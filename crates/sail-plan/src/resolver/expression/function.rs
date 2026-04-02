@@ -58,12 +58,16 @@ impl PlanResolver<'_> {
         // to a string literal before resolution.
         let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
 
-        let (argument_display_names, arguments) = if canonical_function_name == "struct" {
-            self.resolve_struct_expressions_and_names(arguments, schema, state)
-                .await?
-        } else {
-            self.resolve_expressions_and_names(arguments, schema, state)
-                .await?
+        let (argument_display_names, arguments) = match canonical_function_name.as_str() {
+            "struct" => {
+                self.resolve_struct_expressions_and_names(arguments, schema, state)
+                    .await?
+            }
+            "xxhash64" => {
+                self.resolve_wildcard_expressions_and_names(arguments, schema, state)
+                    .await?
+            }
+            _ => self.resolve_expressions_and_names(arguments, schema, state).await?,
         };
 
         // FIXME: `is_user_defined_function` is always false,
@@ -308,6 +312,66 @@ impl PlanResolver<'_> {
                     }
                 }
 
+                other => {
+                    names.push(name.one()?);
+                    exprs.push(other);
+                }
+            }
+        }
+
+        Ok((names, exprs))
+    }
+
+    async fn resolve_wildcard_expressions_and_names(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
+        fn column_display_name(
+            column: &datafusion_common::Column,
+            state: &PlanResolverState,
+        ) -> PlanResult<Option<String>> {
+            let info = state.get_field_info(column.name())?;
+            if info.is_hidden() {
+                return Ok(None);
+            }
+            Ok(Some(info.name().to_string()))
+        }
+
+        let mut names: Vec<String> = vec![];
+        let mut exprs: Vec<expr::Expr> = vec![];
+
+        for expression in expressions {
+            let NamedExpr { name, expr, .. } = self
+                .resolve_named_expression(expression, schema, state)
+                .await?;
+
+            match expr {
+                #[expect(deprecated)]
+                Expr::Wildcard { qualifier, options } => {
+                    let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: schema.clone(),
+                    });
+
+                    let expanded = match qualifier {
+                        Some(q) => expand_qualified_wildcard(&q, schema, Some(&options))?,
+                        None => expand_wildcard(schema, &plan, Some(&options))?,
+                    };
+
+                    for e in expanded {
+                        let Expr::Column(column) = e else {
+                            return Err(PlanError::internal(format!(
+                                "column expected for expanded wildcard expression, got: {e:?}"
+                            )));
+                        };
+                        if let Some(display_name) = column_display_name(&column, state)? {
+                            names.push(display_name);
+                            exprs.push(Expr::Column(column));
+                        }
+                    }
+                }
                 other => {
                     names.push(name.one()?);
                     exprs.push(other);

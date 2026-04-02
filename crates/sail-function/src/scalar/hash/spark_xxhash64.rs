@@ -35,7 +35,7 @@ impl ScalarUDFImpl for SparkXxhash64 {
     }
 
     fn name(&self) -> &str {
-        "spark_xxhash64"
+        "xxhash64"
     }
 
     fn signature(&self) -> &Signature {
