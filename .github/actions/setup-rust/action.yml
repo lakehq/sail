@@ -78,18 +78,19 @@ runs:
         echo "hash=${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}" >> "$GITHUB_OUTPUT"
       shell: bash
 
-    - name: Save mtime
-      if: ${{ github.event_name == 'push' }}
-      run: |
-        mkdir -p tmp
-        .github/workflows/mtime/save-mtime.sh > tmp/mtime.jsonl
-      shell: bash
-
     - uses: actions/cache@v4
+      id: cache
       if: ${{ github.event_name == 'push' }}
       with:
         path: ${{ steps.config.outputs.path }}
         key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
+
+    - name: Save mtime
+      if: ${{ github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true' }}
+      run: |
+        mkdir -p tmp
+        .github/workflows/mtime/save-mtime.sh > tmp/mtime.jsonl
+      shell: bash
 
     # We save the cache only for push events, so that more cache space can be reserved
     # for the default branch and cache eviction is less likely to happen.
