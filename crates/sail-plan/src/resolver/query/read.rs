@@ -9,7 +9,7 @@ use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
-use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -204,9 +204,13 @@ impl PlanResolver<'_> {
             sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
             // TODO: detect duplicated keys in each set of options
             options: vec![
-                table_options.into_iter().collect(),
-                options.into_iter().collect(),
-                temporal_options.into_iter().collect(),
+                OptionLayer::TablePropertyList {
+                    items: table_options,
+                },
+                OptionLayer::OptionList { items: options },
+                OptionLayer::OptionList {
+                    items: temporal_options,
+                },
             ],
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
@@ -449,7 +453,9 @@ impl PlanResolver<'_> {
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
-            options: vec![options.into_iter().collect()],
+            options: vec![OptionLayer::OptionList {
+                items: options.into_iter().collect(),
+            }],
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
         let table_source = registry

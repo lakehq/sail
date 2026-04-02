@@ -57,7 +57,12 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = resolve_delta_read_options(options)?;
+        let options = resolve_delta_read_options(
+            options
+                .into_iter()
+                .map(|l| l.into_opaque_options())
+                .collect(),
+        )?;
         create_delta_source(ctx, table_url, schema, options).await
     }
 
@@ -76,7 +81,12 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = resolve_delta_read_options(options)?;
+        let options = resolve_delta_read_options(
+            options
+                .into_iter()
+                .map(|l| l.into_opaque_options())
+                .collect(),
+        )?;
         create_delta_provider(ctx, table_url, schema, options).await
     }
 

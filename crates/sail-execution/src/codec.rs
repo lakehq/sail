@@ -84,10 +84,11 @@ use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
     PythonDataSourceWriteExec,
 };
-use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
+use sail_data_source::formats::rate::RateSourceExec;
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
+use sail_data_source::options::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
@@ -847,7 +848,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             }) => {
-                let options = TableRateOptions {
+                let options = RateReadOptions {
                     rows_per_second: usize::try_from(rows_per_second).map_err(|_| {
                         plan_datafusion_err!("invalid rows per second for rate source")
                     })?,
