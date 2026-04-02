@@ -142,7 +142,9 @@ impl ScalarUDFImpl for SparkToJson {
         // If input is a Variant struct, delegate to variant_to_json
         // (Spark's to_json supports Variant input and ignores options for it)
         if let Some(field) = args.arg_fields.first() {
-            if crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok() {
+            if matches!(field.data_type(), DataType::Struct(_))
+                && crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok()
+            {
                 let result =
                     crate::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf::default()
                         .invoke_with_args(args)?;
