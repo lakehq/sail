@@ -88,7 +88,7 @@ use sail_data_source::formats::rate::RateSourceExec;
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
-use sail_data_source::options::RateReadOptions;
+use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,

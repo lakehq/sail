@@ -20,7 +20,7 @@ use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
 use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::source::StreamSource;
 
-use crate::options::RateReadOptions;
+use crate::options::gen::RateReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct RateStreamSource {

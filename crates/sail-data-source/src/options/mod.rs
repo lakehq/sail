@@ -5,7 +5,7 @@ mod serde;
 pub use internal::{
     BinaryReadOptions, CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions,
     IcebergReadOptions, IcebergWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions,
-    ParquetWriteOptions, RateReadOptions, RateWriteOptions, TextReadOptions, TextWriteOptions,
+    ParquetWriteOptions, TextReadOptions, TextWriteOptions,
 };
 #[cfg(test)]
 pub use loader::build_options;
@@ -28,6 +28,9 @@ pub(crate) mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/text_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/socket_read.rs"));
+}
+
+pub mod gen {
     include!(concat!(env!("OUT_DIR"), "/options/rate.rs"));
 }
 

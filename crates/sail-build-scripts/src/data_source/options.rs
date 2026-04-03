@@ -34,7 +34,10 @@ struct OptionEntry {
     supported: bool,
     /// The Rust type for the option.
     rust_type: String,
+    /// The scopes in which the option is applicable.
+    /// Each scope corresponds to a data source operation (e.g. read or write).
     scopes: Vec<OptionScope>,
+    /// The origins from which the option can be set.
     origins: Vec<OptionOrigin>,
 }
 
@@ -75,6 +78,7 @@ enum OptionOrigin {
     AsOfStringVersion,
 }
 
+#[derive(Clone, Copy)]
 #[expect(clippy::enum_variant_names)]
 enum TemporalClauseKind {
     AsOfTimestamp,
@@ -82,6 +86,7 @@ enum TemporalClauseKind {
     AsOfStringVersion,
 }
 
+#[derive(Clone, Copy)]
 enum OptionKeyKind {
     Option,
     TableProperty,
@@ -101,8 +106,8 @@ pub fn build_data_source_options(name: &str, kind: &str) -> Result<(), Box<dyn s
         }
     }
 
-    let read_tokens = generate_data_source_options(name, &OptionScope::Read, &entries)?;
-    let write_tokens = generate_data_source_options(name, &OptionScope::Write, &entries)?;
+    let read_tokens = generate_data_source_options(name, OptionScope::Read, &entries)?;
+    let write_tokens = generate_data_source_options(name, OptionScope::Write, &entries)?;
     let tokens = quote! {
         #read_tokens
         #write_tokens
@@ -123,12 +128,12 @@ pub fn build_data_source_options(name: &str, kind: &str) -> Result<(), Box<dyn s
 
 fn generate_data_source_options(
     name: &str,
-    scope: &OptionScope,
+    scope: OptionScope,
     entries: &[OptionEntry],
 ) -> Result<TokenStream, Box<dyn std::error::Error>> {
     let scope_entries: Vec<&OptionEntry> = entries
         .iter()
-        .filter(|e| e.scopes.contains(scope) && e.supported)
+        .filter(|e| e.scopes.contains(&scope) && e.supported)
         .collect();
     let scope_name = scope.name();
 
@@ -211,7 +216,7 @@ fn generate_partial_options_impl(
                 let key = &entry.key;
                 let value = &default.value;
                 Ok(quote! {
-                    #field: Some(#parser(#key, #value).unwrap()),
+                    #field: Some(#parser(#key, #value).expect("valid default value")),
                 })
             } else {
                 Ok(quote! { #field: None, })
@@ -240,30 +245,24 @@ fn generate_partial_options_impl(
         }
     });
 
-    let initialize_fn = if has_defaults {
+    let initialize_lint = if has_defaults {
         quote! {
-            #[expect(clippy::unwrap_used)]
-            fn initialize() -> Self {
-                Self {
-                    #(#initialize_fields)*
-                }
-            }
+            #[expect(clippy::expect_used)]
         }
     } else {
-        quote! {
-            fn initialize() -> Self {
-                Self {
-                    #(#initialize_fields)*
-                }
-            }
-        }
+        quote! {}
     };
 
     Ok(quote! {
         impl crate::options::PartialOptions for #partial_options_name {
             type Options = #options_name;
 
-            #initialize_fn
+            #initialize_lint
+            fn initialize() -> Self {
+                Self {
+                    #(#initialize_fields)*
+                }
+            }
 
             fn merge(&mut self, #other_param) {
                 #(#merge_fields)*
@@ -290,11 +289,11 @@ fn generate_build_partial_options_impl(
     let table_property_list_arm = build_key_match_arm(entries, OptionKeyKind::TableProperty)?;
     let table_location_arm = build_table_location_match_arm(entries)?;
     let timestamp_arm =
-        build_temporal_clause_match_arm(entries, &TemporalClauseKind::AsOfTimestamp)?;
+        build_temporal_clause_match_arm(entries, TemporalClauseKind::AsOfTimestamp)?;
     let integer_version_arm =
-        build_temporal_clause_match_arm(entries, &TemporalClauseKind::AsOfIntegerVersion)?;
+        build_temporal_clause_match_arm(entries, TemporalClauseKind::AsOfIntegerVersion)?;
     let string_version_arm =
-        build_temporal_clause_match_arm(entries, &TemporalClauseKind::AsOfStringVersion)?;
+        build_temporal_clause_match_arm(entries, TemporalClauseKind::AsOfStringVersion)?;
 
     let arms = [
         &option_list_arm,
@@ -313,7 +312,7 @@ fn generate_build_partial_options_impl(
         quote! { let result = #partial_options_name::default(); }
     };
 
-    let wildcard = if has_any_arm && !all_arms_present {
+    let wildcard_arm = if has_any_arm && !all_arms_present {
         quote! { _ => {} }
     } else {
         quote! {}
@@ -328,7 +327,7 @@ fn generate_build_partial_options_impl(
                 #timestamp_arm
                 #integer_version_arm
                 #string_version_arm
-                #wildcard
+                #wildcard_arm
             }
         }
     } else {
@@ -359,7 +358,7 @@ fn build_key_match_arm(
     let mut statements = Vec::new();
     for entry in entries {
         for origin in &entry.origins {
-            let (keys, case_sensitive, parser) = match (origin, &kind) {
+            let (keys, case_sensitive, parser) = match (origin, kind) {
                 (
                     OptionOrigin::Option {
                         keys,
@@ -452,7 +451,7 @@ fn build_table_location_match_arm(
 /// if there are no relevant entries.
 fn build_temporal_clause_match_arm(
     entries: &[&OptionEntry],
-    kind: &TemporalClauseKind,
+    kind: TemporalClauseKind,
 ) -> Result<TokenStream, Box<dyn std::error::Error>> {
     let mut statements = Vec::new();
     for entry in entries {
