@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-rank: 12
+rank: 13
 ---
 
 # Troubleshooting

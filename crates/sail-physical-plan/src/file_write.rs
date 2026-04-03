@@ -19,7 +19,6 @@ pub async fn create_file_write_physical_plan(
     options: FileWriteOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let FileWriteOptions {
-        path,
         format,
         mode,
         partition_by,
@@ -45,7 +44,6 @@ pub async fn create_file_write_physical_plan(
     let sort_order = create_sort_order(ctx, sort_by, logical_input.schema())?;
     let info = SinkInfo {
         input: physical_input,
-        path,
         mode,
         partition_by,
         bucket_by,

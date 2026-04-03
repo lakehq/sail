@@ -1578,7 +1578,14 @@ impl TryFrom<WriteOperation> for spec::Write {
                 null_ordering: spec::NullOrdering::Unspecified,
             })
             .collect();
-        let partitioning_columns = partitioning_columns.into_iter().map(|x| x.into()).collect();
+        let partitioning_columns = partitioning_columns
+            .into_iter()
+            .map(|name| spec::Expr::UnresolvedAttribute {
+                name: spec::ObjectName::bare(name),
+                plan_id: None,
+                is_metadata_column: false,
+            })
+            .collect();
         let clustering_columns = clustering_columns.into_iter().map(|x| x.into()).collect();
         let bucket_by = match bucket_by {
             Some(x) => {

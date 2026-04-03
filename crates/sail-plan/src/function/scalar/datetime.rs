@@ -13,9 +13,12 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
+use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
@@ -716,6 +719,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("make_date", F::ternary(make_date)),
         ("make_dt_interval", F::udf(SparkMakeDtInterval::new())),
         ("make_interval", F::udf(SparkMakeInterval::new())),
+        ("make_time", F::udf(SparkMakeTime::new())),
         ("make_timestamp", F::custom(make_timestamp)),
         ("make_timestamp_ltz", F::custom(make_timestamp_ltz)),
         ("make_timestamp_ntz", F::custom(make_timestamp_ntz)),
@@ -774,6 +778,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("try_make_timestamp_ltz", F::custom(try_make_timestamp_ltz)),
         ("try_make_timestamp_ntz", F::custom(try_make_timestamp_ntz)),
         ("try_to_timestamp", F::custom(try_to_timestamp)),
+        ("time_diff", F::udf(SparkTimeDiff::new())),
+        ("time_trunc", F::udf(SparkTimeTrunc::new())),
         (
             "unix_date",
             F::unary(|arg| cast(cast(arg, DataType::Date32), DataType::Int32)),

@@ -32,8 +32,6 @@ pub struct DeltaTableFormat;
 impl DeltaTableFormat {
     pub fn register(registry: &TableFormatRegistry) -> Result<()> {
         registry.register(Arc::new(Self))?;
-
-        crate::init_delta_types();
         Ok(())
     }
 }
@@ -59,7 +57,12 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = resolve_delta_read_options(options)?;
+        let options = resolve_delta_read_options(
+            options
+                .into_iter()
+                .map(|l| l.into_opaque_options())
+                .collect(),
+        )?;
         create_delta_source(ctx, table_url, schema, options).await
     }
 
@@ -78,7 +81,12 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = resolve_delta_read_options(options)?;
+        let options = resolve_delta_read_options(
+            options
+                .into_iter()
+                .map(|l| l.into_opaque_options())
+                .collect(),
+        )?;
         create_delta_provider(ctx, table_url, schema, options).await
     }
 
@@ -87,9 +95,9 @@ impl TableFormat for DeltaTableFormat {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let path = info.path();
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             bucket_by,
@@ -104,6 +112,13 @@ impl TableFormat for DeltaTableFormat {
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
         }
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for Delta format");
+        }
+        let partition_by = partition_by
+            .into_iter()
+            .map(|field| field.column)
+            .collect::<Vec<_>>();
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let (options, routed_table_properties) =

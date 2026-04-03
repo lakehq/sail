@@ -22,16 +22,16 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
 use tokio_stream::StreamExt;
 
-use crate::formats::socket::options::TableSocketOptions;
+use crate::options::gen::SocketReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct SocketStreamSource {
-    options: TableSocketOptions,
+    options: SocketReadOptions,
     schema: SchemaRef,
 }
 
 impl SocketStreamSource {
-    pub fn try_new(options: TableSocketOptions, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new(options: SocketReadOptions, schema: SchemaRef) -> Result<Self> {
         Self::validate_schema(&schema)?;
         Ok(Self { options, schema })
     }
@@ -78,31 +78,31 @@ impl StreamSource for SocketStreamSource {
 
 #[derive(Debug)]
 pub struct SocketSourceExec {
-    options: TableSocketOptions,
+    options: SocketReadOptions,
     original_schema: SchemaRef,
     projected_schema: SchemaRef,
     projection: Vec<usize>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl SocketSourceExec {
     /// Creates a new execution plan for the socket source.
     /// The schema should be the original schema before projection.
     pub fn try_new(
-        options: TableSocketOptions,
+        options: SocketReadOptions,
         schema: SchemaRef,
         projection: Vec<usize>,
     ) -> Result<Self> {
         let projected_schema = Arc::new(schema.project(&projection)?);
         let output_schema = Arc::new(to_flow_event_schema(&projected_schema));
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(output_schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Both,
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
             },
-        );
+        ));
         Ok(Self {
             options,
             original_schema: schema,
@@ -112,7 +112,7 @@ impl SocketSourceExec {
         })
     }
 
-    pub fn options(&self) -> &TableSocketOptions {
+    pub fn options(&self) -> &SocketReadOptions {
         &self.options
     }
 
@@ -150,7 +150,7 @@ impl ExecutionPlan for SocketSourceExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,11 @@ class PathWrapper:
     def uri(self):
         """The file URI representation of the path."""
         return f"'{self.path.absolute().as_uri()}'"
+
+    @property
+    def file_uri(self):
+        """The unquoted file URI representation of the path."""
+        return self.path.absolute().as_uri()
 
 
 @given(parsers.parse("variable {name} for temporary directory {directory}"), target_fixture="variables")
@@ -101,6 +107,11 @@ def final_statement(template, docstring, spark, variables):
     s = Template(docstring).render(**variables) if template else docstring
     yield
     spark.sql(s)
+
+
+@given(parsers.parse("sleep for {seconds:d} seconds"))
+def sleep_for_seconds(seconds: int) -> None:
+    time.sleep(seconds)
 
 
 @when(parsers.re("query(?P<template>( template)?)"), target_fixture="query")

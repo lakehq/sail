@@ -43,7 +43,9 @@ use datafusion_proto::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_partitioning, serialize_physical_expr,
     serialize_physical_sort_exprs,
 };
-use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
+use datafusion_proto::physical_plan::{
+    AsExecutionPlan, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
@@ -72,6 +74,7 @@ use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
+use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
@@ -81,10 +84,11 @@ use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
     PythonDataSourceWriteExec,
 };
-use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
-use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
+use sail_data_source::formats::rate::RateSourceExec;
+use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
+use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
@@ -113,9 +117,12 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
+use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
@@ -171,6 +178,8 @@ use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
+use sail_function::scalar::xml::xpath::Xpath;
+use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
@@ -287,12 +296,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         requires_infinite_memory: false,
                     }
                 };
-                let properties = PlanProperties::new(
+                let properties = Arc::new(PlanProperties::new(
                     eq_properties,
                     partitioning,
                     EmissionType::Both,
                     boundedness,
-                );
+                ));
                 let node = StageInputExec::new(input as usize, properties);
                 Ok(Arc::new(node))
             }
@@ -382,6 +391,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(JsonSource::new(table_schema)),
                 )?;
                 let source = FileScanConfigBuilder::from(source)
@@ -396,6 +406,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(ArrowSource::new_file_source(table_schema)),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
@@ -424,6 +435,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(TextSource::new(table_schema, whole_text, line_sep)),
                 )?;
                 let source = FileScanConfigBuilder::from(source)
@@ -441,6 +453,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(BinarySource::new(table_schema, path_glob_filter)),
                 )?;
                 let source = FileScanConfigBuilder::from(source).build();
@@ -453,6 +466,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &proto,
                     ctx,
                     self,
+                    &DefaultPhysicalProtoConverter {},
                     Arc::new(AvroSource::new(table_schema)),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
@@ -812,7 +826,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             }) => {
-                let options = TableSocketOptions {
+                let options = SocketReadOptions {
                     host,
                     port: u16::try_from(port)
                         .map_err(|_| plan_datafusion_err!("invalid port for socket source"))?,
@@ -835,7 +849,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             }) => {
-                let options = TableRateOptions {
+                let options = RateReadOptions {
                     rows_per_second: usize::try_from(rows_per_second).map_err(|_| {
                         plan_datafusion_err!("invalid rows per second for rate source")
                     })?,
@@ -888,11 +902,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let sort_order = physical_sort_expr_nodes
                     .as_ref()
                     .map(|physical_sort_expr_nodes| {
-                        parse_physical_sort_exprs(physical_sort_expr_nodes, ctx, &schema, self).map(
-                            |sort_exprs| {
-                                LexRequirement::new(sort_exprs.into_iter().map(Into::into))
-                            },
+                        parse_physical_sort_exprs(
+                            physical_sort_expr_nodes,
+                            ctx,
+                            &schema,
+                            self,
+                            &DefaultPhysicalProtoConverter {},
                         )
+                        .map(|sort_exprs| {
+                            LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                        })
                     })
                     .transpose()?
                     .flatten();
@@ -970,6 +989,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_decode_physical_sink_mode(sink_mode, &input.schema(), ctx)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let partition_columns = partition_columns
+                    .into_iter()
+                    .map(|field| self.try_decode_catalog_partition_field(field))
+                    .collect::<Result<Vec<_>>>()?;
                 let options = if options.is_empty() {
                     TableIcebergOptions::default()
                 } else {
@@ -1232,8 +1255,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             if let Some(file_scan) = source.as_any().downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
                 if let Some(text_source) = file_source.as_any().downcast_ref::<TextSource>() {
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     let file_compression_type =
                         self.try_encode_file_compression_type(file_scan.file_compression_type)?;
                     NodeKind::Text(gen::TextExecNode {
@@ -1245,16 +1271,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else if let Some(binary_source) =
                     file_source.as_any().downcast_ref::<BinarySource>()
                 {
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     NodeKind::BinarySource(gen::BinarySourceExecNode {
                         base_config,
                         path_glob_filter: binary_source.path_glob_filter().cloned(),
                     })
                 } else if file_source.as_any().is::<JsonSource>() {
                     // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     let file_compression_type =
                         self.try_encode_file_compression_type(file_scan.file_compression_type)?;
                     NodeKind::NdJson(gen::NdJsonExecNode {
@@ -1263,12 +1295,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                 } else if file_source.as_any().is::<ArrowSource>() {
                     // TODO: Check if we still need to have ArrowSource: https://github.com/apache/datafusion/pull/14224
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     NodeKind::Arrow(gen::ArrowExecNode { base_config })
                 } else if file_source.as_any().is::<AvroSource>() {
-                    let base_config =
-                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &DefaultPhysicalProtoConverter {},
+                    )?)?;
                     NodeKind::Avro(gen::AvroExecNode { base_config })
                 } else {
                     return plan_err!("unsupported data source node: {data_source:?}");
@@ -1582,7 +1620,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url: iceberg_writer_exec.table_url().to_string(),
-                partition_columns: iceberg_writer_exec.partition_columns().to_vec(),
+                partition_columns: iceberg_writer_exec
+                    .partition_columns()
+                    .iter()
+                    .map(Self::try_encode_catalog_partition_field)
+                    .collect::<Result<Vec<_>>>()?,
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
                 options,
@@ -1747,6 +1789,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = Explode::new(kind);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::XpathTyped(gen::XpathTypedUdf { name }) => {
+                let kind = xpath_typed_name_to_kind(&name)?;
+                let udf = XpathTyped::new(kind);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone }) => {
                 let udf = SparkUnixTimestamp::new(Arc::from(timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -1835,6 +1882,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_schema_of_json" | "schema_of_json" => {
                 Ok(Arc::new(ScalarUDF::from(SparkSchemaOfJson::new())))
             }
+            "xpath" => Ok(Arc::new(ScalarUDF::from(
+                sail_function::scalar::xml::xpath::Xpath::new(),
+            ))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
@@ -1885,6 +1935,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_try_make_timestamp_ntz" | "try_make_timestamp_ntz" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryMakeTimestampNtz::new())))
+            }
+            "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
+            "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
+            "spark_time_trunc" | "time_trunc" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_concat_ws" | "concat_ws" => Ok(Arc::new(ScalarUDF::from(SparkConcatWs::new()))),
@@ -1998,6 +2053,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
             || node_inner.is::<SparkTryMakeTimestampNtz>()
+            || node_inner.is::<SparkMakeTime>()
+            || node_inner.is::<SparkTimeDiff>()
+            || node_inner.is::<SparkTimeTrunc>()
             || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
@@ -2038,6 +2096,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
+            || node_inner.is::<Xpath>()
             || node.name() == "json_as_text"
             || node.name() == "json_len"
             || node.name() == "json_length"
@@ -2092,6 +2151,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(_func) = node.inner().as_any().downcast_ref::<Explode>() {
             let name = node.name().to_string();
             UdfKind::Explode(gen::ExplodeUdf { name })
+        } else if let Some(_func) = node.inner().as_any().downcast_ref::<XpathTyped>() {
+            let name = node.name().to_string();
+            UdfKind::XpathTyped(gen::XpathTypedUdf { name })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
             let timezone = func.timezone().to_string();
             UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone })
@@ -2426,6 +2488,55 @@ impl RemoteExecutionCodec {
         Ok(gen::PhysicalSinkMode { mode: Some(mode) })
     }
 
+    fn try_decode_catalog_partition_field(
+        &self,
+        field: gen::CatalogPartitionFieldNode,
+    ) -> Result<CatalogPartitionField> {
+        let transform_kind = gen::PartitionTransformKind::try_from(field.transform_kind)
+            .map_err(|_| plan_datafusion_err!("invalid partition transform kind"))?;
+        let transform = match transform_kind {
+            gen::PartitionTransformKind::Unspecified | gen::PartitionTransformKind::Identity => {
+                None
+            }
+            gen::PartitionTransformKind::Year => Some(PartitionTransform::Year),
+            gen::PartitionTransformKind::Month => Some(PartitionTransform::Month),
+            gen::PartitionTransformKind::Day => Some(PartitionTransform::Day),
+            gen::PartitionTransformKind::Hour => Some(PartitionTransform::Hour),
+            gen::PartitionTransformKind::Bucket => {
+                Some(PartitionTransform::Bucket(field.transform_value))
+            }
+            gen::PartitionTransformKind::Truncate => {
+                Some(PartitionTransform::Truncate(field.transform_value))
+            }
+        };
+        Ok(CatalogPartitionField {
+            column: field.column,
+            transform,
+        })
+    }
+
+    fn try_encode_catalog_partition_field(
+        field: &CatalogPartitionField,
+    ) -> Result<gen::CatalogPartitionFieldNode> {
+        let (transform_kind, transform_value) = match field.transform {
+            None => (gen::PartitionTransformKind::Unspecified as i32, 0),
+            Some(PartitionTransform::Identity) => (gen::PartitionTransformKind::Identity as i32, 0),
+            Some(PartitionTransform::Year) => (gen::PartitionTransformKind::Year as i32, 0),
+            Some(PartitionTransform::Month) => (gen::PartitionTransformKind::Month as i32, 0),
+            Some(PartitionTransform::Day) => (gen::PartitionTransformKind::Day as i32, 0),
+            Some(PartitionTransform::Hour) => (gen::PartitionTransformKind::Hour as i32, 0),
+            Some(PartitionTransform::Bucket(n)) => (gen::PartitionTransformKind::Bucket as i32, n),
+            Some(PartitionTransform::Truncate(w)) => {
+                (gen::PartitionTransformKind::Truncate as i32, w)
+            }
+        };
+        Ok(gen::CatalogPartitionFieldNode {
+            column: field.column.clone(),
+            transform_kind,
+            transform_value,
+        })
+    }
+
     fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
         let ExtendedStreamUdf { stream_udf_kind } = udf;
         let stream_udf_kind = match stream_udf_kind {
@@ -2583,8 +2694,14 @@ impl RemoteExecutionCodec {
             .map(|x| self.try_decode_message(x))
             .collect::<Result<_>>()?;
         let lex_ordering = LexOrdering::new(
-            parse_physical_sort_exprs(&lex_ordering, ctx, schema, self)
-                .map_err(|e| plan_datafusion_err!("failed to decode lex ordering: {e}"))?,
+            parse_physical_sort_exprs(
+                &lex_ordering,
+                ctx,
+                schema,
+                self,
+                &DefaultPhysicalProtoConverter {},
+            )
+            .map_err(|e| plan_datafusion_err!("failed to decode lex ordering: {e}"))?,
         );
         match lex_ordering {
             Some(lex_ordering) => Ok(lex_ordering),
@@ -2593,7 +2710,11 @@ impl RemoteExecutionCodec {
     }
 
     fn try_encode_lex_ordering(&self, lex_ordering: &LexOrdering) -> Result<gen::LexOrdering> {
-        let lex_ordering = serialize_physical_sort_exprs(lex_ordering.to_vec(), self)?;
+        let lex_ordering = serialize_physical_sort_exprs(
+            lex_ordering.to_vec(),
+            self,
+            &DefaultPhysicalProtoConverter {},
+        )?;
         let lex_ordering = lex_ordering
             .into_iter()
             .map(|x| self.try_encode_message(x))
@@ -3004,12 +3125,19 @@ impl RemoteExecutionCodec {
         ctx: &TaskContext,
     ) -> Result<Partitioning> {
         let partitioning = self.try_decode_message(buf)?;
-        parse_protobuf_partitioning(Some(&partitioning), ctx, schema, self)?
-            .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
+        parse_protobuf_partitioning(
+            Some(&partitioning),
+            ctx,
+            schema,
+            self,
+            &DefaultPhysicalProtoConverter {},
+        )?
+        .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
     }
 
     fn try_encode_partitioning(&self, partitioning: &Partitioning) -> Result<Vec<u8>> {
-        let partitioning = serialize_partitioning(partitioning, self)?;
+        let partitioning =
+            serialize_partitioning(partitioning, self, &DefaultPhysicalProtoConverter {})?;
         self.try_encode_message(partitioning)
     }
 

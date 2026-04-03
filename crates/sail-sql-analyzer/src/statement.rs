@@ -26,6 +26,7 @@ use crate::expression::{from_ast_expression, from_ast_identifier_list, from_ast_
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
 
+/// Converts a parsed SQL AST statement into a spec plan (either a query or a command).
 pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
     match statement {
         Statement::Query(query) => {
@@ -318,6 +319,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             } else {
                 None
             };
+            let query_text = query.text();
             let query = from_ast_query(query)?;
             let name = from_ast_object_name(name)?;
             let CreateViewClauses {
@@ -371,8 +373,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 None => spec::CommandNode::CreateView {
                     view: name,
                     definition: spec::ViewDefinition {
-                        // TODO: handle view definition
-                        definition: "".to_string(),
+                        definition: query_text,
                         columns,
                         if_not_exists: if_not_exists.is_some(),
                         replace: or_replace.is_some(),
@@ -1153,11 +1154,14 @@ fn from_ast_table_definition(
         .into_iter()
         .flatten()
         .map(|x| match x {
-            PartitionByItem::ColumnDefinition(column) => column.name.value,
-            PartitionByItem::Expression(expr) => expr.text().trim().to_string(),
+            PartitionByItem::ColumnDefinition(column) => Ok(spec::Expr::UnresolvedAttribute {
+                name: spec::ObjectName::bare(column.name.value),
+                plan_id: None,
+                is_metadata_column: false,
+            }),
+            PartitionByItem::Expression(expr) => from_ast_expression(expr),
         })
-        .map(Into::into)
-        .collect();
+        .collect::<SqlResult<Vec<_>>>()?;
     let (sort_by, bucket_by) = if let Some(bucket_by) = bucket_by {
         let CreateTableBucketBy {
             columns,

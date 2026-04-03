@@ -21,7 +21,7 @@ pub struct MonotonicIdExec {
     input: Arc<dyn ExecutionPlan>,
     column_name: String,
     schema: SchemaRef,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl MonotonicIdExec {
@@ -42,12 +42,12 @@ impl MonotonicIdExec {
             );
         }
 
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             input.output_partitioning().clone(),
             input.pipeline_behavior(),
             input.boundedness(),
-        );
+        ));
         Ok(Self {
             input,
             column_name,
@@ -80,7 +80,7 @@ impl ExecutionPlan for MonotonicIdExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
