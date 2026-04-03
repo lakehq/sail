@@ -96,7 +96,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 options: table_options,
-                properties: _,
+                properties: table_properties,
             } => {
                 self.resolve_table_kind_table(
                     columns,
@@ -107,6 +107,7 @@ impl PlanResolver<'_> {
                     sort_by,
                     bucket_by,
                     table_options,
+                    table_properties,
                     temporal,
                     options,
                     table_reference,
@@ -185,6 +186,7 @@ impl PlanResolver<'_> {
         sort_by: Vec<sail_common_datafusion::catalog::CatalogTableSort>,
         bucket_by: Option<sail_common_datafusion::catalog::CatalogTableBucketBy>,
         table_options: Vec<(String, String)>,
+        table_properties: Vec<(String, String)>,
         temporal: Option<spec::TableTemporal>,
         options: Vec<(String, String)>,
         table_reference: impl Into<TableReference>,
@@ -205,7 +207,10 @@ impl PlanResolver<'_> {
             // TODO: detect duplicated keys in each set of options
             options: vec![
                 OptionLayer::TablePropertyList {
-                    items: table_options,
+                    items: table_options
+                        .into_iter()
+                        .chain(table_properties)
+                        .collect(),
                 },
                 OptionLayer::OptionList { items: options },
                 OptionLayer::OptionList {
