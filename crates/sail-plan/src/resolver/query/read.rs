@@ -207,10 +207,7 @@ impl PlanResolver<'_> {
             // TODO: detect duplicated keys in each set of options
             options: vec![
                 OptionLayer::TablePropertyList {
-                    items: table_options
-                        .into_iter()
-                        .chain(table_properties)
-                        .collect(),
+                    items: table_options.into_iter().chain(table_properties).collect(),
                 },
                 OptionLayer::OptionList { items: options },
                 OptionLayer::OptionList {
