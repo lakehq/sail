@@ -28,6 +28,9 @@ pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
+use sail_common_datafusion::datasource::RowLevelOperationType;
+pub use sail_common_datafusion::datasource::OPERATION_COLUMN;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
 #[educe(PartialOrd)]
 pub struct MergeCardinalityCheckNode {
@@ -282,74 +285,169 @@ impl UserDefinedLogicalNodeCore for MergeIntoNode {
     }
 }
 
+use sail_common_datafusion::datasource::RowLevelCommand;
+
+/// Unified post-expansion node for row-level operations (DELETE, UPDATE, MERGE).
+///
+/// For MERGE: `write_plan` and `touched_files_plan` are populated by the optimizer.
+/// For DELETE: `condition` is carried through; the physical planner builds the full plan.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
 #[educe(PartialOrd)]
-pub struct MergeIntoWriteNode {
+pub struct RowLevelWriteNode {
+    command: RowLevelCommand,
     raw_target: Arc<LogicalPlan>,
-    raw_source: Arc<LogicalPlan>,
+    raw_source: Option<Arc<LogicalPlan>>,
     #[educe(PartialOrd(ignore))]
     raw_input_schema: DFSchemaRef,
-    input: Arc<LogicalPlan>,
-    touched_files_plan: Arc<LogicalPlan>,
+    /// Expanded write plan (MERGE).
+    write_plan: Option<Arc<LogicalPlan>>,
+    /// Plan yielding touched file paths (MERGE targeted rewrite).
+    touched_files_plan: Option<Arc<LogicalPlan>>,
+    /// Condition for DELETE/UPDATE (passed through to physical planner).
     #[educe(PartialOrd(ignore))]
-    options: MergeIntoOptions,
+    condition: Option<ExprWithSource>,
+    #[educe(PartialOrd(ignore))]
+    merge_options: Option<MergeIntoOptions>,
+    target_format: String,
+    target_location: String,
+    target_table_name: Vec<String>,
+    target_partition_by: Vec<String>,
+    target_options: Vec<Vec<(String, String)>>,
+    with_schema_evolution: bool,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
-impl MergeIntoWriteNode {
-    pub fn new(
+impl RowLevelWriteNode {
+    /// Create a MERGE write node from expansion results.
+    pub fn new_merge(
         raw_target: Arc<LogicalPlan>,
         raw_source: Arc<LogicalPlan>,
         raw_input_schema: DFSchemaRef,
-        input: Arc<LogicalPlan>,
+        write_plan: Arc<LogicalPlan>,
         touched_files_plan: Arc<LogicalPlan>,
         options: MergeIntoOptions,
         schema: DFSchemaRef,
     ) -> Self {
         Self {
+            command: RowLevelCommand::Merge,
+            target_format: options.target.format.clone(),
+            target_location: options.target.location.clone(),
+            target_table_name: options.target.table_name.clone(),
+            target_partition_by: options.target.partition_by.clone(),
+            target_options: options.target.options.clone(),
+            with_schema_evolution: options.with_schema_evolution,
             raw_target,
-            raw_source,
+            raw_source: Some(raw_source),
             raw_input_schema,
-            input,
-            touched_files_plan,
-            options,
+            write_plan: Some(write_plan),
+            touched_files_plan: Some(touched_files_plan),
+            condition: None,
+            merge_options: Some(options),
             schema,
         }
     }
 
-    pub fn options(&self) -> &MergeIntoOptions {
-        &self.options
+    /// Create a DELETE write node carrying the condition for the physical planner.
+    pub fn new_delete(
+        raw_target: Arc<LogicalPlan>,
+        raw_input_schema: DFSchemaRef,
+        condition: Option<ExprWithSource>,
+        format: String,
+        location: String,
+        table_name: Vec<String>,
+        options: Vec<Vec<(String, String)>>,
+    ) -> Self {
+        Self {
+            command: RowLevelCommand::Delete,
+            raw_target,
+            raw_source: None,
+            raw_input_schema,
+            write_plan: None,
+            touched_files_plan: None,
+            condition,
+            merge_options: None,
+            target_format: format,
+            target_location: location,
+            target_table_name: table_name,
+            target_partition_by: Vec::new(),
+            target_options: options,
+            with_schema_evolution: false,
+            schema: Arc::new(DFSchema::empty()),
+        }
     }
 
-    pub fn input(&self) -> &Arc<LogicalPlan> {
-        &self.input
+    pub fn command(&self) -> RowLevelCommand {
+        self.command
+    }
+
+    pub fn merge_options(&self) -> Option<&MergeIntoOptions> {
+        self.merge_options.as_ref()
+    }
+
+    pub fn write_plan(&self) -> Option<&Arc<LogicalPlan>> {
+        self.write_plan.as_ref()
     }
 
     pub fn raw_target(&self) -> &Arc<LogicalPlan> {
         &self.raw_target
     }
 
-    pub fn raw_source(&self) -> &Arc<LogicalPlan> {
-        &self.raw_source
+    pub fn raw_source(&self) -> Option<&Arc<LogicalPlan>> {
+        self.raw_source.as_ref()
     }
 
     pub fn raw_input_schema(&self) -> &DFSchemaRef {
         &self.raw_input_schema
     }
 
-    pub fn touched_files_plan(&self) -> &Arc<LogicalPlan> {
-        &self.touched_files_plan
+    pub fn touched_files_plan(&self) -> Option<&Arc<LogicalPlan>> {
+        self.touched_files_plan.as_ref()
+    }
+
+    pub fn condition(&self) -> Option<&ExprWithSource> {
+        self.condition.as_ref()
+    }
+
+    pub fn target_format(&self) -> &str {
+        &self.target_format
+    }
+
+    pub fn target_location(&self) -> &str {
+        &self.target_location
+    }
+
+    pub fn target_table_name(&self) -> &[String] {
+        &self.target_table_name
+    }
+
+    pub fn target_partition_by(&self) -> &[String] {
+        &self.target_partition_by
+    }
+
+    pub fn target_options(&self) -> &[Vec<(String, String)>] {
+        &self.target_options
+    }
+
+    pub fn with_schema_evolution(&self) -> bool {
+        self.with_schema_evolution
     }
 }
 
-impl UserDefinedLogicalNodeCore for MergeIntoWriteNode {
+impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
     fn name(&self) -> &str {
-        "MergeIntoWrite"
+        "RowLevelWrite"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![self.input.as_ref(), self.touched_files_plan.as_ref()]
+        let mut inputs = Vec::new();
+        if let Some(wp) = &self.write_plan {
+            inputs.push(wp.as_ref());
+        }
+        if let Some(tp) = &self.touched_files_plan {
+            inputs.push(tp.as_ref());
+        }
+        inputs
     }
 
     fn schema(&self) -> &DFSchemaRef {
@@ -361,7 +459,36 @@ impl UserDefinedLogicalNodeCore for MergeIntoWriteNode {
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "MergeIntoWrite: options={:?}", self.options)
+        let table = self
+            .target_table_name
+            .last()
+            .map(|s| s.as_str())
+            .unwrap_or(&self.target_location);
+        write!(
+            f,
+            "RowLevelWrite: command={:?}, target={}, format={}",
+            self.command, table, self.target_format
+        )?;
+        match self.command {
+            RowLevelCommand::Delete => {
+                if let Some(cond) = self.condition.as_ref().and_then(|c| c.source.as_deref()) {
+                    write!(f, ", condition={}", cond.trim())?;
+                }
+            }
+            RowLevelCommand::Merge => {
+                if let Some(opts) = &self.merge_options {
+                    write!(
+                        f,
+                        ", matched={}, not_matched={}, not_matched_by_source={}",
+                        opts.matched_clauses.len(),
+                        opts.not_matched_by_target_clauses.len(),
+                        opts.not_matched_by_source_clauses.len()
+                    )?;
+                }
+            }
+            RowLevelCommand::Update => {}
+        }
+        Ok(())
     }
 
     fn with_exprs_and_inputs(
@@ -370,16 +497,38 @@ impl UserDefinedLogicalNodeCore for MergeIntoWriteNode {
         inputs: Vec<LogicalPlan>,
     ) -> datafusion_common::Result<Self> {
         exprs.zero()?;
-        let (input, touched) = inputs.two().map_err(|_| {
-            DataFusionError::Internal("MergeIntoWriteNode expects exactly 2 inputs".to_string())
-        })?;
+        let mut iter = inputs.into_iter();
+        let write_plan = if self.write_plan.is_some() {
+            Some(Arc::new(iter.next().ok_or_else(|| {
+                DataFusionError::Internal("RowLevelWriteNode: missing write_plan input".into())
+            })?))
+        } else {
+            None
+        };
+        let touched_files_plan = if self.touched_files_plan.is_some() {
+            Some(Arc::new(iter.next().ok_or_else(|| {
+                DataFusionError::Internal(
+                    "RowLevelWriteNode: missing touched_files_plan input".into(),
+                )
+            })?))
+        } else {
+            None
+        };
         Ok(Self {
+            command: self.command,
             raw_target: self.raw_target.clone(),
             raw_source: self.raw_source.clone(),
             raw_input_schema: self.raw_input_schema.clone(),
-            input: Arc::new(input),
-            touched_files_plan: Arc::new(touched),
-            options: self.options.clone(),
+            write_plan,
+            touched_files_plan,
+            condition: self.condition.clone(),
+            merge_options: self.merge_options.clone(),
+            target_format: self.target_format.clone(),
+            target_location: self.target_location.clone(),
+            target_table_name: self.target_table_name.clone(),
+            target_partition_by: self.target_partition_by.clone(),
+            target_options: self.target_options.clone(),
+            with_schema_evolution: self.with_schema_evolution,
             schema: self.schema.clone(),
         })
     }
@@ -961,6 +1110,9 @@ fn build_insert_only_projection(
         projections.push(expr.alias(name));
     }
 
+    // Insert-only path: all rows are INSERTs.
+    projections.push(lit(RowLevelOperationType::Insert.as_i32()).alias(OPERATION_COLUMN));
+
     Ok(projections)
 }
 
@@ -1276,6 +1428,27 @@ fn build_merge_projection(
     // Preserve the file path column so downstream physical planning can implement
     // targeted rewrite (filter writer input to touched files, while keeping inserts).
     projections.push(col(path_column).alias(path_column.to_string()));
+
+    // Append the operation type column so downstream writers know per-row semantics.
+    //   INSERT = 3 (not_matched_by_target → insert)
+    //   UPDATE = 2 (matched → update, not_matched_by_source → update, or unchanged copy)
+    //   DELETE is already filtered out, but matched → delete clauses are excluded above.
+    //
+    // Rows that survive the active_expr filter are either:
+    //   - Target rows (present) that were not deleted → UPDATE (2)
+    //   - Source-only rows (not_matched_by_target) that matched insert clauses → INSERT (3)
+    let insert_op = lit(RowLevelOperationType::Insert.as_i32());
+    let update_op = lit(RowLevelOperationType::Update.as_i32());
+    let op_expr = Expr::Case(Case {
+        expr: None,
+        when_then_expr: vec![(
+            Box::new(col(TARGET_PRESENT_COLUMN).is_null()),
+            Box::new(insert_op),
+        )],
+        else_expr: Some(Box::new(update_op)),
+    });
+    projections.push(op_expr.alias(OPERATION_COLUMN));
+
     Ok(projections)
 }
 

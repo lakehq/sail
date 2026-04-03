@@ -15,21 +15,18 @@ use std::sync::Arc;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
+use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
-    DeltaWriterExec,
+    DeltaDiscoveryExec, DeltaPhysicalExprAdapterFactory, DeltaScanByAddsExec,
 };
 
 pub async fn build_delete_plan(
@@ -103,7 +100,7 @@ pub async fn build_delete_plan(
 
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,
     // and DeltaScanByAddsExec may reorder/augment the schema compared to the original table schema.
-    let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
+    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
     let adapter = adapter_factory
         .create(table_schema.clone(), scan_exec.schema())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -112,32 +109,22 @@ pub async fn build_delete_plan(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let negated_condition = Arc::new(NotExpr::new(adapted_condition));
-    let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+    let filter_exec: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
 
-    let operation_override = Some(DeltaOperation::Delete {
+    let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,
     });
-    let writer_exec = Arc::new(DeltaWriterExec::new(
+
+    assemble_commit_plan(
         filter_exec,
+        Some(find_files_exec),
         ctx.table_url().clone(),
         ctx.options().clone(),
         ctx.metadata_configuration().clone(),
-        partition_columns.clone(),
-        PhysicalSinkMode::Append,
-        ctx.table_exists(),
-        table_schema.clone(),
-        operation_override,
-    )?);
-
-    let remove_exec = Arc::new(DeltaRemoveActionsExec::new(find_files_exec)?);
-    let union_exec = UnionExec::try_new(vec![writer_exec, remove_exec])?;
-
-    Ok(Arc::new(DeltaCommitExec::new(
-        Arc::new(CoalescePartitionsExec::new(union_exec)),
-        ctx.table_url().clone(),
         partition_columns,
         ctx.table_exists(),
         table_schema,
-        PhysicalSinkMode::Append,
-    )))
+        operation,
+    )
 }

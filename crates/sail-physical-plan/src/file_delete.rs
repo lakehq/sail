@@ -4,10 +4,14 @@ use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::Result;
-use sail_common_datafusion::datasource::{DeleteInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    RowLevelCommand, RowLevelTargetInfo, RowLevelWriteInfo, TableFormatRegistry,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::file_delete::FileDeleteOptions;
 
+/// Fallback physical planner for non-lakehouse DELETE (e.g. session planner).
+/// Lakehouse DELETEs are handled via `RowLevelWriteNode` → `create_row_level_write_physical_plan`.
 pub async fn create_file_delete_physical_plan(
     ctx: &SessionState,
     _planner: &dyn PhysicalPlanner,
@@ -15,22 +19,35 @@ pub async fn create_file_delete_physical_plan(
     options: FileDeleteOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let FileDeleteOptions {
-        table_name: _,
+        table_name,
         path,
         format,
         condition,
         options,
     } = options;
 
-    let info = DeleteInfo {
-        path,
+    let info = RowLevelWriteInfo {
+        command: RowLevelCommand::Delete,
+        target: RowLevelTargetInfo {
+            table_name,
+            path,
+            partition_by: Vec::new(),
+            options: options
+                .into_iter()
+                .map(|x| x.into_iter().collect())
+                .collect(),
+        },
         condition,
-        options: options
-            .into_iter()
-            .map(|x| x.into_iter().collect())
-            .collect(),
+        expanded_input: None,
+        touched_file_plan: None,
+        with_schema_evolution: false,
+        operation_override: None,
+        merge_strategy: Default::default(),
     };
 
     let registry = ctx.extension::<TableFormatRegistry>()?;
-    registry.get(&format)?.create_deleter(ctx, info).await
+    registry
+        .get(&format)?
+        .create_row_level_writer(ctx, info)
+        .await
 }

@@ -25,6 +25,7 @@ use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::stats::Statistics;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -32,7 +33,6 @@ use crate::kernel::snapshot::SnapshotPruningStats;
 use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategyOption};
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaSnapshot;
-pub const PATH_COLUMN: &str = "__sail_file_path";
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
 pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
