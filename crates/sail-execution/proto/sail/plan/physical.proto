@@ -82,7 +82,6 @@ message ExtendedScalarUdf {
     SparkTimestampUdf spark_timestamp = 10;
     SparkDateUdf spark_date = 11;
     SparkFromCsvUdf spark_from_csv = 12;
-    SparkSchemaOfJsonUdf spark_schema_of_json = 13;
   }
 }
 
@@ -164,8 +163,6 @@ message SparkDateUdf {
 message SparkFromCsvUdf {
   string session_timezone = 1;
 }
-
-message SparkSchemaOfJsonUdf {}
 
 message StandardUdaf {}
 

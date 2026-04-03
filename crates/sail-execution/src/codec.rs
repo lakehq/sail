@@ -1780,10 +1780,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkSchemaOfJson(gen::SparkSchemaOfJsonUdf {}) => {
-                let udf = SparkSchemaOfJson::new();
-                return Ok(Arc::new(ScalarUDF::from(udf)));
-            }
         };
         match name {
             "array_item_with_position" => {
@@ -1835,6 +1831,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
             "json_object_keys" | "json_keys" => {
                 Ok(sail_function::scalar::json::json_object_keys_udf())
+            }
+            "spark_schema_of_json" | "schema_of_json" => {
+                Ok(Arc::new(ScalarUDF::from(SparkSchemaOfJson::new())))
             }
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
@@ -2006,7 +2005,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkNextDay>()
             || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkReverse>()
-            || node_inner.is::<SparkSchemaOfJson>()
             || node_inner.is::<SparkSequence>()
             || node_inner.is::<SparkShuffle>()
             || node_inner.is::<SparkSha1>()
@@ -2121,8 +2119,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
-        } else if let Some(_func) = node.inner().as_any().downcast_ref::<SparkSchemaOfJson>() {
-            UdfKind::SparkSchemaOfJson(gen::SparkSchemaOfJsonUdf {})
         } else {
             return Ok(());
         };

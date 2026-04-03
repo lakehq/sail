@@ -111,7 +111,7 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
         Self::validate_arg_types(arg_types)?;
         let mut coerce_to = vec![DataType::Utf8];
         if arg_types.len() > 1 {
-            // Forcer le map<k,v> → map<Utf8, Utf8>
+            // Force map<k,v> → map<Utf8, Utf8>
             coerce_to.push(DataType::Map(
                 Arc::new(Field::new(
                     "entries",
