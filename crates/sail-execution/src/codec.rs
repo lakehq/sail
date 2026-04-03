@@ -85,7 +85,7 @@ use sail_data_source::formats::python::{
     PythonDataSourceWriteExec,
 };
 use sail_data_source::formats::rate::RateSourceExec;
-use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
+use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::options::gen::RateReadOptions;
@@ -826,7 +826,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             }) => {
-                let options = TableSocketOptions {
+                let options = SocketReadOptions {
                     host,
                     port: u16::try_from(port)
                         .map_err(|_| plan_datafusion_err!("invalid port for socket source"))?,

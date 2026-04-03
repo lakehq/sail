@@ -24,6 +24,24 @@ pub fn parse_bool(key: &str, value: &str) -> DataSourceResult<bool> {
     }
 }
 
+pub fn parse_u16(key: &str, value: &str) -> DataSourceResult<u16> {
+    value
+        .parse::<u16>()
+        .map_err(|_| DataSourceError::InvalidOption {
+            key: key.to_string(),
+            value: value.to_string(),
+        })
+}
+
+pub fn parse_u64(key: &str, value: &str) -> DataSourceResult<u64> {
+    value
+        .parse::<u64>()
+        .map_err(|_| DataSourceError::InvalidOption {
+            key: key.to_string(),
+            value: value.to_string(),
+        })
+}
+
 pub fn parse_i64(key: &str, value: &str) -> DataSourceResult<i64> {
     value
         .parse::<i64>()

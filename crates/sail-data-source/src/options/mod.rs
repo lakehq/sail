@@ -27,10 +27,10 @@ pub(crate) mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/iceberg_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text_write.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/socket_read.rs"));
 }
 
 pub mod gen {
+    include!(concat!(env!("OUT_DIR"), "/options/socket.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/rate.rs"));
 }
 

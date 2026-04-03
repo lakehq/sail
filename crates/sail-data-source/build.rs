@@ -142,7 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     build_options("IcebergWriteOptions", "iceberg_write")?;
     build_options("TextReadOptions", "text_read")?;
     build_options("TextWriteOptions", "text_write")?;
-    build_options("SocketReadOptions", "socket_read")?;
+    build_data_source_options("Socket", "socket")?;
     build_data_source_options("Rate", "rate")?;
     Ok(())
 }
