@@ -7591,6 +7591,14 @@
               }
             },
             {
+              "name": "Option(Tuple(Operator(LeftParenthesis), StringLiteral, Operator(RightParenthesis)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Operator(LeftParenthesis), StringLiteral, Operator(RightParenthesis))"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Option(Keyword(As)), Either(Identifier, IdentList)))",
               "node": {
                 "optional": {
@@ -9441,6 +9449,22 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Show)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Tblproperties)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), StringLiteral, Operator(RightParenthesis)))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Explain)"
                       },
                       {
@@ -11090,6 +11114,22 @@
                   },
                   {
                     "nonTerminal": "Sequence(ViewColumn, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Operator(LeftParenthesis), StringLiteral, Operator(RightParenthesis))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "StringLiteral"
                   },
                   {
                     "nonTerminal": "Operator(RightParenthesis)"
