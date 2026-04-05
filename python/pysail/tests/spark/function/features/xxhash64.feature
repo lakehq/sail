@@ -67,4 +67,4 @@ Feature: xxhash64() returns 64-bit xxHash
         """
         SELECT xxhash64() AS result
         """
-      Then query error (?s).*xxhash64.*zero arguments.*
+      Then query error (?s).*xxhash64.*requires at least one argument.*
