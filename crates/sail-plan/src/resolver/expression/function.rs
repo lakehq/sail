@@ -69,8 +69,20 @@ impl PlanResolver<'_> {
         // to a string literal before resolution.
         let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
 
+        // The resolution order here (UDF → built-in scalar → built-in aggregate) must match
+        // the function-dispatch order in the `let func = ...` chain below.
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
+                .await?
+        } else if catalog_manager
+            .get_function(&canonical_function_name)?
+            .is_some()
+            || get_built_in_function(&canonical_function_name).is_ok()
+        {
+            // For scalar functions and UDFs, expand any wildcard argument into the visible
+            // column list, matching PySpark's `_invoke_function_over_columns` semantics
+            // (e.g., `hash(*)` or `xxhash64(*)` expand to individual column references).
+            self.resolve_wildcard_expressions_and_names(arguments, schema, state)
                 .await?
         } else if get_built_in_aggregate_function(&canonical_function_name).is_ok() {
             // For aggregate functions, preserve wildcard arguments (e.g., `COUNT(*)`) as-is.
@@ -79,9 +91,7 @@ impl PlanResolver<'_> {
             self.resolve_expressions_and_names(arguments, schema, state)
                 .await?
         } else {
-            // For scalar functions and UDFs, expand any wildcard argument into the visible
-            // column list, matching PySpark's `_invoke_function_over_columns` semantics
-            // (e.g., `hash(*)` or `xxhash64(*)` expand to individual column references).
+            // For unknown functions, resolve arguments without expanding wildcards, to allow passing
             self.resolve_wildcard_expressions_and_names(arguments, schema, state)
                 .await?
         };
