@@ -114,8 +114,8 @@ fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             let str_from_pos = expr_fn::substr(str, start.clone());
             let pos = expr_fn::strpos(str_from_pos, substr);
             when(start.clone().lt_eq(lit(0i64)), lit(0i64))
-                .when(pos.clone().eq(lit(0)), lit(0))
-                .when(pos.clone().gt(lit(0)), start + pos - lit(1))
+                .when(pos.clone().eq(lit(0i64)), lit(0i64))
+                .when(pos.clone().gt(lit(0i64)), start + pos - lit(1i64))
                 .end()?
         }
         None => expr_fn::strpos(str, substr),
