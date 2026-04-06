@@ -6567,6 +6567,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "sail-build-scripts"
+version = "0.5.3"
+dependencies = [
+ "lazy_static",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "serde",
+ "serde_yaml",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "sail-cache"
 version = "0.5.3"
 dependencies = [
@@ -6791,6 +6805,7 @@ dependencies = [
  "pyo3",
  "quote",
  "regex",
+ "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
  "sail-sql-analyzer",

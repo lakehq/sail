@@ -90,25 +90,25 @@ def tables(spark):
         spark.sql(f"""
             CREATE TABLE t1
             USING socket
-            OPTIONS (
-                host '{server.host}',
-                port '{server.port}'
+            TBLPROPERTIES (
+                'option.host' = '{server.host}',
+                'option.port' = '{server.port}'
             )
         """)
         spark.sql("""
             CREATE TABLE t2_invalid_port
             USING socket
-            OPTIONS (
-                host 'localhost',
-                port '0'
+            TBLPROPERTIES (
+                'option.host' = 'localhost',
+                'option.port' = '0'
             )
         """)
         spark.sql("""
             CREATE TABLE t3_connection_failure
             USING socket
-            OPTIONS (
-                host 'localhost',
-                port '65535'
+            TBLPROPERTIES (
+                'option.host' = 'localhost',
+                'option.port' = '65535'
             )
         """)
         yield

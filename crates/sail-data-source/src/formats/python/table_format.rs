@@ -172,7 +172,12 @@ impl TableFormat for PythonTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         // Create PythonDataSource from options
-        let datasource = self.create_datasource(&info.options)?;
+        let opaque_options: Vec<HashMap<String, String>> = info
+            .options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let datasource = self.create_datasource(&opaque_options)?;
 
         // Get schema (use provided schema or discover from Python).
         // When a table is created without column definitions (e.g. `CREATE TABLE t USING fmt`),

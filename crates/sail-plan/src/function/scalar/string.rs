@@ -19,6 +19,7 @@ use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
+use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
@@ -284,7 +285,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("right", F::binary(expr_fn::right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
         ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
-        ("sentences", F::unknown("sentences")),
+        ("sentences", F::udf(SparkSentences::new())),
         ("soundex", F::udf(Soundex::new())),
         ("space", F::unary(space)),
         ("split", F::udf(SparkSplit::new())),

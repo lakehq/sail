@@ -49,18 +49,45 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::GroupedMapPandas
         | PySparkUdfType::GroupedMapArrow
         | PySparkUdfType::WindowAggPandas
+        | PySparkUdfType::WindowAggArrow
         | PySparkUdfType::MapPandasIter
         | PySparkUdfType::CogroupedMapPandas
         | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
-        | PySparkUdfType::Table
-        | PySparkUdfType::ArrowTable => false,
-        PySparkUdfType::Batched
+        | PySparkUdfType::TransformWithStatePandas
+        | PySparkUdfType::TransformWithStatePandasInitState
+        | PySparkUdfType::TransformWithStatePythonRow
+        | PySparkUdfType::TransformWithStatePythonRowInitState
+        | PySparkUdfType::GroupedMapArrowIter
+        | PySparkUdfType::GroupedMapPandasIter => false,
+        PySparkUdfType::Table
+        | PySparkUdfType::ArrowTable
+        | PySparkUdfType::ArrowUdtf
+        | PySparkUdfType::Batched
         | PySparkUdfType::ArrowBatched
         | PySparkUdfType::ScalarPandas
         | PySparkUdfType::GroupedAggPandas
-        | PySparkUdfType::ScalarPandasIter => true,
+        | PySparkUdfType::GroupedAggPandasIter
+        | PySparkUdfType::ScalarPandasIter
+        | PySparkUdfType::ScalarArrow
+        | PySparkUdfType::ScalarArrowIter
+        | PySparkUdfType::GroupedAggArrow
+        | PySparkUdfType::GroupedAggArrowIter => true,
+    }
+}
+
+/// Writes the keyword argument flag and name for a single argument into `data`.
+/// If the argument at `index` is a keyword argument, writes `1u8` followed by
+/// the length-prefixed UTF-8 name. Otherwise writes `0u8` (positional).
+pub(crate) fn write_kwarg(data: &mut Vec<u8>, kwargs: &[Option<String>], index: usize) {
+    if let Some(name) = kwargs.get(index).and_then(|k| k.as_deref()) {
+        data.extend(1u8.to_be_bytes()); // keyword argument flag
+        let name_bytes = name.as_bytes();
+        data.extend((name_bytes.len() as i32).to_be_bytes());
+        data.extend(name_bytes);
+    } else {
+        data.extend(0u8.to_be_bytes()); // positional argument flag
     }
 }
 
@@ -74,13 +101,26 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::GroupedMapPandas
         | PySparkUdfType::GroupedMapArrow
         | PySparkUdfType::GroupedAggPandas
+        | PySparkUdfType::GroupedAggPandasIter
         | PySparkUdfType::WindowAggPandas
+        | PySparkUdfType::WindowAggArrow
         | PySparkUdfType::ScalarPandasIter
         | PySparkUdfType::MapPandasIter
         | PySparkUdfType::CogroupedMapPandas
         | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
-        | PySparkUdfType::ArrowTable => true,
+        | PySparkUdfType::TransformWithStatePandas
+        | PySparkUdfType::TransformWithStatePandasInitState
+        | PySparkUdfType::TransformWithStatePythonRow
+        | PySparkUdfType::TransformWithStatePythonRowInitState
+        | PySparkUdfType::GroupedMapArrowIter
+        | PySparkUdfType::GroupedMapPandasIter
+        | PySparkUdfType::ScalarArrow
+        | PySparkUdfType::ScalarArrowIter
+        | PySparkUdfType::GroupedAggArrow
+        | PySparkUdfType::GroupedAggArrowIter
+        | PySparkUdfType::ArrowTable
+        | PySparkUdfType::ArrowUdtf => true,
     }
 }

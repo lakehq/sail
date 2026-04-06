@@ -121,8 +121,14 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             options,
         } = info;
 
+        let opaque_options: Vec<std::collections::HashMap<String, String>> = options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
-        let file_format = self.inner.create_read_format(ctx, options.clone(), None)?;
+        let file_format = self
+            .inner
+            .create_read_format(ctx, opaque_options.clone(), None)?;
         let extension_with_compression =
             file_format.compression_type().and_then(|compression_type| {
                 match file_format.get_ext_with_compression(&compression_type) {
@@ -149,7 +155,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                     &urls,
                     &mut listing_options,
                     &extension_with_compression,
-                    options,
+                    opaque_options,
                     self,
                 )
                 .await?;
