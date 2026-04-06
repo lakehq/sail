@@ -75,9 +75,24 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
+    // Spark uses 1-based indexing, but treats pos=0 the same as pos=1 (start of string).
+    // For negative positions, Spark counts from the end of the string.
+    // DataFusion follows the SQL standard where pos=0 reduces the effective length by 1,
+    // and pos<0 reduces even more. We convert Spark's semantics to DataFusion's:
+    // - pos > 0: use as-is (1-based from start)
+    // - pos = 0: use 1 (same behavior as pos=1 in Spark)
+    // - pos < 0: use greatest(char_length(str) + pos + 1, 1) (absolute position from end)
+    let adjusted_position = when(position.clone().gt(lit(0i64)), position.clone())
+        .when(position.clone().eq(lit(0i64)), lit(1i64))
+        .otherwise(expr_fn::greatest(vec![
+            cast(expr_fn::char_length(string.clone()), DataType::Int64)
+                + position.clone()
+                + lit(1i64),
+            lit(1i64),
+        ]))?;
     let substr_res = match length_opt {
-        Some(length) => expr_fn::substring(string, position, length),
-        None => expr_fn::substr(string, position),
+        Some(length) => expr_fn::substring(string, adjusted_position, length),
+        None => expr_fn::substr(string, adjusted_position),
     };
     // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
     //  when the return type is Utf8View.
