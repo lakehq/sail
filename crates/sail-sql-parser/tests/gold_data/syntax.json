@@ -2221,6 +2221,13 @@
                         "nonTerminal": "Operator(RightParenthesis)"
                       }
                     ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Variant)"
+                      }
+                    ]
                   }
                 ]
               }
@@ -6010,6 +6017,14 @@
               "node": {
                 "terminal": {
                   "keyword": "VARCHAR"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Variant)",
+              "node": {
+                "terminal": {
+                  "keyword": "VARIANT"
                 }
               }
             },

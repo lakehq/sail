@@ -31,11 +31,14 @@ pub fn to_struct_array(
         .zip(arg_fields.iter())
         .map(|((arg, field_name), arg_field)| {
             Ok((
-                Arc::new(Field::new(
-                    field_name.as_str(),
-                    arg.data_type().clone(),
-                    arg_field.is_nullable(),
-                )),
+                Arc::new(
+                    Field::new(
+                        field_name.as_str(),
+                        arg.data_type().clone(),
+                        arg_field.is_nullable(),
+                    )
+                    .with_metadata(arg_field.metadata().clone()),
+                ),
                 arg.clone(),
             ))
         })
@@ -93,10 +96,13 @@ impl ScalarUDFImpl for StructFunction {
                     arg_field.data_type().clone(),
                     arg_field.is_nullable(),
                 )
+                .with_metadata(arg_field.metadata().clone())
             })
             .collect();
 
-        // Spark marks struct as nullable when any child field is nullable
+        // Spark marks struct as nullable when any child field is nullable.
+        // This matches Spark's StructType behavior: the struct itself is nullable
+        // to reflect that its contents may contain nulls.
         let struct_nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         let struct_type = DataType::Struct(Fields::from(fields));
         Ok(Arc::new(Field::new(

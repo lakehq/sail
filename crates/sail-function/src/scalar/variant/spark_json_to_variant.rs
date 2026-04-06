@@ -51,10 +51,12 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // Use Binary instead of BinaryView for PySpark compatibility
-        // TODO: Canonical variant layout uses BinaryView, but PySpark doesn't
-        // support BinaryView in Arrow conversion. Using Binary for compatibility.
-        // The canonical layout is: metadata: BinaryView (non-null), value: BinaryView (nullable)
+        // Use Binary instead of BinaryView for PySpark compatibility.
+        // parquet-variant uses BinaryView internally (zero-copy, more efficient),
+        // but PySpark doesn't support BinaryView in Arrow-to-Python conversion,
+        // failing at gRPC serialization. The ideal approach would be BinaryView
+        // internally and convert to Binary only at the Spark Connect serialization
+        // layer, but that requires a broader refactor of the serialization path.
         Ok(DataType::Struct(Fields::from(vec![
             Field::new("metadata", DataType::Binary, false),
             Field::new("value", DataType::Binary, false),
@@ -185,7 +187,7 @@ macro_rules! define_from_string_array {
 define_from_string_array!(from_utf8view_arr, StringViewArray);
 
 /// Converts a StructArray with BinaryView fields to Binary fields for PySpark compatibility
-fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<StructArray> {
+pub(crate) fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<StructArray> {
     let fields: Vec<Arc<Field>> = struct_array
         .fields()
         .iter()

@@ -3,6 +3,16 @@ use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, Field};
 use datafusion_common::{exec_err, ScalarValue};
 use parquet_variant_compute::{VariantArray, VariantType};
+use sail_common::spec::{ARROW_EXTENSION_NAME_KEY, VARIANT_EXTENSION_NAME};
+
+/// Returns `true` if the field has Variant extension metadata.
+pub fn is_variant_field(field: &Field) -> bool {
+    field
+        .metadata()
+        .get(ARROW_EXTENSION_NAME_KEY)
+        .map(|s| s == VARIANT_EXTENSION_NAME)
+        .unwrap_or(false)
+}
 
 pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()> {
     // Accept Null type (for parse_json(null) case)
@@ -10,16 +20,8 @@ pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()
         return Ok(());
     }
 
-    // Check extension type name exists before calling extension_type()
-    // which panics in arrow 57.3 if ARROW:extension:name is missing
-    let has_variant_ext = field
-        .metadata()
-        .get("ARROW:extension:name")
-        .map(|s| s == "arrow.parquet.variant")
-        .unwrap_or(false);
-
     ensure(
-        has_variant_ext,
+        is_variant_field(field),
         "field does not have extension type VariantType",
     )?;
 

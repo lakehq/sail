@@ -144,6 +144,9 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
     // Resolve the target type.
     // For Decimal/Timestamp, parquet-variant doesn't support direct extraction,
     // so we extract as an intermediate type and then cast.
+    // Decimal: extract as Float64 then cast (loses precision beyond ~15 digits;
+    //   a more precise approach would be String→Decimal parsing).
+    // Timestamp: extract as Utf8 then cast (preserves full precision).
     let final_type = type_str.as_deref().map(spark_type_to_arrow).transpose()?;
     let (extract_field, needs_post_cast) = match &final_type {
         Some(DataType::Decimal128(_, _)) => (

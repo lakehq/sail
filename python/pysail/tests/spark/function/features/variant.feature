@@ -776,3 +776,59 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | 42      |
         | NULL    |
         | {"a":1} |
+
+  Rule: CAST to VARIANT
+
+    Scenario: CAST string to variant
+      When query
+        """
+        SELECT CAST('hello' AS VARIANT) AS result
+        """
+      Then query result
+        | result  |
+        | "hello" |
+
+    Scenario: CAST integer to variant
+      When query
+        """
+        SELECT CAST(42 AS VARIANT) AS result
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    Scenario: CAST null to variant
+      When query
+        """
+        SELECT CAST(NULL AS VARIANT) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: CAST boolean to variant
+      When query
+        """
+        SELECT CAST(true AS VARIANT) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: CAST decimal to variant
+      When query
+        """
+        SELECT CAST(CAST(99.99 AS DECIMAL(10,2)) AS VARIANT) AS result
+        """
+      Then query result
+        | result |
+        | 99.99  |
+
+    Scenario: CAST array to variant
+      When query
+        """
+        SELECT CAST(array(1,2,3) AS VARIANT) AS result
+        """
+      Then query result
+        | result  |
+        | [1,2,3] |

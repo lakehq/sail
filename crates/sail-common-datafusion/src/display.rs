@@ -318,11 +318,11 @@ fn make_formatter<'a>(
         DataType::Struct(_) => {
             let struct_array = as_struct_array(array);
 
-            // Check if this is a Variant by verifying:
-            // 1. Has exactly 2 fields in order: metadata, value
-            // 2. Both fields are Binary or BinaryView type
-            //    (Binary for PySpark compatibility, BinaryView internally)
-            // 3. VariantArray::try_new succeeds (validates structure without panicking)
+            // Check if this is a Variant using structural heuristics.
+            // TODO: Ideally we would check ARROW:extension:name metadata on the parent Field,
+            // but make_formatter only receives an &dyn Array (no parent field metadata).
+            // Plumbing field metadata through the formatter API is a larger refactor.
+            // The structural check + VariantArray::try_new is specific enough for now.
             let is_variant = struct_array.fields().len() == 2
                 && struct_array.fields()[0].name() == "metadata"
                 && matches!(

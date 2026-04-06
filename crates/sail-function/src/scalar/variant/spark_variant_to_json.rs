@@ -14,6 +14,46 @@ use parquet_variant_json::VariantToJson;
 use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::utils::helper::try_field_as_variant_array;
 
+/// Converts a variant ColumnarValue to a Utf8View JSON string representation.
+/// This is the shared logic used by both `variant_to_json` and `to_json` (for variant inputs).
+pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
+    match arg {
+        ColumnarValue::Scalar(scalar) => match scalar {
+            ScalarValue::Null => Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None))),
+            ScalarValue::Struct(variant_array) => {
+                let variant_array = VariantArray::try_new(variant_array.as_ref())?;
+                if variant_array.is_empty() {
+                    return exec_err!("Cannot convert empty VariantArray to JSON: the array must contain at least one element");
+                }
+                if variant_array.is_null(0) {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None)))
+                } else {
+                    let v = variant_array.value(0);
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                        v.to_json_string()?,
+                    ))))
+                }
+            }
+            _ => exec_err!("Unsupported data type: {}", scalar.data_type()),
+        },
+        ColumnarValue::Array(arr) => match arr.data_type() {
+            DataType::Struct(_) => {
+                let variant_array = VariantArray::try_new(arr.as_ref())?;
+                let mut builder =
+                    arrow::array::StringViewBuilder::with_capacity(variant_array.len());
+                for variant in variant_array.iter() {
+                    match variant {
+                        Some(v) => builder.append_value(v.to_json_string()?),
+                        None => builder.append_null(),
+                    }
+                }
+                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+            }
+            unsupported => exec_err!("Invalid data type: {unsupported}"),
+        },
+    }
+}
+
 /// Returns a JSON string from a VariantArray
 ///
 /// ## Arguments
@@ -66,46 +106,7 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
 
         try_field_as_variant_array(field.as_ref())?;
 
-        let arg = &args.args[0];
-
-        let out = match arg {
-            ColumnarValue::Scalar(scalar) => match scalar {
-                ScalarValue::Null => ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
-                ScalarValue::Struct(variant_array) => {
-                    let variant_array = VariantArray::try_new(variant_array.as_ref())?;
-                    if variant_array.is_empty() {
-                        return exec_err!("Cannot convert empty VariantArray to JSON: the array must contain at least one element");
-                    }
-                    if variant_array.is_null(0) {
-                        ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-                    } else {
-                        let v = variant_array.value(0);
-                        ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v.to_json_string()?)))
-                    }
-                }
-                _ => return exec_err!("Unsupported data type: {}", scalar.data_type()),
-            },
-            ColumnarValue::Array(arr) => match arr.data_type() {
-                DataType::Struct(_) => {
-                    let variant_array = VariantArray::try_new(arr.as_ref())?;
-
-                    let mut builder =
-                        arrow::array::StringViewBuilder::with_capacity(variant_array.len());
-                    for variant in variant_array.iter() {
-                        match variant {
-                            Some(v) => builder.append_value(v.to_json_string()?),
-                            None => builder.append_null(),
-                        }
-                    }
-                    let string_view_array = builder.finish();
-
-                    ColumnarValue::Array(Arc::new(string_view_array))
-                }
-                unsupported => return exec_err!("Invalid data type: {unsupported}"),
-            },
-        };
-
-        Ok(out)
+        variant_to_json_columnar(&args.args[0])
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

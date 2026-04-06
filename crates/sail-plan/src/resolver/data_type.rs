@@ -331,7 +331,7 @@ impl PlanResolver<'_> {
                 // and are automatically filtered from Spark client responses.
                 // Edges default to planar in GeoArrow, so we omit them for Geometry.
                 metadata.insert(
-                    "ARROW:extension:name".to_string(),
+                    spec::ARROW_EXTENSION_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
                 let mut ext = json!({});
@@ -347,7 +347,7 @@ impl PlanResolver<'_> {
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
                 metadata.insert(
-                    "ARROW:extension:name".to_string(),
+                    spec::ARROW_EXTENSION_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
                 let mut ext = json!({"edges": "spherical"});
@@ -359,8 +359,8 @@ impl PlanResolver<'_> {
             }
             spec::DataType::Variant => {
                 metadata.insert(
-                    "ARROW:extension:name".to_string(),
-                    "arrow.parquet.variant".to_string(),
+                    spec::ARROW_EXTENSION_NAME_KEY.to_string(),
+                    spec::VARIANT_EXTENSION_NAME.to_string(),
                 );
                 data_type
             }

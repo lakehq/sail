@@ -122,6 +122,11 @@ impl TryFrom<adt::Field> for sdt::StructField {
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
         let is_udt = field.metadata().keys().any(|k| k.starts_with("udt."));
         let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
+        let is_variant = field
+            .metadata()
+            .get(sail_common::spec::ARROW_EXTENSION_NAME_KEY)
+            .map(|s| s == sail_common::spec::VARIANT_EXTENSION_NAME)
+            .unwrap_or(false);
 
         let data_type = if is_udt {
             DataType {
@@ -159,6 +164,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
                         type_variation_reference: 0,
                     })),
                 }
+            }
+        } else if is_variant {
+            DataType {
+                kind: Some(sdt::Kind::Variant(sdt::Variant {
+                    type_variation_reference: 0,
+                })),
             }
         } else {
             field.data_type().clone().try_into()?
