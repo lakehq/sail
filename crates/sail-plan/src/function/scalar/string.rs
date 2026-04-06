@@ -82,14 +82,21 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // - pos > 0: use as-is (1-based from start)
     // - pos = 0: use 1 (same behavior as pos=1 in Spark)
     // - pos < 0: use greatest(char_length(str) + pos + 1, 1) (absolute position from end)
-    let adjusted_position = when(position.clone().gt(lit(0i64)), position.clone())
-        .when(position.clone().eq(lit(0i64)), lit(1i64))
-        .otherwise(expr_fn::greatest(vec![
-            cast(expr_fn::char_length(string.clone()), DataType::Int64)
-                + position.clone()
-                + lit(1i64),
-            lit(1i64),
-        ]))?;
+    // For literal positive positions (the common case), we skip the CASE WHEN to keep plans clean.
+    let adjusted_position = match &position {
+        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) if *n > 0 => position,
+        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) if *n > 0 => position,
+        expr::Expr::Literal(ScalarValue::Int64(Some(0)), _)
+        | expr::Expr::Literal(ScalarValue::Int32(Some(0)), _) => lit(1i64),
+        _ => when(position.clone().gt(lit(0i64)), position.clone())
+            .when(position.clone().eq(lit(0i64)), lit(1i64))
+            .otherwise(expr_fn::greatest(vec![
+                cast(expr_fn::char_length(string.clone()), DataType::Int64)
+                    + position.clone()
+                    + lit(1i64),
+                lit(1i64),
+            ]))?,
+    };
     let substr_res = match length_opt {
         Some(length) => expr_fn::substring(string, adjusted_position, length),
         None => expr_fn::substr(string, adjusted_position),

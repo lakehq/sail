@@ -24,7 +24,7 @@ Feature: substring() and substr() extract substrings
     Scenario: substring without length returns tail
       When query
         """
-        SELECT substring('Spark SQL', 6) AS result
+        SELECT substring('Spark SQL', 7) AS result
         """
       Then query result
         | result |
