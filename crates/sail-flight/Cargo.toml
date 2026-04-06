@@ -26,6 +26,7 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
+thiserror = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 

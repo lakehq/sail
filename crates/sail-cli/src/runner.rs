@@ -66,8 +66,6 @@ enum SparkCommand {
             help = "The port number that the server listens on"
         )]
         port: u16,
-        #[arg(long, help = "Also start the Arrow Flight SQL server on this port")]
-        flight_port: Option<u16>,
         #[arg(
             short = 'C',
             long,
@@ -144,13 +142,12 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
             SparkCommand::Server {
                 ip,
                 port,
-                flight_port,
                 directory,
             } => {
                 if let Some(directory) = directory {
                     std::env::set_current_dir(directory)?;
                 }
-                run_spark_connect_server(ip.parse()?, port, flight_port)
+                run_spark_connect_server(ip.parse()?, port)
             }
             SparkCommand::Shell => {
                 // TODO: Why is there warning about leaked semaphore objects

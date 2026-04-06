@@ -51,6 +51,9 @@ test = [
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
     "vortex-data>=0.64,<1",
+    "pyarrow>=19.0,<20",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
 ]
 mcp = [
     "mcp>=1.0.0,<2",

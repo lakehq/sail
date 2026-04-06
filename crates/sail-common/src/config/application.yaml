@@ -742,6 +742,14 @@
     If the value is `0`, there is no limit on the number of rows returned.
   experimental: true
 
+- key: flight.session_timeout_secs
+  type: number
+  default: "3600"
+  description: |
+    The timeout in seconds for idle Flight SQL sessions.
+    Sessions that have been inactive for longer than this duration will be cleaned up.
+  experimental: true
+
 - key: telemetry.export_traces
   type: boolean
   default: "false"

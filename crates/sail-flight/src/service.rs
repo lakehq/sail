@@ -99,22 +99,21 @@ impl QueryKind {
     }
 }
 
+pub struct SailFlightSqlOptions {
+    /// Maximum rows to return per query (0 = unlimited)
+    pub max_rows: usize,
+}
+
 pub struct SailFlightSqlService {
     session_manager: SessionManager,
     config: Arc<PlanConfig>,
-    /// Maximum rows to return per query (0 = unlimited)
-    max_rows: usize,
+    options: SailFlightSqlOptions,
     /// Optional metric registry for OTLP metrics (None if telemetry disabled)
     metrics: Option<Arc<MetricRegistry>>,
 }
 
 impl SailFlightSqlService {
-    /// Create a new service with the given configuration
-    ///
-    /// # Arguments
-    /// * `session_manager` - SessionManager for multi-session support
-    /// * `max_rows` - Maximum rows to return per query (0 = unlimited)
-    pub fn new(session_manager: SessionManager, max_rows: usize) -> Self {
+    pub fn new(session_manager: SessionManager, options: SailFlightSqlOptions) -> Self {
         let config = Arc::new(PlanConfig::default());
 
         // Get global metric registry if telemetry is enabled
@@ -126,7 +125,7 @@ impl SailFlightSqlService {
         SailFlightSqlService {
             session_manager,
             config,
-            max_rows,
+            options,
             metrics,
         }
     }
@@ -339,35 +338,36 @@ impl SailFlightSqlService {
         let num_batches = batches.len();
 
         // Apply max_rows limit if configured (0 = unlimited)
-        let (batches, was_truncated) = if self.max_rows > 0 && total_rows > self.max_rows {
-            let mut limited_batches = Vec::new();
-            let mut rows_remaining = self.max_rows;
+        let (batches, was_truncated) =
+            if self.options.max_rows > 0 && total_rows > self.options.max_rows {
+                let mut limited_batches = Vec::new();
+                let mut rows_remaining = self.options.max_rows;
 
-            for batch in batches {
-                if rows_remaining == 0 {
-                    break;
+                for batch in batches {
+                    if rows_remaining == 0 {
+                        break;
+                    }
+                    if batch.num_rows() <= rows_remaining {
+                        rows_remaining -= batch.num_rows();
+                        limited_batches.push(batch);
+                    } else {
+                        // Slice the batch to fit the limit
+                        let sliced = batch.slice(0, rows_remaining);
+                        limited_batches.push(sliced);
+                        rows_remaining = 0;
+                    }
                 }
-                if batch.num_rows() <= rows_remaining {
-                    rows_remaining -= batch.num_rows();
-                    limited_batches.push(batch);
-                } else {
-                    // Slice the batch to fit the limit
-                    let sliced = batch.slice(0, rows_remaining);
-                    limited_batches.push(sliced);
-                    rows_remaining = 0;
-                }
-            }
-            (limited_batches, true)
-        } else {
-            (batches, false)
-        };
+                (limited_batches, true)
+            } else {
+                (batches, false)
+            };
 
         let final_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
 
         if was_truncated {
             warn!(
                 "Query results truncated: {} rows returned (limit: {}), original: {} rows",
-                final_rows, self.max_rows, total_rows
+                final_rows, self.options.max_rows, total_rows
             );
         }
 
@@ -679,16 +679,6 @@ impl FlightSqlService for SailFlightSqlService {
 
         Ok(Response::new(info))
     }
-
-    // ========================================================================
-    // Unimplemented Flight SQL Operations (Future Work)
-    // ========================================================================
-    //
-    // The following methods are part of the Arrow Flight SQL specification
-    // but are not yet implemented. They return Status::unimplemented() to
-    // indicate to clients that these operations are not supported.
-    //
-    // See ARCHITECTURE.md for implementation roadmap.
 
     async fn get_flight_info_substrait_plan(
         &self,

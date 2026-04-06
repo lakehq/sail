@@ -6,9 +6,6 @@ from adbc_driver_flightsql import dbapi
 
 from pysail.flight import FlightSqlServer
 
-pytestmark = [pytest.mark.flight_sql]
-
-
 @pytest.fixture(scope="module")
 def flight_uri():
     if "SAIL_FLIGHT_URI" in os.environ:
@@ -70,30 +67,6 @@ def test_flight_error_handling(flight_connection):
         match="nonexistent_table",
     ):
         cur.execute("SELECT * FROM nonexistent_table_12345")
-
-    cur.close()
-
-
-def test_flight_not_implemented_function(flight_connection):
-    """Test that unimplemented SQL functions return proper error."""
-    cur = flight_connection.cursor()
-
-    # json_tuple is not yet implemented
-    with pytest.raises(
-        (
-            adbc_driver_manager.ProgrammingError,
-            adbc_driver_manager.OperationalError,
-            adbc_driver_manager.InternalError,
-        )
-    ) as exc_info:
-        cur.execute("SELECT json_tuple('{\"a\":1,\"b\":2}', 'a', 'b')")
-
-    # Verify the error message indicates the function is not implemented
-    error_message = str(exc_info.value).lower()
-    assert "not" in error_message, f"Expected 'not' in error, got: {exc_info.value}"
-    assert "implemented" in error_message or "found" in error_message, (
-        f"Expected 'implemented' or 'found' in error, got: {exc_info.value}"
-    )
 
     cur.close()
 

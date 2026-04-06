@@ -6912,6 +6912,7 @@ dependencies = [
  "sail-sql-analyzer",
  "sail-sql-parser",
  "sail-telemetry",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-build",

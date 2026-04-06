@@ -120,33 +120,6 @@ where
     })
 }
 
-pub fn run_spark_connect_server(
-    ip: IpAddr,
-    port: u16,
-    flight_port: Option<u16>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    match flight_port {
-        None => with_spark_connect_server((ip, port), shutdown(), |_| async { Ok(()) }),
-        Some(fp) => {
-            with_spark_connect_server((ip, port), shutdown(), move |_server_address| async move {
-                let flight_config = Arc::new(AppConfig::load()?);
-                let flight_runtime = RuntimeManager::try_new(&flight_config.runtime)?;
-                let flight_listener = TcpListener::bind((ip, fp)).await?;
-                info!(
-                    "Starting the Flight SQL server on {}...",
-                    flight_listener.local_addr()?
-                );
-                let flight_handle = flight_runtime.handle().clone();
-                sail_flight::serve(
-                    flight_listener,
-                    async {
-                        let _ = tokio::signal::ctrl_c().await;
-                    },
-                    flight_config,
-                    flight_handle,
-                )
-                .await
-            })
-        }
-    }
+pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    with_spark_connect_server((ip, port), shutdown(), |_| async { Ok(()) })
 }
