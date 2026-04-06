@@ -83,7 +83,7 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // - pos = 0: use 1 (same behavior as pos=1 in Spark)
     // - pos < 0: use greatest(char_length(str) + pos + 1, 1) (absolute position from end)
     // For literal positive positions (the common case), we skip the CASE WHEN to keep plans clean.
-    let adjusted_position = match &position {
+    let position = match &position {
         expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) if *n > 0 => position,
         expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) if *n > 0 => position,
         expr::Expr::Literal(ScalarValue::Int64(Some(0)), _)
@@ -98,8 +98,8 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             ]))?,
     };
     let substr_res = match length_opt {
-        Some(length) => expr_fn::substring(string, adjusted_position, length),
-        None => expr_fn::substr(string, adjusted_position),
+        Some(length) => expr_fn::substring(string, position, length),
+        None => expr_fn::substr(string, position),
     };
     // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
     //  when the return type is Utf8View.
