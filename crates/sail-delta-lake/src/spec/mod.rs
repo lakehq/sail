@@ -26,11 +26,12 @@ pub use checksum::VersionChecksum;
 pub use datafusion::arrow::datatypes::SchemaRef;
 pub use error::{CommitConflictError, DeltaError, DeltaResult, TransactionError};
 pub use log::{
-    checkpoint_path, checksum_path, commit_path, delta_log_file_path, delta_log_prefix_path,
-    delta_log_root_path, is_uuid_checkpoint_filename, last_checkpoint_path,
-    parse_checkpoint_version, parse_checksum_version, parse_commit_version, parse_version_prefix,
-    sidecar_file_path, sidecars_dir_path, temp_commit_path, uuid_checkpoint_path, DELTA_LOG_DIR,
-    LAST_CHECKPOINT_FILE, SIDECARS_DIR,
+    checkpoint_path, checksum_path, commit_path, compacted_json_path, delta_log_file_path,
+    delta_log_prefix_path, delta_log_root_path, is_compacted_json_filename,
+    is_uuid_checkpoint_filename, last_checkpoint_path, parse_checkpoint_version,
+    parse_checksum_version, parse_commit_version, parse_compacted_json_versions,
+    parse_version_prefix, sidecar_file_path, sidecars_dir_path, temp_commit_path,
+    uuid_checkpoint_path, DELTA_LOG_DIR, LAST_CHECKPOINT_FILE, SIDECARS_DIR,
 };
 pub use metadata::{Format, Metadata};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};

@@ -136,18 +136,6 @@ These results come from a derived TPC-H benchmark (22 queries, scale factor 100,
 
 See the full analysis and graphs on our [Benchmark Results](https://docs.lakesail.com/sail/latest/introduction/benchmark-results/) page.
 
-## Contributing
-
-Contributions are more than welcome!
-
-Please submit [GitHub issues](https://github.com/lakehq/sail/issues) for bug reports and feature requests.
-You are also welcome to ask questions in [GitHub discussions](https://github.com/lakehq/sail/discussions).
-
-Feel free to create a [pull request](https://github.com/lakehq/sail/pulls) if you would like to make a code change.
-You can refer to the [Development Guide](https://docs.lakesail.com/sail/main/development/) to get started.
-
-Additionally, please join our [Slack Community](https://www.launchpass.com/lakesail-community/free) if you haven’t already!
-
 ## Why Choose Sail?
 
 When Spark was invented over 15 years ago, it was revolutionary. It redefined distributed data processing and powered ETL, machine learning, and analytics pipelines across industries.

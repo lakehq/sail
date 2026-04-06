@@ -8,6 +8,7 @@ pub mod spark_base64;
 pub mod spark_concat_ws;
 pub mod spark_encode_decode;
 pub mod spark_mask;
+pub mod spark_sentences;
 pub mod spark_split;
 pub mod spark_to_binary;
 pub mod spark_to_number;

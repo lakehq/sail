@@ -16,7 +16,7 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
-use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
+use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{get_null_treatment, FunctionContextInput, WinFunctionInput};
@@ -123,6 +123,7 @@ impl PlanResolver<'_> {
                     function,
                 } = function;
                 let function_name: String = function_name.into();
+                let (arguments, kwargs) = Self::extract_kwargs(arguments);
                 let (argument_display_names, arguments) = self
                     .resolve_expressions_and_names(arguments, schema, state)
                     .await?;
@@ -137,11 +138,35 @@ impl PlanResolver<'_> {
                     &function.command,
                     function.eval_type,
                     &((0..arguments.len()).collect::<Vec<_>>()),
+                    &kwargs,
                     &self.config.pyspark_udf_config,
                 )?;
-                let function = match function.eval_type {
-                    spec::PySparkUdfType::GroupedAggPandas => {
+                let (function, arguments) = match function.eval_type {
+                    spec::PySparkUdfType::GroupedAggPandas
+                    | spec::PySparkUdfType::GroupedAggPandasIter
+                    | spec::PySparkUdfType::GroupedAggArrow
+                    | spec::PySparkUdfType::GroupedAggArrowIter
+                    | spec::PySparkUdfType::WindowAggPandas
+                    | spec::PySparkUdfType::WindowAggArrow => {
+                        let kind = match function.eval_type {
+                            spec::PySparkUdfType::GroupedAggArrow
+                            | spec::PySparkUdfType::GroupedAggArrowIter
+                            | spec::PySparkUdfType::WindowAggArrow => PySparkGroupAggKind::Arrow,
+                            _ => PySparkGroupAggKind::Pandas,
+                        };
+                        // DataFusion requires at least one input to an aggregate function.
+                        // For 0-arg UDFs inject a dummy Int64 literal; the accumulator strips it.
+                        let actual_arg_count = arguments.len();
+                        let (arguments, input_types) = if arguments.is_empty() {
+                            (
+                                vec![datafusion_expr::lit(0i64)],
+                                vec![arrow::datatypes::DataType::Int64],
+                            )
+                        } else {
+                            (arguments, input_types)
+                        };
                         let udaf = PySparkGroupAggregateUDF::new(
+                            kind,
                             get_udf_name(&function_name, &payload),
                             payload,
                             deterministic,
@@ -149,9 +174,13 @@ impl PlanResolver<'_> {
                             input_types,
                             function.output_type,
                             self.config.pyspark_udf_config.clone(),
+                            actual_arg_count,
                         );
                         let udaf = AggregateUDF::from(udaf);
-                        expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf))
+                        (
+                            expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf)),
+                            arguments,
+                        )
                     }
                     _ => {
                         return Err(PlanError::invalid(

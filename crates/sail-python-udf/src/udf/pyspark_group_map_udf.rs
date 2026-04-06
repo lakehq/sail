@@ -134,6 +134,7 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
             self.input_types.clone(),
             self.output_type.clone(),
             aggregator,
+            self.input_types.len(), // all inputs are real (no dummy)
         )))
     }
 

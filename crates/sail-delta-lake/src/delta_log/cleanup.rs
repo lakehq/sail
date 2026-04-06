@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use super::{
     parse_checkpoint_version_from_location, parse_checksum_version_from_location,
-    parse_commit_version_from_location, resolve_version_timestamp,
+    parse_commit_version_from_location, parse_compacted_json_versions_from_location,
+    resolve_version_timestamp,
 };
 use crate::kernel::checkpoints::read_checkpoint_main_rows_from_parquet;
 use crate::kernel::snapshot::DeltaSnapshot;
@@ -47,6 +48,8 @@ enum DeltaLogFile {
     Commit(i64),
     Checksum(i64),
     Checkpoint(i64),
+    /// Compacted JSON covering [start, end].
+    Compaction(i64, i64),
 }
 
 impl DeltaLogFile {
@@ -57,16 +60,24 @@ impl DeltaLogFile {
             .or_else(|| {
                 parse_checkpoint_version_from_location(&meta.location).map(Self::Checkpoint)
             })
+            .or_else(|| {
+                parse_compacted_json_versions_from_location(&meta.location)
+                    .map(|(s, e)| Self::Compaction(s, e))
+            })
     }
 
     fn version(self) -> i64 {
         match self {
             Self::Commit(version) | Self::Checksum(version) | Self::Checkpoint(version) => version,
+            Self::Compaction(start, _) => start,
         }
     }
 
     fn expires_before(self, retention_checkpoint_version: i64) -> bool {
-        self.version() < retention_checkpoint_version
+        match self {
+            Self::Compaction(_, end) => end < retention_checkpoint_version,
+            _ => self.version() < retention_checkpoint_version,
+        }
     }
 }
 

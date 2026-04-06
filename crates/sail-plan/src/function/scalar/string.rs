@@ -19,6 +19,7 @@ use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
+use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
@@ -74,6 +75,28 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
+    // Spark uses 1-based indexing, but treats pos=0 the same as pos=1 (start of string).
+    // For negative positions, Spark counts from the end of the string.
+    // DataFusion follows the SQL standard where pos=0 reduces the effective length by 1,
+    // and pos<0 reduces even more. We convert Spark's semantics to DataFusion's:
+    // - pos > 0: use as-is (1-based from start)
+    // - pos = 0: use 1 (same behavior as pos=1 in Spark)
+    // - pos < 0: use greatest(char_length(str) + pos + 1, 1) (absolute position from end)
+    // For literal positive positions (the common case), we skip the CASE WHEN to keep plans clean.
+    let position = match &position {
+        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) if *n > 0 => position,
+        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) if *n > 0 => position,
+        expr::Expr::Literal(ScalarValue::Int64(Some(0)), _)
+        | expr::Expr::Literal(ScalarValue::Int32(Some(0)), _) => lit(1i64),
+        _ => when(position.clone().gt(lit(0i64)), position.clone())
+            .when(position.clone().eq(lit(0i64)), lit(1i64))
+            .otherwise(expr_fn::greatest(vec![
+                cast(expr_fn::char_length(string.clone()), DataType::Int64)
+                    + position.clone()
+                    + lit(1i64),
+                lit(1i64),
+            ]))?,
+    };
     let substr_res = match length_opt {
         Some(length) => expr_fn::substring(string, position, length),
         None => expr_fn::substr(string, position),
@@ -112,7 +135,8 @@ fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Some(start) => {
             let str_from_pos = expr_fn::substr(str, start.clone());
             let pos = expr_fn::strpos(str_from_pos, substr);
-            when(pos.clone().eq(lit(0)), lit(0))
+            when(start.clone().lt_eq(lit(0)), lit(0))
+                .when(pos.clone().eq(lit(0)), lit(0))
                 .when(pos.clone().gt(lit(0)), start + pos - lit(1))
                 .end()?
         }
@@ -284,7 +308,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("right", F::binary(expr_fn::right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
         ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
-        ("sentences", F::unknown("sentences")),
+        ("sentences", F::udf(SparkSentences::new())),
         ("soundex", F::udf(Soundex::new())),
         ("space", F::unary(space)),
         ("split", F::udf(SparkSplit::new())),

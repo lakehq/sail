@@ -3094,7 +3094,7 @@
     {
       "input": "select * from my_tvf(arg1 => 'value1', 2, arg2 => true)",
       "output": {
-        "failure": "invalid argument: positional argument after named argument"
+        "failure": "analysis error: [UNEXPECTED_POSITIONAL_ARGUMENT] Positional argument follows a named (keyword) argument."
       }
     },
     {
@@ -3162,7 +3162,7 @@
     {
       "input": "select * from my_tvf(arg1 => table (v1), 2, arg2 => true)",
       "output": {
-        "failure": "invalid argument: positional argument after named argument"
+        "failure": "analysis error: [UNEXPECTED_POSITIONAL_ARGUMENT] Positional argument follows a named (keyword) argument."
       }
     },
     {

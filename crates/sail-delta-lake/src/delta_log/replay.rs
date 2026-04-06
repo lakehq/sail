@@ -8,13 +8,14 @@ use parquet::arrow::ProjectionMask;
 
 use super::{
     list_delta_log_entries_from, parse_checkpoint_version_from_location,
-    parse_commit_version_from_location, read_last_checkpoint_version_from_store,
-    LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment,
+    parse_commit_version_from_location, parse_compacted_json_versions_from_location,
+    read_last_checkpoint_version_from_store, LogSegmentResolver, ReplayedTableHeader,
+    ResolvedLogSegment,
 };
 use crate::kernel::checkpoints::{
-    decode_checkpoint_rows, read_checkpoint_rows_from_parquet, replay_commit_actions,
-    replay_commit_header_actions, ReconciledCheckpointState, ReconciledHeaderState,
-    ReplayedTableState,
+    decode_checkpoint_rows, read_checkpoint_rows_from_parquet,
+    replay_commit_actions_with_compactions, replay_commit_header_actions_with_compactions,
+    ReconciledCheckpointState, ReconciledHeaderState, ReplayedTableState,
 };
 use crate::spec::{CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult};
 use crate::storage::LogStore;
@@ -70,6 +71,7 @@ pub(crate) async fn load_replayed_table_state(
     let ResolvedLogSegment::FullReplay {
         checkpoint,
         commit_files,
+        compaction_files,
         target_version,
     } = segment
     else {
@@ -88,15 +90,17 @@ pub(crate) async fn load_replayed_table_state(
         commit_files
             .first()
             .map(|(v, _)| *v)
+            .or_else(|| compaction_files.first().map(|((s, _), _)| *s))
             .unwrap_or(target_version.saturating_add(1))
     } else {
         0
     };
 
-    let commit_timestamps = replay_commit_actions(
+    let commit_timestamps = replay_commit_actions_with_compactions(
         &mut state,
         store,
         &commit_files,
+        &compaction_files,
         start_commit_version,
         target_version,
     )
@@ -160,6 +164,7 @@ pub(crate) async fn load_replayed_table_header(
             base,
             checkpoint,
             commit_files,
+            compaction_files,
             target_version,
         } => {
             let store = log_store.object_store(None);
@@ -171,6 +176,7 @@ pub(crate) async fn load_replayed_table_header(
                     let next_v = commit_files
                         .first()
                         .map(|(v, _)| *v)
+                        .or_else(|| compaction_files.first().map(|((s, _), _)| *s))
                         .unwrap_or(target_version.saturating_add(1));
                     (cp_state, next_v, BTreeMap::new())
                 }
@@ -183,10 +189,11 @@ pub(crate) async fn load_replayed_table_header(
 
             if start_commit_version <= target_version {
                 commit_timestamps.extend(
-                    replay_commit_header_actions(
+                    replay_commit_header_actions_with_compactions(
                         &mut state,
                         store,
                         &commit_files,
+                        &compaction_files,
                         start_commit_version,
                         target_version,
                     )
@@ -231,6 +238,9 @@ pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> Delta
         .filter_map(|meta| {
             parse_commit_version_from_location(&meta.location)
                 .or_else(|| parse_checkpoint_version_from_location(&meta.location))
+                .or_else(|| {
+                    parse_compacted_json_versions_from_location(&meta.location).map(|(_, end)| end)
+                })
         })
         .max();
 

@@ -2827,7 +2827,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sentences"
+        "success": "ok"
       }
     },
     {
@@ -2857,7 +2857,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sentences"
+        "success": "ok"
       }
     },
     {
@@ -2887,7 +2887,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sentences"
+        "success": "ok"
       }
     },
     {
