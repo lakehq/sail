@@ -6,6 +6,7 @@ from adbc_driver_flightsql import dbapi
 
 from pysail.flight import FlightSqlServer
 
+
 @pytest.fixture(scope="module")
 def flight_uri():
     if "SAIL_FLIGHT_URI" in os.environ:
