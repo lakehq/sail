@@ -258,7 +258,21 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let pattern = like
                 .map(|(_, pattern)| from_ast_string(pattern))
                 .transpose()?;
-            let node = spec::CommandNode::ListTables { database, pattern };
+            let node = spec::CommandNode::ShowTables { database, pattern };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ShowTableExtended {
+            show: _,
+            table: _,
+            extended: _,
+            from,
+            like,
+        } => {
+            let database = from
+                .map(|(_, name)| from_ast_object_name(name))
+                .transpose()?;
+            let pattern = from_ast_string(like.1)?;
+            let node = spec::CommandNode::ShowTableExtended { database, pattern };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::ShowCreateTable { .. } => Err(SqlError::todo("SHOW CREATE TABLE")),
@@ -1050,6 +1064,24 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     spec::CommandNode::DescribeTable {
                         table: from_ast_object_name(name)?,
                         extended: extended.is_some(),
+                        partition,
+                        column,
+                    }
+                }
+                DescribeItem::TableExtended {
+                    extended: _,
+                    name,
+                    partition,
+                    column,
+                } => {
+                    let partition = partition
+                        .map(from_ast_partition)
+                        .transpose()?
+                        .unwrap_or_default();
+                    let column = column.map(from_ast_object_name).transpose()?;
+                    spec::CommandNode::DescribeTable {
+                        table: from_ast_object_name(name)?,
+                        extended: true,
                         partition,
                         column,
                     }
