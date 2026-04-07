@@ -145,7 +145,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
             // Parse geoarrow extension metadata to determine Geometry vs Geography
             let ext_metadata = field
                 .metadata()
-                .get("ARROW:extension:metadata")
+                .get(sail_common::spec::ARROW_EXTENSION_METADATA_KEY)
                 .cloned()
                 .unwrap_or_default();
             let geo_meta = GeoArrowMetadata::from_json(&ext_metadata)?;
@@ -427,11 +427,11 @@ mod tests {
         // Geometry omits "edges" (defaults to planar in GeoArrow)
         let metadata: HashMap<String, String> = [
             (
-                "ARROW:extension:name".to_string(),
+                sail_common::spec::ARROW_EXTENSION_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                "ARROW:extension:metadata".to_string(),
+                sail_common::spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84"}"#.to_string(),
             ),
         ]
@@ -460,11 +460,11 @@ mod tests {
         // Create an Arrow field with geoarrow.wkb metadata for Geography (spherical)
         let metadata: HashMap<String, String> = [
             (
-                "ARROW:extension:name".to_string(),
+                sail_common::spec::ARROW_EXTENSION_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                "ARROW:extension:metadata".to_string(),
+                sail_common::spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84","edges":"spherical"}"#.to_string(),
             ),
         ]
@@ -493,10 +493,13 @@ mod tests {
         // Test mixed SRID (-1): CRS and edges are omitted from metadata
         let metadata: HashMap<String, String> = [
             (
-                "ARROW:extension:name".to_string(),
+                sail_common::spec::ARROW_EXTENSION_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
-            ("ARROW:extension:metadata".to_string(), r#"{}"#.to_string()),
+            (
+                sail_common::spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
+                r#"{}"#.to_string(),
+            ),
         ]
         .into_iter()
         .collect();

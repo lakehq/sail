@@ -14,6 +14,8 @@ pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
 
 /// Arrow extension type metadata key.
 pub const ARROW_EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
+/// Arrow extension type metadata value key.
+pub const ARROW_EXTENSION_METADATA_KEY: &str = "ARROW:extension:metadata";
 /// Arrow extension type name for Variant.
 pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
 

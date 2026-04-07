@@ -58,7 +58,7 @@ impl ScalarUDFImpl for StGeomFromWKB {
             "geoarrow.wkb".to_string(),
         );
         metadata.insert(
-            "ARROW:extension:metadata".to_string(),
+            sail_common::spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
             r#"{"crs":"SRID:0"}"#.to_string(),
         );
         Ok(Arc::new(

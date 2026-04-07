@@ -338,7 +338,10 @@ impl PlanResolver<'_> {
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert("ARROW:extension:metadata".to_string(), ext.to_string());
+                metadata.insert(
+                    spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
+                    ext.to_string(),
+                );
                 data_type
             }
             spec::DataType::Geography { srid, algorithm: _ } => {
@@ -354,7 +357,10 @@ impl PlanResolver<'_> {
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert("ARROW:extension:metadata".to_string(), ext.to_string());
+                metadata.insert(
+                    spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
+                    ext.to_string(),
+                );
                 data_type
             }
             spec::DataType::Variant => {
