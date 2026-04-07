@@ -188,7 +188,9 @@ impl TableStatus {
 
         output.push_str("Schema: root\n");
         for column in self.kind.columns() {
-            let data_type = formatter.data_type_to_simple_string(&column.data_type)?;
+            let data_type = formatter
+                .data_type_to_simple_string(&column.data_type)
+                .unwrap_or_else(|_| "invalid".to_string());
             let nullable = if column.nullable { "true" } else { "false" };
             output.push_str(&format!(
                 " |-- {}: {} (nullable = {})\n",
