@@ -70,3 +70,49 @@ def test_dataframe_drop(spark):
             {"a.b.c": "int32"}
         ),
     )
+
+
+def test_dataframe_with_column_alias(spark):
+    df = spark.createDataFrame(
+        schema="id INTEGER, some_text STRING",
+        data=[(1, "bar"), (2, "foo")],
+    )
+
+    # Using alias and referencing a single column works
+    assert_frame_equal(
+        df.alias("a").withColumn("new_col1", col("a.id")).sort("id").toPandas(),
+        pd.DataFrame({"id": [1, 2], "some_text": ["bar", "foo"], "new_col1": [1, 2]}).astype(
+            {"id": "int32", "new_col1": "int32"}
+        ),
+    )
+
+    # Using alias and referencing multiple columns in chained withColumn calls
+    assert_frame_equal(
+        df.alias("a")
+        .withColumn("new_col1", col("a.id"))
+        .withColumn("new_col2", col("a.some_text"))
+        .sort("id")
+        .toPandas(),
+        pd.DataFrame(
+            {"id": [1, 2], "some_text": ["bar", "foo"], "new_col1": [1, 2], "new_col2": ["bar", "foo"]}
+        ).astype({"id": "int32", "new_col1": "int32"}),
+    )
+
+    # More than two chained withColumn calls with alias
+    assert_frame_equal(
+        df.alias("a")
+        .withColumn("new_col1", col("a.id"))
+        .withColumn("new_col2", col("a.some_text"))
+        .withColumn("new_col3", col("a.id"))
+        .sort("id")
+        .toPandas(),
+        pd.DataFrame(
+            {
+                "id": [1, 2],
+                "some_text": ["bar", "foo"],
+                "new_col1": [1, 2],
+                "new_col2": ["bar", "foo"],
+                "new_col3": [1, 2],
+            }
+        ).astype({"id": "int32", "new_col1": "int32", "new_col3": "int32"}),
+    )
