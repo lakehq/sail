@@ -66,6 +66,26 @@ Feature: bitmap_construct_agg builds a bitmap from bit positions
         | result |
         | 000000 |
 
+    Scenario: bitmap_construct_agg on empty input returns an empty bitmap
+      When query
+        """
+        SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) AS result
+        FROM (SELECT CAST(1 AS BIGINT) AS col WHERE false) AS tab
+        """
+      Then query result
+        | result |
+        | 000000 |
+
+    Scenario: bitmap_construct_agg supports negative input values
+      When query
+        """
+        SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) AS result
+        FROM VALUES (-1), (-2), (-3) AS tab(col)
+        """
+      Then query result
+        | result |
+        | 0E0000 |
+
   Rule: bitmap_count can count bits in bitmap_construct_agg output
 
     Scenario: bitmap_count of bitmap_construct_agg output
@@ -77,3 +97,27 @@ Feature: bitmap_construct_agg builds a bitmap from bit positions
       Then query result
         | result |
         | 3      |
+
+  Rule: bitmap_construct_agg as a window function
+
+    Scenario: bitmap_construct_agg over window
+      When query
+        """
+        SELECT
+          id,
+          substring(
+            hex(bitmap_construct_agg(bitmap_bit_position(col)) OVER (
+              ORDER BY id
+              ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            )),
+            0,
+            6
+          ) AS result
+        FROM VALUES (1, 1), (2, 2), (3, 3) AS tab(id, col)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result |
+        | 1  | 010000 |
+        | 2  | 030000 |
+        | 3  | 070000 |
