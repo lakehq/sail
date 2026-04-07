@@ -144,14 +144,27 @@ prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.8"
-datafusion = { version = "53.0.0", features = ["serde", "avro", "sql"] }
+datafusion = { version = "53.0.0", default-features = false, features = [
+    "nested_expressions",
+    "crypto_expressions",
+    "datetime_expressions",
+    "encoding_expressions",
+    "regex_expressions",
+    "string_expressions",
+    "unicode_expressions",
+    "compression",
+    "parquet",
+    "serde",
+    "avro",
+    "recursive_protection",
+] }
 datafusion-common = { version = "53.0.0", features = ["object_store", "avro"] }
 datafusion-datasource = { version = "53.0.0" }
-datafusion-expr = { version = "53.0.0" }
+datafusion-expr = { version = "53.0.0", default-features = false }
 datafusion-expr-common = { version = "53.0.0" }
 datafusion-proto = { version = "53.0.0" }
 datafusion-functions = { version = "53.0.0" }
-datafusion-functions-nested = { version = "53.0.0" }
+datafusion-functions-nested = { version = "53.0.0", default-features = false }
 datafusion-physical-expr = { version = "53.0.0" }
 datafusion-session = { version = "53.0.0" }
 datafusion-spark = { version = "53.0.0", features = ["core"] }
