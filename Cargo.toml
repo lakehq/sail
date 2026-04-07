@@ -153,11 +153,11 @@ datafusion = { version = "53.0.0", default-features = false, features = [
     "compression",
     "parquet",
     "serde",
+    "avro",
     "recursive_protection",
 ] }
 datafusion-common = { version = "53.0.0", features = ["object_store", "avro"] }
 datafusion-datasource = { version = "53.0.0" }
-datafusion-datasource-avro = { version = "53.0.0" }
 datafusion-expr = { version = "53.0.0", default-features = false }
 datafusion-expr-common = { version = "53.0.0" }
 datafusion-proto = { version = "53.0.0" }
