@@ -2334,6 +2334,22 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Extended)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(PartitionClause)"
+                      },
+                      {
+                        "nonTerminal": "Option(ObjectName)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Option(Keyword(Query))"
                       },
                       {
@@ -9285,6 +9301,25 @@
                         "nonTerminal": "Keyword(Show)"
                       },
                       {
+                        "nonTerminal": "Keyword(Table)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Extended)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Either(Keyword(From), Keyword(In)), ObjectName))"
+                      },
+                      {
+                        "nonTerminal": "Tuple(Keyword(Like), StringLiteral)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Show)"
+                      },
+                      {
                         "nonTerminal": "Keyword(Create)"
                       },
                       {
@@ -10712,6 +10747,19 @@
                   },
                   {
                     "nonTerminal": "ObjectName"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Keyword(Like), StringLiteral)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Like)"
+                  },
+                  {
+                    "nonTerminal": "StringLiteral"
                   }
                 ]
               }

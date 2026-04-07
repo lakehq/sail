@@ -292,6 +292,14 @@ pub enum CommandNode {
     ListCatalogs {
         pattern: Option<String>,
     },
+    ShowTables {
+        database: Option<ObjectName>,
+        pattern: Option<String>,
+    },
+    ShowTableExtended {
+        database: Option<ObjectName>,
+        pattern: String,
+    },
     ListTables {
         database: Option<ObjectName>,
         pattern: Option<String>,
