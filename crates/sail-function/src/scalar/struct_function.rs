@@ -100,16 +100,11 @@ impl ScalarUDFImpl for StructFunction {
             })
             .collect();
 
-        // Spark marks struct as nullable when any child field is nullable.
-        // This matches Spark's StructType behavior: the struct itself is nullable
-        // to reflect that its contents may contain nulls.
-        let struct_nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        // The struct value itself is never NULL — only child fields may be.
+        // StructArray::from() creates no null bitmap, and Spark's struct()
+        // always returns non-nullable.
         let struct_type = DataType::Struct(Fields::from(fields));
-        Ok(Arc::new(Field::new(
-            self.name(),
-            struct_type,
-            struct_nullable,
-        )))
+        Ok(Arc::new(Field::new(self.name(), struct_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
