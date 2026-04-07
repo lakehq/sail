@@ -73,6 +73,7 @@ macro_rules! duration_none {
     };
 }
 
+pub mod bitmap_construct_agg;
 pub mod histogram_numeric;
 pub mod kurtosis;
 pub mod max_min_by;

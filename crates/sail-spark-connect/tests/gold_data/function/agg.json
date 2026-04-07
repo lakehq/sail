@@ -3885,7 +3885,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: bitmap_construct_agg"
+        "success": "ok"
       }
     },
     {
@@ -3907,7 +3907,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: bitmap_construct_agg"
+        "success": "ok"
       }
     },
     {

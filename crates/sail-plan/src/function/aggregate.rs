@@ -15,6 +15,7 @@ use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -517,7 +518,10 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
         ("bit_or", F::default(bit_and_or_xor::bit_or_udaf)),
         ("bit_xor", F::default(bit_and_or_xor::bit_xor_udaf)),
-        ("bitmap_construct_agg", F::unknown("bitmap_construct_agg")),
+        (
+            "bitmap_construct_agg",
+            F::default(|| Arc::new(AggregateUDF::from(BitmapConstructAggFunction::new()))),
+        ),
         ("bitmap_or_agg", F::unknown("bitmap_or_agg")),
         ("bool_and", F::default(bool_and_or::bool_and_udaf)),
         ("bool_or", F::default(bool_and_or::bool_or_udaf)),
