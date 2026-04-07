@@ -132,6 +132,13 @@ pub enum Statement {
         from: Option<(Either<From, In>, ObjectName)>,
         like: Option<(Option<Like>, StringLiteral)>,
     },
+    ShowTableExtended {
+        show: Show,
+        table: Table,
+        extended: Extended,
+        from: Option<(Either<From, In>, ObjectName)>,
+        like: (Like, StringLiteral),
+    },
     ShowCreateTable {
         show: Show,
         create: Create,
@@ -952,11 +959,18 @@ pub enum DescribeItem {
         extended: Option<Extended>,
         item: ObjectName,
     },
-    // TODO: In Spark SQL, the `TABLE` keyword is optional.
-    //   Here we mark it as required to disambiguate between `DESCRIBE TABLE` and `DESCRIBE QUERY`.
     Table {
         table: Table,
         extended: Option<Extended>,
+        name: ObjectName,
+        #[parser(function = |(_, e), o| compose(e, o))]
+        partition: Option<PartitionClause>,
+        column: Option<ObjectName>,
+    },
+    // Spark also allows DESCRIBE EXTENDED <table> without the TABLE keyword.
+    // We keep it as a separate branch so DESCRIBE QUERY can still remain the catch-all last case.
+    TableExtended {
+        extended: Extended,
         name: ObjectName,
         #[parser(function = |(_, e), o| compose(e, o))]
         partition: Option<PartitionClause>,
