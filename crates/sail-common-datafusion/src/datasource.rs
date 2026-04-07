@@ -26,6 +26,43 @@ pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
 
+/// A layer of options that can be applied to a data source.
+/// Multiple layers are used to represent different sources of options,
+/// applied in order so that later layers override earlier ones.
+#[derive(Debug, Clone)]
+pub enum OptionLayer {
+    /// Options stored as table properties in a catalog.
+    TablePropertyList { items: Vec<(String, String)> },
+    /// Options provided by the data source operation.
+    OptionList { items: Vec<(String, String)> },
+    /// The location of the data source.
+    TableLocation { value: String },
+    /// Time travel: read data as of a specific timestamp.
+    AsOfTimestamp { value: DateTime<Utc> },
+    /// Time travel: read data as of a specific integer version.
+    AsOfIntegerVersion { value: i64 },
+    /// Time travel: read data as of a specific string version (e.g. a branch or tag name).
+    AsOfStringVersion { value: String },
+}
+
+impl OptionLayer {
+    /// Converts this option layer into an opaque key-value map.
+    ///
+    /// This is used for data sources that have not yet migrated to the typed
+    /// option system. The returned map can be passed to existing code that
+    /// accepts `HashMap<String, String>`.
+    pub fn into_opaque_options(self) -> HashMap<String, String> {
+        match self {
+            OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
+            OptionLayer::OptionList { items } => items.into_iter().collect(),
+            OptionLayer::TableLocation { .. }
+            | OptionLayer::AsOfTimestamp { .. }
+            | OptionLayer::AsOfIntegerVersion { .. }
+            | OptionLayer::AsOfStringVersion { .. } => HashMap::new(),
+        }
+    }
+}
+
 /// Row-level operation type tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
@@ -65,43 +102,6 @@ pub trait MergeCapableSource: Send + Sync {
 
     /// Returns a reconfigured source with the file column enabled.
     fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
-}
-
-/// A layer of options that can be applied to a data source.
-/// Multiple layers are used to represent different sources of options,
-/// applied in order so that later layers override earlier ones.
-#[derive(Debug, Clone)]
-pub enum OptionLayer {
-    /// Options stored as table properties in a catalog.
-    TablePropertyList { items: Vec<(String, String)> },
-    /// Options provided by the data source operation.
-    OptionList { items: Vec<(String, String)> },
-    /// The location of the data source.
-    TableLocation { value: String },
-    /// Time travel: read data as of a specific timestamp.
-    AsOfTimestamp { value: DateTime<Utc> },
-    /// Time travel: read data as of a specific integer version.
-    AsOfIntegerVersion { value: i64 },
-    /// Time travel: read data as of a specific string version (e.g. a branch or tag name).
-    AsOfStringVersion { value: String },
-}
-
-impl OptionLayer {
-    /// Converts this option layer into an opaque key-value map.
-    ///
-    /// This is used for data sources that have not yet migrated to the typed
-    /// option system. The returned map can be passed to existing code that
-    /// accepts `HashMap<String, String>`.
-    pub fn into_opaque_options(self) -> HashMap<String, String> {
-        match self {
-            OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
-            OptionLayer::OptionList { items } => items.into_iter().collect(),
-            OptionLayer::TableLocation { .. }
-            | OptionLayer::AsOfTimestamp { .. }
-            | OptionLayer::AsOfIntegerVersion { .. }
-            | OptionLayer::AsOfStringVersion { .. } => HashMap::new(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
