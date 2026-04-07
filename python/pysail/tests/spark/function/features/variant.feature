@@ -832,3 +832,68 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
       Then query result
         | result  |
         | [1,2,3] |
+
+  Rule: Variant NULL handling
+
+    Scenario: parse_json NULL returns SQL NULL
+      When query
+        """
+        SELECT parse_json(NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_json null string returns variant null
+      When query
+        """
+        SELECT parse_json('null') AS result
+        """
+      Then query result
+        | result |
+        | null   |
+
+    Scenario: CAST NULL AS VARIANT returns SQL NULL
+      When query
+        """
+        SELECT CAST(NULL AS VARIANT) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: is_variant_null on SQL NULL variant returns false
+      When query
+        """
+        SELECT is_variant_null(CAST(NULL AS VARIANT)) AS result
+        """
+      Then query result
+        | result |
+        | false  |
+
+    Scenario: is_variant_null on json null returns true
+      When query
+        """
+        SELECT is_variant_null(parse_json('null')) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: to_json on SQL NULL variant returns NULL
+      When query
+        """
+        SELECT to_json(CAST(NULL AS VARIANT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: to_json on json null returns null string
+      When query
+        """
+        SELECT to_json(parse_json('null')) AS result
+        """
+      Then query result
+        | result |
+        | null   |
