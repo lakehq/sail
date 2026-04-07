@@ -66,7 +66,12 @@ impl TableFormat for IcebergTableFormat {
         } = info;
 
         let table_url = Self::parse_table_url(paths).await?;
-        let iceberg_options = resolve_iceberg_read_options(options)?;
+        let iceberg_options = resolve_iceberg_read_options(
+            options
+                .into_iter()
+                .map(|l| l.into_opaque_options())
+                .collect(),
+        )?;
 
         create_iceberg_provider(ctx, table_url, iceberg_options).await
     }

@@ -103,6 +103,7 @@ impl From<SqlError> for PlanError {
             SqlError::NotImplemented(message) => PlanError::NotImplemented(message),
             SqlError::NotSupported(message) => PlanError::NotSupported(message),
             SqlError::InternalError(message) => PlanError::InternalError(message),
+            SqlError::AnalysisError(message) => PlanError::AnalysisError(message),
         }
     }
 }

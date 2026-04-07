@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::plan_datafusion_err;
@@ -17,6 +18,43 @@ use datafusion_expr::TableSource;
 use crate::catalog::CatalogPartitionField;
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
+
+/// A layer of options that can be applied to a data source.
+/// Multiple layers are used to represent different sources of options,
+/// applied in order so that later layers override earlier ones.
+#[derive(Debug, Clone)]
+pub enum OptionLayer {
+    /// Options stored as table properties in a catalog.
+    TablePropertyList { items: Vec<(String, String)> },
+    /// Options provided by the data source operation.
+    OptionList { items: Vec<(String, String)> },
+    /// The location of the data source.
+    TableLocation { value: String },
+    /// Time travel: read data as of a specific timestamp.
+    AsOfTimestamp { value: DateTime<Utc> },
+    /// Time travel: read data as of a specific integer version.
+    AsOfIntegerVersion { value: i64 },
+    /// Time travel: read data as of a specific string version (e.g. a branch or tag name).
+    AsOfStringVersion { value: String },
+}
+
+impl OptionLayer {
+    /// Converts this option layer into an opaque key-value map.
+    ///
+    /// This is used for data sources that have not yet migrated to the typed
+    /// option system. The returned map can be passed to existing code that
+    /// accepts `HashMap<String, String>`.
+    pub fn into_opaque_options(self) -> HashMap<String, String> {
+        match self {
+            OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
+            OptionLayer::OptionList { items } => items.into_iter().collect(),
+            OptionLayer::TableLocation { .. }
+            | OptionLayer::AsOfTimestamp { .. }
+            | OptionLayer::AsOfIntegerVersion { .. }
+            | OptionLayer::AsOfStringVersion { .. } => HashMap::new(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
@@ -59,9 +97,9 @@ pub struct SourceInfo {
     pub partition_by: Vec<String>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Vec<Sort>,
-    /// The sets of options for the data source.
-    /// A later set of options can override earlier ones.
-    pub options: Vec<HashMap<String, String>>,
+    /// The layers of options for the data source.
+    /// A later layer can override earlier ones.
+    pub options: Vec<OptionLayer>,
 }
 
 /// Information required to create a data writer.

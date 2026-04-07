@@ -71,7 +71,7 @@ async fn setup_catalog(
         .await
         .expect("Failed to start MC");
 
-    let rest = GenericImage::new("apache/iceberg-rest-fixture", "latest")
+    let rest = GenericImage::new("apache/iceberg-rest-fixture", "1.10.1")
         .with_wait_for(WaitFor::message_on_stderr(
             "INFO org.eclipse.jetty.server.Server - Started ",
         ))

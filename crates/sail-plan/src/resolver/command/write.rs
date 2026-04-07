@@ -15,7 +15,7 @@ use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
 };
 use sail_common_datafusion::datasource::{
-    find_option, BucketBy, SinkMode, SourceInfo, TableFormatRegistry,
+    find_option, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -501,7 +501,9 @@ impl PlanResolver<'_> {
                         partition_by: vec![],
                         bucket_by: None,
                         sort_order: vec![],
-                        options: vec![options.iter().cloned().collect()],
+                        options: vec![OptionLayer::OptionList {
+                            items: options.to_vec(),
+                        }],
                     };
                     let provider = table_format
                         .create_provider(&self.ctx.state(), info)

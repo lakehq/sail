@@ -912,6 +912,16 @@ fn merge_disambiguate_unqualified_plan_ids(
                 .collect(),
             negated,
         },
+        // NamedArgument is not expected in MERGE statements; pass through unchanged
+        Expr::NamedArgument { key, value } => Expr::NamedArgument {
+            key,
+            value: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *value,
+                state,
+                target_schema,
+                source_schema,
+            )),
+        },
     }
 }
 

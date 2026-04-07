@@ -924,6 +924,191 @@ pub(crate) async fn replay_commit_header_actions(
     Ok(commit_timestamps)
 }
 
+/// Replay commit actions with compacted JSON files.
+///
+/// Compacted JSON files replace ranges of individual commit files during replay.
+/// Both compacted and individual commit files use the same ndjson format.
+/// Compacted files contain reconciled actions for version range [start, end].
+pub(crate) async fn replay_commit_actions_with_compactions(
+    state: &mut ReconciledCheckpointState,
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    commit_entries: &[(i64, ObjectMeta)],
+    compaction_entries: &[((i64, i64), ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> DeltaResult<BTreeMap<i64, i64>> {
+    if compaction_entries.is_empty() {
+        return replay_commit_actions(
+            state,
+            root_store,
+            commit_entries,
+            start_version,
+            end_version,
+        )
+        .await;
+    }
+
+    let replay_sequence = build_replay_sequence(
+        commit_entries,
+        compaction_entries,
+        start_version,
+        end_version,
+    );
+
+    let mut commit_timestamps = BTreeMap::new();
+    for entry in &replay_sequence {
+        match entry {
+            ReplayEntry::Commit(version, meta) => {
+                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                let actions = get_actions(*version, &bytes)?;
+                let commit_timestamp = resolve_commit_timestamp_from_actions(
+                    *version,
+                    meta,
+                    state.protocol.as_ref(),
+                    state.metadata.as_ref(),
+                    &actions,
+                )?;
+                for action in actions {
+                    state.apply_action(action);
+                }
+                commit_timestamps.insert(*version, commit_timestamp);
+            }
+            ReplayEntry::Compaction(start, end, meta) => {
+                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                // Compacted JSON files use the same ndjson format as regular commits.
+                // Use end_version for the "version" parameter in error messages.
+                let actions = get_actions(*end, &bytes)?;
+                for action in actions {
+                    state.apply_action(action);
+                }
+                // Use the compaction file's modification time as timestamp for the end version.
+                let timestamp = meta.last_modified.timestamp_millis();
+                for v in *start..=*end {
+                    commit_timestamps.insert(v, timestamp);
+                }
+            }
+        }
+    }
+    Ok(commit_timestamps)
+}
+
+/// Replay only header-relevant actions with compacted JSON files.
+pub(crate) async fn replay_commit_header_actions_with_compactions(
+    state: &mut ReconciledHeaderState,
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    commit_entries: &[(i64, ObjectMeta)],
+    compaction_entries: &[((i64, i64), ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> DeltaResult<BTreeMap<i64, i64>> {
+    if compaction_entries.is_empty() {
+        return replay_commit_header_actions(
+            state,
+            root_store,
+            commit_entries,
+            start_version,
+            end_version,
+        )
+        .await;
+    }
+
+    let replay_sequence = build_replay_sequence(
+        commit_entries,
+        compaction_entries,
+        start_version,
+        end_version,
+    );
+
+    let mut commit_timestamps = BTreeMap::new();
+    for entry in &replay_sequence {
+        match entry {
+            ReplayEntry::Commit(version, meta) => {
+                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                let actions = get_actions(*version, &bytes)?;
+                let commit_timestamp = resolve_commit_timestamp_from_actions(
+                    *version,
+                    meta,
+                    state.protocol.as_ref(),
+                    state.metadata.as_ref(),
+                    &actions,
+                )?;
+                for action in actions {
+                    state.apply_action(action);
+                }
+                commit_timestamps.insert(*version, commit_timestamp);
+            }
+            ReplayEntry::Compaction(start, end, meta) => {
+                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                let actions = get_actions(*end, &bytes)?;
+                for action in actions {
+                    state.apply_action(action);
+                }
+                let timestamp = meta.last_modified.timestamp_millis();
+                for v in *start..=*end {
+                    commit_timestamps.insert(v, timestamp);
+                }
+            }
+        }
+    }
+    Ok(commit_timestamps)
+}
+
+/// An entry in the ordered replay sequence.
+enum ReplayEntry<'a> {
+    /// A single commit file for one version.
+    Commit(i64, &'a ObjectMeta),
+    /// A compacted JSON file covering [start, end].
+    Compaction(i64, i64, &'a ObjectMeta),
+}
+
+/// Build an ordered replay sequence by merging individual commits and compaction files.
+///
+/// The sequence is ordered by version. Compaction files are placed at their start_version
+/// position. Individual commits that fall within a compaction range are excluded
+/// (the resolver should have already removed them, but this is a safety measure).
+fn build_replay_sequence<'a>(
+    commit_entries: &'a [(i64, ObjectMeta)],
+    compaction_entries: &'a [((i64, i64), ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> Vec<ReplayEntry<'a>> {
+    let mut sequence: Vec<ReplayEntry<'a>> = Vec::new();
+
+    // Build a map of compaction start versions for quick lookup.
+    let mut compaction_map: BTreeMap<i64, (i64, &'a ObjectMeta)> = BTreeMap::new();
+    for ((s, e), meta) in compaction_entries {
+        compaction_map.insert(*s, (*e, meta));
+    }
+
+    let mut version = start_version;
+    let mut commit_idx = 0;
+
+    while version <= end_version {
+        if let Some(&(comp_end, meta)) = compaction_map.get(&version) {
+            sequence.push(ReplayEntry::Compaction(version, comp_end, meta));
+            version = comp_end.saturating_add(1);
+            // Skip any individual commits that overlap with this compaction.
+            while commit_idx < commit_entries.len() && commit_entries[commit_idx].0 < version {
+                commit_idx += 1;
+            }
+        } else if commit_idx < commit_entries.len() {
+            let (v, meta) = &commit_entries[commit_idx];
+            if *v == version {
+                sequence.push(ReplayEntry::Commit(*v, meta));
+                commit_idx += 1;
+                version = version.saturating_add(1);
+            } else {
+                // Gap — advance version to match.
+                version = version.saturating_add(1);
+            }
+        } else {
+            break;
+        }
+    }
+
+    sequence
+}
+
 /// Creates a checkpoint for the given table version.
 pub(crate) async fn create_checkpoint_for(
     version: i64,
@@ -933,6 +1118,150 @@ pub(crate) async fn create_checkpoint_for(
     CheckpointManager::new(log_store, operation_id)
         .create_checkpoint(version)
         .await
+}
+
+/// Creates a log compaction file for versions [start_version, end_version].
+///
+/// Reads all commit files in the range, reconciles actions using the same rules
+/// as checkpoint creation, and writes the result as a compacted JSON file.
+/// CommitInfo actions are excluded per the Delta protocol spec.
+pub(crate) async fn create_log_compaction_for(
+    start_version: i64,
+    end_version: i64,
+    log_store: &dyn LogStore,
+    min_file_retention_timestamp_millis: i64,
+) -> DeltaResult<()> {
+    use crate::spec::compacted_json_path;
+
+    let store = log_store.object_store(None);
+    let compacted_path = compacted_json_path(start_version, end_version);
+
+    debug!(
+        "Writing log compaction file for versions {} to {} at {:?}",
+        start_version, end_version, compacted_path
+    );
+
+    // Replay the commit range to reconcile actions.
+    let mut state = ReconciledCheckpointState::default();
+    let mut commit_count: i64 = 0;
+    for version in start_version..=end_version {
+        let bytes = match log_store.read_commit_entry(version).await? {
+            Some(b) => b,
+            None => {
+                return Err(DeltaTableError::generic(format!(
+                    "Missing commit file for version {version} during log compaction"
+                )));
+            }
+        };
+        let actions = get_actions(version, &bytes)?;
+        for action in actions {
+            state.apply_action(action);
+        }
+        commit_count += 1;
+    }
+    let expected_count = end_version - start_version + 1;
+    if commit_count != expected_count {
+        return Err(DeltaTableError::generic(format!(
+            "Expected {expected_count} commits for compaction [{start_version}, {end_version}], found {commit_count}"
+        )));
+    }
+
+    // Build the compacted ndjson content (same format as commits, excluding commitInfo).
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(protocol) = &state.protocol {
+        lines.push(
+            serde_json::to_string(&Action::Protocol(protocol.clone()))
+                .map_err(DeltaTableError::generic_err)?,
+        );
+    }
+    if let Some(metadata) = &state.metadata {
+        lines.push(
+            serde_json::to_string(&Action::Metadata(metadata.clone()))
+                .map_err(DeltaTableError::generic_err)?,
+        );
+    }
+    let mut txns: Vec<_> = state.txns.values().collect();
+    txns.sort_by(|a, b| a.app_id.cmp(&b.app_id));
+    for txn in txns {
+        lines.push(
+            serde_json::to_string(&Action::Txn(txn.clone()))
+                .map_err(DeltaTableError::generic_err)?,
+        );
+    }
+    let mut domains: Vec<_> = state.domain_metadata.values().collect();
+    domains.sort_by(|a, b| a.domain.cmp(&b.domain));
+    for domain in domains {
+        if !domain.removed {
+            lines.push(
+                serde_json::to_string(&Action::DomainMetadata(domain.clone()))
+                    .map_err(DeltaTableError::generic_err)?,
+            );
+        }
+    }
+    // Filter removes that are expired (tombstone retention).
+    // Removes with no deletion_timestamp are retained, matching checkpoint pruning semantics.
+    let mut removes: Vec<_> = state.removes.values().collect();
+    removes.sort_by(|a, b| a.path.cmp(&b.path));
+    for remove in removes {
+        if remove
+            .deletion_timestamp
+            .map(|ts| ts >= min_file_retention_timestamp_millis)
+            .unwrap_or(true)
+        {
+            lines.push(
+                serde_json::to_string(&Action::Remove(remove.clone()))
+                    .map_err(DeltaTableError::generic_err)?,
+            );
+        }
+    }
+    let mut adds: Vec<_> = state.adds.values().collect();
+    adds.sort_by(|a, b| a.path.cmp(&b.path));
+    for add in adds {
+        lines.push(
+            serde_json::to_string(&Action::Add(add.clone()))
+                .map_err(DeltaTableError::generic_err)?,
+        );
+    }
+
+    let content = lines.join("\n");
+    let bytes = bytes::Bytes::from(content);
+
+    // Write atomically — if file already exists (race), that is fine.
+    match store
+        .put_opts(
+            &compacted_path,
+            bytes.into(),
+            object_store::PutOptions {
+                mode: object_store::PutMode::Create,
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        Ok(_) => {
+            debug!(
+                "Successfully wrote log compaction file for versions {} to {}",
+                start_version, end_version
+            );
+        }
+        Err(object_store::Error::AlreadyExists { .. }) => {
+            debug!(
+                "Log compaction file already exists for versions {} to {}, skipping",
+                start_version, end_version
+            );
+        }
+        Err(e) => return Err(DeltaTableError::generic_err(e)),
+    }
+
+    Ok(())
+}
+
+/// Determine whether log compaction should run for the given commit version.
+/// `commitVersion > 0 && (commitVersion + 1) % interval == 0`
+pub(crate) fn should_create_compaction(version: i64, compaction_interval: u64) -> bool {
+    compaction_interval > 0
+        && version > 0
+        && ((version + 1) as u64).is_multiple_of(compaction_interval)
 }
 #[cfg(test)]
 mod tests {

@@ -102,6 +102,7 @@ pub struct TableProperties {
     pub isolation_level: Option<IsolationLevel>,
     pub log_retention_duration: Option<Duration>,
     pub enable_expired_log_cleanup: Option<bool>,
+    pub log_compaction_interval: Option<NonZeroU64>,
     pub unknown_properties: HashMap<String, String>,
 }
 
@@ -171,6 +172,10 @@ impl TableProperties {
     pub fn deleted_file_retention_duration(&self) -> Duration {
         self.deleted_file_retention_duration
             .unwrap_or(Duration::from_secs(DEFAULT_DELETED_FILE_RETENTION_SECS))
+    }
+
+    pub fn log_compaction_interval(&self) -> Option<u64> {
+        self.log_compaction_interval.map(|v| v.get())
     }
 
     pub fn isolation_level(&self) -> IsolationLevel {
@@ -247,6 +252,9 @@ fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
         "delta.enableexpiredlogcleanup"
         | "enable_expired_log_cleanup"
         | "enableexpiredlogcleanup" => Some("delta.enableExpiredLogCleanup"),
+        "delta.logcompactioninterval" | "log_compaction_interval" | "logcompactioninterval" => {
+            Some("delta.logCompactionInterval")
+        }
         _ => None,
     }
 }
@@ -286,11 +294,13 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
         | "delta.enableExpiredLogCleanup" => parse_bool(value).map(|_| ()).ok_or_else(|| {
             DeltaTableError::generic(format!("invalid boolean value for {key}: {value}"))
         }),
-        "delta.checkpointInterval" => parse_positive_int(value).map(|_| ()).ok_or_else(|| {
-            DeltaTableError::generic(format!(
-                "invalid value for {key}: expected positive integer"
-            ))
-        }),
+        "delta.checkpointInterval" | "delta.logCompactionInterval" => {
+            parse_positive_int(value).map(|_| ()).ok_or_else(|| {
+                DeltaTableError::generic(format!(
+                    "invalid value for {key}: expected positive integer"
+                ))
+            })
+        }
         "delta.inCommitTimestampEnablementVersion" => {
             parse_non_negative_i64(value).map(|_| ()).ok_or_else(|| {
                 DeltaTableError::generic(format!(
@@ -361,6 +371,9 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
         "delta.logRetentionDuration" => props.log_retention_duration = parse_interval(value),
         "delta.enableExpiredLogCleanup" => {
             props.enable_expired_log_cleanup = Some(parse_bool(value)?)
+        }
+        "delta.logCompactionInterval" => {
+            props.log_compaction_interval = Some(parse_positive_int(value)?)
         }
         _ => return None,
     }

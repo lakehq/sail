@@ -9,7 +9,7 @@ use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
-use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -96,7 +96,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 options: table_options,
-                properties: _,
+                properties: table_properties,
             } => {
                 self.resolve_table_kind_table(
                     columns,
@@ -107,6 +107,7 @@ impl PlanResolver<'_> {
                     sort_by,
                     bucket_by,
                     table_options,
+                    table_properties,
                     temporal,
                     options,
                     table_reference,
@@ -185,6 +186,7 @@ impl PlanResolver<'_> {
         sort_by: Vec<sail_common_datafusion::catalog::CatalogTableSort>,
         bucket_by: Option<sail_common_datafusion::catalog::CatalogTableBucketBy>,
         table_options: Vec<(String, String)>,
+        table_properties: Vec<(String, String)>,
         temporal: Option<spec::TableTemporal>,
         options: Vec<(String, String)>,
         table_reference: impl Into<TableReference>,
@@ -204,9 +206,13 @@ impl PlanResolver<'_> {
             sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
             // TODO: detect duplicated keys in each set of options
             options: vec![
-                table_options.into_iter().collect(),
-                options.into_iter().collect(),
-                temporal_options.into_iter().collect(),
+                OptionLayer::TablePropertyList {
+                    items: table_options.into_iter().chain(table_properties).collect(),
+                },
+                OptionLayer::OptionList { items: options },
+                OptionLayer::OptionList {
+                    items: temporal_options,
+                },
             ],
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
@@ -383,6 +389,7 @@ impl PlanResolver<'_> {
                         &function_name,
                         input,
                         arguments,
+                        &[], // ReadUdtf kwargs come via named_arguments, not NamedArgument exprs
                         None,
                         None,
                         f.deterministic(),
@@ -449,7 +456,9 @@ impl PlanResolver<'_> {
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
-            options: vec![options.into_iter().collect()],
+            options: vec![OptionLayer::OptionList {
+                items: options.into_iter().collect(),
+            }],
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
         let table_source = registry
