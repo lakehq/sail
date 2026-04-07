@@ -125,7 +125,8 @@ export const sphinxPages: SphinxPageData[] = ${cacheData}
   // Add VitePluginSphinxPages plugin
   config.vite ??= {};
   config.vite.plugins ??= [];
-  config.vite.plugins.push(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (config.vite.plugins as any[]).push(
     VitePluginSphinxPages({
       hasPages: hasSphinxPages,
       requiresPages: requireSphinxPages(),

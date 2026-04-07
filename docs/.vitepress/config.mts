@@ -391,7 +391,8 @@ export default async () => {
         hostname: Site.url(),
       },
       vite: {
-        plugins: [tailwindcss()],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        plugins: [tailwindcss() as any],
       },
     }),
   );
