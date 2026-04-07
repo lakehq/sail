@@ -81,21 +81,15 @@ def test_dataframe_with_column_alias(spark):
     # Using alias and referencing a single column works
     assert_frame_equal(
         df.alias("a").withColumn("col1", col("a.id")).sort("id").toPandas(),
-        pd.DataFrame({"id": [1, 2], "value": ["bar", "foo"], "col1": [1, 2]}).astype(
-            {"id": "int32", "col1": "int32"}
-        ),
+        pd.DataFrame({"id": [1, 2], "value": ["bar", "foo"], "col1": [1, 2]}).astype({"id": "int32", "col1": "int32"}),
     )
 
     # Using alias and referencing multiple columns in chained withColumn calls
     assert_frame_equal(
-        df.alias("a")
-        .withColumn("col1", col("a.id"))
-        .withColumn("col2", col("a.value"))
-        .sort("id")
-        .toPandas(),
-        pd.DataFrame(
-            {"id": [1, 2], "value": ["bar", "foo"], "col1": [1, 2], "col2": ["bar", "foo"]}
-        ).astype({"id": "int32", "col1": "int32"}),
+        df.alias("a").withColumn("col1", col("a.id")).withColumn("col2", col("a.value")).sort("id").toPandas(),
+        pd.DataFrame({"id": [1, 2], "value": ["bar", "foo"], "col1": [1, 2], "col2": ["bar", "foo"]}).astype(
+            {"id": "int32", "col1": "int32"}
+        ),
     )
 
     # More than two chained withColumn calls with alias
