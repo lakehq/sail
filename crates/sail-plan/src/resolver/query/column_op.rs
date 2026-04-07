@@ -182,13 +182,12 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         // If the input is a SubqueryAlias, save the alias and re-apply it after building the
-        // projection. This ensures that subsequent operations (e.g., another withColumn call) can
-        // still reference columns by the qualified name (e.g., `a.some_text` after
-        // `df.alias("a").withColumn("new_col1", col("a.id"))`).
-        let input_alias = if let LogicalPlan::SubqueryAlias(sa) = &input {
-            Some(sa.alias.clone())
-        } else {
-            None
+        // projection. A Projection node strips qualifiers from its output schema, so without
+        // re-wrapping, subsequent operations could no longer reference columns by the qualified
+        // name (e.g., `a.some_text` in `df.alias("a").withColumn("a", ...).withColumn("b", col("a.some_text"))`).
+        let input_alias = match &input {
+            LogicalPlan::SubqueryAlias(sa) => Some(sa.alias.clone()),
+            _ => None,
         };
         let schema = input.schema();
         // We use `IndexMap` to ensure the result schema has a deterministic column order.
