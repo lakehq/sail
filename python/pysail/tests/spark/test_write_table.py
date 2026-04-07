@@ -150,7 +150,7 @@ def test_create_or_replace_table_as_select(spark, tmp_path):
             AS SELECT 1 AS id, 'Alice' AS name
             """
         )
-        actual = spark.sql(f"SELECT * FROM {table_name}").toPandas()
+        actual = spark.sql(f"SELECT * FROM {table_name}").toPandas()  # noqa: S608
         expected = pd.DataFrame({"id": [1], "name": ["Alice"]})
         assert_frame_equal(actual, expected, check_dtype=False)
 
@@ -162,7 +162,7 @@ def test_create_or_replace_table_as_select(spark, tmp_path):
             AS SELECT 2 AS id, 'Bob' AS name
             """
         )
-        actual = spark.sql(f"SELECT * FROM {table_name}").toPandas()
+        actual = spark.sql(f"SELECT * FROM {table_name}").toPandas()  # noqa: S608
         expected = pd.DataFrame({"id": [2], "name": ["Bob"]})
         assert_frame_equal(actual, expected, check_dtype=False)
     finally:
