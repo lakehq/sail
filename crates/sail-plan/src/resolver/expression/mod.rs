@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 
 use async_recursion::async_recursion;
+use datafusion::arrow::datatypes::Schema;
+use datafusion::catalog::Session;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr;
 use sail_common::spec;
@@ -18,6 +20,7 @@ mod lambda;
 mod literal;
 mod misc;
 mod predicate;
+mod row_local;
 mod sort;
 mod subquery;
 mod udf;
@@ -81,6 +84,26 @@ impl NamedExpr {
 }
 
 impl PlanResolver<'_> {
+    /// Parse a SQL expression string with the Sail parser/analyzer and resolve it against
+    /// the provided Arrow schema without consulting session extensions.
+    ///
+    /// This is intentionally limited to row-local expressions that do not require catalog,
+    /// formatter, or other session-dependent semantics.
+    pub fn resolve_row_local_sql_expression_without_session(
+        sql: &str,
+        schema: &Schema,
+    ) -> PlanResult<expr::Expr> {
+        row_local::resolve_row_local_sql_expression_without_session(sql, schema)
+    }
+
+    pub fn resolve_row_local_sql_expression_with_session(
+        session: &dyn Session,
+        sql: &str,
+        schema: &Schema,
+    ) -> PlanResult<expr::Expr> {
+        row_local::resolve_row_local_sql_expression_with_session(session, sql, schema)
+    }
+
     #[async_recursion]
     /// Resolves a Sail spec expression into a named expression.
     ///

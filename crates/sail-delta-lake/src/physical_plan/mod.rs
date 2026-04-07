@@ -28,6 +28,7 @@ use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
 
 mod action_schema;
 mod commit_exec;
+mod data_quality_exec;
 pub mod discovery_exec;
 mod expr_adapter;
 mod log_replay_exec;
@@ -42,6 +43,9 @@ pub use action_schema::{
     encode_actions, ExecCommitMeta, COL_ACTION,
 };
 pub use commit_exec::DeltaCommitExec;
+pub use data_quality_exec::{
+    compile_data_quality_invariants, CompiledInvariant, DataQualityPolicy, DeltaDataQualityExec,
+};
 pub use discovery_exec::DeltaDiscoveryExec;
 pub use expr_adapter::{DeltaCastColumnExpr, DeltaPhysicalExprAdapterFactory};
 pub use log_replay_exec::DeltaLogReplayExec;

@@ -8,7 +8,11 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, plan_err, DFSchemaRef, DataFusionError, Result, ToDFSchema};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use sail_data_source::resolve_listing_urls;
-use sail_delta_lake::table::open_table_with_object_store;
+use sail_delta_lake::physical_plan::{
+    compile_data_quality_invariants, DataQualityPolicy, DeltaDataQualityExec,
+};
+use sail_delta_lake::table::open_table_with_object_store_and_table_config;
+use sail_delta_lake::DeltaTableConfig;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::merge::{MergeCardinalityCheckNode, MergeIntoWriteNode};
@@ -39,9 +43,19 @@ async fn delta_table_schema(session_state: &SessionState, path: &str) -> Result<
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let table = open_table_with_object_store(table_url, object_store, Default::default())
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    // Only the schema (protocol + metadata) is needed; skip loading file-level actions.
+    let table_config = DeltaTableConfig {
+        require_files: false,
+        ..Default::default()
+    };
+    let table = open_table_with_object_store_and_table_config(
+        table_url,
+        object_store,
+        Default::default(),
+        table_config,
+    )
+    .await
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let arrow_schema = table
         .snapshot()
@@ -75,11 +89,17 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
             let [physical_input] = physical_inputs else {
                 return internal_err!("FileWriteNode requires exactly one physical input");
             };
+
+            // Compile invariants on the driver side and wrap the input if needed
+            let physical_input = self
+                .wrap_with_data_quality(session_state, physical_input.clone(), node.options())
+                .await?;
+
             let plan = create_file_write_physical_plan(
                 session_state,
                 planner,
                 logical_input,
-                physical_input.clone(),
+                physical_input,
                 node.options().clone(),
             )
             .await?;
@@ -143,6 +163,87 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
 
         Ok(None)
     }
+}
+
+impl DeltaExtensionPlanner {
+    /// Compile Delta invariants and wrap the input with a `DeltaDataQualityExec` if needed.
+    ///
+    /// This runs on the driver during physical plan construction so that workers
+    /// only evaluate pre-compiled `PhysicalExpr` without needing SQL parsing or session context.
+    async fn wrap_with_data_quality(
+        &self,
+        session_state: &SessionState,
+        physical_input: Arc<dyn ExecutionPlan>,
+        options: &sail_logical_plan::file_write::FileWriteOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let all_options: Vec<std::collections::HashMap<String, String>> = options
+            .options
+            .iter()
+            .map(|set| set.iter().cloned().collect())
+            .collect();
+        let path = all_options
+            .iter()
+            .find_map(|set| set.get("path").or_else(|| set.get("location")).cloned());
+        let Some(path) = path else {
+            return Ok(physical_input);
+        };
+
+        let table = resolve_and_open_delta_table(session_state, &path)
+            .await
+            .ok();
+
+        let table_properties: std::collections::HashMap<String, String> =
+            options.table_properties.iter().cloned().collect();
+
+        let input_schema = physical_input.schema();
+        let invariants = compile_data_quality_invariants(
+            session_state,
+            table.as_ref(),
+            &[], // no pending schema actions at this stage
+            &input_schema,
+            &table_properties,
+        )?;
+
+        if invariants.is_empty() {
+            return Ok(physical_input);
+        }
+
+        let exec =
+            DeltaDataQualityExec::new(physical_input, invariants, DataQualityPolicy::Strict)?;
+        Ok(Arc::new(exec))
+    }
+}
+
+async fn resolve_and_open_delta_table(
+    session_state: &SessionState,
+    path: &str,
+) -> Result<sail_delta_lake::table::DeltaTable> {
+    let mut urls = resolve_listing_urls(session_state, vec![path.to_string()]).await?;
+    let table_url = match (urls.pop(), urls.is_empty()) {
+        (Some(url), true) => <ListingTableUrl as AsRef<Url>>::as_ref(&url).clone(),
+        _ => return plan_err!("expected a single path for Delta table: {path}"),
+    };
+
+    let object_store = session_state
+        .runtime_env()
+        .object_store_registry
+        .get_store(&table_url)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    // Only protocol + metadata are needed for invariant compilation;
+    // skip eagerly loading file-level actions.
+    let table_config = DeltaTableConfig {
+        require_files: false,
+        ..Default::default()
+    };
+    open_table_with_object_store_and_table_config(
+        table_url,
+        object_store,
+        Default::default(),
+        table_config,
+    )
+    .await
+    .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 pub fn new_lakehouse_extension_planners() -> Vec<Arc<dyn ExtensionPlanner + Send + Sync>> {

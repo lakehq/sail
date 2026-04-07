@@ -488,3 +488,74 @@ def delta_log_commit_timestamps_are_rewritten(
         crc_obj["inCommitTimestampOpt"] = timestamp_ms
         with crc_path.open("w", encoding="utf-8") as f:
             json.dump(crc_obj, f, separators=(",", ":"))
+
+
+def _update_first_commit_metadata_schema(location: Path, updater, *, protocol_updater=None) -> None:
+    log_file = location / "_delta_log" / "00000000000000000000.json"
+    crc_file = location / "_delta_log" / "00000000000000000000.crc"
+    assert log_file.exists(), f"first delta log not found: {log_file}"
+
+    updated_lines = []
+    updated = False
+    with log_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            protocol = obj.get("protocol")
+            if isinstance(protocol, dict) and protocol_updater is not None:
+                protocol_updater(protocol)
+            metadata = obj.get("metaData")
+            if isinstance(metadata, dict):
+                schema = json.loads(metadata["schemaString"])
+                updater(schema)
+                metadata["schemaString"] = json.dumps(schema, separators=(",", ":"))
+                updated = True
+            updated_lines.append(json.dumps(obj, separators=(",", ":")))
+
+    assert updated, f"metaData action not found in {log_file}"
+    log_file.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+    crc_file.unlink(missing_ok=True)
+
+
+def _find_struct_field(schema: dict, field_path: str) -> dict:
+    current_type = schema
+    field = None
+    for segment in field_path.split("."):
+        assert isinstance(current_type, dict), f"field path {field_path!r} only supports struct traversal"
+        assert current_type.get("type") == "struct", f"field path {field_path!r} only supports struct traversal"
+        fields = current_type.get("fields", [])
+        field = next((field for field in fields if field.get("name") == segment), None)
+        assert field is not None, f"field {segment!r} not found in path {field_path!r}"
+        current_type = field.get("type")
+    assert field is not None
+    return field
+
+
+def _set_column_invariant(schema: dict, field_path: str, expression: str) -> None:
+    field = _find_struct_field(schema, field_path)
+    metadata = field.setdefault("metadata", {})
+    metadata["delta.invariants"] = json.dumps(
+        {"expression": {"expression": expression}},
+        separators=(",", ":"),
+    )
+
+
+def _enable_invariants_protocol(protocol: dict) -> None:
+    protocol["minWriterVersion"] = max(int(protocol.get("minWriterVersion", 2)), 7)
+    writer_features = protocol.setdefault("writerFeatures", [])
+    if "invariants" not in writer_features:
+        writer_features.append("invariants")
+
+
+@given(parsers.parse("delta log first commit column {field_path} has invariant {expression}"))
+def delta_log_first_commit_column_has_invariant(
+    field_path: str,
+    expression: str,
+    variables: dict,
+) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log mutation"
+    _update_first_commit_metadata_schema(
+        Path(location.path),
+        lambda schema: _set_column_invariant(schema, field_path, expression),
+        protocol_updater=_enable_invariants_protocol,
+    )
