@@ -130,7 +130,7 @@ impl Accumulator for BitmapConstructAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.bitmap.capacity()
+        std::mem::size_of_val(self) + self.bitmap.capacity()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
