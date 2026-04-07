@@ -5329,7 +5329,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "half",
- "indexmap 2.13.0",
+ "indexmap 2.13.1",
  "simdutf8",
  "uuid",
 ]
@@ -5344,7 +5344,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "half",
- "indexmap 2.13.0",
+ "indexmap 2.13.1",
  "parquet-variant",
  "parquet-variant-json",
  "serde_json",
