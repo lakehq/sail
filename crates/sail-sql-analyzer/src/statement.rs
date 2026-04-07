@@ -1162,16 +1162,16 @@ fn from_ast_table_definition(
                 comment,
                 colon: _,
             }) => {
-                let col_name = name.value;
-                let col_type = from_ast_data_type(data_type)?;
-                let col_comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
+                let name = name.value;
+                let data_type = from_ast_data_type(data_type)?;
+                let comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
                 Ok(spec::PartitionColumn::Definition(
                     spec::TableColumnDefinition {
-                        name: col_name,
-                        data_type: col_type,
+                        name,
+                        data_type,
                         nullable: not_null.is_none(),
                         default: None,
-                        comment: col_comment,
+                        comment,
                         generated_always_as: None,
                     },
                 ))

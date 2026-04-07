@@ -256,8 +256,8 @@ impl PlanResolver<'_> {
                 spec::PartitionColumn::Expression(expr) => {
                     result.push(self.resolve_partition_by_expression(expr)?);
                 }
-                spec::PartitionColumn::Definition(col_def) => {
-                    let resolved = self.resolve_table_columns(vec![col_def], state)?.one()?;
+                spec::PartitionColumn::Definition(column) => {
+                    let resolved = self.resolve_table_columns(vec![column], state)?.one()?;
                     if let Some(existing) = columns
                         .iter()
                         .find(|c| c.name.eq_ignore_ascii_case(&resolved.name))
