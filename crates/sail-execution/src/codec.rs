@@ -94,6 +94,7 @@ use sail_delta_lake::physical_plan::{
     DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 use sail_delta_lake::spec::DeltaOperation;
+use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -2200,6 +2201,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::Standard(gen::StandardUdaf {})) => match name {
+                "bitmap_construct_agg" => Ok(Arc::new(AggregateUDF::from(
+                    BitmapConstructAggFunction::new(),
+                ))),
                 "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
                     HistogramNumericFunction::new(),
                 ))),
@@ -2298,7 +2302,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udaf_kind = if node.inner().as_any().is::<HistogramNumericFunction>()
+        let udaf_kind = if node.inner().as_any().is::<BitmapConstructAggFunction>()
+            || node.inner().as_any().is::<HistogramNumericFunction>()
             || node.inner().as_any().is::<KurtosisFunction>()
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()
