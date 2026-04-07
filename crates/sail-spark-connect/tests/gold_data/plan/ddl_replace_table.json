@@ -55,6 +55,7 @@
               "rowFormat": null,
               "partitionBy": [
                 {
+                  "variant": "expression",
                   "unresolvedAttribute": {
                     "name": [
                       "a"
@@ -64,6 +65,7 @@
                   }
                 },
                 {
+                  "variant": "expression",
                   "unresolvedFunction": {
                     "functionName": [
                       "bucket"
@@ -96,6 +98,7 @@
                   }
                 },
                 {
+                  "variant": "expression",
                   "unresolvedFunction": {
                     "functionName": [
                       "years"
@@ -121,6 +124,7 @@
                   }
                 },
                 {
+                  "variant": "expression",
                   "unresolvedFunction": {
                     "functionName": [
                       "months"
@@ -146,6 +150,7 @@
                   }
                 },
                 {
+                  "variant": "expression",
                   "unresolvedFunction": {
                     "functionName": [
                       "days"
@@ -171,6 +176,7 @@
                   }
                 },
                 {
+                  "variant": "expression",
                   "unresolvedFunction": {
                     "functionName": [
                       "hours"
@@ -196,6 +202,7 @@
                   }
                 },
                 {
+                  "variant": "expression",
                   "unresolvedFunction": {
                     "functionName": [
                       "foo"
@@ -603,13 +610,17 @@
               "rowFormat": null,
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -661,13 +672,17 @@
               },
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -723,13 +738,17 @@
               },
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -786,13 +805,17 @@
               },
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -838,13 +861,17 @@
               "rowFormat": null,
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -900,13 +927,17 @@
               },
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -962,13 +993,17 @@
               },
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -1023,13 +1058,17 @@
               },
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -1085,13 +1124,17 @@
               },
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -1133,13 +1176,17 @@
               "rowFormat": null,
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -1192,13 +1239,17 @@
               "rowFormat": null,
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -1260,6 +1311,7 @@
               "rowFormat": null,
               "partitionBy": [
                 {
+                  "variant": "expression",
                   "unresolvedAttribute": {
                     "name": [
                       "p1"
@@ -1269,13 +1321,17 @@
                   }
                 },
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "p2"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "p2",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -1330,15 +1386,20 @@
               "rowFormat": null,
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "p2"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "p2",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 },
                 {
+                  "variant": "expression",
                   "unresolvedFunction": {
                     "functionName": [
                       "truncate"
@@ -1532,13 +1593,17 @@
               "rowFormat": null,
               "partitionBy": [
                 {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "part"
-                    ],
-                    "planId": null,
-                    "isMetadataColumn": false
-                  }
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
                 }
               ],
               "sortBy": [],
@@ -1650,6 +1715,7 @@
               "rowFormat": null,
               "partitionBy": [
                 {
+                  "variant": "expression",
                   "unresolvedAttribute": {
                     "name": [
                       "a"
@@ -1889,6 +1955,7 @@
               "rowFormat": null,
               "partitionBy": [
                 {
+                  "variant": "expression",
                   "unresolvedAttribute": {
                     "name": [
                       "a"
