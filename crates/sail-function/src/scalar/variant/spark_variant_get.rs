@@ -197,7 +197,18 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
                     datafusion_common::DataFusionError::Execution(format!("{name}: {e}"))
                 })?;
                 if bool_result.null_count() < bool_result.len() {
-                    datafusion::arrow::compute::cast(&bool_result, dt)?
+                    if safe {
+                        datafusion::arrow::compute::cast_with_options(
+                            &bool_result,
+                            dt,
+                            &datafusion::arrow::compute::CastOptions {
+                                safe: true,
+                                ..Default::default()
+                            },
+                        )?
+                    } else {
+                        datafusion::arrow::compute::cast(&bool_result, dt)?
+                    }
                 } else {
                     result
                 }

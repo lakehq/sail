@@ -591,6 +591,64 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | result |
         | 1      |
 
+    Scenario: try_variant_get false as int returns 0
+      When query
+        """
+        SELECT try_variant_get(parse_json('false'), '$', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: try_variant_get bool as bigint
+      When query
+        """
+        SELECT try_variant_get(parse_json('true'), '$', 'bigint') AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: try_variant_get bool as short
+      When query
+        """
+        SELECT try_variant_get(parse_json('false'), '$', 'short') AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: variant_get bool as int returns 1
+      When query
+        """
+        SELECT variant_get(parse_json('true'), '$', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: variant_get false as int returns 0
+      When query
+        """
+        SELECT variant_get(parse_json('false'), '$', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: try_variant_get multi-row bool as int
+      When query
+        """
+        SELECT try_variant_get(parse_json(v), '$', 'int') AS result
+        FROM VALUES ('true'), ('false'), ('null'), ('"text"') AS t(v)
+        """
+      Then query result
+        | result |
+        | 1      |
+        | 0      |
+        | NULL   |
+        | NULL   |
+
     Scenario: try_variant_get null JSON value returns NULL
       When query
         """
