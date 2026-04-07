@@ -149,10 +149,17 @@ impl Accumulator for BitmapConstructAggAccumulator {
         for i in 0..binary_array.len() {
             if !binary_array.is_null(i) {
                 let other = binary_array.value(i);
+                if other.len() != self.bitmap.len() {
+                    return Err(datafusion::error::DataFusionError::Internal(
+                        format!(
+                            "bitmap_construct_agg expected state length {}, got {}",
+                            self.bitmap.len(),
+                            other.len()
+                        ),
+                    ));
+                }
                 for (j, byte) in other.iter().enumerate() {
-                    if j < self.bitmap.len() {
-                        self.bitmap[j] |= byte;
-                    }
+                    self.bitmap[j] |= byte;
                 }
             }
         }
