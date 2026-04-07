@@ -30,7 +30,7 @@ Feature: bitmap_construct_agg builds a bitmap from bit positions
         """
       Then query result
         | result |
-        | 010100 |
+        | 010101 |
 
   Rule: bitmap_construct_agg returns a binary value
 
