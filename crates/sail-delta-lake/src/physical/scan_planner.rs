@@ -102,11 +102,13 @@ fn build_file_schema(snapshot: &DeltaSnapshot) -> Result<Arc<ArrowSchema>> {
     Ok(Arc::new(ArrowSchema::new(file_fields)))
 }
 
+type PrunedFiles = (Option<Arc<Vec<Add>>>, Option<Vec<bool>>);
+
 fn maybe_prune_files(
     files: Option<Arc<Vec<Add>>>,
     table_schema: Arc<ArrowSchema>,
     pruning_predicate: Option<&Arc<dyn PhysicalExpr>>,
-) -> Result<(Option<Arc<Vec<Add>>>, Option<Vec<bool>>)> {
+) -> Result<PrunedFiles> {
     match files {
         Some(files) => {
             if let Some(predicate) = pruning_predicate {

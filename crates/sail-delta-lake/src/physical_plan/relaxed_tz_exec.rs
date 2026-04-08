@@ -147,7 +147,7 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let stream = exec.execute(0, task_ctx)?;
         let batches = stream.collect::<Vec<_>>();
-        let batches = futures::executor::block_on(async move { batches.await });
+        let batches = futures::executor::block_on(batches);
         let batch = batches.into_iter().next().unwrap()?;
 
         assert_eq!(batch.schema(), target_schema);
