@@ -112,6 +112,9 @@ data:
                                       Projection: column1 AS #0, column2 AS #1, column3 AS #2, column4 AS #3
                                         Values: (Int32(1), Utf8("existing"), Int32(15), Utf8("promote")), (Int32(2), Utf8("vip"), Int32(22), Utf8("platinum")), (Int32(4), Utf8("standard"), Int32(25), Utf8("regular"))
   
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
   
@@ -325,6 +328,9 @@ data:
     SAME TEXT AS ABOVE
   
     logical_plan after expand_merge:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
   
     logical_plan after rewrite_set_comparison:
