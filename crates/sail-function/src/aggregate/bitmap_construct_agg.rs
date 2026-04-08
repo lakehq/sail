@@ -24,8 +24,8 @@ const BITMAP_NUM_BITS: i64 = (8 * BITMAP_NUM_BYTES) as i64;
 ///
 /// Returns a binary value of `BITMAP_NUM_BYTES` bytes with the positions
 /// of the bits set from all input values. The input values should be
-/// bit positions (typically from `bitmap_bit_position()`), ranging from
-/// 0 to `BITMAP_NUM_BITS - 1`.
+/// bit positions (typically from `bitmap_bit_position()`). Positions are
+/// wrapped into the range `0..BITMAP_NUM_BITS` using modulo arithmetic.
 #[derive(PartialEq, Eq, Hash)]
 pub struct BitmapConstructAggFunction {
     signature: Signature,
@@ -108,7 +108,7 @@ impl BitmapConstructAggAccumulator {
     }
 
     fn set_bit(&mut self, position: i64) {
-        // Ensure position is within valid range
+        // Wrap positions into the bitmap range using modulo arithmetic.
         let pos = position.rem_euclid(BITMAP_NUM_BITS) as usize;
         let byte_index = pos / 8;
         let bit_index = pos % 8;
