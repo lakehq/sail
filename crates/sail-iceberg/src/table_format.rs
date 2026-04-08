@@ -19,14 +19,15 @@ use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
-    PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
-use sail_data_source::options::{
-    load_default_options, load_options, IcebergReadOptions, IcebergWriteOptions,
+use sail_data_source::error::DataSourceResult;
+use sail_data_source::options::gen::{
+    IcebergReadOptions, IcebergReadPartialOptions, IcebergWriteOptions, IcebergWritePartialOptions,
 };
+use sail_data_source::options::{BuildPartialOptions, PartialOptions};
 use url::Url;
 
-use crate::options::TableIcebergOptions;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::spec::{PartitionSpec, Schema, Snapshot};
 use crate::table::{find_latest_metadata_file, Table};
@@ -66,12 +67,8 @@ impl TableFormat for IcebergTableFormat {
         } = info;
 
         let table_url = Self::parse_table_url(paths).await?;
-        let iceberg_options = resolve_iceberg_read_options(
-            options
-                .into_iter()
-                .map(|l| l.into_opaque_options())
-                .collect(),
-        )?;
+        let iceberg_options = resolve_iceberg_read_options(options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         create_iceberg_provider(ctx, table_url, iceberg_options).await
     }

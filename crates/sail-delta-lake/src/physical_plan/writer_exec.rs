@@ -52,7 +52,7 @@ use crate::conversion::DeltaTypeConverter;
 use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
-use crate::options::TableDeltaOptions;
+use sail_data_source::options::gen::DeltaWriteOptions;
 use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
@@ -78,7 +78,7 @@ enum SchemaMode {
 pub struct DeltaWriterExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
-    options: TableDeltaOptions,
+    options: DeltaWriteOptions,
     metadata_configuration: HashMap<String, String>,
     partition_columns: Vec<String>,
     sink_mode: PhysicalSinkMode,
@@ -109,7 +109,7 @@ impl DeltaWriterExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
-        options: TableDeltaOptions,
+        options: DeltaWriteOptions,
         metadata_configuration: HashMap<String, String>,
         partition_columns: Vec<String>,
         sink_mode: PhysicalSinkMode,
@@ -148,7 +148,7 @@ impl DeltaWriterExec {
         &self.table_url
     }
 
-    pub fn options(&self) -> &TableDeltaOptions {
+    pub fn options(&self) -> &DeltaWriteOptions {
         &self.options
     }
 
@@ -329,7 +329,7 @@ impl DeltaWriterExec {
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let exec_start = Instant::now();
-            let TableDeltaOptions {
+            let DeltaWriteOptions {
                 target_file_size,
                 write_batch_size,
                 ..
@@ -738,7 +738,7 @@ impl DeltaWriterExec {
 impl DeltaWriterExec {
     /// Determine the schema mode based on options and save mode
     fn get_schema_mode(
-        options: &TableDeltaOptions,
+        options: &DeltaWriteOptions,
         save_mode: SaveMode,
     ) -> Result<Option<SchemaMode>> {
         match (options.merge_schema, options.overwrite_schema) {

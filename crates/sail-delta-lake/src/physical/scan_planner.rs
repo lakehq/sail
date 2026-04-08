@@ -16,7 +16,7 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
-use crate::options::TableDeltaOptions;
+use crate::options::DeltaLogReplayStrategyOption;
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
@@ -27,6 +27,8 @@ use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
+use sail_data_source::options::gen::{DeltaWriteOptions, DeltaWritePartialOptions};
+use sail_data_source::options::PartialOptions;
 
 pub(crate) async fn plan_delta_scan(
     session: &dyn Session,
@@ -242,11 +244,17 @@ pub(crate) async fn plan_delta_scan(
     // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
     let table_url = log_store.config().location.clone();
 
-    let planner_options = TableDeltaOptions {
-        delta_log_replay_strategy: config.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: config.delta_log_replay_hash_threshold,
-        ..TableDeltaOptions::default()
+    let strategy_str = match config.delta_log_replay_strategy {
+        DeltaLogReplayStrategyOption::Auto => "auto",
+        DeltaLogReplayStrategyOption::Sort => "sort",
+        DeltaLogReplayStrategyOption::Hash => "hash",
     };
+    let mut partial = DeltaWritePartialOptions::initialize();
+    partial.delta_log_replay_strategy = Some(strategy_str.to_string());
+    partial.delta_log_replay_hash_threshold = Some(config.delta_log_replay_hash_threshold);
+    let planner_options = partial
+        .finalize()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let planner_ctx = PlannerContext::new(
         session,

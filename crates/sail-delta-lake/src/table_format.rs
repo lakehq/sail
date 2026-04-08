@@ -8,16 +8,18 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
-    DeleteInfo, MergeInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    DeleteInfo, MergeInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
+    TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
-use sail_data_source::options::{
-    load_default_options, load_options, DeltaReadOptions, DeltaWriteOptions,
+use sail_data_source::error::{DataSourceError, DataSourceResult};
+use sail_data_source::options::gen::{
+    DeltaReadOptions, DeltaReadPartialOptions, DeltaWriteOptions, DeltaWritePartialOptions,
 };
+use sail_data_source::options::{BuildPartialOptions, PartialOptions};
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
-use crate::options::{DeltaLogReplayStrategyOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
@@ -57,12 +59,8 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = resolve_delta_read_options(
-            options
-                .into_iter()
-                .map(|l| l.into_opaque_options())
-                .collect(),
-        )?;
+        let options = resolve_delta_read_options(options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         create_delta_source(ctx, table_url, schema, options).await
     }
 
@@ -81,12 +79,8 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = resolve_delta_read_options(
-            options
-                .into_iter()
-                .map(|l| l.into_opaque_options())
-                .collect(),
-        )?;
+        let options = resolve_delta_read_options(options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         create_delta_provider(ctx, table_url, schema, options).await
     }
 
@@ -123,7 +117,14 @@ impl TableFormat for DeltaTableFormat {
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let (options, routed_table_properties) =
             split_delta_write_options_and_table_properties(options);
-        let delta_options = resolve_delta_write_options(options)?;
+        let option_layers: Vec<OptionLayer> = options
+            .into_iter()
+            .map(|map| OptionLayer::OptionList {
+                items: map.into_iter().collect(),
+            })
+            .collect();
+        let delta_options = resolve_delta_write_options(option_layers)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let object_store = ctx
             .runtime_env()
@@ -263,7 +264,16 @@ impl TableFormat for DeltaTableFormat {
             DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
         })?;
 
-        let delta_options = resolve_delta_write_options(options)?;
+        let delta_options = {
+            let option_layers: Vec<OptionLayer> = options
+                .into_iter()
+                .map(|map| OptionLayer::OptionList {
+                    items: map.into_iter().collect(),
+                })
+                .collect();
+            resolve_delta_write_options(option_layers)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+        };
 
         let delete_config = DeltaTableConfig::new(
             table_url,
@@ -285,7 +295,19 @@ impl TableFormat for DeltaTableFormat {
         info: MergeInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-        let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+        let delta_options = {
+            let option_layers: Vec<OptionLayer> = info
+                .target
+                .options
+                .clone()
+                .into_iter()
+                .map(|map| OptionLayer::OptionList {
+                    items: map.into_iter().collect(),
+                })
+                .collect();
+            resolve_delta_write_options(option_layers)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+        };
         let merge_config = DeltaTableConfig::new(
             table_url,
             delta_options,
@@ -310,98 +332,22 @@ impl DeltaTableFormat {
     }
 }
 
-fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) -> Result<()> {
-    if let Some(timestamp_as_of) = from.timestamp_as_of {
-        to.timestamp_as_of = Some(timestamp_as_of)
+pub fn resolve_delta_read_options(options: Vec<OptionLayer>) -> DataSourceResult<DeltaReadOptions> {
+    let mut partial = DeltaReadPartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    if let Some(version_as_of) = from.version_as_of {
-        to.version_as_of = Some(version_as_of)
-    }
-    if let Some(metadata_as_data_read) = from.metadata_as_data_read {
-        to.metadata_as_data_read = metadata_as_data_read;
-    }
-    if let Some(ref raw) = from.delta_log_replay_strategy {
-        to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
-            "auto" => DeltaLogReplayStrategyOption::Auto,
-            "sort" => DeltaLogReplayStrategyOption::Sort,
-            "hash" => DeltaLogReplayStrategyOption::Hash,
-            other => {
-                return plan_err!(
-                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash"
-                )
-            }
-        };
-    }
-    if let Some(threshold) = from.delta_log_replay_hash_threshold {
-        if threshold == 0 {
-            return plan_err!(
-                "invalid value for deltaLogReplayHashThreshold: expected positive integer"
-            );
-        }
-        to.delta_log_replay_hash_threshold = threshold;
-    }
-    Ok(())
-}
-
-fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions) -> Result<()> {
-    if let Some(merge_schema) = from.merge_schema {
-        to.merge_schema = merge_schema;
-    }
-    if let Some(overwrite_schema) = from.overwrite_schema {
-        to.overwrite_schema = overwrite_schema;
-    }
-    if let Some(replace_where) = from.replace_where {
-        to.replace_where = Some(replace_where);
-    }
-    if let Some(target_file_size) = from.target_file_size {
-        to.target_file_size = target_file_size;
-    }
-    if let Some(write_batch_size) = from.write_batch_size {
-        to.write_batch_size = write_batch_size;
-    }
-    if let Some(ref raw) = from.delta_log_replay_strategy {
-        to.delta_log_replay_strategy = match raw.to_ascii_lowercase().as_str() {
-            "auto" => DeltaLogReplayStrategyOption::Auto,
-            "sort" => DeltaLogReplayStrategyOption::Sort,
-            "hash" => DeltaLogReplayStrategyOption::Hash,
-            other => {
-                return plan_err!(
-                    "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash"
-                )
-            }
-        };
-    }
-    if let Some(threshold) = from.delta_log_replay_hash_threshold {
-        if threshold == 0 {
-            return plan_err!(
-                "invalid value for deltaLogReplayHashThreshold: expected positive integer"
-            );
-        }
-        to.delta_log_replay_hash_threshold = threshold;
-    }
-    Ok(())
-}
-
-pub fn resolve_delta_read_options(
-    options: Vec<HashMap<String, String>>,
-) -> Result<TableDeltaOptions> {
-    let mut delta_options = TableDeltaOptions::default();
-    apply_delta_read_options(load_default_options()?, &mut delta_options)?;
-    for opt in options {
-        apply_delta_read_options(load_options(opt)?, &mut delta_options)?;
-    }
-    Ok(delta_options)
+    partial.finalize()
 }
 
 pub fn resolve_delta_write_options(
-    options: Vec<HashMap<String, String>>,
-) -> Result<TableDeltaOptions> {
-    let mut delta_options = TableDeltaOptions::default();
-    apply_delta_write_options(load_default_options()?, &mut delta_options)?;
-    for opt in options {
-        apply_delta_write_options(load_options(opt)?, &mut delta_options)?;
+    options: Vec<OptionLayer>,
+) -> DataSourceResult<DeltaWriteOptions> {
+    let mut partial = DeltaWritePartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    Ok(delta_options)
+    partial.finalize()
 }
 
 fn resolve_delta_metadata_configuration(

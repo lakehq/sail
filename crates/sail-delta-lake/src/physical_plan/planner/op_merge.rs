@@ -31,7 +31,7 @@ use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::datasource::PATH_COLUMN;
 use crate::kernel::{DeltaOperation, MergePredicate};
-use crate::options::TableDeltaOptions;
+use sail_data_source::options::gen::DeltaWriteOptions;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
 };
@@ -118,7 +118,7 @@ async fn finalize_merge(
     snapshot: &DeltaSnapshot,
     table_url: Url,
     version: i64,
-    options: TableDeltaOptions,
+    options: DeltaWriteOptions,
     partition_columns: Vec<String>,
     table_schema: datafusion::arrow::datatypes::SchemaRef,
     touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
