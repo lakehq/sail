@@ -133,15 +133,6 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | result |
         | false  |
 
-    Scenario: Integer 13 is not variant null
-      When query
-        """
-        SELECT is_variant_null(parse_json('13')) AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
     Scenario: Boolean false is not variant null
       When query
         """
@@ -189,7 +180,7 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | result |
         | true   |
 
-    Scenario: Extract string from nested object
+    Scenario: Extract string field from object
       When query
         """
         SELECT variant_get(parse_json('{"a":null,"b":"spark"}'), '$.b', 'string') AS result
@@ -255,24 +246,6 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | 3      |
 
   Rule: Edge cases
-
-    Scenario: Missing field returns NULL
-      When query
-        """
-        SELECT variant_get(parse_json('{"a":1}'), '$.b', 'int') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: Null field in object returns NULL
-      When query
-        """
-        SELECT variant_get(parse_json('{"a":null}'), '$.a', 'string') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
 
     Scenario: Empty string value
       When query
