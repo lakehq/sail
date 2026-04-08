@@ -13,7 +13,6 @@
 pub use sail_data_source::options::types::delta::{
     parse_delta_log_replay_strategy, DeltaLogReplayStrategy,
 };
-pub use DeltaLogReplayStrategy as DeltaLogReplayStrategyOption;
 
 pub fn default_delta_log_replay_hash_threshold() -> usize {
     100

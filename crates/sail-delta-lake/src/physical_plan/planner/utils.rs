@@ -40,7 +40,7 @@ use super::log_segment::{resolve_log_segment_files, LogSegmentResolveOptions};
 use crate::datasource::{
     simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
 };
-use crate::options::DeltaLogReplayStrategyOption;
+use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
     DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions, COL_LOG_IS_REMOVE,
@@ -547,9 +547,9 @@ async fn build_log_replay_pipeline_with_files(
     let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.max(1);
     let has_checkpoint = !checkpoint_files.is_empty();
     let use_hash = match replay_strategy {
-        DeltaLogReplayStrategyOption::Sort => false,
-        DeltaLogReplayStrategyOption::Hash => has_checkpoint,
-        DeltaLogReplayStrategyOption::Auto => {
+        DeltaLogReplayStrategy::Sort => false,
+        DeltaLogReplayStrategy::Hash => has_checkpoint,
+        DeltaLogReplayStrategy::Auto => {
             has_checkpoint && commit_files.len() <= replay_hash_threshold
         }
     };
