@@ -10,22 +10,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use sail_data_source::options::gen::IcebergWriteOptions;
 use serde::{Deserialize, Serialize};
 
 /// Options for the Iceberg writer execution plan.
 /// This is a subset of `IcebergWriteOptions` containing only the fields used
 /// during physical writing. It derives serde for use in the physical plan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IcebergWriterExecOptions {
     pub merge_schema: bool,
     pub overwrite_schema: bool,
 }
 
-impl From<sail_data_source::options::gen::IcebergWriteOptions> for IcebergWriterExecOptions {
-    fn from(opts: sail_data_source::options::gen::IcebergWriteOptions) -> Self {
+impl From<IcebergWriteOptions> for IcebergWriterExecOptions {
+    fn from(options: IcebergWriteOptions) -> Self {
         Self {
-            merge_schema: opts.merge_schema,
-            overwrite_schema: opts.overwrite_schema,
+            merge_schema: options.merge_schema,
+            overwrite_schema: options.overwrite_schema,
         }
     }
 }

@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use sail_data_source::options::gen::DeltaWriteOptions;
 use serde::{Deserialize, Serialize};
 
 /// Options for the Delta Lake writer execution plan.
@@ -24,14 +25,14 @@ pub struct DeltaWriterExecOptions {
     pub replace_where: Option<String>,
 }
 
-impl From<sail_data_source::options::gen::DeltaWriteOptions> for DeltaWriterExecOptions {
-    fn from(opts: sail_data_source::options::gen::DeltaWriteOptions) -> Self {
+impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
+    fn from(options: DeltaWriteOptions) -> Self {
         Self {
-            target_file_size: opts.target_file_size,
-            write_batch_size: opts.write_batch_size,
-            merge_schema: opts.merge_schema,
-            overwrite_schema: opts.overwrite_schema,
-            replace_where: opts.replace_where,
+            target_file_size: options.target_file_size,
+            write_batch_size: options.write_batch_size,
+            merge_schema: options.merge_schema,
+            overwrite_schema: options.overwrite_schema,
+            replace_where: options.replace_where,
         }
     }
 }

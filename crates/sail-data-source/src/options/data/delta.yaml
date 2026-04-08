@@ -562,7 +562,7 @@
     value: "auto"
     parser: crate::options::types::delta::parse_delta_log_replay_strategy
   supported: true
-  rust_type: crate::options::types::delta::DeltaLogReplayStrategyOption
+  rust_type: crate::options::types::delta::DeltaLogReplayStrategy
   scopes:
     - read
     - write

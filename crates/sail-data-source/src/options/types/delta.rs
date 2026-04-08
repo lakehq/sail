@@ -2,7 +2,7 @@ use crate::error::{DataSourceError, DataSourceResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum DeltaLogReplayStrategyOption {
+pub enum DeltaLogReplayStrategy {
     #[default]
     Auto,
     Sort,
@@ -12,11 +12,11 @@ pub enum DeltaLogReplayStrategyOption {
 pub fn parse_delta_log_replay_strategy(
     key: &str,
     value: &str,
-) -> DataSourceResult<DeltaLogReplayStrategyOption> {
+) -> DataSourceResult<DeltaLogReplayStrategy> {
     match value.to_ascii_lowercase().as_str() {
-        "auto" => Ok(DeltaLogReplayStrategyOption::Auto),
-        "sort" => Ok(DeltaLogReplayStrategyOption::Sort),
-        "hash" => Ok(DeltaLogReplayStrategyOption::Hash),
+        "auto" => Ok(DeltaLogReplayStrategy::Auto),
+        "sort" => Ok(DeltaLogReplayStrategy::Sort),
+        "hash" => Ok(DeltaLogReplayStrategy::Hash),
         _ => Err(DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),

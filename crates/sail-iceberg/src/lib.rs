@@ -29,6 +29,7 @@ pub use operations::write::base_writer::*;
 pub use operations::write::file_writer::*;
 pub use operations::write::{IcebergWriter, WriteOutcome};
 pub use operations::Transaction;
+pub use physical_plan::IcebergWriterExecOptions;
 pub use schema_evolution::*;
 pub use spec::*;
 pub use table_format::*;
