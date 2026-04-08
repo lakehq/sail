@@ -208,10 +208,10 @@ impl ExecutionPlan for DeltaCommitExec {
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
-            // For existing tables, open concurrently with `require_files: true` while
-            // input data (Parquet writes from workers) is being drained.  This overlaps
-            // log-replay I/O with worker I/O so that PostCommit receives a complete
-            // snapshot and only needs a cheap `update()` call.
+            // For existing tables, open concurrently with `require_files: false` while
+            // input data (Parquet writes from workers) is being drained.  The post-commit
+            // hook uses incremental CRC computation (no full file list needed) and the
+            // checkpoint writer does its own log replay, so a header-only snapshot suffices.
             let table_join = if table_exists {
                 let open_url = table_url.clone();
                 let open_store = Arc::clone(&object_store);
@@ -221,7 +221,10 @@ impl ExecutionPlan for DeltaCommitExec {
                         open_url,
                         open_store,
                         open_storage,
-                        DeltaSnapshotConfig::default(), // require_files: true
+                        DeltaSnapshotConfig {
+                            require_files: false,
+                            ..Default::default()
+                        },
                     )
                     .await
                 }))
