@@ -36,9 +36,7 @@ const DEFAULT_CATALOG: &str = "sail_test_catalog";
 
 const MAX_CONTAINER_START_RETRIES: u32 = 3;
 
-async fn start_container_with_retry<F>(
-    image_fn: F,
-) -> ContainerAsync<GenericImage>
+async fn start_container_with_retry<F>(image_fn: F) -> ContainerAsync<GenericImage>
 where
     F: Fn() -> ContainerRequest<GenericImage>,
 {
