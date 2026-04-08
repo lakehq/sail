@@ -104,7 +104,11 @@ impl ExecutionPlan for RelaxedTzCastExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input.partition_statistics(partition)
+        if self.input.schema() == self.schema {
+            self.input.partition_statistics(partition)
+        } else {
+            Ok(Statistics::new_unknown(self.schema.as_ref()))
+        }
     }
 }
 
