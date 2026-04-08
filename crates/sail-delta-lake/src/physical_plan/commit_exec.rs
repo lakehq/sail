@@ -20,6 +20,7 @@ use chrono::Utc;
 use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -215,7 +216,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 let open_url = table_url.clone();
                 let open_store = Arc::clone(&object_store);
                 let open_storage = storage_config.clone();
-                Some(tokio::task::spawn(async move {
+                Some(SpawnedTask::spawn(async move {
                     open_table_with_object_store_and_table_config(
                         open_url,
                         open_store,
