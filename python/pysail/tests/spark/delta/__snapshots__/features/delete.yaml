@@ -22,6 +22,9 @@ data:
     logical_plan after expand_row_level_op:
     RowLevelWrite: command=Delete, target=delta_delete_explain_codegen, format=DELTA, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
   
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
   
