@@ -102,7 +102,6 @@ async fn setup_catalog(
     let runtime = RuntimeHandle::new(
         tokio::runtime::Handle::current(),
         tokio::runtime::Handle::current(),
-        true,
     );
 
     let catalog = RuntimeAwareCatalogProvider::try_new(

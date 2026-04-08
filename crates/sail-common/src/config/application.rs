@@ -89,7 +89,6 @@ pub enum ExecutionMode {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub stack_size: usize,
-    pub enable_secondary: bool,
     pub memory_pool: MemoryPoolConfig,
     pub temporary_files: TemporaryFilesConfig,
 }

@@ -15,13 +15,6 @@
   default: "8388608"
   description: The stack size in bytes for each thread.
 
-- key: runtime.enable_secondary
-  type: boolean
-  default: "true"
-  description: |
-    Use a secondary Tokio runtime to separate object storage I/O tasks from other operations.
-  experimental: true
-
 - key: runtime.memory_pool.type
   type: string
   default: "unbounded"
