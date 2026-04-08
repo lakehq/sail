@@ -208,6 +208,13 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+        // DataFusion validates that the physical input schema of an aggregate matches the
+        // logical input schema, including field-level metadata. However, the physical
+        // `ProjectionExec` does not propagate logical field metadata (e.g., column metadata
+        // from Delta table partition columns, or metadata set via `DataFrame.withMetadata()`)
+        // into its output schema, so this check spuriously fails. Skipping the check is safe
+        // because the mismatch only involves annotation metadata, not data types or nullability.
+        execution.skip_physical_aggregate_schema_check = true;
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {

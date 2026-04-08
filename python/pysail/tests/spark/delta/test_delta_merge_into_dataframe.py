@@ -73,3 +73,49 @@ def test_dataframe_merge_into_insert_all_and_delete(spark, tmp_path):
         assert_frame_equal(result, expected, check_dtype=False)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_dataframe_merge_into_self_with_partition_column_metadata(spark, tmp_path):
+    """Regression test: merging a table into itself when a partition column has field metadata
+    should not raise SparkRuntimeException about physical/logical schema mismatch.
+
+    See: https://github.com/lakehq/sail/issues/1617
+    """
+    table_name = "delta_merge_self_partition_metadata"
+    table_path = tmp_path / "delta_merge_self_partition_metadata"
+    table_path_literal = escape_sql_string_literal(str(table_path))
+
+    # Create a DataFrame with a column that has metadata, partitioned by that column.
+    # The metadata on the partition column triggers the schema mismatch bug.
+    source_df = spark.createDataFrame(
+        [(1, "bar"), (2, "foo")],
+        "some_id INT, some_category STRING",
+    )
+    # Attach metadata to the partition column
+    source_df = source_df.withMetadata("some_category", {"some_md": "foo"})
+    source_df.write.format("delta").partitionBy("some_category").mode("overwrite").save(str(table_path))
+
+    spark.sql(
+        f"CREATE TABLE {table_name} (some_id INT, some_category STRING) USING DELTA LOCATION '{table_path_literal}'"
+    )
+    try:
+        # Merge the table into itself (source == target) — this is the scenario that used to fail
+        (
+            spark.table(table_name)
+            .alias("src")
+            .mergeInto(
+                table=table_name,
+                condition=(F.col(f"{table_name}.some_id") == F.col("src.some_id")),
+            )
+            .whenMatched()
+            .updateAll()
+            .merge()
+        )
+
+        result = spark.table(table_name).sort("some_id").toPandas()
+        expected = pd.DataFrame({"some_id": [1, 2], "some_category": ["bar", "foo"]}).astype(
+            {"some_id": "int32", "some_category": "string"}
+        )
+        assert_frame_equal(result, expected, check_dtype=False)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
