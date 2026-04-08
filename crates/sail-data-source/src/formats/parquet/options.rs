@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::str::FromStr;
 
 use datafusion::catalog::Session;
@@ -6,8 +5,12 @@ use datafusion::parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parquet_config::DFParquetWriterVersion;
 use datafusion_common::{config_err, DataFusionError, Result};
+use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::options::{load_default_options, load_options, ParquetReadOptions, ParquetWriteOptions};
+use crate::options::gen::{
+    ParquetReadOptions, ParquetReadPartialOptions, ParquetWriteOptions, ParquetWritePartialOptions,
+};
+use crate::options::{BuildPartialOptions, PartialOptions};
 use crate::utils::split_parquet_compression_string;
 
 fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> Result<()> {
@@ -58,9 +61,7 @@ fn apply_parquet_read_options(
     if let Some(v) = binary_as_string {
         to.global.binary_as_string = v;
     }
-    if let Some(v) = coerce_int96 {
-        to.global.coerce_int96 = Some(v);
-    }
+    to.global.coerce_int96 = Some(coerce_int96);
     if let Some(v) = bloom_filter_on_read {
         to.global.bloom_filter_on_read = v;
     }
@@ -215,25 +216,29 @@ fn apply_parquet_write_options(
 
 pub fn resolve_parquet_read_options(
     ctx: &dyn Session,
-    options: Vec<HashMap<String, String>>,
+    options: Vec<OptionLayer>,
 ) -> Result<TableParquetOptions> {
-    let mut parquet_options = ctx.default_table_options().parquet;
-    apply_parquet_read_options(load_default_options()?, &mut parquet_options)?;
-    for opt in options {
-        apply_parquet_read_options(load_options(opt)?, &mut parquet_options)?;
+    let mut partial = ParquetReadPartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
+    let opts = partial.finalize()?;
+    let mut parquet_options = ctx.default_table_options().parquet;
+    apply_parquet_read_options(opts, &mut parquet_options)?;
     Ok(parquet_options)
 }
 
 pub fn resolve_parquet_write_options(
     ctx: &dyn Session,
-    options: Vec<HashMap<String, String>>,
+    options: Vec<OptionLayer>,
 ) -> Result<TableParquetOptions> {
-    let mut parquet_options = ctx.default_table_options().parquet;
-    apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
-    for opt in options {
-        apply_parquet_write_options(load_options(opt)?, &mut parquet_options)?;
+    let mut partial = ParquetWritePartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
+    let opts = partial.finalize()?;
+    let mut parquet_options = ctx.default_table_options().parquet;
+    apply_parquet_write_options(opts, &mut parquet_options)?;
     // When the FPP or NDV is set, the parquet writer will enable bloom filter implicitly.
     // This is not desired since we want those values to take effect only when the bloom filter
     // is explicitly enabled on write.
@@ -255,7 +260,7 @@ mod tests {
     use crate::formats::parquet::options::{
         resolve_parquet_read_options, resolve_parquet_write_options,
     };
-    use crate::options::build_options;
+    use crate::options::build_option_layer;
 
     #[test]
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {
@@ -267,7 +272,7 @@ mod tests {
             .global
             .metadata_size_hint;
 
-        let mut kv = build_options(&[
+        let kv = build_option_layer(&[
             ("enable_page_index", "true"),
             ("pruning", "true"),
             ("skip_metadata", "false"),
@@ -280,7 +285,7 @@ mod tests {
             ("bloom_filter_on_read", "true"),
             ("max_predicate_cache_size", "0"),
         ]);
-        let options = resolve_parquet_read_options(&state, vec![kv.clone()])?;
+        let options = resolve_parquet_read_options(&state, vec![kv])?;
         assert!(options.global.enable_page_index);
         assert!(options.global.pruning);
         assert!(!options.global.skip_metadata);
@@ -293,11 +298,12 @@ mod tests {
         assert!(options.global.bloom_filter_on_read);
         assert_eq!(options.global.max_predicate_cache_size, Some(0));
 
-        kv.insert("metadata_size_hint".to_string(), "0".to_string());
-        let options = resolve_parquet_read_options(&state, vec![kv.clone()])?;
+        // metadata_size_hint=0 means use session default (non-zero parser)
+        let kv = build_option_layer(&[("metadata_size_hint", "0")]);
+        let options = resolve_parquet_read_options(&state, vec![kv])?;
         assert_eq!(options.global.metadata_size_hint, default_hint);
 
-        kv.insert("metadata_size_hint".to_string(), "".to_string());
+        let kv = build_option_layer(&[("metadata_size_hint", "")]);
         let options = resolve_parquet_read_options(&state, vec![kv])?;
         assert_eq!(options.global.metadata_size_hint, default_hint);
 
@@ -317,15 +323,15 @@ mod tests {
             .metadata_size_hint = Some(123);
         let state = ctx.state();
 
-        let kv = build_options(&[]);
+        let kv = build_option_layer(&[]);
         let options = resolve_parquet_read_options(&state, vec![kv])?;
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
-        let kv = build_options(&[("metadata_size_hint", "0")]);
+        let kv = build_option_layer(&[("metadata_size_hint", "0")]);
         let options = resolve_parquet_read_options(&state, vec![kv])?;
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
-        let kv = build_options(&[("metadata_size_hint", "")]);
+        let kv = build_option_layer(&[("metadata_size_hint", "")]);
         let options = resolve_parquet_read_options(&state, vec![kv])?;
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
@@ -337,7 +343,7 @@ mod tests {
         let ctx = SessionContext::default();
         let state = ctx.state();
 
-        let mut kv = build_options(&[
+        let kv = build_option_layer(&[
             ("data_page_size_limit", "1024"),
             ("write_batch_size", "1000"),
             ("writer_version", "2.0"),
@@ -358,7 +364,7 @@ mod tests {
             ("maximum_parallel_row_group_writers", "4"),
             ("maximum_buffered_record_batches_per_stream", "10"),
         ]);
-        let options = resolve_parquet_write_options(&state, vec![kv.clone()])?;
+        let options = resolve_parquet_write_options(&state, vec![kv])?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
         assert_eq!(options.global.write_batch_size, 1000);
         assert_eq!(
@@ -388,16 +394,21 @@ mod tests {
             10
         );
 
-        kv.insert("column_index_truncate_length".to_string(), "0".to_string());
-        kv.insert("statistics_truncate_length".to_string(), "0".to_string());
-        kv.insert("encoding".to_string(), "".to_string());
-        let options = resolve_parquet_write_options(&state, vec![kv.clone()])?;
+        // column_index_truncate_length=0 and statistics_truncate_length=0 mean use session default
+        let kv = build_option_layer(&[
+            ("column_index_truncate_length", "0"),
+            ("statistics_truncate_length", "0"),
+            ("encoding", ""),
+        ]);
+        let options = resolve_parquet_write_options(&state, vec![kv])?;
         assert_eq!(options.global.column_index_truncate_length, Some(64));
         assert_eq!(options.global.statistics_truncate_length, Some(64));
-        assert_eq!(options.global.encoding, None,);
+        assert_eq!(options.global.encoding, None);
 
-        kv.insert("column_index_truncate_length".to_string(), "".to_string());
-        kv.insert("statistics_truncate_length".to_string(), "".to_string());
+        let kv = build_option_layer(&[
+            ("column_index_truncate_length", ""),
+            ("statistics_truncate_length", ""),
+        ]);
         let options = resolve_parquet_write_options(&state, vec![kv])?;
         assert_eq!(options.global.column_index_truncate_length, Some(64));
         assert_eq!(options.global.statistics_truncate_length, Some(64));
@@ -439,14 +450,14 @@ mod tests {
             .encoding = Some("bit_packed".to_string());
         let state = ctx.state();
 
-        let kv = build_options(&[]);
+        let kv = build_option_layer(&[]);
         let options = resolve_parquet_write_options(&state, vec![kv])?;
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
 
-        let kv = build_options(&[
+        let kv = build_option_layer(&[
             ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
             ("encoding", ""),
@@ -457,7 +468,7 @@ mod tests {
         assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
 
-        let kv = build_options(&[
+        let kv = build_option_layer(&[
             ("column_index_truncate_length", ""),
             ("statistics_truncate_length", ""),
         ]);

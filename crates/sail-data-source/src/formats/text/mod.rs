@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
+use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
 use crate::formats::text::file_format::TextFileFormat;
@@ -47,7 +47,7 @@ impl ListingFormat for TextListingFormat {
     fn create_read_format(
         &self,
         _ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
+        options: Vec<OptionLayer>,
         compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
         let mut options = resolve_text_read_options(options)?;
@@ -60,7 +60,7 @@ impl ListingFormat for TextListingFormat {
     fn create_write_format(
         &self,
         _ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
+        options: Vec<OptionLayer>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
         let options = resolve_text_write_options(options)?;
         Ok((Arc::new(TextFileFormat::new(options)), None))

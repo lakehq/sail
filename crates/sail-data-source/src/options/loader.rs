@@ -37,6 +37,16 @@ pub fn merge_options(options: Vec<HashMap<String, String>>) -> HashMap<String, S
 }
 
 #[cfg(test)]
+pub fn build_option_layer(options: &[(&str, &str)]) -> sail_common_datafusion::datasource::OptionLayer {
+    sail_common_datafusion::datasource::OptionLayer::OptionList {
+        items: options
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    }
+}
+
+#[cfg(test)]
 pub fn build_options(options: &[(&str, &str)]) -> HashMap<String, String> {
     options
         .iter()

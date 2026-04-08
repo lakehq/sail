@@ -2,36 +2,28 @@ mod loader;
 pub mod parsers;
 mod serde;
 
-pub use internal::{
-    BinaryReadOptions, CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions,
-    IcebergReadOptions, IcebergWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions,
-    ParquetWriteOptions, TextReadOptions, TextWriteOptions,
-};
+pub use internal::{DeltaReadOptions, DeltaWriteOptions, IcebergReadOptions, IcebergWriteOptions};
 #[cfg(test)]
-pub use loader::build_options;
+pub use loader::{build_option_layer, build_options};
 pub use loader::{load_default_options, load_options, merge_options};
 
 use crate::error::DataSourceResult;
 
 pub(crate) mod internal {
-    include!(concat!(env!("OUT_DIR"), "/options/binary_read.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/csv_read.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/csv_write.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/json_read.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/json_write.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/parquet_read.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/parquet_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/delta_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/delta_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/iceberg_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/iceberg_write.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/text_read.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/text_write.rs"));
 }
 
 pub mod gen {
+    include!(concat!(env!("OUT_DIR"), "/options/binary.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/csv.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/json.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/parquet.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/socket.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/rate.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/text.rs"));
 }
 
 pub trait DataSourceOptions: for<'de> serde::Deserialize<'de> {

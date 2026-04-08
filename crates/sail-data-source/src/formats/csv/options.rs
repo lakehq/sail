@@ -1,12 +1,15 @@
-use std::collections::HashMap;
 use std::str::FromStr;
 
 use datafusion::catalog::Session;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::plan_err;
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::options::{load_default_options, load_options, CsvReadOptions, CsvWriteOptions};
+use crate::options::gen::{
+    CsvReadOptions, CsvReadPartialOptions, CsvWriteOptions, CsvWritePartialOptions,
+};
+use crate::options::{BuildPartialOptions, PartialOptions};
 use crate::utils::char_to_u8;
 
 fn apply_csv_read_options(
@@ -22,62 +25,48 @@ fn apply_csv_read_options(
         null_value,
         null_regex,
         line_sep,
+        infer_schema,
         schema_infer_max_records,
         multi_line,
         compression,
         allow_truncated_rows,
-        infer_schema,
     } = from;
-    let null_regex = match (null_value, null_regex) {
-        (Some(null_value), Some(null_regex))
-            if !null_value.is_empty() && !null_regex.is_empty() =>
-        {
+    let null_regex = match (null_value.as_str(), null_regex.as_str()) {
+        (nv, nr) if !nv.is_empty() && !nr.is_empty() => {
             return plan_err!("CSV `null_value` and `null_regex` cannot be both set");
         }
-        (Some(null_value), _) if !null_value.is_empty() => {
+        (nv, _) if !nv.is_empty() => {
             // Convert null value to regex by escaping special characters
-            Some(regex::escape(&null_value))
+            Some(regex::escape(nv))
         }
-        (_, Some(null_regex)) if !null_regex.is_empty() => Some(null_regex),
+        (_, nr) if !nr.is_empty() => Some(nr.to_string()),
         _ => None,
     };
     if let Some(null_regex) = null_regex {
         to.null_regex = Some(null_regex);
     }
-    if let Some(delimiter) = delimiter {
-        to.delimiter = char_to_u8(delimiter, "delimiter")?;
-    }
+    to.delimiter = char_to_u8(delimiter, "delimiter")?;
     // TODO: support no quote
-    if let Some(Some(quote)) = quote {
+    if let Some(quote) = quote {
         to.quote = char_to_u8(quote, "quote")?;
     }
     // TODO: support no escape
-    if let Some(Some(escape)) = escape {
+    if let Some(escape) = escape {
         to.escape = Some(char_to_u8(escape, "escape")?);
     }
     // TODO: support no comment
-    if let Some(Some(comment)) = comment {
+    if let Some(comment) = comment {
         to.comment = Some(char_to_u8(comment, "comment")?);
     }
-    if let Some(header) = header {
-        to.has_header = Some(header);
-    }
-    if let Some(Some(sep)) = line_sep {
+    to.has_header = Some(header);
+    if let Some(sep) = line_sep {
         to.terminator = Some(char_to_u8(sep, "line_sep")?);
     }
-    if let Some(n) = schema_infer_max_records {
-        to.schema_infer_max_rec = Some(n);
-    }
-    if let Some(compression) = compression {
-        to.compression = FileCompressionType::from_str(&compression)?.into();
-    }
-    if let Some(multi_line) = multi_line {
-        to.newlines_in_values = Some(multi_line);
-    }
-    if let Some(allow_truncated_rows) = allow_truncated_rows {
-        to.truncated_rows = Some(allow_truncated_rows);
-    }
-    if infer_schema == Some(false) {
+    to.schema_infer_max_rec = Some(schema_infer_max_records);
+    to.compression = FileCompressionType::from_str(&compression)?.into();
+    to.newlines_in_values = Some(multi_line);
+    to.truncated_rows = Some(allow_truncated_rows);
+    if !infer_schema {
         to.schema_infer_max_rec = Some(0);
     }
     Ok(())
@@ -96,53 +85,47 @@ fn apply_csv_write_options(
         null_value,
         compression,
     } = from;
-    if let Some(delimiter) = delimiter {
-        to.delimiter = char_to_u8(delimiter, "delimiter")?;
-    }
+    to.delimiter = char_to_u8(delimiter, "delimiter")?;
     // TODO: support no quote
-    if let Some(Some(quote)) = quote {
+    if let Some(quote) = quote {
         to.quote = char_to_u8(quote, "quote")?;
     }
     // TODO: support no escape
-    if let Some(Some(escape)) = escape {
+    if let Some(escape) = escape {
         to.escape = Some(char_to_u8(escape, "escape")?);
     }
-    if let Some(escape_quotes) = escape_quotes {
-        to.double_quote = Some(escape_quotes);
-    }
-    if let Some(header) = header {
-        to.has_header = Some(header);
-    }
-    if let Some(null_value) = null_value {
-        to.null_value = Some(null_value);
-    }
-    if let Some(compression) = compression {
-        to.compression = FileCompressionType::from_str(&compression)?.into();
-    }
+    to.double_quote = Some(escape_quotes);
+    to.has_header = Some(header);
+    to.null_value = Some(null_value);
+    to.compression = FileCompressionType::from_str(&compression)?.into();
     Ok(())
 }
 
 pub fn resolve_csv_read_options(
     ctx: &dyn Session,
-    options: Vec<HashMap<String, String>>,
+    options: Vec<OptionLayer>,
 ) -> datafusion_common::Result<CsvOptions> {
-    let mut csv_options = ctx.default_table_options().csv;
-    apply_csv_read_options(load_default_options()?, &mut csv_options)?;
-    for opt in options {
-        apply_csv_read_options(load_options(opt)?, &mut csv_options)?;
+    let mut partial = CsvReadPartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
+    let opts = partial.finalize()?;
+    let mut csv_options = ctx.default_table_options().csv;
+    apply_csv_read_options(opts, &mut csv_options)?;
     Ok(csv_options)
 }
 
 pub fn resolve_csv_write_options(
     ctx: &dyn Session,
-    options: Vec<HashMap<String, String>>,
+    options: Vec<OptionLayer>,
 ) -> datafusion_common::Result<CsvOptions> {
-    let mut csv_options = ctx.default_table_options().csv;
-    apply_csv_write_options(load_default_options()?, &mut csv_options)?;
-    for opt in options {
-        apply_csv_write_options(load_options(opt)?, &mut csv_options)?;
+    let mut partial = CsvWritePartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
+    let opts = partial.finalize()?;
+    let mut csv_options = ctx.default_table_options().csv;
+    apply_csv_write_options(opts, &mut csv_options)?;
     Ok(csv_options)
 }
 
@@ -152,14 +135,14 @@ mod tests {
     use datafusion_common::parsers::CompressionTypeVariant;
 
     use crate::formats::csv::options::{resolve_csv_read_options, resolve_csv_write_options};
-    use crate::options::build_options;
+    use crate::options::build_option_layer;
 
     #[test]
     fn test_resolve_csv_read_options() -> datafusion_common::Result<()> {
         let ctx = SessionContext::default();
         let state = ctx.state();
 
-        let kv = build_options(&[
+        let kv = build_option_layer(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),
@@ -185,30 +168,29 @@ mod tests {
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         // When inferSchema is false, schema_infer_max_rec should be set to 0
-        let kv = build_options(&[("inferSchema", "false")]);
+        let kv = build_option_layer(&[("inferSchema", "false")]);
         let options = resolve_csv_read_options(&state, vec![kv])?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
         // When inferSchema is true (or not set), schema_infer_max_rec should keep its value
-        let kv = build_options(&[("inferSchema", "true")]);
+        let kv = build_option_layer(&[("inferSchema", "true")]);
         let options = resolve_csv_read_options(&state, vec![kv])?;
-        // Default from YAML is 1000
         assert_eq!(options.schema_infer_max_rec, Some(1000));
 
         // When infer_schema is false with snake_case key
-        let kv = build_options(&[("infer_schema", "false")]);
+        let kv = build_option_layer(&[("infer_schema", "false")]);
         let options = resolve_csv_read_options(&state, vec![kv])?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
         // infer_schema=false should override explicit schema_infer_max_records
-        let kv = build_options(&[
+        let kv = build_option_layer(&[
             ("inferSchema", "false"),
             ("schema_infer_max_records", "500"),
         ]);
         let options = resolve_csv_read_options(&state, vec![kv])?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
-        let kv = build_options(&[
+        let kv = build_option_layer(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),
@@ -225,7 +207,7 @@ mod tests {
         let result = resolve_csv_read_options(&state, vec![kv]);
         assert!(result.is_err());
 
-        let kv = build_options(&[
+        let kv = build_option_layer(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),
@@ -249,7 +231,7 @@ mod tests {
         let ctx = SessionContext::default();
         let state = ctx.state();
 
-        let kv = build_options(&[
+        let kv = build_option_layer(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),

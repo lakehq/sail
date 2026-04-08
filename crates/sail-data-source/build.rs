@@ -129,20 +129,16 @@ fn build_options(name: &str, kind: &str) -> Result<(), Box<dyn std::error::Error
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
-    build_options("BinaryReadOptions", "binary_read")?;
-    build_options("CsvReadOptions", "csv_read")?;
-    build_options("CsvWriteOptions", "csv_write")?;
-    build_options("JsonReadOptions", "json_read")?;
-    build_options("JsonWriteOptions", "json_write")?;
-    build_options("ParquetReadOptions", "parquet_read")?;
-    build_options("ParquetWriteOptions", "parquet_write")?;
     build_options("DeltaReadOptions", "delta_read")?;
     build_options("DeltaWriteOptions", "delta_write")?;
     build_options("IcebergReadOptions", "iceberg_read")?;
     build_options("IcebergWriteOptions", "iceberg_write")?;
-    build_options("TextReadOptions", "text_read")?;
-    build_options("TextWriteOptions", "text_write")?;
+    build_data_source_options("Binary", "binary")?;
+    build_data_source_options("Csv", "csv")?;
+    build_data_source_options("Json", "json")?;
+    build_data_source_options("Parquet", "parquet")?;
     build_data_source_options("Socket", "socket")?;
     build_data_source_options("Rate", "rate")?;
+    build_data_source_options("Text", "text")?;
     Ok(())
 }
