@@ -29,6 +29,7 @@ use sail_data_source::options::{BuildPartialOptions, PartialOptions};
 use url::Url;
 
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
+use crate::physical_plan::IcebergWriterExecOptions;
 use crate::spec::{PartitionSpec, Schema, Snapshot};
 use crate::table::{find_latest_metadata_file, Table};
 use crate::utils::partition_transform::{
@@ -96,7 +97,8 @@ impl TableFormat for IcebergTableFormat {
         }
 
         let table_url = Self::parse_table_url(vec![path]).await?;
-        let iceberg_options = resolve_iceberg_write_options(options)?;
+        let iceberg_options = resolve_iceberg_write_options(options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let store = ctx
             .runtime_env()
@@ -170,7 +172,7 @@ impl TableFormat for IcebergTableFormat {
             table_url,
             partition_columns: resolved_partition_columns,
             table_exists,
-            options: iceberg_options,
+            options: IcebergWriterExecOptions::from(iceberg_options),
         };
 
         let physical_sort = sort_order.map(|req| {
@@ -277,20 +279,11 @@ fn resolve_iceberg_read_options(options: Vec<OptionLayer>) -> DataSourceResult<I
 }
 
 fn resolve_iceberg_write_options(
-    options: Vec<std::collections::HashMap<String, String>>,
-) -> Result<IcebergWriteOptions> {
+    options: Vec<OptionLayer>,
+) -> DataSourceResult<IcebergWriteOptions> {
     let mut partial = IcebergWritePartialOptions::initialize();
-    for map in options {
-        let layer = OptionLayer::OptionList {
-            items: map.into_iter().collect(),
-        };
-        partial.merge(
-            layer
-                .build_partial_options()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-        );
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    partial
-        .finalize()
-        .map_err(|e| DataFusionError::External(Box::new(e)))
+    partial.finalize()
 }

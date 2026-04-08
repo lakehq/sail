@@ -235,7 +235,11 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .iter()
             .map(|field| (field.column.clone(), DataType::Null))
             .collect::<Vec<_>>();
-        let (format, compression) = self.inner.create_write_format(ctx, options)?;
+        let listing_options_raw: Vec<std::collections::HashMap<String, String>> = options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let (format, compression) = self.inner.create_write_format(ctx, listing_options_raw)?;
         let file_extension = if let Some(file_compression_type) = format.compression_type() {
             match format.get_ext_with_compression(&file_compression_type) {
                 Ok(ext) => ext,

@@ -9,7 +9,9 @@ use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    OptionLayer, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+};
 
 use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
@@ -248,14 +250,17 @@ impl TableFormat for PythonTableFormat {
             PhysicalSinkMode::OverwriteIf { .. } => "overwrite",
             PhysicalSinkMode::OverwritePartitions => "overwrite",
         };
-        let mode_option: HashMap<String, String> = [("mode".to_string(), mode_str.to_string())]
-            .into_iter()
-            .collect();
-        options.push(mode_option);
+        options.push(OptionLayer::OptionList {
+            items: vec![("mode".to_string(), mode_str.to_string())],
+        });
 
         // Create datasource and get writer using the same executor configuration
         // path as write execution for consistent Python datasource behavior.
-        let datasource = self.create_datasource(&options)?;
+        let opaque_options: Vec<HashMap<String, String>> = options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let datasource = self.create_datasource(&opaque_options)?;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
         let schema = input.schema();

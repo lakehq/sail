@@ -117,13 +117,7 @@ impl TableFormat for DeltaTableFormat {
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let (options, routed_table_properties) =
             split_delta_write_options_and_table_properties(options);
-        let option_layers: Vec<OptionLayer> = options
-            .into_iter()
-            .map(|map| OptionLayer::OptionList {
-                items: map.into_iter().collect(),
-            })
-            .collect();
-        let delta_options = resolve_delta_write_options(option_layers)
+        let delta_options = resolve_delta_write_options(options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let object_store = ctx
@@ -361,23 +355,37 @@ fn resolve_delta_metadata_configuration(
 }
 
 fn split_delta_write_options_and_table_properties(
-    options: Vec<HashMap<String, String>>,
-) -> (Vec<HashMap<String, String>>, HashMap<String, String>) {
-    let mut clean_options = Vec::with_capacity(options.len());
+    options: Vec<OptionLayer>,
+) -> (Vec<OptionLayer>, HashMap<String, String>) {
     let mut table_properties = HashMap::new();
-
-    for layer in options {
-        let mut clean_layer = HashMap::with_capacity(layer.len());
-        for (key, value) in layer {
-            if let Some(property_key) = route_table_property_key(&key) {
-                table_properties.insert(property_key, value);
-            } else {
-                clean_layer.insert(key, value);
+    let clean_options = options
+        .into_iter()
+        .map(|layer| match layer {
+            OptionLayer::OptionList { items } => {
+                let mut clean_items = Vec::with_capacity(items.len());
+                for (key, value) in items {
+                    if let Some(property_key) = route_table_property_key(&key) {
+                        table_properties.insert(property_key, value);
+                    } else {
+                        clean_items.push((key, value));
+                    }
+                }
+                OptionLayer::OptionList { items: clean_items }
             }
-        }
-        clean_options.push(clean_layer);
-    }
-
+            OptionLayer::TablePropertyList { items } => {
+                let mut clean_items = Vec::with_capacity(items.len());
+                for (key, value) in items {
+                    if let Some(property_key) = route_table_property_key(&key) {
+                        table_properties.insert(property_key, value);
+                    } else {
+                        clean_items.push((key, value));
+                    }
+                }
+                OptionLayer::TablePropertyList { items: clean_items }
+            }
+            other => other,
+        })
+        .collect();
     (clean_options, table_properties)
 }
 
@@ -388,28 +396,36 @@ mod tests {
     #[test]
     fn test_split_delta_write_options_and_table_properties() {
         let options = vec![
-            HashMap::from([
-                ("mergeSchema".to_string(), "true".to_string()),
-                ("column_mapping_mode".to_string(), "name".to_string()),
-            ]),
-            HashMap::from([
-                ("delta.appendOnly".to_string(), "true".to_string()),
-                ("targetFileSize".to_string(), "10".to_string()),
-            ]),
+            OptionLayer::OptionList {
+                items: vec![
+                    ("mergeSchema".to_string(), "true".to_string()),
+                    ("column_mapping_mode".to_string(), "name".to_string()),
+                ],
+            },
+            OptionLayer::OptionList {
+                items: vec![
+                    ("delta.appendOnly".to_string(), "true".to_string()),
+                    ("targetFileSize".to_string(), "10".to_string()),
+                ],
+            },
         ];
 
         let (clean_options, table_properties) =
             split_delta_write_options_and_table_properties(options);
 
         assert_eq!(clean_options.len(), 2);
-        assert_eq!(
-            clean_options[0],
-            HashMap::from([("mergeSchema".to_string(), "true".to_string())])
-        );
-        assert_eq!(
-            clean_options[1],
-            HashMap::from([("targetFileSize".to_string(), "10".to_string())])
-        );
+        match &clean_options[0] {
+            OptionLayer::OptionList { items } => {
+                assert_eq!(items, &[("mergeSchema".to_string(), "true".to_string())]);
+            }
+            _ => unreachable!("expected OptionList"),
+        }
+        match &clean_options[1] {
+            OptionLayer::OptionList { items } => {
+                assert_eq!(items, &[("targetFileSize".to_string(), "10".to_string())]);
+            }
+            _ => unreachable!("expected OptionList"),
+        }
         assert_eq!(
             table_properties.get("delta.columnMapping.mode"),
             Some(&"name".to_string())

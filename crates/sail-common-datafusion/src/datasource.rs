@@ -114,7 +114,7 @@ pub struct SinkInfo {
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
-    pub options: Vec<HashMap<String, String>>,
+    pub options: Vec<OptionLayer>,
 }
 
 impl SinkInfo {
@@ -122,8 +122,27 @@ impl SinkInfo {
     /// Checks the `"path"` key first, then `"location"`.
     /// Key comparison is case-insensitive.
     pub fn path(&self) -> String {
-        find_option(&self.options, "path")
-            .or_else(|| find_option(&self.options, "location"))
+        let find = |key: &str| -> Option<String> {
+            for layer in self.options.iter().rev() {
+                let items = match layer {
+                    OptionLayer::OptionList { items } => items,
+                    OptionLayer::TablePropertyList { items } => items,
+                    _ => continue,
+                };
+                if let Some(v) = items.iter().find_map(|(k, v)| {
+                    if k.eq_ignore_ascii_case(key) {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                }) {
+                    return Some(v);
+                }
+            }
+            None
+        };
+        find("path")
+            .or_else(|| find("location"))
             .unwrap_or_default()
     }
 }

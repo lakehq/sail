@@ -43,8 +43,8 @@ use crate::datasource::{
 use crate::options::DeltaLogReplayStrategyOption;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION,
-    COL_REPLAY_PATH,
+    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions, COL_LOG_IS_REMOVE,
+    COL_LOG_VERSION, COL_REPLAY_PATH,
 };
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
@@ -121,7 +121,7 @@ pub fn build_standard_write_layers(
     let writer = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
-        ctx.options().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         sink_mode.clone(),
@@ -543,9 +543,7 @@ async fn build_log_replay_pipeline_with_files(
         ))
     };
 
-    let replay_strategy =
-        crate::options::parse_delta_log_replay_strategy(&ctx.options().delta_log_replay_strategy)
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+    let replay_strategy = ctx.options().delta_log_replay_strategy;
     let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.max(1);
     let has_checkpoint = !checkpoint_files.is_empty();
     let use_hash = match replay_strategy {

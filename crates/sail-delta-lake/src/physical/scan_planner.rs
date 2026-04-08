@@ -18,7 +18,6 @@ use sail_data_source::options::PartialOptions;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
-use crate::options::DeltaLogReplayStrategyOption;
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
@@ -244,13 +243,12 @@ pub(crate) async fn plan_delta_scan(
     // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
     let table_url = log_store.config().location.clone();
 
-    let strategy_str = match config.delta_log_replay_strategy {
-        DeltaLogReplayStrategyOption::Auto => "auto",
-        DeltaLogReplayStrategyOption::Sort => "sort",
-        DeltaLogReplayStrategyOption::Hash => "hash",
-    };
+    // TODO: Decouple planning for reading and writing. It is strange to require
+    // construction of write options (DeltaWritePartialOptions) just to drive the
+    // log-replay strategy for a read scan. The replay strategy and hash threshold
+    // should ideally come from read options or a dedicated configuration.
     let mut partial = DeltaWritePartialOptions::initialize();
-    partial.delta_log_replay_strategy = Some(strategy_str.to_string());
+    partial.delta_log_replay_strategy = Some(config.delta_log_replay_strategy);
     partial.delta_log_replay_hash_threshold = Some(config.delta_log_replay_hash_threshold);
     let planner_options = partial
         .finalize()

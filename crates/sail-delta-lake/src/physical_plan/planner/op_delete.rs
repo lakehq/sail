@@ -29,7 +29,7 @@ use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
-    DeltaWriterExec,
+    DeltaWriterExec, DeltaWriterExecOptions,
 };
 
 pub async fn build_delete_plan(
@@ -120,7 +120,7 @@ pub async fn build_delete_plan(
     let writer_exec = Arc::new(DeltaWriterExec::new(
         filter_exec,
         ctx.table_url().clone(),
-        ctx.options().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone()),
         ctx.metadata_configuration().clone(),
         partition_columns.clone(),
         PhysicalSinkMode::Append,

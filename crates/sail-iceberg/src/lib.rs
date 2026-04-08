@@ -13,7 +13,6 @@
 pub mod datasource;
 pub mod io;
 pub mod operations;
-pub mod options;
 pub mod physical_plan;
 pub mod schema_evolution;
 pub mod spec;

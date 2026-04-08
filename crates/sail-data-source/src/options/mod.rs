@@ -1,6 +1,7 @@
 mod loader;
 pub mod parsers;
 mod serde;
+pub mod types;
 
 pub use internal::{
     BinaryReadOptions, CsvReadOptions, CsvWriteOptions, JsonReadOptions, JsonWriteOptions,

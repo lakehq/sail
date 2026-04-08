@@ -10,29 +10,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use datafusion::common::{plan_err, Result};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DeltaLogReplayStrategyOption {
-    #[default]
-    Auto,
-    Sort,
-    Hash,
-}
+pub use sail_data_source::options::types::delta::{
+    parse_delta_log_replay_strategy, DeltaLogReplayStrategyOption,
+};
 
 pub fn default_delta_log_replay_hash_threshold() -> usize {
     100
-}
-
-pub fn parse_delta_log_replay_strategy(s: &str) -> Result<DeltaLogReplayStrategyOption> {
-    match s.to_ascii_lowercase().as_str() {
-        "auto" => Ok(DeltaLogReplayStrategyOption::Auto),
-        "sort" => Ok(DeltaLogReplayStrategyOption::Sort),
-        "hash" => Ok(DeltaLogReplayStrategyOption::Hash),
-        other => {
-            plan_err!("invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash")
-        }
-    }
 }

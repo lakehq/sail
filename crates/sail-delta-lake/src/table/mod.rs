@@ -41,7 +41,6 @@ use crate::delta_log::resolve_version_timestamp;
 pub use crate::kernel::snapshot::DeltaSnapshot;
 use crate::kernel::DeltaTableConfig;
 use crate::logical::table_source::DeltaTableSource;
-use crate::options::parse_delta_log_replay_strategy;
 use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
@@ -281,9 +280,7 @@ pub async fn create_delta_provider(
         },
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
-        delta_log_replay_strategy: parse_delta_log_replay_strategy(
-            &options.delta_log_replay_strategy,
-        )?,
+        delta_log_replay_strategy: options.delta_log_replay_strategy,
         delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold,
     };
 
@@ -336,9 +333,7 @@ pub async fn create_delta_source(
         },
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
-        delta_log_replay_strategy: parse_delta_log_replay_strategy(
-            &options.delta_log_replay_strategy,
-        )?,
+        delta_log_replay_strategy: options.delta_log_replay_strategy,
         delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold,
     };
 

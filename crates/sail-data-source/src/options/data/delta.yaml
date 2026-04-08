@@ -4,7 +4,7 @@
 #   - [2] https://docs.delta.io/latest/delta-batch.html
 #   - [3] https://docs.delta.io/latest/delta-change-data-feed.html
 
-# ── Read-only options ─────────────────────────────────────────────────────────
+### Read-Only Options ###
 
 - key: version_as_of
   description: |
@@ -21,11 +21,6 @@
       keys:
         - version_as_of
         - versionAsOf
-      parser: crate::options::parsers::parse_optional_i64
-    - type: table_property
-      keys:
-        - option.version_as_of
-        - option.versionAsOf
       parser: crate::options::parsers::parse_optional_i64
 
 - key: timestamp_as_of
@@ -45,11 +40,6 @@
         - timestamp_as_of
         - timestampAsOf
       parser: crate::options::parsers::parse_optional_string
-    - type: table_property
-      keys:
-        - option.timestamp_as_of
-        - option.timestampAsOf
-      parser: crate::options::parsers::parse_optional_string
 
 - key: read_change_feed
   description: |
@@ -63,11 +53,6 @@
       keys:
         - read_change_feed
         - readChangeFeed
-      parser: crate::options::parsers::parse_bool
-    - type: table_property
-      keys:
-        - option.read_change_feed
-        - option.readChangeFeed
       parser: crate::options::parsers::parse_bool
 
 - key: starting_version
@@ -83,11 +68,6 @@
         - starting_version
         - startingVersion
       parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.starting_version
-        - option.startingVersion
-      parser: crate::options::parsers::parse_string
 
 - key: starting_timestamp
   description: |
@@ -101,11 +81,6 @@
       keys:
         - starting_timestamp
         - startingTimestamp
-      parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.starting_timestamp
-        - option.startingTimestamp
       parser: crate::options::parsers::parse_string
 
 - key: ending_version
@@ -121,11 +96,6 @@
         - ending_version
         - endingVersion
       parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.ending_version
-        - option.endingVersion
-      parser: crate::options::parsers::parse_string
 
 - key: ending_timestamp
   description: |
@@ -139,11 +109,6 @@
       keys:
         - ending_timestamp
         - endingTimestamp
-      parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.ending_timestamp
-        - option.endingTimestamp
       parser: crate::options::parsers::parse_string
 
 - key: metadata_as_data_read
@@ -164,13 +129,217 @@
         - metadata_as_data_read
         - metadataAsDataRead
       parser: crate::options::parsers::parse_bool
-    - type: table_property
+
+- key: max_files_per_trigger
+  description: |
+    (Streaming) How many new files to be considered in every micro-batch.
+  default:
+    value: "1000"
+    parser: crate::options::parsers::parse_usize
+  supported: false
+  rust_type: usize
+  scopes:
+    - read
+  origins:
+    - type: option
       keys:
-        - option.metadata_as_data_read
-        - option.metadataAsDataRead
+        - max_files_per_trigger
+        - maxFilesPerTrigger
+      parser: crate::options::parsers::parse_usize
+
+- key: max_bytes_per_trigger
+  description: |
+    (Streaming) How much data gets processed in each micro-batch.
+    This option sets a "soft max", meaning that a batch processes approximately this amount of data.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - max_bytes_per_trigger
+        - maxBytesPerTrigger
+      parser: crate::options::parsers::parse_string
+
+- key: ignore_deletes
+  description: |
+    (Streaming) Ignore transactions that delete data.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - ignore_deletes
+        - ignoreDeletes
       parser: crate::options::parsers::parse_bool
 
-# ── Write-only options ────────────────────────────────────────────────────────
+- key: ignore_changes
+  description: |
+    (Streaming) Re-process updates if files had to be rewritten in the source table.
+    Unchanged rows may still be emitted. Deletes are not propagated downstream.
+    This option subsumes `ignoreDeletes`.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - ignore_changes
+        - ignoreChanges
+      parser: crate::options::parsers::parse_bool
+
+- key: ignore_file_deletion
+  description: |
+    (Streaming) Ignore transactions that delete files at partition boundaries.
+    This option is deprecated and has been replaced by `ignoreDeletes`.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - ignore_file_deletion
+        - ignoreFileDeletion
+      parser: crate::options::parsers::parse_bool
+
+- key: fail_on_data_loss
+  description: |
+    (Streaming) Whether to fail the stream if it detects that data has been lost
+    (e.g. files were deleted from the middle of the log).
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - fail_on_data_loss
+        - failOnDataLoss
+      parser: crate::options::parsers::parse_bool
+
+- key: skip_change_commits
+  description: |
+    (Streaming) Whether to skip commits that are only rearranging data,
+    i.e. have the `dataChange` property set to `false`.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - skip_change_commits
+        - skipChangeCommits
+      parser: crate::options::parsers::parse_bool
+
+- key: exclude_regex
+  description: |
+    (Streaming) Regex to exclude files from being considered by the streaming source.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - exclude_regex
+        - excludeRegex
+      parser: crate::options::parsers::parse_string
+
+- key: schema_tracking_location
+  description: |
+    (Streaming) The path to the location where the schema of the streaming source should be tracked.
+    This is required for streams reading from Delta tables with column mapping and schema changes.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - schema_tracking_location
+        - schemaTrackingLocation
+        - schemaLocation
+      parser: crate::options::parsers::parse_string
+
+- key: streaming_source_tracking_id
+  description: |
+    (Streaming) An option to instruct DeltaSource to pick a customized subdirectory for schema log
+    in case of rare conflicts.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - streaming_source_tracking_id
+        - streamingSourceTrackingId
+      parser: crate::options::parsers::parse_string
+
+- key: allow_source_column_rename
+  description: |
+    (Streaming) Option to allow a stream to continue if a source column is renamed.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_source_column_rename
+        - allowSourceColumnRename
+      parser: crate::options::parsers::parse_bool
+
+- key: allow_source_column_drop
+  description: |
+    (Streaming) Option to allow a stream to continue if a source column is dropped.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_source_column_drop
+        - allowSourceColumnDrop
+      parser: crate::options::parsers::parse_bool
+
+- key: allow_source_column_type_change
+  description: |
+    (Streaming) Option to allow a stream to continue if the data type of a source column is changed.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_source_column_type_change
+        - allowSourceColumnTypeChange
+      parser: crate::options::parsers::parse_bool
+
+### Write-Only Options ###
 
 - key: replace_where
   description: |
@@ -189,11 +358,6 @@
         - replace_where
         - replaceWhere
       parser: crate::options::parsers::parse_optional_string
-    - type: table_property
-      keys:
-        - option.replace_where
-        - option.replaceWhere
-      parser: crate::options::parsers::parse_optional_string
 
 - key: user_metadata
   description: |
@@ -208,11 +372,6 @@
         - user_metadata
         - userMetadata
       parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.user_metadata
-        - option.userMetadata
-      parser: crate::options::parsers::parse_string
 
 - key: optimize_write
   description: |
@@ -226,11 +385,6 @@
       keys:
         - optimize_write
         - optimizeWrite
-      parser: crate::options::parsers::parse_bool
-    - type: table_property
-      keys:
-        - option.optimize_write
-        - option.optimizeWrite
       parser: crate::options::parsers::parse_bool
 
 - key: merge_schema
@@ -249,11 +403,6 @@
         - merge_schema
         - mergeSchema
       parser: crate::options::parsers::parse_bool
-    - type: table_property
-      keys:
-        - option.merge_schema
-        - option.mergeSchema
-      parser: crate::options::parsers::parse_bool
 
 - key: overwrite_schema
   description: |
@@ -271,11 +420,6 @@
         - overwrite_schema
         - overwriteSchema
       parser: crate::options::parsers::parse_bool
-    - type: table_property
-      keys:
-        - option.overwrite_schema
-        - option.overwriteSchema
-      parser: crate::options::parsers::parse_bool
 
 - key: data_change
   description: |
@@ -289,11 +433,6 @@
       keys:
         - data_change
         - dataChange
-      parser: crate::options::parsers::parse_bool
-    - type: table_property
-      keys:
-        - option.data_change
-        - option.dataChange
       parser: crate::options::parsers::parse_bool
 
 - key: txn_version
@@ -309,11 +448,6 @@
         - txn_version
         - txnVersion
       parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.txn_version
-        - option.txnVersion
-      parser: crate::options::parsers::parse_string
 
 - key: txn_app_id
   description: |
@@ -327,11 +461,6 @@
       keys:
         - txn_app_id
         - txnAppId
-      parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.txn_app_id
-        - option.txnAppId
       parser: crate::options::parsers::parse_string
 
 - key: partition_overwrite_mode
@@ -347,11 +476,6 @@
         - partition_overwrite_mode
         - partitionOverwriteMode
       parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.partition_overwrite_mode
-        - option.partitionOverwriteMode
-      parser: crate::options::parsers::parse_string
 
 - key: compression
   description: |
@@ -364,10 +488,6 @@
     - type: option
       keys:
         - compression
-      parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.compression
       parser: crate::options::parsers::parse_string
 
 - key: max_records_per_file
@@ -383,11 +503,6 @@
         - max_records_per_file
         - maxRecordsPerFile
       parser: crate::options::parsers::parse_u64
-    - type: table_property
-      keys:
-        - option.max_records_per_file
-        - option.maxRecordsPerFile
-      parser: crate::options::parsers::parse_u64
 
 - key: write_partition_columns
   description: |
@@ -401,11 +516,6 @@
       keys:
         - write_partition_columns
         - writePartitionColumns
-      parser: crate::options::parsers::parse_bool
-    - type: table_property
-      keys:
-        - option.write_partition_columns
-        - option.writePartitionColumns
       parser: crate::options::parsers::parse_bool
 
 - key: target_file_size
@@ -425,11 +535,6 @@
         - target_file_size
         - targetFileSize
       parser: crate::options::parsers::parse_u64
-    - type: table_property
-      keys:
-        - option.target_file_size
-        - option.targetFileSize
-      parser: crate::options::parsers::parse_u64
 
 - key: write_batch_size
   description: |
@@ -447,22 +552,17 @@
         - write_batch_size
         - writeBatchSize
       parser: crate::options::parsers::parse_usize
-    - type: table_property
-      keys:
-        - option.write_batch_size
-        - option.writeBatchSize
-      parser: crate::options::parsers::parse_usize
 
-# ── Read and write options ────────────────────────────────────────────────────
+### Read and Write Options ###
 
 - key: delta_log_replay_strategy
   description: |
     Strategy for Delta log replay in the metadata-as-data path. Values: "auto", "sort", "hash".
   default:
     value: "auto"
-    parser: crate::options::parsers::parse_string
+    parser: crate::options::types::delta::parse_delta_log_replay_strategy
   supported: true
-  rust_type: String
+  rust_type: crate::options::types::delta::DeltaLogReplayStrategyOption
   scopes:
     - read
     - write
@@ -471,12 +571,7 @@
       keys:
         - delta_log_replay_strategy
         - deltaLogReplayStrategy
-      parser: crate::options::parsers::parse_string
-    - type: table_property
-      keys:
-        - option.delta_log_replay_strategy
-        - option.deltaLogReplayStrategy
-      parser: crate::options::parsers::parse_string
+      parser: crate::options::types::delta::parse_delta_log_replay_strategy
 
 - key: delta_log_replay_hash_threshold
   description: |
@@ -494,9 +589,4 @@
       keys:
         - delta_log_replay_hash_threshold
         - deltaLogReplayHashThreshold
-      parser: crate::options::parsers::parse_usize
-    - type: table_property
-      keys:
-        - option.delta_log_replay_hash_threshold
-        - option.deltaLogReplayHashThreshold
       parser: crate::options::parsers::parse_usize

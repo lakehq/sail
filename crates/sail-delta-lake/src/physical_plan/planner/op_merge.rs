@@ -25,7 +25,6 @@ use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::datasource::{
     MergeInfo as PhysicalMergeInfo, MergePredicateInfo, OperationOverride, PhysicalSinkMode,
 };
-use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use super::context::PlannerContext;
@@ -34,6 +33,7 @@ use crate::datasource::PATH_COLUMN;
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    DeltaWriterExecOptions,
 };
 use crate::table::DeltaSnapshot;
 
@@ -60,7 +60,7 @@ pub async fn build_merge_plan(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
-    let mut options = ctx.options().clone();
+    let mut options = DeltaWriterExecOptions::from(ctx.options().clone());
     if merge_info.with_schema_evolution {
         options.merge_schema = true;
     }
@@ -118,7 +118,7 @@ async fn finalize_merge(
     snapshot: &DeltaSnapshot,
     table_url: Url,
     version: i64,
-    options: DeltaWriteOptions,
+    options: DeltaWriterExecOptions,
     partition_columns: Vec<String>,
     table_schema: datafusion::arrow::datatypes::SchemaRef,
     touched_file_plan: Option<Arc<dyn ExecutionPlan>>,

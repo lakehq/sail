@@ -46,13 +46,13 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
 use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
@@ -78,7 +78,7 @@ enum SchemaMode {
 pub struct DeltaWriterExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
-    options: DeltaWriteOptions,
+    options: DeltaWriterExecOptions,
     metadata_configuration: HashMap<String, String>,
     partition_columns: Vec<String>,
     sink_mode: PhysicalSinkMode,
@@ -109,7 +109,7 @@ impl DeltaWriterExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
-        options: DeltaWriteOptions,
+        options: DeltaWriterExecOptions,
         metadata_configuration: HashMap<String, String>,
         partition_columns: Vec<String>,
         sink_mode: PhysicalSinkMode,
@@ -148,7 +148,7 @@ impl DeltaWriterExec {
         &self.table_url
     }
 
-    pub fn options(&self) -> &DeltaWriteOptions {
+    pub fn options(&self) -> &DeltaWriterExecOptions {
         &self.options
     }
 
@@ -329,7 +329,7 @@ impl DeltaWriterExec {
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let exec_start = Instant::now();
-            let DeltaWriteOptions {
+            let DeltaWriterExecOptions {
                 target_file_size,
                 write_batch_size,
                 ..
@@ -738,7 +738,7 @@ impl DeltaWriterExec {
 impl DeltaWriterExec {
     /// Determine the schema mode based on options and save mode
     fn get_schema_mode(
-        options: &DeltaWriteOptions,
+        options: &DeltaWriterExecOptions,
         save_mode: SaveMode,
     ) -> Result<Option<SchemaMode>> {
         match (options.merge_schema, options.overwrite_schema) {

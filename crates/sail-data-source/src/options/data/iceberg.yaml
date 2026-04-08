@@ -1,6 +1,4 @@
-# Options for Apache Iceberg tables.
-
-# ── Read-only options ─────────────────────────────────────────────────────────
+### Read-Only Options ###
 
 - key: use_ref
   description: |
@@ -22,14 +20,6 @@
         - tag
         - iceberg.ref
       parser: crate::options::parsers::parse_optional_string
-    - type: table_property
-      keys:
-        - option.use_ref
-        - option.ref
-        - option.branch
-        - option.tag
-        - option.iceberg.ref
-      parser: crate::options::parsers::parse_optional_string
 
 - key: snapshot_id
   description: |
@@ -48,12 +38,6 @@
         - snapshot-id
         - snapshotId
       parser: crate::options::parsers::parse_optional_i64
-    - type: table_property
-      keys:
-        - option.snapshot_id
-        - option.snapshot-id
-        - option.snapshotId
-      parser: crate::options::parsers::parse_optional_i64
 
 - key: timestamp_as_of
   description: |
@@ -71,13 +55,8 @@
         - timestamp_as_of
         - timestampAsOf
       parser: crate::options::parsers::parse_optional_string
-    - type: table_property
-      keys:
-        - option.timestamp_as_of
-        - option.timestampAsOf
-      parser: crate::options::parsers::parse_optional_string
 
-# ── Write-only options ────────────────────────────────────────────────────────
+### Write-Only Options ###
 
 - key: overwrite_schema
   description: |
@@ -95,11 +74,6 @@
         - overwrite_schema
         - overwriteSchema
       parser: crate::options::parsers::parse_bool
-    - type: table_property
-      keys:
-        - option.overwrite_schema
-        - option.overwriteSchema
-      parser: crate::options::parsers::parse_bool
 
 - key: merge_schema
   description: |
@@ -116,9 +90,4 @@
       keys:
         - merge_schema
         - mergeSchema
-      parser: crate::options::parsers::parse_bool
-    - type: table_property
-      keys:
-        - option.merge_schema
-        - option.mergeSchema
       parser: crate::options::parsers::parse_bool
