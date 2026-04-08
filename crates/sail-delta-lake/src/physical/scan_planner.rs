@@ -22,11 +22,113 @@ use crate::physical_plan::planner::metadata_predicate::{
 };
 use crate::physical_plan::planner::utils::LogReplayOptions;
 use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
-use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
+use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
+
+fn expand_scan_projection(
+    full_logical_schema: &ArrowSchema,
+    used_columns: &[usize],
+    filters: &[Expr],
+    table_partition_cols: &[String],
+) -> Result<Vec<usize>> {
+    let mut scan_projection = used_columns.to_vec();
+    let filter_expr = conjunction(filters.iter().cloned());
+
+    // Partition-filter columns can be removed from the original projection by the optimizer,
+    // but they still need to be present for predicate pruning and scan planning.
+    if let Some(expr) = &filter_expr {
+        for column in expr.column_refs() {
+            let idx = full_logical_schema.index_of(column.name.as_str())?;
+            if !scan_projection.contains(&idx) {
+                scan_projection.push(idx);
+            }
+        }
+    }
+
+    for partition_col in table_partition_cols {
+        if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
+            if !scan_projection.contains(&idx) {
+                scan_projection.push(idx);
+            }
+        }
+    }
+
+    Ok(scan_projection)
+}
+
+fn split_scan_filters(filters: &[Expr], table_partition_cols: &[String]) -> (Vec<Expr>, Vec<Expr>) {
+    let predicates: Vec<&Expr> = filters.iter().collect();
+    let pushdown_filters =
+        crate::datasource::get_pushdown_filters(&predicates, table_partition_cols);
+
+    let mut pruning_filters = Vec::new();
+    let mut parquet_pushdown_filters = Vec::new();
+    for (filter, pushdown) in filters.iter().zip(pushdown_filters) {
+        match pushdown {
+            datafusion::logical_expr::TableProviderFilterPushDown::Exact => {
+                pruning_filters.push(filter.clone());
+            }
+            datafusion::logical_expr::TableProviderFilterPushDown::Inexact => {
+                pruning_filters.push(filter.clone());
+                parquet_pushdown_filters.push(filter.clone());
+            }
+            datafusion::logical_expr::TableProviderFilterPushDown::Unsupported => {}
+        }
+    }
+
+    (pruning_filters, parquet_pushdown_filters)
+}
+
+fn build_file_schema(snapshot: &DeltaSnapshot) -> Result<Arc<ArrowSchema>> {
+    let kmode: ColumnMappingMode = snapshot.effective_column_mapping_mode();
+    let kschema_arc = snapshot.schema();
+    let logical_kernel = StructType::try_from(kschema_arc)?;
+    let physical_arrow: ArrowSchema = get_physical_schema(&logical_kernel, kmode);
+    let physical_partition_cols: HashSet<String> = snapshot
+        .physical_partition_columns()
+        .into_iter()
+        .map(|(_, physical)| physical)
+        .collect();
+
+    let file_fields = physical_arrow
+        .fields()
+        .iter()
+        .filter(|f| !physical_partition_cols.contains(f.name()))
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(Arc::new(ArrowSchema::new(file_fields)))
+}
+
+fn maybe_prune_files(
+    files: Option<Arc<Vec<Add>>>,
+    table_schema: Arc<ArrowSchema>,
+    pruning_predicate: Option<&Arc<dyn PhysicalExpr>>,
+) -> Result<(Option<Arc<Vec<Add>>>, Option<Vec<bool>>)> {
+    match files {
+        Some(files) => {
+            if let Some(predicate) = pruning_predicate {
+                let source_files = files.as_ref().clone();
+                let pruning_mask = crate::datasource::pruning::prune_adds_by_physical_predicate(
+                    source_files.clone(),
+                    table_schema,
+                    Arc::clone(predicate),
+                )?;
+                let pruned_files = source_files
+                    .into_iter()
+                    .zip(pruning_mask.iter().copied())
+                    .filter_map(|(add, keep)| keep.then_some(add))
+                    .collect::<Vec<_>>();
+                Ok((Some(Arc::new(pruned_files)), Some(pruning_mask)))
+            } else {
+                Ok((Some(files), None))
+            }
+        }
+        None => Ok((None, None)),
+    }
+}
 
 pub(crate) async fn plan_delta_scan(
     session: &dyn Session,
@@ -57,81 +159,32 @@ pub(crate) async fn plan_delta_scan(
         Some(schema.clone()),
     )?;
     let table_partition_cols = snapshot.metadata().partition_columns().clone();
-    let logical_schema = if let Some(used_columns) = projection {
-        let mut fields = vec![];
-        for idx in used_columns {
-            fields.push(full_logical_schema.field(*idx).to_owned());
-        }
-        // partition filters with Exact pushdown were removed from projection by DF optimizer,
-        // we need to add them back for the predicate pruning to work
-        let filter_expr = conjunction(filters.iter().cloned());
-        if let Some(expr) = &filter_expr {
-            for c in expr.column_refs() {
-                let idx = full_logical_schema.index_of(c.name.as_str())?;
-                if !used_columns.contains(&idx) {
-                    fields.push(full_logical_schema.field(idx).to_owned());
-                }
-            }
-        }
-        // Ensure all partition columns are included in logical schema
-        for partition_col in table_partition_cols.iter() {
-            if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
-                if !used_columns.contains(&idx) && !fields.iter().any(|f| f.name() == partition_col)
-                {
-                    fields.push(full_logical_schema.field(idx).to_owned());
-                }
-            }
-        }
-        Arc::new(ArrowSchema::new(fields))
-    } else {
-        Arc::clone(&full_logical_schema)
-    };
-
-    let (scan_projection, projection_prefix_len) = if let Some(used_columns) = projection {
-        let mut scan_projection = used_columns.clone();
-        let filter_expr = conjunction(filters.iter().cloned());
-        if let Some(expr) = &filter_expr {
-            for c in expr.column_refs() {
-                let idx = full_logical_schema.index_of(c.name.as_str())?;
-                if !scan_projection.contains(&idx) {
-                    scan_projection.push(idx);
-                }
-            }
-        }
-        for partition_col in table_partition_cols.iter() {
-            if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
-                if !scan_projection.contains(&idx) {
-                    scan_projection.push(idx);
-                }
-            }
-        }
-        (Some(scan_projection), Some(used_columns.len()))
-    } else {
-        (None, None)
-    };
+    let (logical_schema, scan_projection, projection_prefix_len) =
+        if let Some(used_columns) = projection {
+            let scan_projection = expand_scan_projection(
+                full_logical_schema.as_ref(),
+                used_columns,
+                filters,
+                &table_partition_cols,
+            )?;
+            let fields = scan_projection
+                .iter()
+                .map(|idx| full_logical_schema.field(*idx).to_owned())
+                .collect::<Vec<_>>();
+            (
+                Arc::new(ArrowSchema::new(fields)),
+                Some(scan_projection),
+                Some(used_columns.len()),
+            )
+        } else {
+            (Arc::clone(&full_logical_schema), None, None)
+        };
 
     // Separate filters for pruning vs pushdown.
     //
     // Exact and Inexact filters are used for pruning; Inexact are additionally pushed down.
-    let partition_cols = &table_partition_cols;
-    let predicates: Vec<&Expr> = filters.iter().collect();
-    let pushdown_filters =
-        crate::datasource::get_pushdown_filters(&predicates, partition_cols.as_slice());
-
-    let mut pruning_filters = Vec::new();
-    let mut parquet_pushdown_filters = Vec::new();
-    for (filter, pushdown) in filters.iter().zip(pushdown_filters) {
-        match pushdown {
-            datafusion::logical_expr::TableProviderFilterPushDown::Exact => {
-                pruning_filters.push(filter.clone());
-            }
-            datafusion::logical_expr::TableProviderFilterPushDown::Inexact => {
-                pruning_filters.push(filter.clone());
-                parquet_pushdown_filters.push(filter.clone());
-            }
-            datafusion::logical_expr::TableProviderFilterPushDown::Unsupported => {}
-        }
-    }
+    let (pruning_filters, parquet_pushdown_filters) =
+        split_scan_filters(filters, &table_partition_cols);
 
     let table_schema = snapshot
         .input_schema()
@@ -151,46 +204,11 @@ pub(crate) async fn plan_delta_scan(
         None
     };
 
-    let (files, pruning_mask): (Option<Arc<Vec<Add>>>, Option<Vec<bool>>) = match files {
-        Some(files) => {
-            if let Some(predicate) = pruning_predicate.as_ref() {
-                let source_files = files.as_ref().clone();
-                let pruning_mask = crate::datasource::pruning::prune_adds_by_physical_predicate(
-                    source_files.clone(),
-                    table_schema.clone(),
-                    Arc::clone(predicate),
-                )?;
-                let pruned_files = source_files
-                    .into_iter()
-                    .zip(pruning_mask.iter().copied())
-                    .filter_map(|(add, keep)| keep.then_some(add))
-                    .collect::<Vec<_>>();
-                (Some(Arc::new(pruned_files)), Some(pruning_mask))
-            } else {
-                (Some(files), None)
-            }
-        }
-        None => (None, None),
-    };
+    let (files, pruning_mask) =
+        maybe_prune_files(files, table_schema.clone(), pruning_predicate.as_ref())?;
 
     // Build physical file schema (non-partition columns)
-    let kmode: ColumnMappingMode = snapshot.effective_column_mapping_mode();
-    let kschema_arc = snapshot.schema();
-    let logical_kernel = StructType::try_from(kschema_arc)?;
-    let physical_arrow: ArrowSchema = get_physical_schema(&logical_kernel, kmode);
-    let physical_partition_cols: HashSet<String> = snapshot
-        .physical_partition_columns()
-        .into_iter()
-        .map(|(_, physical)| physical)
-        .collect();
-
-    let file_fields = physical_arrow
-        .fields()
-        .iter()
-        .filter(|f| !physical_partition_cols.contains(f.name()))
-        .cloned()
-        .collect::<Vec<_>>();
-    let file_schema = Arc::new(ArrowSchema::new(file_fields));
+    let file_schema = build_file_schema(snapshot)?;
 
     // Prepare pushdown filter for Parquet.
     let pushdown_filter = if !parquet_pushdown_filters.is_empty() {
@@ -236,7 +254,18 @@ pub(crate) async fn plan_delta_scan(
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
         let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
-        return Ok(renamed);
+        let output_schema = if let Some(used_columns) = projection {
+            let fields = used_columns
+                .iter()
+                .map(|idx| full_logical_schema.field(*idx).to_owned())
+                .collect::<Vec<_>>();
+            Arc::new(ArrowSchema::new(fields))
+        } else {
+            Arc::clone(&full_logical_schema)
+        };
+        return Ok(
+            Arc::new(RelaxedTzCastExec::new(renamed, output_schema)) as Arc<dyn ExecutionPlan>
+        );
     }
 
     // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
