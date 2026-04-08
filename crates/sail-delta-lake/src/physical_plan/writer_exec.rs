@@ -62,7 +62,7 @@ use crate::spec::{
     contains_timestampntz_arrow, Action, ColumnMappingMode, StructType, TableProperties,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
-use crate::table::open_table_with_object_store;
+use crate::table::{open_table_with_object_store, DeltaTable};
 
 /// Schema handling mode for Delta Lake writes
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -86,6 +86,9 @@ pub struct DeltaWriterExec {
     sink_schema: SchemaRef,
     /// Optional override for commit operation metadata.
     operation_override: Option<DeltaOperation>,
+    /// Pre-opened Delta table from the planning phase, shared to avoid a redundant open
+    /// during execution. When `Some`, `execute_stream` skips its own `open_table` call.
+    prefetched_table: Option<Arc<DeltaTable>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -130,6 +133,7 @@ impl DeltaWriterExec {
             table_exists,
             sink_schema,
             operation_override,
+            prefetched_table: None,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
@@ -178,6 +182,25 @@ impl DeltaWriterExec {
 
     pub fn operation_override(&self) -> Option<&DeltaOperation> {
         self.operation_override.as_ref()
+    }
+
+    /// Attach a pre-opened table handle, eliminating the redundant `open_table` call
+    /// that `execute_stream` would otherwise perform during execution.
+    /// Creates a new `DeltaWriterExec` with the same configuration but `prefetched_table` set.
+    pub fn with_prefetched_table(&self, table: Arc<DeltaTable>) -> Result<Self> {
+        let mut new = Self::new(
+            Arc::clone(&self.input),
+            self.table_url.clone(),
+            self.options.clone(),
+            self.metadata_configuration.clone(),
+            self.partition_columns.clone(),
+            self.sink_mode.clone(),
+            self.table_exists,
+            self.sink_schema.clone(),
+            self.operation_override.clone(),
+        )?;
+        new.prefetched_table = Some(table);
+        Ok(new)
     }
 }
 
@@ -266,7 +289,7 @@ impl ExecutionPlan for DeltaWriterExec {
             return internal_err!("DeltaWriterExec requires exactly one child");
         }
 
-        Ok(Arc::new(Self::new(
+        let mut new_exec = Self::new(
             Arc::clone(&children[0]),
             self.table_url.clone(),
             self.options.clone(),
@@ -276,7 +299,11 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_exists,
             self.sink_schema.clone(),
             self.operation_override.clone(),
-        )?))
+        )?;
+        if let Some(table) = &self.prefetched_table {
+            new_exec.prefetched_table = Some(Arc::clone(table));
+        }
+        Ok(Arc::new(new_exec))
     }
 
     fn execute(
@@ -318,6 +345,7 @@ impl DeltaWriterExec {
         let table_exists = self.table_exists;
         let input_schema = normalize_delta_schema(&self.input.schema());
         let operation_override = self.operation_override.clone();
+        let prefetched_table = self.prefetched_table.clone();
         // let sink_schema = self.sink_schema.clone();
         let session_timezone = context
             .session_config()
@@ -347,15 +375,23 @@ impl DeltaWriterExec {
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
 
-            let table_result = open_table_with_object_store(
-                table_url.clone(),
-                object_store.clone(),
-                storage_config.clone(),
-            )
-            .await;
-
-            let table = if table_exists {
-                Some(table_result?)
+            // Reuse the pre-opened table from planning when available (avoids a redundant
+            // `open_table` call); fall back to opening now if not provided.
+            let table: Option<Arc<DeltaTable>> = if let Some(prefetched) = prefetched_table {
+                if table_exists {
+                    Some(prefetched)
+                } else {
+                    None
+                }
+            } else if table_exists {
+                Some(Arc::new(
+                    open_table_with_object_store(
+                        table_url.clone(),
+                        object_store.clone(),
+                        storage_config.clone(),
+                    )
+                    .await?,
+                ))
             } else {
                 None
             };

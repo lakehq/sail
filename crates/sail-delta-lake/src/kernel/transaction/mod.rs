@@ -1136,13 +1136,30 @@ impl PostCommit {
         // Always construct a state for the committed version so checkpoint + cleanup can run
         // even when `table_data` isn't available (e.g. planner didn't provide a snapshot).
         let mut state = if let Some(snapshot) = &self.table_data {
-            let mut snapshot = Arc::clone(snapshot);
-            if self.version != snapshot.version() {
-                Arc::make_mut(&mut snapshot)
-                    .update(self.log_store.as_ref(), Some(self.version as u64))
-                    .await?;
+            if snapshot.load_config().require_files {
+                // Full file list is available — just advance to the committed version if needed.
+                let mut snapshot = Arc::clone(snapshot);
+                if self.version != snapshot.version() {
+                    Arc::make_mut(&mut snapshot)
+                        .update(self.log_store.as_ref(), Some(self.version as u64))
+                        .await?;
+                }
+                snapshot
+            } else {
+                // Header-only snapshot (require_files=false): `update()` would inherit the same
+                // flag and leave `adds` empty, producing wrong numFiles/tableSizeBytes in the
+                // version checksum and an unusable state for checkpoint writes.  Re-open at the
+                // committed version with the full file list instead.
+                Arc::new(
+                    DeltaSnapshot::try_new(
+                        self.log_store.as_ref(),
+                        Default::default(),
+                        Some(self.version),
+                        None,
+                    )
+                    .await?,
+                )
             }
-            snapshot
         } else {
             Arc::new(
                 DeltaSnapshot::try_new(

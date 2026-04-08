@@ -17,12 +17,13 @@ use sail_data_source::options::{
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
+use crate::kernel::DeltaTableConfig as KernelDeltaTableConfig;
 use crate::options::{DeltaLogReplayStrategyOption, TableDeltaOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
 use crate::spec::{canonicalize_and_validate_table_properties, route_table_property_key};
-use crate::table::open_table_with_object_store;
+use crate::table::open_table_with_object_store_and_table_config;
 use crate::{create_delta_provider, create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
@@ -130,15 +131,24 @@ impl TableFormat for DeltaTableFormat {
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table =
-            match open_table_with_object_store(table_url.clone(), object_store, Default::default())
-                .await
-            {
-                Ok(table) => Some(table),
-                Err(DeltaTableError::InvalidTableLocation(_))
-                | Err(DeltaTableError::FileNotFound(_)) => None,
-                Err(err) => return Err(DataFusionError::External(Box::new(err))),
-            };
+        let table = match open_table_with_object_store_and_table_config(
+            table_url.clone(),
+            object_store,
+            Default::default(),
+            // Only partition columns and table existence are needed at planning time;
+            // skip replaying Add/Remove file actions which are not used here.
+            KernelDeltaTableConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            Ok(table) => Some(table),
+            Err(DeltaTableError::InvalidTableLocation(_))
+            | Err(DeltaTableError::FileNotFound(_)) => None,
+            Err(err) => return Err(DataFusionError::External(Box::new(err))),
+        };
         let table_exists = table.is_some();
         let mut metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;

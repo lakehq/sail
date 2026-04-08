@@ -9,7 +9,7 @@ use datafusion_common::{internal_err, plan_err, DFSchemaRef, DataFusionError, Re
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use sail_data_source::resolve_listing_urls;
 use sail_delta_lake::physical_plan::{
-    compile_data_quality_invariants, DataQualityPolicy, DeltaDataQualityExec,
+    compile_data_quality_invariants, DataQualityPolicy, DeltaDataQualityExec, DeltaWriterExec,
 };
 use sail_delta_lake::table::open_table_with_object_store_and_table_config;
 use sail_delta_lake::DeltaTableConfig;
@@ -90,8 +90,10 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
                 return internal_err!("FileWriteNode requires exactly one physical input");
             };
 
-            // Compile invariants on the driver side and wrap the input if needed
-            let physical_input = self
+            // Compile invariants on the driver side and wrap the input if needed.
+            // `wrap_with_data_quality` also returns the already-opened table so we can
+            // pass it into `DeltaWriterExec` and avoid a redundant open during execution.
+            let (physical_input, maybe_table) = self
                 .wrap_with_data_quality(session_state, physical_input.clone(), node.options())
                 .await?;
 
@@ -103,6 +105,13 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
                 node.options().clone(),
             )
             .await?;
+
+            // Inject the pre-opened table into `DeltaWriterExec` so execution reuses it.
+            let plan = if let Some(table) = maybe_table {
+                inject_prefetched_table(plan, Arc::new(table))?
+            } else {
+                plan
+            };
             return Ok(Some(plan));
         }
 
@@ -168,6 +177,10 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
 impl DeltaExtensionPlanner {
     /// Compile Delta invariants and wrap the input with a `DeltaDataQualityExec` if needed.
     ///
+    /// Returns both the (possibly-wrapped) input plan and the `DeltaTable` that was opened to
+    /// compile invariants. The caller can inject the table into `DeltaWriterExec` via
+    /// `inject_prefetched_table` so that execution does not need to open the table a second time.
+    ///
     /// This runs on the driver during physical plan construction so that workers
     /// only evaluate pre-compiled `PhysicalExpr` without needing SQL parsing or session context.
     async fn wrap_with_data_quality(
@@ -175,7 +188,10 @@ impl DeltaExtensionPlanner {
         session_state: &SessionState,
         physical_input: Arc<dyn ExecutionPlan>,
         options: &sail_logical_plan::file_write::FileWriteOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    ) -> Result<(
+        Arc<dyn ExecutionPlan>,
+        Option<sail_delta_lake::table::DeltaTable>,
+    )> {
         let all_options: Vec<std::collections::HashMap<String, String>> = options
             .options
             .iter()
@@ -185,7 +201,7 @@ impl DeltaExtensionPlanner {
             .iter()
             .find_map(|set| set.get("path").or_else(|| set.get("location")).cloned());
         let Some(path) = path else {
-            return Ok(physical_input);
+            return Ok((physical_input, None));
         };
 
         let table = resolve_and_open_delta_table(session_state, &path)
@@ -205,13 +221,31 @@ impl DeltaExtensionPlanner {
         )?;
 
         if invariants.is_empty() {
-            return Ok(physical_input);
+            return Ok((physical_input, table));
         }
 
         let exec =
             DeltaDataQualityExec::new(physical_input, invariants, DataQualityPolicy::Strict)?;
-        Ok(Arc::new(exec))
+        Ok((Arc::new(exec), table))
     }
+}
+
+/// Recursively traverse `plan` and attach `table` to any `DeltaWriterExec` found in the tree,
+/// rebuilding ancestor nodes via `with_new_children`.  This lets the executor skip opening the
+/// table a second time at task start.
+fn inject_prefetched_table(
+    plan: Arc<dyn ExecutionPlan>,
+    table: Arc<sail_delta_lake::table::DeltaTable>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if let Some(writer) = plan.as_any().downcast_ref::<DeltaWriterExec>() {
+        return Ok(Arc::new(writer.with_prefetched_table(Arc::clone(&table))?));
+    }
+    let new_children: Vec<Arc<dyn ExecutionPlan>> = plan
+        .children()
+        .into_iter()
+        .map(|child| inject_prefetched_table(Arc::clone(child), Arc::clone(&table)))
+        .collect::<Result<Vec<_>>>()?;
+    plan.with_new_children(new_children)
 }
 
 async fn resolve_and_open_delta_table(

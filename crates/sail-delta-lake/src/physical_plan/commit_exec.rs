@@ -35,7 +35,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, OperationMetrics};
-use crate::kernel::{DeltaOperation, SaveMode};
+use crate::kernel::{DeltaOperation, DeltaTableConfig, SaveMode};
 use crate::physical_plan::action_schema::ExecCommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
 use crate::schema::{
@@ -43,7 +43,9 @@ use crate::schema::{
 };
 use crate::spec::{CommitAction, StructType};
 use crate::storage::{get_object_store_from_context, StorageConfig};
-use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
+use crate::table::{
+    create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
+};
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
 const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
@@ -205,22 +207,25 @@ impl ExecutionPlan for DeltaCommitExec {
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
-            let table = if table_exists {
-                open_table_with_object_store(
-                    table_url.clone(),
-                    object_store.clone(),
-                    storage_config.clone(),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
+            // For existing tables, open concurrently with `require_files: true` while
+            // input data (Parquet writes from workers) is being drained.  This overlaps
+            // log-replay I/O with worker I/O so that PostCommit receives a complete
+            // snapshot and only needs a cheap `update()` call.
+            let table_join = if table_exists {
+                let open_url = table_url.clone();
+                let open_store = Arc::clone(&object_store);
+                let open_storage = storage_config.clone();
+                Some(tokio::task::spawn(async move {
+                    open_table_with_object_store_and_table_config(
+                        open_url,
+                        open_store,
+                        open_storage,
+                        DeltaTableConfig::default(), // require_files: true
+                    )
+                    .await
+                }))
             } else {
-                create_delta_table_with_object_store(
-                    table_url.clone(),
-                    object_store.clone(),
-                    storage_config.clone(),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                None
             };
 
             let mut total_rows = 0u64;
@@ -382,6 +387,23 @@ impl ExecutionPlan for DeltaCommitExec {
                     }),
                     final_actions,
                 )
+            };
+
+            // Await the concurrently-opened table, or create one for new tables.
+            // For existing tables the open() ran in the background while workers were
+            // writing Parquet; it should be complete (or nearly so) by now.
+            let table = if let Some(join) = table_join {
+                join.await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+            } else {
+                create_delta_table_with_object_store(
+                    table_url.clone(),
+                    object_store.clone(),
+                    storage_config.clone(),
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
             };
 
             let snapshot = if table_exists {
