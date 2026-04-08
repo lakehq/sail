@@ -22,11 +22,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_rules_start_with_expand_merge() {
+    fn default_rules_start_with_expand_row_level_op() {
         let rules = default_optimizer_rules();
         assert!(
-            rules.first().map(|r| r.name()) == Some("expand_merge"),
-            "expand_merge should run before built-in optimizers"
+            rules.first().map(|r| r.name()) == Some("expand_row_level_op"),
+            "expand_row_level_op should run before built-in optimizers"
         );
     }
 }

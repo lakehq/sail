@@ -111,11 +111,6 @@ impl PlanResolver<'_> {
                 "CLUSTER BY in CREATE TABLE AS SELECT statement",
             ));
         }
-        if replace {
-            return Err(PlanError::todo(
-                "REPLACE in CREATE TABLE AS SELECT statement",
-            ));
-        }
         if !sort_by.is_empty() {
             return Err(PlanError::todo(
                 "SORT_BY in CREATE TABLE AS SELECT statement",
@@ -167,8 +162,12 @@ impl PlanResolver<'_> {
             write_options.push(("path".to_string(), location));
         }
 
-        // Set write mode based on if_not_exists
-        let write_mode = if if_not_exists {
+        // Set write mode based on create-or-replace / if-not-exists semantics.
+        let write_mode = if replace {
+            WriteMode::Replace {
+                error_if_absent: false,
+            }
+        } else if if_not_exists {
             WriteMode::IgnoreIfExists
         } else {
             WriteMode::ErrorIfExists
@@ -282,6 +281,7 @@ impl PlanResolver<'_> {
         Ok(result)
     }
 
+    /// Resolves a table file format clause to the concrete format name to write.
     fn resolve_catalog_table_format(
         &self,
         file_format: Option<spec::TableFileFormat>,

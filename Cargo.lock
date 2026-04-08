@@ -7109,6 +7109,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "log",
+ "sail-common-datafusion",
  "sail-data-source",
  "sail-delta-lake",
  "sail-logical-plan",

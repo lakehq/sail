@@ -110,6 +110,7 @@ pub(super) struct WritePlanBuilder {
 }
 
 impl WritePlanBuilder {
+    /// Creates an empty write plan builder.
     pub fn new() -> Self {
         Self {
             target: None,
@@ -124,21 +125,25 @@ impl WritePlanBuilder {
         }
     }
 
+    /// Sets the write target for the builder.
     pub fn with_target(mut self, target: WriteTarget) -> Self {
         self.target = Some(target);
         self
     }
 
+    /// Sets the write mode for the builder.
     pub fn with_mode(mut self, mode: WriteMode) -> Self {
         self.mode = Some(mode);
         self
     }
 
+    /// Sets the output format for the builder.
     pub fn with_format(mut self, format: String) -> Self {
         self.format = Some(format);
         self
     }
 
+    /// Sets the partitioning fields for the builder.
     pub fn with_partition_by(mut self, partition_by: Vec<CatalogPartitionField>) -> Self {
         self.partition_by = partition_by;
         self
@@ -159,11 +164,13 @@ impl WritePlanBuilder {
         self
     }
 
+    /// Appends a set of write options to the builder.
     pub fn with_options(mut self, options: Vec<(String, String)>) -> Self {
         self.options.push(options);
         self
     }
 
+    /// Sets the table properties to apply when creating the target table.
     pub fn with_table_properties(mut self, properties: Vec<(String, String)>) -> Self {
         self.table_properties = properties;
         self
@@ -171,6 +178,7 @@ impl WritePlanBuilder {
 }
 
 impl PlanResolver<'_> {
+    /// Builds a write logical plan and any catalog preconditions needed before executing it.
     pub(super) async fn resolve_write_with_builder(
         &self,
         mut input: LogicalPlan,
@@ -646,6 +654,7 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Resolves partition expressions into catalog partition fields for a write.
     pub(super) fn resolve_write_partition_by_expressions(
         &self,
         partition_by: Vec<spec::Expr>,

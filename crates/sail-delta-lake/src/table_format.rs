@@ -8,8 +8,8 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
-    DeleteInfo, MergeInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatRegistry,
+    MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo,
+    SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::error::DataSourceResult;
@@ -241,78 +241,59 @@ impl TableFormat for DeltaTableFormat {
         Ok(sink_exec)
     }
 
-    async fn create_deleter(
+    async fn create_row_level_writer(
         &self,
         ctx: &dyn Session,
-        info: DeleteInfo,
+        info: RowLevelWriteInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let DeleteInfo {
-            path,
-            condition,
-            options,
-        } = info;
+        // Strategy branching: all row-level operations check the materialization strategy
+        // before delegating to the format-specific planner. MoR support will be implemented
+        // here in the future; for now only Eager (Copy-on-Write) is supported.
+        match info.merge_strategy {
+            MergeStrategy::Eager => {}
+            MergeStrategy::MergeOnRead => {
+                return not_impl_err!(
+                    "Merge-on-Read strategy is not yet implemented for Delta Lake"
+                );
+            }
+        }
 
-        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-
-        let condition = condition.ok_or_else(|| {
-            DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
-        })?;
-
-        let delta_options = {
-            let option_layers: Vec<OptionLayer> = options
-                .into_iter()
-                .map(|map| OptionLayer::OptionList {
-                    items: map.into_iter().collect(),
-                })
-                .collect();
-            resolve_delta_write_options(option_layers)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-        };
-
-        let delete_config = DeltaTableConfig::new(
-            table_url,
-            delta_options,
-            HashMap::new(),
-            Vec::new(),
-            None,
-            true,
-        );
-        let delete_ctx = PlannerContext::new(ctx, delete_config);
-        let delete_exec = plan_delete(&delete_ctx, condition).await?;
-
-        Ok(delete_exec)
-    }
-
-    async fn create_merger(
-        &self,
-        ctx: &dyn Session,
-        info: MergeInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-        let delta_options = {
-            let option_layers: Vec<OptionLayer> = info
-                .target
-                .options
-                .clone()
-                .into_iter()
-                .map(|map| OptionLayer::OptionList {
-                    items: map.into_iter().collect(),
-                })
-                .collect();
-            resolve_delta_write_options(option_layers)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-        };
-        let merge_config = DeltaTableConfig::new(
-            table_url,
-            delta_options,
-            HashMap::new(),
-            info.target.partition_by.clone(),
-            None,
-            true,
-        );
-        let merge_ctx = PlannerContext::new(ctx, merge_config);
-        let merge_exec = plan_merge(&merge_ctx, info).await?;
-        Ok(merge_exec)
+        match info.command {
+            RowLevelCommand::Delete => {
+                let table_url = Self::parse_table_url(ctx, vec![info.target.path]).await?;
+                let condition = info.condition.ok_or_else(|| {
+                    DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
+                })?;
+                let delta_options = resolve_delta_write_options(info.target.options)?;
+                let delete_config = DeltaTableConfig::new(
+                    table_url,
+                    delta_options,
+                    HashMap::new(),
+                    Vec::new(),
+                    None,
+                    true,
+                );
+                let delete_ctx = PlannerContext::new(ctx, delete_config);
+                plan_delete(&delete_ctx, condition).await
+            }
+            RowLevelCommand::Merge => {
+                let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+                let merge_config = DeltaTableConfig::new(
+                    table_url,
+                    delta_options,
+                    HashMap::new(),
+                    info.target.partition_by.clone(),
+                    None,
+                    true,
+                );
+                let merge_ctx = PlannerContext::new(ctx, merge_config);
+                plan_merge(&merge_ctx, info).await
+            }
+            RowLevelCommand::Update => {
+                not_impl_err!("UPDATE is not yet implemented for Delta Lake")
+            }
+        }
     }
 }
 

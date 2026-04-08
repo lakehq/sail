@@ -53,7 +53,7 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
   
-    logical_plan after expand_merge:
+    logical_plan after expand_row_level_op:
     SAME TEXT AS ABOVE
   
     logical_plan after decorrelate_lateral_projection:
@@ -132,7 +132,7 @@ data:
           Projection: column1 AS #2, column2 AS #3
             Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
   
-    logical_plan after expand_merge:
+    logical_plan after expand_row_level_op:
     SAME TEXT AS ABOVE
   
     logical_plan after decorrelate_lateral_projection:
