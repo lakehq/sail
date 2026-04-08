@@ -31,12 +31,12 @@ use object_store::ObjectStoreExt;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_data_source::options::gen::IcebergWriteOptions;
 use url::Url;
 
 use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_to_arrow};
 use crate::operations::write::config::WriterConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
-use crate::options::TableIcebergOptions;
 use crate::physical_plan::action_schema::{
     encode_add_data_files, encode_commit_meta, iceberg_action_schema, CommitMeta,
 };
@@ -59,7 +59,7 @@ pub struct IcebergWriterExec {
     partition_columns: Vec<CatalogPartitionField>,
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
-    options: TableIcebergOptions,
+    options: IcebergWriteOptions,
     cache: Arc<PlanProperties>,
 }
 
@@ -94,7 +94,7 @@ impl IcebergWriterExec {
         partition_columns: Vec<CatalogPartitionField>,
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
-        options: TableIcebergOptions,
+        options: IcebergWriteOptions,
     ) -> Self {
         let schema = match iceberg_action_schema() {
             Ok(s) => s,
@@ -140,7 +140,7 @@ impl IcebergWriterExec {
         self.table_exists
     }
 
-    pub fn options(&self) -> &TableIcebergOptions {
+    pub fn options(&self) -> &IcebergWriteOptions {
         &self.options
     }
 
@@ -149,7 +149,7 @@ impl IcebergWriterExec {
     }
 
     fn get_schema_mode(
-        options: &TableIcebergOptions,
+        options: &IcebergWriteOptions,
         sink_mode: &PhysicalSinkMode,
     ) -> Result<Option<SchemaMode>> {
         match (options.merge_schema, options.overwrite_schema) {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
-use datafusion::common::{Result, ToDFSchema};
+use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
@@ -13,6 +13,8 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_data_source::options::gen::DeltaWritePartialOptions;
+use sail_data_source::options::PartialOptions;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
@@ -27,8 +29,6 @@ use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
-use sail_data_source::options::gen::{DeltaWriteOptions, DeltaWritePartialOptions};
-use sail_data_source::options::PartialOptions;
 
 pub(crate) async fn plan_delta_scan(
     session: &dyn Session,

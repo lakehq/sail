@@ -17,13 +17,13 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
 use crate::kernel::DeltaTableConfig as KernelDeltaTableConfig;
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store_and_table_config, DeltaTable};
-use sail_data_source::options::gen::DeltaWriteOptions;
 
 /// Configuration shared by all Delta planners.
 #[derive(Clone)]

@@ -543,10 +543,9 @@ async fn build_log_replay_pipeline_with_files(
         ))
     };
 
-    let replay_strategy = crate::options::parse_delta_log_replay_strategy(
-        &ctx.options().delta_log_replay_strategy,
-    )
-    .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+    let replay_strategy =
+        crate::options::parse_delta_log_replay_strategy(&ctx.options().delta_log_replay_strategy)
+            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
     let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.max(1);
     let has_checkpoint = !checkpoint_files.is_empty();
     let use_hash = match replay_strategy {

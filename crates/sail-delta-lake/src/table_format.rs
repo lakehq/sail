@@ -12,7 +12,7 @@ use sail_common_datafusion::datasource::{
     TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
-use sail_data_source::error::{DataSourceError, DataSourceResult};
+use sail_data_source::error::DataSourceResult;
 use sail_data_source::options::gen::{
     DeltaReadOptions, DeltaReadPartialOptions, DeltaWriteOptions, DeltaWritePartialOptions,
 };

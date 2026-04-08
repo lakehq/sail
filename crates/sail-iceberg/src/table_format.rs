@@ -192,7 +192,7 @@ impl TableFormat for IcebergTableFormat {
 pub async fn create_iceberg_provider(
     ctx: &dyn Session,
     table_url: Url,
-    options: TableIcebergOptions,
+    options: IcebergReadOptions,
 ) -> Result<Arc<dyn TableProvider>> {
     let table = Table::load(ctx, table_url).await?;
     let provider = table.to_provider(&options)?;
@@ -204,7 +204,7 @@ pub async fn create_iceberg_provider(
 pub(crate) async fn load_table_metadata_with_options(
     ctx: &dyn Session,
     table_url: &Url,
-    options: TableIcebergOptions,
+    options: IcebergReadOptions,
 ) -> Result<(Schema, Snapshot, Vec<PartitionSpec>)> {
     log::trace!(
         "Loading table metadata (with options) from: {}, options: {:?}",
@@ -268,53 +268,29 @@ impl IcebergTableFormat {
     }
 }
 
-fn apply_iceberg_read_options(
-    from: IcebergReadOptions,
-    to: &mut TableIcebergOptions,
-) -> Result<()> {
-    if let Some(use_ref) = from.use_ref {
-        to.use_ref = Some(use_ref);
+fn resolve_iceberg_read_options(options: Vec<OptionLayer>) -> DataSourceResult<IcebergReadOptions> {
+    let mut partial = IcebergReadPartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    if let Some(snapshot_id) = from.snapshot_id {
-        to.snapshot_id = Some(snapshot_id);
-    }
-    if let Some(ts) = from.timestamp_as_of {
-        to.timestamp_as_of = Some(ts);
-    }
-    Ok(())
-}
-
-fn resolve_iceberg_read_options(
-    options: Vec<std::collections::HashMap<String, String>>,
-) -> Result<TableIcebergOptions> {
-    let mut iceberg = TableIcebergOptions::default();
-    apply_iceberg_read_options(load_default_options()?, &mut iceberg)?;
-    for opt in options {
-        apply_iceberg_read_options(load_options(opt)?, &mut iceberg)?;
-    }
-    Ok(iceberg)
-}
-
-fn apply_iceberg_write_options(
-    from: IcebergWriteOptions,
-    to: &mut TableIcebergOptions,
-) -> Result<()> {
-    if let Some(merge_schema) = from.merge_schema {
-        to.merge_schema = merge_schema;
-    }
-    if let Some(overwrite_schema) = from.overwrite_schema {
-        to.overwrite_schema = overwrite_schema;
-    }
-    Ok(())
+    partial.finalize()
 }
 
 fn resolve_iceberg_write_options(
     options: Vec<std::collections::HashMap<String, String>>,
-) -> Result<TableIcebergOptions> {
-    let mut iceberg = TableIcebergOptions::default();
-    apply_iceberg_write_options(load_default_options()?, &mut iceberg)?;
-    for opt in options {
-        apply_iceberg_write_options(load_options(opt)?, &mut iceberg)?;
+) -> Result<IcebergWriteOptions> {
+    let mut partial = IcebergWritePartialOptions::initialize();
+    for map in options {
+        let layer = OptionLayer::OptionList {
+            items: map.into_iter().collect(),
+        };
+        partial.merge(
+            layer
+                .build_partial_options()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        );
     }
-    Ok(iceberg)
+    partial
+        .finalize()
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }

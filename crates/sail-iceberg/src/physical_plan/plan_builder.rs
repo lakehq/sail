@@ -21,9 +21,9 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_data_source::options::gen::IcebergWriteOptions;
 use url::Url;
 
-use crate::options::TableIcebergOptions;
 use crate::physical_plan::writer_exec::IcebergWriterExec;
 use crate::utils::partition_transform::format_partition_expr;
 
@@ -31,7 +31,7 @@ pub struct IcebergTableConfig {
     pub table_url: Url,
     pub partition_columns: Vec<CatalogPartitionField>,
     pub table_exists: bool,
-    pub options: TableIcebergOptions,
+    pub options: IcebergWriteOptions,
 }
 
 pub struct IcebergPlanBuilder<'a> {

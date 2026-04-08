@@ -11,8 +11,10 @@
 // limitations under the License.
 
 use datafusion::common::{plan_err, Result};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DeltaLogReplayStrategyOption {
     #[default]
     Auto,
@@ -20,14 +22,17 @@ pub enum DeltaLogReplayStrategyOption {
     Hash,
 }
 
+pub fn default_delta_log_replay_hash_threshold() -> usize {
+    100
+}
+
 pub fn parse_delta_log_replay_strategy(s: &str) -> Result<DeltaLogReplayStrategyOption> {
     match s.to_ascii_lowercase().as_str() {
         "auto" => Ok(DeltaLogReplayStrategyOption::Auto),
         "sort" => Ok(DeltaLogReplayStrategyOption::Sort),
         "hash" => Ok(DeltaLogReplayStrategyOption::Hash),
-        other => plan_err!(
-            "invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash"
-        ),
+        other => {
+            plan_err!("invalid value for deltaLogReplayStrategy: {other}, expected auto/sort/hash")
+        }
     }
 }
-

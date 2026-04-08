@@ -25,13 +25,13 @@ use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::datasource::{
     MergeInfo as PhysicalMergeInfo, MergePredicateInfo, OperationOverride, PhysicalSinkMode,
 };
+use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::datasource::PATH_COLUMN;
 use crate::kernel::{DeltaOperation, MergePredicate};
-use sail_data_source::options::gen::DeltaWriteOptions;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
 };
