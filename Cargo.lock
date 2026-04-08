@@ -7034,6 +7034,8 @@ name = "sail-logical-optimizer"
 version = "0.5.3"
 dependencies = [
  "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
 ]
 
 [[package]]

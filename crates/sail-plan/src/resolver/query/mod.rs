@@ -14,6 +14,7 @@ mod dedup;
 mod filter;
 mod join;
 mod lateral;
+mod lateral_join;
 mod limit;
 mod misc;
 mod na;
@@ -346,6 +347,15 @@ impl PlanResolver<'_> {
                     state,
                 )
                 .await?
+            }
+            QueryNode::LateralJoin {
+                left,
+                right,
+                join_condition,
+                join_type,
+            } => {
+                self.resolve_query_lateral_join(*left, *right, join_condition, join_type, state)
+                    .await?
             }
         };
         self.verify_query_plan(&plan, state)?;

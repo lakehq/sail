@@ -623,29 +623,36 @@ impl PlanResolver<'_> {
         Ok(plan)
     }
 
+    pub(super) fn resolve_partition_by_expression(
+        &self,
+        expr: spec::Expr,
+    ) -> PlanResult<CatalogPartitionField> {
+        match expr {
+            spec::Expr::UnresolvedAttribute {
+                name,
+                plan_id: None,
+                is_metadata_column: false,
+            } => {
+                let name: Vec<String> = name.into();
+                Ok(CatalogPartitionField {
+                    column: name.one()?,
+                    transform: None,
+                })
+            }
+            spec::Expr::UnresolvedFunction(f) => resolve_partition_transform_function(f),
+            _ => Err(PlanError::invalid(
+                "partitioning column must be a column reference or transform function",
+            )),
+        }
+    }
+
     pub(super) fn resolve_write_partition_by_expressions(
         &self,
         partition_by: Vec<spec::Expr>,
     ) -> PlanResult<Vec<CatalogPartitionField>> {
         partition_by
             .into_iter()
-            .map(|x| match x {
-                spec::Expr::UnresolvedAttribute {
-                    name,
-                    plan_id: None,
-                    is_metadata_column: false,
-                } => {
-                    let name: Vec<String> = name.into();
-                    Ok(CatalogPartitionField {
-                        column: name.one()?,
-                        transform: None,
-                    })
-                }
-                spec::Expr::UnresolvedFunction(f) => resolve_partition_transform_function(f),
-                _ => Err(PlanError::invalid(
-                    "partitioning column must be a column reference or transform function",
-                )),
-            })
+            .map(|x| self.resolve_partition_by_expression(x))
             .collect()
     }
 

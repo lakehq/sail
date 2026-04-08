@@ -57,19 +57,25 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         for (q, remaining) in Self::generate_qualified_wildcard_candidates(name.parts()) {
-            if remaining.is_empty()
-                && schema
+            if remaining.is_empty() {
+                let in_input = schema
                     .iter()
-                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
-            {
-                return Ok(NamedExpr::new(
-                    vec!["*".to_string()],
-                    #[expect(deprecated)]
-                    expr::Expr::Wildcard {
-                        qualifier: q,
-                        options: Default::default(),
-                    },
-                ));
+                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier));
+                let in_outer = state.get_outer_query_schema().is_some_and(|outer_schema| {
+                    outer_schema
+                        .iter()
+                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
+                });
+                if in_input || in_outer {
+                    return Ok(NamedExpr::new(
+                        vec!["*".to_string()],
+                        #[expect(deprecated)]
+                        expr::Expr::Wildcard {
+                            qualifier: q,
+                            options: Default::default(),
+                        },
+                    ));
+                }
             }
         }
 

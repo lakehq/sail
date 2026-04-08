@@ -1,7 +1,7 @@
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{CreateTableColumnOptions, CreateTableOptions};
+use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
@@ -44,7 +44,7 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
         }
-        let columns = self.resolve_table_columns(columns, state)?;
+        let mut columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
         let location = if let Some(location) = location {
             location
@@ -52,7 +52,8 @@ impl PlanResolver<'_> {
             self.resolve_default_table_location(&table).await?
         };
         let format = self.resolve_catalog_table_format(file_format)?;
-        let partition_by = self.resolve_write_partition_by_expressions(partition_by)?;
+        let partition_by =
+            self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
 
@@ -144,6 +145,18 @@ impl PlanResolver<'_> {
             ));
         }
 
+        // Column definitions are not allowed in PARTITIONED BY for CTAS.
+        let partition_by_exprs = partition_by
+            .into_iter()
+            .map(|item| match item {
+                spec::PartitionColumn::Definition(_) => Err(PlanError::invalid(
+                    "column definitions are not allowed in PARTITIONED BY \
+                     for CREATE TABLE AS SELECT statement",
+                )),
+                spec::PartitionColumn::Expression(expr) => Ok(expr),
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+
         // Rename the input using names in the PlanResolverState, opaque field ID -> fieldInfo.name
         let input = self.resolve_query_plan(query, state).await?;
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
@@ -160,7 +173,7 @@ impl PlanResolver<'_> {
         } else {
             WriteMode::ErrorIfExists
         };
-        let partition_by = self.resolve_write_partition_by_expressions(partition_by)?;
+        let partition_by = self.resolve_write_partition_by_expressions(partition_by_exprs)?;
         let builder = WritePlanBuilder::new()
             .with_target(WriteTarget::Table {
                 table,
@@ -229,6 +242,44 @@ impl PlanResolver<'_> {
             name,
             suffix,
         ))
+    }
+
+    fn resolve_catalog_table_partition_by(
+        &self,
+        partition_by: Vec<spec::PartitionColumn>,
+        columns: &mut Vec<CreateTableColumnOptions>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<CatalogPartitionField>> {
+        let mut result = Vec::with_capacity(partition_by.len());
+        for item in partition_by {
+            match item {
+                spec::PartitionColumn::Expression(expr) => {
+                    result.push(self.resolve_partition_by_expression(expr)?);
+                }
+                spec::PartitionColumn::Definition(column) => {
+                    let resolved = self.resolve_table_columns(vec![column], state)?.one()?;
+                    if let Some(existing) = columns
+                        .iter()
+                        .find(|c| c.name.eq_ignore_ascii_case(&resolved.name))
+                    {
+                        if existing.data_type != resolved.data_type {
+                            return Err(PlanError::invalid(format!(
+                                "partition column '{}' has incompatible type: \
+                                 column definition has {:?} but PARTITIONED BY clause has {:?}",
+                                resolved.name, existing.data_type, resolved.data_type
+                            )));
+                        }
+                    } else {
+                        columns.push(resolved.clone());
+                    }
+                    result.push(CatalogPartitionField {
+                        column: resolved.name,
+                        transform: None,
+                    });
+                }
+            }
+        }
+        Ok(result)
     }
 
     fn resolve_catalog_table_format(

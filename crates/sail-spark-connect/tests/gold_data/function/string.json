@@ -2485,7 +2485,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_extract_all"
+        "success": "ok"
       }
     },
     {
@@ -2511,7 +2511,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_extract_all"
+        "success": "ok"
       }
     },
     {

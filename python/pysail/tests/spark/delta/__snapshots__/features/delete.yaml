@@ -22,6 +22,9 @@ data:
     logical_plan after expand_merge:
     SAME TEXT AS ABOVE
   
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
   
