@@ -35,25 +35,26 @@ message ExtendedPhysicalPlanNode {
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
     DeltaLogReplayExecNode delta_log_replay = 21;
     DeltaMetadataStatsExecNode delta_metadata_stats = 22;
-    AvroExecNode avro = 23;
-    ConsoleSinkExecNode console_sink = 24;
-    SocketSourceExecNode socket_source = 25;
-    RateSourceExecNode rate_source = 26;
-    TextSinkExecNode text_sink = 27;
-    BinarySourceExecNode binary_source = 28;
-    StreamCollectorExecNode stream_collector = 29;
-    StreamLimitExecNode stream_limit = 30;
-    StreamFilterExecNode stream_filter = 31;
-    StreamSourceAdapterExecNode stream_source_adapter = 32;
-    IcebergWriterExecNode iceberg_writer = 33;
-    IcebergCommitExecNode iceberg_commit = 34;
-    MergeCardinalityCheckExecNode merge_cardinality_check = 35;
-    PythonDataSourceExecNode python_data_source = 36;
-    MonotonicIdExecNode monotonic_id = 37;
-    PythonDataSourceWriteExecNode python_data_source_write = 38;
-    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 39;
-    CatalogCommandExecNode catalog_command = 40;
-    BarrierExecNode barrier = 41;
+    DeltaDataQualityExecNode delta_data_quality = 23;
+    AvroExecNode avro = 24;
+    ConsoleSinkExecNode console_sink = 25;
+    SocketSourceExecNode socket_source = 26;
+    RateSourceExecNode rate_source = 27;
+    TextSinkExecNode text_sink = 28;
+    BinarySourceExecNode binary_source = 29;
+    StreamCollectorExecNode stream_collector = 30;
+    StreamLimitExecNode stream_limit = 31;
+    StreamFilterExecNode stream_filter = 32;
+    StreamSourceAdapterExecNode stream_source_adapter = 33;
+    IcebergWriterExecNode iceberg_writer = 34;
+    IcebergCommitExecNode iceberg_commit = 35;
+    MergeCardinalityCheckExecNode merge_cardinality_check = 36;
+    PythonDataSourceExecNode python_data_source = 37;
+    MonotonicIdExecNode monotonic_id = 38;
+    PythonDataSourceWriteExecNode python_data_source_write = 39;
+    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 40;
+    CatalogCommandExecNode catalog_command = 41;
+    BarrierExecNode barrier = 42;
   }
 }
 
@@ -505,6 +506,18 @@ message DeltaMetadataStatsExecNode {
 
 message DeltaRemoveActionsExecNode {
   bytes input = 1;
+}
+
+message CompiledInvariantNode {
+  string field_path = 1;
+  string sql = 2;
+  bytes expr = 3;
+}
+
+message DeltaDataQualityExecNode {
+  bytes input = 1;
+  repeated CompiledInvariantNode invariants = 2;
+  uint32 policy = 3;
 }
 
 message ConsoleSinkExecNode {

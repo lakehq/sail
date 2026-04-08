@@ -90,8 +90,9 @@ use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
-    DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
-    DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    CompiledInvariant, DataQualityPolicy, DeltaCastColumnExpr, DeltaCommitExec,
+    DeltaDataQualityExec, DeltaDiscoveryExec, DeltaLogReplayExec, DeltaMetadataStatsExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 use sail_delta_lake::spec::DeltaOperation;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
@@ -817,6 +818,33 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ),
                 }
             }
+            NodeKind::DeltaDataQuality(gen::DeltaDataQualityExecNode {
+                input,
+                invariants,
+                policy,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let schema = input.schema();
+                let invariants = invariants
+                    .into_iter()
+                    .map(|inv| {
+                        let expr = parse_physical_expr(
+                            &self.try_decode_message(&inv.expr)?,
+                            ctx,
+                            &schema,
+                            self,
+                        )?;
+                        Ok(CompiledInvariant::new(inv.field_path, inv.sql, expr))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let policy = match policy {
+                    0 => DataQualityPolicy::Strict,
+                    _ => return plan_err!("unknown DataQualityPolicy: {policy}"),
+                };
+                Ok(Arc::new(DeltaDataQualityExec::new(
+                    input, invariants, policy,
+                )?))
+            }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
@@ -1480,6 +1508,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 commit_files: delta_log_replay_exec.commit_files().to_vec(),
                 checkpoint_input,
                 commits_input,
+            })
+        } else if let Some(data_quality_exec) = node.as_any().downcast_ref::<DeltaDataQualityExec>()
+        {
+            let input = self.try_encode_plan(data_quality_exec.input())?;
+            let invariants = data_quality_exec
+                .invariants()
+                .iter()
+                .map(|inv| {
+                    let expr_node = serialize_physical_expr(inv.expr(), self)?;
+                    let expr = self.try_encode_message(expr_node)?;
+                    Ok(gen::CompiledInvariantNode {
+                        field_path: inv.field_path().to_string(),
+                        sql: inv.sql().to_string(),
+                        expr,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let policy = match data_quality_exec.policy() {
+                DataQualityPolicy::Strict => 0u32,
+            };
+            NodeKind::DeltaDataQuality(gen::DeltaDataQualityExecNode {
+                input,
+                invariants,
+                policy,
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;

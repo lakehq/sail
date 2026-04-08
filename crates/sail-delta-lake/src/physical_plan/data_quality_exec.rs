@@ -233,6 +233,18 @@ impl DeltaDataQualityExec {
         })
     }
 
+    pub fn input(&self) -> Arc<dyn ExecutionPlan> {
+        Arc::clone(&self.input)
+    }
+
+    pub fn invariants(&self) -> &[CompiledInvariant] {
+        &self.invariants
+    }
+
+    pub fn policy(&self) -> DataQualityPolicy {
+        self.policy
+    }
+
     fn apply_policy(&self, batch: RecordBatch) -> Result<Option<RecordBatch>> {
         if self.invariants.is_empty() {
             return Ok(Some(batch));
