@@ -52,7 +52,7 @@ pub use log_replay_exec::DeltaLogReplayExec;
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
 pub mod planner;
 pub use planner::{
-    plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
+    plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext,
 };
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;

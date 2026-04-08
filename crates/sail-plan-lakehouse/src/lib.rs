@@ -12,7 +12,7 @@ use sail_delta_lake::physical_plan::{
     compile_data_quality_invariants, DataQualityPolicy, DeltaDataQualityExec, DeltaWriterExec,
 };
 use sail_delta_lake::table::open_table_with_object_store_and_table_config;
-use sail_delta_lake::DeltaTableConfig;
+use sail_delta_lake::DeltaSnapshotConfig;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::merge::{MergeCardinalityCheckNode, MergeIntoWriteNode};
@@ -44,7 +44,7 @@ async fn delta_table_schema(session_state: &SessionState, path: &str) -> Result<
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     // Only the schema (protocol + metadata) is needed; skip loading file-level actions.
-    let table_config = DeltaTableConfig {
+    let table_config = DeltaSnapshotConfig {
         require_files: false,
         ..Default::default()
     };
@@ -266,7 +266,7 @@ async fn resolve_and_open_delta_table(
 
     // Only protocol + metadata are needed for invariant compilation;
     // skip eagerly loading file-level actions.
-    let table_config = DeltaTableConfig {
+    let table_config = DeltaSnapshotConfig {
         require_files: false,
         ..Default::default()
     };

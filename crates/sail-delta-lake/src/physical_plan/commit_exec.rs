@@ -35,7 +35,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, OperationMetrics};
-use crate::kernel::{DeltaOperation, DeltaTableConfig, SaveMode};
+use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
 use crate::physical_plan::action_schema::ExecCommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
 use crate::schema::{
@@ -220,7 +220,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         open_url,
                         open_store,
                         open_storage,
-                        DeltaTableConfig::default(), // require_files: true
+                        DeltaSnapshotConfig::default(), // require_files: true
                     )
                     .await
                 }))
