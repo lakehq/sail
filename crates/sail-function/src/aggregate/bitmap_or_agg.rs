@@ -8,8 +8,7 @@ use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
 
-/// The size of the bitmap in bytes (4 * 1024 = 4096).
-const BITMAP_NUM_BYTES: usize = 4 * 1024;
+use super::utils::BITMAP_NUM_BYTES;
 
 /// An aggregate function that returns a bitmap that is the bitwise OR
 /// of all of the bitmaps from the input column.
@@ -101,7 +100,15 @@ impl Accumulator for BitmapOrAggAccumulator {
             })?;
         for i in 0..binary_array.len() {
             if !binary_array.is_null(i) {
-                self.or_bytes(binary_array.value(i));
+                let other = binary_array.value(i);
+                if other.len() > BITMAP_NUM_BYTES {
+                    return Err(datafusion::error::DataFusionError::Internal(format!(
+                        "bitmap_or_agg input length {} exceeds maximum {}",
+                        other.len(),
+                        BITMAP_NUM_BYTES
+                    )));
+                }
+                self.or_bytes(other);
             }
         }
         Ok(())

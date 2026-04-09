@@ -78,6 +78,15 @@ Feature: bitmap_or_agg returns the bitwise OR of all input bitmaps
         | result |
         | 000000 |
 
+  Rule: bitmap_or_agg rejects invalid oversized inputs
+
+    Scenario: bitmap_or_agg with oversized bitmap input
+      When query
+        """
+        SELECT bitmap_or_agg(to_binary(repeat('00', 4097), 'hex')) AS result
+        """
+      Then query error bitmap_or_agg input length 4097 exceeds maximum 4096
+
   Rule: bitmap_or_agg works with bitmap_construct_agg output
 
     Scenario: bitmap_or_agg of bitmap_construct_agg bitmaps

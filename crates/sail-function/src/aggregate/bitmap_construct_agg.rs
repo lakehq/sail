@@ -14,8 +14,7 @@ use datafusion_common::types::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
-/// The size of the bitmap in bytes (4 * 1024 = 4096).
-const BITMAP_NUM_BYTES: usize = 4 * 1024;
+use super::utils::BITMAP_NUM_BYTES;
 
 /// The number of bits in the bitmap (8 * 4 * 1024 = 32768).
 const BITMAP_NUM_BITS: i64 = (8 * BITMAP_NUM_BYTES) as i64;
