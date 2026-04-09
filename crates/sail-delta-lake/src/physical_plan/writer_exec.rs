@@ -591,7 +591,7 @@ impl DeltaWriterExec {
                 physical_partition_columns.clone(),
                 None,
                 *target_file_size,
-                *write_batch_size,
+                write_batch_size.get(),
                 32,
                 None,
             );

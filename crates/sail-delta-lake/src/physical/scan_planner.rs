@@ -249,7 +249,8 @@ pub(crate) async fn plan_delta_scan(
     // should ideally come from read options or a dedicated configuration.
     let mut partial = DeltaWritePartialOptions::initialize();
     partial.delta_log_replay_strategy = Some(config.delta_log_replay_strategy);
-    partial.delta_log_replay_hash_threshold = Some(config.delta_log_replay_hash_threshold);
+    partial.delta_log_replay_hash_threshold =
+        std::num::NonZeroUsize::new(config.delta_log_replay_hash_threshold);
     let planner_options = partial
         .finalize()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;

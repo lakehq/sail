@@ -70,3 +70,16 @@ pub fn parse_optional_string(_key: &str, value: &str) -> DataSourceResult<Option
     }
     Ok(Some(value.to_string()))
 }
+
+pub fn parse_non_zero_usize(key: &str, value: &str) -> DataSourceResult<std::num::NonZeroUsize> {
+    let n = value
+        .parse::<usize>()
+        .map_err(|_| DataSourceError::InvalidOption {
+            key: key.to_string(),
+            value: value.to_string(),
+        })?;
+    std::num::NonZeroUsize::new(n).ok_or_else(|| DataSourceError::InvalidOption {
+        key: key.to_string(),
+        value: value.to_string(),
+    })
+}

@@ -549,9 +549,9 @@
     The number of records to write in a single batch.
   default:
     value: "1024"
-    parser: crate::options::parsers::parse_usize
+    parser: crate::options::parsers::parse_non_zero_usize
   supported: true
-  rust_type: usize
+  rust_type: std::num::NonZeroUsize
   scopes:
     - write
   origins:
@@ -559,7 +559,7 @@
       keys:
         - write_batch_size
         - writeBatchSize
-      parser: crate::options::parsers::parse_usize
+      parser: crate::options::parsers::parse_non_zero_usize
 
 ### Read and Write Options ###
 
@@ -586,9 +586,9 @@
     Max commit JSON file count to use hash-no-sort replay when strategy is "auto".
   default:
     value: "100"
-    parser: crate::options::parsers::parse_usize
+    parser: crate::options::parsers::parse_non_zero_usize
   supported: true
-  rust_type: usize
+  rust_type: std::num::NonZeroUsize
   scopes:
     - read
     - write
@@ -597,4 +597,4 @@
       keys:
         - delta_log_replay_hash_threshold
         - deltaLogReplayHashThreshold
-      parser: crate::options::parsers::parse_usize
+      parser: crate::options::parsers::parse_non_zero_usize

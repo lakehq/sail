@@ -544,7 +544,7 @@ async fn build_log_replay_pipeline_with_files(
     };
 
     let replay_strategy = ctx.options().delta_log_replay_strategy;
-    let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.max(1);
+    let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.get();
     let has_checkpoint = !checkpoint_files.is_empty();
     let use_hash = match replay_strategy {
         DeltaLogReplayStrategy::Sort => false,

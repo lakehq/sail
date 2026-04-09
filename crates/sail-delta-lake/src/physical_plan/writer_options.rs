@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeltaWriterExecOptions {
     pub target_file_size: u64,
-    pub write_batch_size: usize,
+    pub write_batch_size: std::num::NonZeroUsize,
     pub merge_schema: bool,
     pub overwrite_schema: bool,
     pub replace_where: Option<String>,
