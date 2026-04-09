@@ -1,165 +1,202 @@
-use std::collections::HashMap;
 use std::str::FromStr;
 
-use datafusion::catalog::Session;
 use datafusion_common::config::CsvOptions;
-use datafusion_common::plan_err;
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::options::{load_default_options, load_options, CsvReadOptions, CsvWriteOptions};
+use crate::error::{DataSourceError, DataSourceResult};
+use crate::options::gen::{
+    CsvReadOptions, CsvReadPartialOptions, CsvWriteOptions, CsvWritePartialOptions,
+};
+use crate::options::{BuildPartialOptions, PartialOptions};
 use crate::utils::char_to_u8;
 
-fn apply_csv_read_options(
-    from: CsvReadOptions,
-    to: &mut CsvOptions,
-) -> datafusion_common::Result<()> {
-    let CsvReadOptions {
-        delimiter,
-        quote,
-        escape,
-        comment,
-        header,
-        null_value,
-        null_regex,
-        line_sep,
-        schema_infer_max_records,
-        multi_line,
-        compression,
-        allow_truncated_rows,
-        infer_schema,
-    } = from;
-    let null_regex = match (null_value, null_regex) {
-        (Some(null_value), Some(null_regex))
-            if !null_value.is_empty() && !null_regex.is_empty() =>
-        {
-            return plan_err!("CSV `null_value` and `null_regex` cannot be both set");
-        }
-        (Some(null_value), _) if !null_value.is_empty() => {
-            // Convert null value to regex by escaping special characters
-            Some(regex::escape(&null_value))
-        }
-        (_, Some(null_regex)) if !null_regex.is_empty() => Some(null_regex),
-        _ => None,
-    };
-    if let Some(null_regex) = null_regex {
-        to.null_regex = Some(null_regex);
+impl CsvReadOptions {
+    pub fn into_table_options(self) -> DataSourceResult<CsvOptions> {
+        let CsvReadOptions {
+            delimiter,
+            quote,
+            escape,
+            comment,
+            header,
+            null_value,
+            null_regex,
+            line_sep,
+            infer_schema,
+            schema_infer_max_records,
+            multi_line,
+            compression,
+            allow_truncated_rows,
+        } = self;
+        let null_regex = match (null_value.as_str(), null_regex.as_str()) {
+            (nv, nr) if !nv.is_empty() && !nr.is_empty() => {
+                return Err(DataSourceError::InvalidOption {
+                    key: "null_value/null_regex".to_string(),
+                    value: "CSV `null_value` and `null_regex` cannot be both set".to_string(),
+                });
+            }
+            (nv, _) if !nv.is_empty() => Some(regex::escape(nv)),
+            (_, nr) if !nr.is_empty() => Some(nr.to_string()),
+            _ => None,
+        };
+        let delimiter =
+            char_to_u8(delimiter, "delimiter").map_err(|e| DataSourceError::InvalidOption {
+                key: "delimiter".to_string(),
+                value: e.to_string(),
+            })?;
+        let quote = quote
+            .map(|c| {
+                char_to_u8(c, "quote").map_err(|e| DataSourceError::InvalidOption {
+                    key: "quote".to_string(),
+                    value: e.to_string(),
+                })
+            })
+            .transpose()?
+            .unwrap_or(CsvOptions::default().quote);
+        let escape = escape
+            .map(|c| {
+                char_to_u8(c, "escape").map_err(|e| DataSourceError::InvalidOption {
+                    key: "escape".to_string(),
+                    value: e.to_string(),
+                })
+            })
+            .transpose()?;
+        let comment = comment
+            .map(|c| {
+                char_to_u8(c, "comment").map_err(|e| DataSourceError::InvalidOption {
+                    key: "comment".to_string(),
+                    value: e.to_string(),
+                })
+            })
+            .transpose()?;
+        let terminator = line_sep
+            .map(|c| {
+                char_to_u8(c, "line_sep").map_err(|e| DataSourceError::InvalidOption {
+                    key: "line_sep".to_string(),
+                    value: e.to_string(),
+                })
+            })
+            .transpose()?;
+        let schema_infer_max_rec = if infer_schema {
+            Some(schema_infer_max_records)
+        } else {
+            Some(0)
+        };
+        let compression = FileCompressionType::from_str(&compression)
+            .map_err(|e| DataSourceError::InvalidOption {
+                key: "compression".to_string(),
+                value: e.to_string(),
+            })?
+            .into();
+        Ok(CsvOptions {
+            has_header: Some(header),
+            delimiter,
+            quote,
+            terminator,
+            escape,
+            comment,
+            null_regex,
+            schema_infer_max_rec,
+            compression,
+            newlines_in_values: Some(multi_line),
+            truncated_rows: Some(allow_truncated_rows),
+            ..CsvOptions::default()
+        })
     }
-    if let Some(delimiter) = delimiter {
-        to.delimiter = char_to_u8(delimiter, "delimiter")?;
-    }
-    // TODO: support no quote
-    if let Some(Some(quote)) = quote {
-        to.quote = char_to_u8(quote, "quote")?;
-    }
-    // TODO: support no escape
-    if let Some(Some(escape)) = escape {
-        to.escape = Some(char_to_u8(escape, "escape")?);
-    }
-    // TODO: support no comment
-    if let Some(Some(comment)) = comment {
-        to.comment = Some(char_to_u8(comment, "comment")?);
-    }
-    if let Some(header) = header {
-        to.has_header = Some(header);
-    }
-    if let Some(Some(sep)) = line_sep {
-        to.terminator = Some(char_to_u8(sep, "line_sep")?);
-    }
-    if let Some(n) = schema_infer_max_records {
-        to.schema_infer_max_rec = Some(n);
-    }
-    if let Some(compression) = compression {
-        to.compression = FileCompressionType::from_str(&compression)?.into();
-    }
-    if let Some(multi_line) = multi_line {
-        to.newlines_in_values = Some(multi_line);
-    }
-    if let Some(allow_truncated_rows) = allow_truncated_rows {
-        to.truncated_rows = Some(allow_truncated_rows);
-    }
-    if infer_schema == Some(false) {
-        to.schema_infer_max_rec = Some(0);
-    }
-    Ok(())
 }
 
-fn apply_csv_write_options(
-    from: CsvWriteOptions,
-    to: &mut CsvOptions,
-) -> datafusion_common::Result<()> {
-    let CsvWriteOptions {
-        delimiter,
-        quote,
-        escape,
-        escape_quotes,
-        header,
-        null_value,
-        compression,
-    } = from;
-    if let Some(delimiter) = delimiter {
-        to.delimiter = char_to_u8(delimiter, "delimiter")?;
+impl CsvWriteOptions {
+    pub fn into_table_options(self) -> DataSourceResult<CsvOptions> {
+        let CsvWriteOptions {
+            delimiter,
+            quote,
+            escape,
+            header,
+            null_value,
+            escape_quotes,
+            compression,
+        } = self;
+        let delimiter =
+            char_to_u8(delimiter, "delimiter").map_err(|e| DataSourceError::InvalidOption {
+                key: "delimiter".to_string(),
+                value: e.to_string(),
+            })?;
+        let quote = quote
+            .map(|c| {
+                char_to_u8(c, "quote").map_err(|e| DataSourceError::InvalidOption {
+                    key: "quote".to_string(),
+                    value: e.to_string(),
+                })
+            })
+            .transpose()?
+            .unwrap_or(CsvOptions::default().quote);
+        let escape = escape
+            .map(|c| {
+                char_to_u8(c, "escape").map_err(|e| DataSourceError::InvalidOption {
+                    key: "escape".to_string(),
+                    value: e.to_string(),
+                })
+            })
+            .transpose()?;
+        let null_value = if null_value.is_empty() {
+            None
+        } else {
+            Some(null_value)
+        };
+        let compression = FileCompressionType::from_str(&compression)
+            .map_err(|e| DataSourceError::InvalidOption {
+                key: "compression".to_string(),
+                value: e.to_string(),
+            })?
+            .into();
+        Ok(CsvOptions {
+            has_header: Some(header),
+            delimiter,
+            quote,
+            escape,
+            null_value,
+            double_quote: Some(escape_quotes),
+            compression,
+            ..CsvOptions::default()
+        })
     }
-    // TODO: support no quote
-    if let Some(Some(quote)) = quote {
-        to.quote = char_to_u8(quote, "quote")?;
-    }
-    // TODO: support no escape
-    if let Some(Some(escape)) = escape {
-        to.escape = Some(char_to_u8(escape, "escape")?);
-    }
-    if let Some(escape_quotes) = escape_quotes {
-        to.double_quote = Some(escape_quotes);
-    }
-    if let Some(header) = header {
-        to.has_header = Some(header);
-    }
-    if let Some(null_value) = null_value {
-        to.null_value = Some(null_value);
-    }
-    if let Some(compression) = compression {
-        to.compression = FileCompressionType::from_str(&compression)?.into();
-    }
-    Ok(())
 }
 
-pub fn resolve_csv_read_options(
-    ctx: &dyn Session,
-    options: Vec<HashMap<String, String>>,
-) -> datafusion_common::Result<CsvOptions> {
-    let mut csv_options = ctx.default_table_options().csv;
-    apply_csv_read_options(load_default_options()?, &mut csv_options)?;
-    for opt in options {
-        apply_csv_read_options(load_options(opt)?, &mut csv_options)?;
+pub fn resolve_csv_read_options(options: Vec<OptionLayer>) -> DataSourceResult<CsvOptions> {
+    let mut partial = CsvReadPartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    Ok(csv_options)
+    partial.finalize()?.into_table_options()
 }
 
-pub fn resolve_csv_write_options(
-    ctx: &dyn Session,
-    options: Vec<HashMap<String, String>>,
-) -> datafusion_common::Result<CsvOptions> {
-    let mut csv_options = ctx.default_table_options().csv;
-    apply_csv_write_options(load_default_options()?, &mut csv_options)?;
-    for opt in options {
-        apply_csv_write_options(load_options(opt)?, &mut csv_options)?;
+pub fn resolve_csv_write_options(options: Vec<OptionLayer>) -> DataSourceResult<CsvOptions> {
+    let mut partial = CsvWritePartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    Ok(csv_options)
+    partial.finalize()?.into_table_options()
 }
 
 #[cfg(test)]
 mod tests {
-    use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
+    use sail_common_datafusion::datasource::OptionLayer;
 
     use crate::formats::csv::options::{resolve_csv_read_options, resolve_csv_write_options};
-    use crate::options::build_options;
+
+    fn option_list(items: &[(&str, &str)]) -> OptionLayer {
+        OptionLayer::OptionList {
+            items: items
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
 
     #[test]
     fn test_resolve_csv_read_options() -> datafusion_common::Result<()> {
-        let ctx = SessionContext::default();
-        let state = ctx.state();
-
-        let kv = build_options(&[
+        let kv = option_list(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),
@@ -171,85 +208,59 @@ mod tests {
             ("multi_line", "true"),
             ("compression", "bzip2"),
         ]);
-        let options = resolve_csv_read_options(&state, vec![kv])?;
+        let options =
+            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
         assert_eq!(options.escape, Some(b'*'));
         assert_eq!(options.comment, Some(b'^'));
         assert_eq!(options.has_header, Some(true));
-        assert_eq!(options.null_value, None); // This is for the writer
-        assert_eq!(options.null_regex, Some("MEOW".to_string())); // null_value
-        assert_eq!(options.terminator, Some(b'@')); // line_sep
+        assert_eq!(options.null_value, None);
+        assert_eq!(options.null_regex, Some("MEOW".to_string()));
+        assert_eq!(options.terminator, Some(b'@'));
         assert_eq!(options.schema_infer_max_rec, Some(100));
-        assert_eq!(options.newlines_in_values, Some(true)); // multi_line
+        assert_eq!(options.newlines_in_values, Some(true));
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
-        // When inferSchema is false, schema_infer_max_rec should be set to 0
-        let kv = build_options(&[("inferSchema", "false")]);
-        let options = resolve_csv_read_options(&state, vec![kv])?;
+        let kv = option_list(&[("inferSchema", "false")]);
+        let options =
+            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
-        // When inferSchema is true (or not set), schema_infer_max_rec should keep its value
-        let kv = build_options(&[("inferSchema", "true")]);
-        let options = resolve_csv_read_options(&state, vec![kv])?;
-        // Default from YAML is 1000
+        let kv = option_list(&[("inferSchema", "true")]);
+        let options =
+            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(1000));
 
-        // When infer_schema is false with snake_case key
-        let kv = build_options(&[("infer_schema", "false")]);
-        let options = resolve_csv_read_options(&state, vec![kv])?;
+        let kv = option_list(&[("infer_schema", "false")]);
+        let options =
+            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
-        // infer_schema=false should override explicit schema_infer_max_records
-        let kv = build_options(&[
+        let kv = option_list(&[
             ("inferSchema", "false"),
             ("schema_infer_max_records", "500"),
         ]);
-        let options = resolve_csv_read_options(&state, vec![kv])?;
+        let options =
+            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
-        let kv = build_options(&[
-            ("delimiter", "!"),
-            ("quote", "("),
-            ("escape", "*"),
-            ("comment", "^"),
-            ("header", "true"),
-            ("null_value", "MEOW"),
-            ("null_regex", "MEOW"),
-            ("line_sep", "@"),
-            ("schema_infer_max_records", "100"),
-            ("multi_line", "true"),
-            ("compression", "bzip2"),
-        ]);
-        // null_value and null_regex cannot both be set
-        let result = resolve_csv_read_options(&state, vec![kv]);
+        let kv = option_list(&[("null_value", "MEOW"), ("null_regex", "MEOW")]);
+        let result = resolve_csv_read_options(vec![kv]);
         assert!(result.is_err());
 
-        let kv = build_options(&[
-            ("delimiter", "!"),
-            ("quote", "("),
-            ("escape", "*"),
-            ("comment", "^"),
-            ("header", "true"),
-            ("null_regex", "MEOW"),
-            ("line_sep", "@"),
-            ("schema_infer_max_records", "100"),
-            ("multi_line", "true"),
-            ("compression", "bzip2"),
-        ]);
-        let options = resolve_csv_read_options(&state, vec![kv])?;
-        assert_eq!(options.null_value, None); // This is for the writer
-        assert_eq!(options.null_regex, Some("MEOW".to_string())); // null_regex
+        let kv = option_list(&[("null_regex", "MEOW")]);
+        let options =
+            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.null_value, None);
+        assert_eq!(options.null_regex, Some("MEOW".to_string()));
 
         Ok(())
     }
 
     #[test]
     fn test_resolve_csv_write_options() -> datafusion_common::Result<()> {
-        let ctx = SessionContext::default();
-        let state = ctx.state();
-
-        let kv = build_options(&[
+        let kv = option_list(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),
@@ -258,11 +269,12 @@ mod tests {
             ("null_value", "MEOW"),
             ("compression", "bzip2"),
         ]);
-        let options = resolve_csv_write_options(&state, vec![kv])?;
+        let options = resolve_csv_write_options(vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
         assert_eq!(options.escape, Some(b'*'));
-        assert_eq!(options.double_quote, Some(true)); // escape_quotes
+        assert_eq!(options.double_quote, Some(true));
         assert_eq!(options.has_header, Some(true));
         assert_eq!(options.null_value, Some("MEOW".to_string()));
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);

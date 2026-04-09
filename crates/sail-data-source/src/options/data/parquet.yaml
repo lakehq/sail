@@ -68,6 +68,9 @@
   description: |
     (Reading) If specified, the reader will try to fetch the last `size_hint` bytes of the parquet file optimistically.
     Setting to 0 or empty clears the hint. Defaults to the session configuration option `parquet.metadata_size_hint`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_non_zero_usize
   supported: true
   rust_type: "Option<usize>"
   scopes:
@@ -212,6 +215,9 @@
   description: |
     (Reading) The maximum predicate cache size in bytes. Setting to 0 means no caching.
     Defaults to the session configuration option `parquet.max_predicate_cache_size`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_usize
   supported: true
   rust_type: "Option<usize>"
   scopes:
@@ -313,6 +319,9 @@
     (Writing) The default Parquet compression codec. Valid values are `uncompressed`, `snappy`,
     `gzip(level)`, `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`.
     Defaults to the session configuration option `parquet.compression`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
   supported: true
   rust_type: "Option<String>"
   scopes:
@@ -333,6 +342,9 @@
   description: |
     (Writing) Whether to enable dictionary encoding for the Parquet writer.
     Defaults to the session configuration option `parquet.dictionary_enabled`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_bool
   supported: true
   rust_type: "Option<bool>"
   scopes:
@@ -373,6 +385,9 @@
   description: |
     (Writing) Whether statistics are enabled for any column. Valid values are `none`, `chunk`, `page`.
     Defaults to the session configuration option `parquet.statistics_enabled`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
   supported: true
   rust_type: "Option<String>"
   scopes:
@@ -413,6 +428,9 @@
   description: |
     (Writing) The column index truncate length. Setting to 0 disables truncation.
     Defaults to the session configuration option `parquet.column_index_truncate_length`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_non_zero_usize
   supported: true
   rust_type: "Option<usize>"
   scopes:
@@ -433,6 +451,9 @@
   description: |
     (Writing) The statistics truncate length. Setting to 0 disables truncation.
     Defaults to the session configuration option `parquet.statistics_truncate_length`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_non_zero_usize
   supported: true
   rust_type: "Option<usize>"
   scopes:
@@ -473,6 +494,9 @@
   description: |
     (Writing) The default encoding for any column. Set to empty for automatic selection.
     Defaults to the session configuration option `parquet.encoding`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
   supported: true
   rust_type: "Option<String>"
   scopes:
@@ -511,6 +535,9 @@
   description: |
     (Writing) The false positive probability for bloom filters.
     Defaults to the session configuration option `parquet.bloom_filter_fpp`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_f64
   supported: true
   rust_type: "Option<f64>"
   scopes:
@@ -531,6 +558,9 @@
   description: |
     (Writing) The number of distinct values for bloom filters.
     Defaults to the session configuration option `parquet.bloom_filter_ndv`.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_u64
   supported: true
   rust_type: "Option<u64>"
   scopes:
