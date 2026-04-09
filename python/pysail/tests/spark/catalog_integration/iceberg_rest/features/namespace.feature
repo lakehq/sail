@@ -209,10 +209,10 @@ Feature: Iceberg REST catalog namespace (database) operations
       DESCRIBE DATABASE describe_ns_iceberg
       """
     Then query result ordered
-      | info_name      | info_value          |
-      | Namespace Name | describe_ns_iceberg |
-      | Comment        |                     |
-      | Location       |                     |
+      | info_name      | info_value                            |
+      | Namespace Name | describe_ns_iceberg                   |
+      | Comment        |                                       |
+      | Location       | s3://icebergdata/demo/describe_ns_iceberg |
 
   Scenario: Describe non-existent namespace raises error
     When query

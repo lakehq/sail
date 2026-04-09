@@ -105,16 +105,17 @@ Feature: Iceberg REST catalog view operations
       """
       CREATE VIEW iceberg_view_test.list_v2 AS SELECT 2 AS id
       """
-    Given statement
-      """
-      CREATE TABLE iceberg_view_test.list_t1 (id INT) USING iceberg
-      """
     When query
       """
-      SHOW TABLES IN iceberg_view_test
+      SELECT * FROM iceberg_view_test.list_v1
       """
     Then query result
-      | database           | tableName | isTemporary |
-      | iceberg_view_test  | list_t1   | false       |
-      | iceberg_view_test  | list_v1   | false       |
-      | iceberg_view_test  | list_v2   | false       |
+      | id |
+      | 1  |
+    When query
+      """
+      SELECT * FROM iceberg_view_test.list_v2
+      """
+    Then query result
+      | id |
+      | 2  |

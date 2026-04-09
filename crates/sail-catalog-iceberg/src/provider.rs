@@ -689,7 +689,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let DropDatabaseOptions { if_exists, cascade } = options;
 
         if cascade {
-            // For CASCADE, first drop all tables in the namespace before dropping the namespace.
+            // For CASCADE, first drop all tables and views in the namespace before dropping the namespace.
             let prefix = catalog_config
                 .props
                 .get(REST_CATALOG_PROP_PREFIX)
@@ -704,6 +704,18 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     let _ = client
                         .catalog_api_api()
                         .drop_table(&ns_string, &identifier.name, Some(false), prefix)
+                        .await;
+                }
+            }
+            let views_result = client
+                .catalog_api_api()
+                .list_views(&ns_string, None, None, prefix)
+                .await;
+            if let Ok(views) = views_result {
+                for identifier in views.identifiers.unwrap_or_default() {
+                    let _ = client
+                        .catalog_api_api()
+                        .drop_view(&ns_string, &identifier.name, prefix)
                         .await;
                 }
             }
