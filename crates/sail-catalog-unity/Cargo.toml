@@ -35,6 +35,7 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+testcontainers = { workspace = true }
 wiremock = { workspace = true }
 tempfile = { workspace = true }
 

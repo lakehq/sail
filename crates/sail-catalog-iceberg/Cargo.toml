@@ -36,3 +36,5 @@ tokio = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 wiremock = { workspace = true }
+testcontainers = { workspace = true }
+arrow = { workspace = true }
