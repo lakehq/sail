@@ -16,8 +16,3 @@ aws-config = { workspace = true }
 aws-sdk-glue = { workspace = true }
 aws-smithy-types = { workspace = true }
 tokio = { workspace = true }
-
-[dev-dependencies]
-arrow = { workspace = true }
-testcontainers = { workspace = true }
-tokio = { workspace = true, features = ["test-util"] }
