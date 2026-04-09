@@ -196,14 +196,17 @@ impl MergedType {
 }
 
 /// Split a string by top-level commas (respecting nested angle brackets).
+/// Uses a checked depth counter to avoid misparses on malformed input.
 fn split_top_level(s: &str) -> Vec<&str> {
     let mut results = Vec::new();
-    let mut depth = 0;
+    let mut depth: usize = 0;
     let mut start = 0;
     for (i, ch) in s.char_indices() {
         match ch {
             '<' => depth += 1,
-            '>' => depth -= 1,
+            '>' => {
+                depth = depth.saturating_sub(1);
+            }
             ',' if depth == 0 => {
                 results.push(s[start..i].trim());
                 start = i + 1;
