@@ -129,6 +129,14 @@
         - metadata_as_data_read
         - metadataAsDataRead
       parser: crate::options::parsers::parse_bool
+    # FIXME: We allow this option in table properties for testing purposes.
+    #   We may remove this later since this is not tied to the table itself.
+    #   We should eventually support read options via SQL hints.
+    - type: table_property
+      keys:
+        - metadata_as_data_read
+        - metadataAsDataRead
+      parser: crate::options::parsers::parse_bool
 
 - key: max_files_per_trigger
   description: |
