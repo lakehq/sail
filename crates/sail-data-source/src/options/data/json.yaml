@@ -1,0 +1,68 @@
+# References:
+#   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-json.html#data-source-option
+
+- key: schema_infer_max_records
+  description: |
+    The maximum number of rows to read from JSON files for schema inference if needed.
+  default:
+    value: "1000"
+    parser: crate::options::parsers::parse_usize
+  supported: true
+  rust_type: usize
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - schema_infer_max_records
+        - schemaInferMaxRecords
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.schema_infer_max_records
+        - option.schemaInferMaxRecords
+      parser: crate::options::parsers::parse_usize
+
+- key: compression
+  description: |
+    Specifies the file compression type for reading.
+  default:
+    value: "UNCOMPRESSED"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - compression
+        - codec
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.compression
+        - option.codec
+      parser: crate::options::parsers::parse_string
+
+- key: compression
+  description: |
+    Specifies the file compression type for writing.
+  default:
+    value: "UNCOMPRESSED"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - compression
+        - codec
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.compression
+        - option.codec
+      parser: crate::options::parsers::parse_string

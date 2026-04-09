@@ -1,0 +1,333 @@
+# References:
+#   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-csv.html#data-source-option
+
+# TODO: Delimiter can be one or more characters
+- key: delimiter
+  description: |
+    Sets a single character separator for each field and value.
+  default:
+    value: ","
+    parser: crate::options::parsers::parse_char
+  supported: true
+  rust_type: char
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - delimiter
+        - sep
+      parser: crate::options::parsers::parse_char
+    - type: table_property
+      keys:
+        - option.delimiter
+        - option.sep
+      parser: crate::options::parsers::parse_char
+
+- key: quote
+  description: |
+    Sets a single character used for escaping quoted values where the delimiter can be part of the value.
+  default:
+    value: "\""
+    parser: crate::options::parsers::parse_optional_char
+  supported: true
+  rust_type: "Option<char>"
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - quote
+      parser: crate::options::parsers::parse_optional_char
+    - type: table_property
+      keys:
+        - option.quote
+      parser: crate::options::parsers::parse_optional_char
+
+- key: escape
+  description: |
+    Sets a single character used for escaping quotes inside an already quoted value.
+  default:
+    value: "\\"
+    parser: crate::options::parsers::parse_optional_char
+  supported: true
+  rust_type: "Option<char>"
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - escape
+      parser: crate::options::parsers::parse_optional_char
+    - type: table_property
+      keys:
+        - option.escape
+      parser: crate::options::parsers::parse_optional_char
+
+- key: header
+  description: |
+    For reading, uses the first line as names of columns.
+    For writing, writes the names of columns as the first line.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - header
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.header
+      parser: crate::options::parsers::parse_bool
+
+- key: null_value
+  description: |
+    Sets the string representation of a null value.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - null_value
+        - nullValue
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.null_value
+        - option.nullValue
+      parser: crate::options::parsers::parse_string
+
+- key: comment
+  description: |
+    Sets a single character used for skipping lines beginning with this character. By default, disabled.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_char
+  supported: true
+  rust_type: "Option<char>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - comment
+      parser: crate::options::parsers::parse_optional_char
+    - type: table_property
+      keys:
+        - option.comment
+      parser: crate::options::parsers::parse_optional_char
+
+- key: null_regex
+  description: |
+    Optional regex to match null values. Throws an exception if `null_value` is also set.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - null_regex
+        - nullRegex
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.null_regex
+        - option.nullRegex
+      parser: crate::options::parsers::parse_string
+
+- key: line_sep
+  description: |
+    Sets the single character line separator for reading. Defaults to None (CRLF/LF/CR).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_char
+  supported: true
+  rust_type: "Option<char>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - line_sep
+        - lineSep
+        - terminator
+      parser: crate::options::parsers::parse_optional_char
+    - type: table_property
+      keys:
+        - option.line_sep
+        - option.lineSep
+        - option.terminator
+      parser: crate::options::parsers::parse_optional_char
+
+- key: infer_schema
+  description: |
+    Infers the input schema automatically from data.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - infer_schema
+        - inferSchema
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.infer_schema
+        - option.inferSchema
+      parser: crate::options::parsers::parse_bool
+
+- key: schema_infer_max_records
+  description: |
+    The maximum number of rows to read from CSV files for schema inference if needed.
+  default:
+    value: "1000"
+    parser: crate::options::parsers::parse_usize
+  supported: true
+  rust_type: usize
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - schema_infer_max_records
+        - schemaInferMaxRecords
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.schema_infer_max_records
+        - option.schemaInferMaxRecords
+      parser: crate::options::parsers::parse_usize
+
+- key: multi_line
+  description: |
+    Specifies whether newlines in quoted values are supported.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - multi_line
+        - multiLine
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.multi_line
+        - option.multiLine
+      parser: crate::options::parsers::parse_bool
+
+- key: compression
+  description: |
+    Specifies the file compression type for reading.
+  default:
+    value: "UNCOMPRESSED"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - compression
+        - codec
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.compression
+        - option.codec
+      parser: crate::options::parsers::parse_string
+
+- key: allow_truncated_rows
+  description: |
+    Whether rows with fewer columns should be allowed.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_truncated_rows
+        - allowTruncatedRows
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_truncated_rows
+        - option.allowTruncatedRows
+      parser: crate::options::parsers::parse_bool
+
+- key: escape_quotes
+  description: |
+    A flag indicating whether values containing quotes should always be enclosed in quotes.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - escape_quotes
+        - escapeQuotes
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.escape_quotes
+        - option.escapeQuotes
+      parser: crate::options::parsers::parse_bool
+
+- key: compression
+  description: |
+    Specifies the file compression type for writing.
+  default:
+    value: "UNCOMPRESSED"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - compression
+        - codec
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.compression
+        - option.codec
+      parser: crate::options::parsers::parse_string
