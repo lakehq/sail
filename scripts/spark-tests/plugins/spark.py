@@ -197,10 +197,6 @@ SKIPPED_SPARK_TESTS = [
         reason="Client keeps retrying setting session config for invalid remote endpoints",
     ),
     TestMarker(
-        keywords=["test_connect_session.py", "test_custom_channel_builder"],
-        reason="Flaky test that can hang during session shutdown",
-    ),
-    TestMarker(
         keywords=["TorchDistributorDataLoaderUnitTests", "test_data_loader"],
         reason="Flaky test",
     ),
