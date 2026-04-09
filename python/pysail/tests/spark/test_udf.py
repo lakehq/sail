@@ -44,3 +44,9 @@ def test_implicit_binary_casting_string_type(spark):
 
     df = spark.sql("SELECT '1' as a").select(udf(lambda x: [x], returnType="array<binary>")("a").alias("b"))
     assert df.collect() == [Row(b=[bytearray(b"1")])]
+
+
+@pytest.mark.usefixtures("arrow")
+def test_array_return_type(spark):
+    df = spark.sql("SELECT 1 as a").select(udf(lambda x: [x], returnType="array<int>")("a").alias("b"))
+    assert df.collect() == [Row(b=[1])]
