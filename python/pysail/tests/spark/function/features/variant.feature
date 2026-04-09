@@ -928,3 +928,4 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
       Then query result
         | result |
         | null   |
+
