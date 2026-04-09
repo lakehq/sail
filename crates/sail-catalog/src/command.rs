@@ -513,8 +513,9 @@ impl CatalogCommand {
                     let props = if status.properties.is_empty() {
                         String::new()
                     } else {
-                        let entries: Vec<String> = status
-                            .properties
+                        let mut sorted_props = status.properties.clone();
+                        sorted_props.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        let entries: Vec<String> = sorted_props
                             .iter()
                             .map(|(k, v)| format!("({k},{v})"))
                             .collect();
