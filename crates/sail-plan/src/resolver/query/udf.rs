@@ -67,6 +67,7 @@ impl PlanResolver<'_> {
             // MapPartitions UDF has the iterator as the only argument
             &[0],
             &[], // map partitions don't use kwargs
+            &[], // input types not needed for map partitions
             &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
@@ -210,6 +211,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             &offsets,
             &[], // group map UDFs don't use kwargs
+            &input_types,
             &self.config.pyspark_udf_config,
         )?;
         let udaf = PySparkGroupMapUDF::new(
@@ -341,6 +343,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             &offsets,
             &[], // cogroup map UDFs don't use kwargs
+            &[], // input types not needed for cogroup map
             &self.config.pyspark_udf_config,
         )?;
         let udf = PySparkCoGroupMapUDF::try_new(

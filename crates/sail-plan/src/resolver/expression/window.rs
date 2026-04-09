@@ -139,6 +139,7 @@ impl PlanResolver<'_> {
                     function.eval_type,
                     &((0..arguments.len()).collect::<Vec<_>>()),
                     &kwargs,
+                    &input_types,
                     &self.config.pyspark_udf_config,
                 )?;
                 let (function, arguments) = match function.eval_type {
