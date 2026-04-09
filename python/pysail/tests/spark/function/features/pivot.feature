@@ -245,3 +245,57 @@ Feature: PIVOT rotates rows into columns with aggregation
         | grp | x | y |
         | A   | 2 | 1 |
         | B   | 1 | 0 |
+
+  Rule: Pivot with NULL pivot category
+
+    Scenario: pivot with NULL in pivot column values
+      Given statement
+        """
+        CREATE OR REPLACE TEMPORARY VIEW data AS
+        SELECT * FROM VALUES
+          ('A', 1, 10),
+          ('A', CAST(NULL AS INT), 20),
+          ('B', 1, 30),
+          ('B', CAST(NULL AS INT), 40)
+        AS t(grp, cat, val)
+        """
+      When query
+        """
+        SELECT * FROM data
+        PIVOT (
+          SUM(val)
+          FOR (cat) IN (1, NULL)
+        )
+        ORDER BY grp
+        """
+      Then query result ordered
+        | grp | 1  | NULL |
+        | A   | 10 | 20   |
+        | B   | 30 | 40   |
+
+  Rule: Pivot with count star aggregate
+
+    Scenario: pivot count star
+      Given statement
+        """
+        CREATE OR REPLACE TEMPORARY VIEW data AS
+        SELECT * FROM VALUES
+          ('A', 'x'),
+          ('A', 'x'),
+          ('A', 'y'),
+          ('B', 'x')
+        AS t(grp, cat)
+        """
+      When query
+        """
+        SELECT * FROM data
+        PIVOT (
+          COUNT(*)
+          FOR (cat) IN ('x', 'y')
+        )
+        ORDER BY grp
+        """
+      Then query result ordered
+        | grp | x | y |
+        | A   | 2 | 1 |
+        | B   | 1 | 0 |

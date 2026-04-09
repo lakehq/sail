@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
     col, expr, lit, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, ScalarUDF,
@@ -117,8 +117,8 @@ impl PlanResolver<'_> {
         };
 
         // 6. Build the pivot aggregates.
-        //    For each pivot value and each aggregate function, create:
-        //    agg_func(CASE WHEN pivot_col = value THEN agg_arg END)
+        //    For each pivot value and each aggregate function, add a filter predicate:
+        //    agg_func(...) FILTER (WHERE pivot_col = value)
         let mut pivot_projections: Vec<NamedExpr> = Vec::new();
         let single_agg = aggregate_named.len() == 1;
 
@@ -378,65 +378,67 @@ fn types_are_coercible(data_types: &[DataType]) -> bool {
 }
 
 /// Rewrite an aggregate expression to include a pivot filter.
-/// For a given aggregate like `sum(col)`, this produces:
-/// `sum(CASE WHEN pivot_col = value THEN col END)`
+/// Instead of wrapping aggregate arguments in CASE WHEN, this uses the
+/// aggregate function's `filter` parameter: `agg_func(...) FILTER (WHERE pivot_col = value)`.
+/// This approach correctly handles nested/composed aggregates (e.g. `sum(x) + 1`),
+/// `count(*)`, and preserves correct semantics for all aggregate types.
 ///
-/// For expressions that contain aggregate functions, the CASE WHEN is pushed
-/// into the aggregate function arguments. For bare column references or other
-/// expressions, the whole expression is wrapped in a CASE WHEN.
+/// The function walks the expression tree (bottom-up) and rewrites each
+/// `AggregateFunction` node, combining any pre-existing filter with the pivot
+/// predicate via AND.  Top-level aliases are stripped because the caller
+/// controls output column naming.
 fn rewrite_aggregate_with_pivot_filter(
     agg_expr: &Expr,
     pivot_col: &Expr,
     pivot_value: &ScalarValue,
 ) -> PlanResult<Expr> {
-    match agg_expr {
-        Expr::AggregateFunction(agg_func) => {
-            let filtered_args = agg_func
-                .params
-                .args
-                .iter()
-                .map(|arg| wrap_with_case_when(arg.clone(), pivot_col, pivot_value))
-                .collect();
-            Ok(Expr::AggregateFunction(expr::AggregateFunction {
-                func: agg_func.func.clone(),
-                params: expr::AggregateFunctionParams {
-                    args: filtered_args,
-                    distinct: agg_func.params.distinct,
-                    filter: agg_func.params.filter.clone(),
-                    order_by: agg_func.params.order_by.clone(),
-                    null_treatment: agg_func.params.null_treatment,
-                },
-            }))
-        }
-        Expr::Alias(alias) => {
-            let inner = rewrite_aggregate_with_pivot_filter(&alias.expr, pivot_col, pivot_value)?;
-            Ok(inner)
-        }
-        _ => {
-            // For non-aggregate expressions, just wrap the whole thing.
-            Ok(wrap_with_case_when(
-                agg_expr.clone(),
-                pivot_col,
-                pivot_value,
-            ))
-        }
-    }
+    let pivot_predicate = build_pivot_predicate(pivot_col, pivot_value);
+    // Use transform_up so that inner AggregateFunction nodes are rewritten
+    // before outer Alias nodes are stripped.
+    let result = agg_expr
+        .clone()
+        .transform_up(|e| match e {
+            Expr::AggregateFunction(agg_func) => {
+                let new_filter = match &agg_func.params.filter {
+                    Some(existing) => {
+                        Box::new(existing.as_ref().clone().and(pivot_predicate.clone()))
+                    }
+                    None => Box::new(pivot_predicate.clone()),
+                };
+                Ok(Transformed::yes(Expr::AggregateFunction(
+                    expr::AggregateFunction {
+                        func: agg_func.func,
+                        params: expr::AggregateFunctionParams {
+                            args: agg_func.params.args,
+                            distinct: agg_func.params.distinct,
+                            filter: Some(new_filter),
+                            order_by: agg_func.params.order_by,
+                            null_treatment: agg_func.params.null_treatment,
+                        },
+                    },
+                )))
+            }
+            Expr::Alias(alias) => {
+                // Strip aliases; the caller controls output column naming.
+                Ok(Transformed::yes(*alias.expr))
+            }
+            other => Ok(Transformed::no(other)),
+        })
+        .data()?;
+    Ok(result)
 }
 
-/// Wrap an expression with `CASE WHEN pivot_col = value THEN expr END`.
-fn wrap_with_case_when(expr: Expr, pivot_col: &Expr, pivot_value: &ScalarValue) -> Expr {
-    Expr::Case(expr::Case {
-        expr: None,
-        when_then_expr: vec![(
-            Box::new(
-                pivot_col
-                    .clone()
-                    .eq(Expr::Literal(pivot_value.clone(), None)),
-            ),
-            Box::new(expr),
-        )],
-        else_expr: None,
-    })
+/// Build the predicate expression for pivot filtering.
+/// Uses `IS NULL` for NULL pivot values (since `col = NULL` is always NULL in SQL)
+/// and standard equality for non-NULL values.
+fn build_pivot_predicate(pivot_col: &Expr, pivot_value: &ScalarValue) -> Expr {
+    if pivot_value.is_null() {
+        pivot_col.clone().is_null()
+    } else {
+        pivot_col
+            .clone()
+            .eq(Expr::Literal(pivot_value.clone(), None))
+    }
 }
 
 /// Collect all column names referenced by an expression.
