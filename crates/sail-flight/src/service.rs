@@ -313,6 +313,10 @@ impl SailFlightSqlService {
     }
 
     /// Wrap an async operation with metrics reporting (active query count, duration, status).
+    ///
+    /// Row count is not tracked here because the wrapped function may return a stream whose
+    /// rows are consumed lazily by the caller; callers that need row-level metrics should
+    /// record them separately after consuming the result.
     async fn execute_with_metrics_reporting<F, Fut, T>(
         &self,
         query_type: &'static str,
