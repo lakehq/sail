@@ -16,9 +16,9 @@ if TYPE_CHECKING:
 @pytest.fixture(autouse=True)
 def _iceberg_table_ns(iceberg_spark: SparkSession):
     """Create and clean up a test namespace for table tests."""
-    iceberg_spark.sql("CREATE NAMESPACE IF NOT EXISTS iceberg_table_test")
+    iceberg_spark.sql("CREATE DATABASE IF NOT EXISTS iceberg_table_test")
     yield
-    iceberg_spark.sql("DROP NAMESPACE IF EXISTS iceberg_table_test CASCADE")
+    iceberg_spark.sql("DROP DATABASE IF EXISTS iceberg_table_test CASCADE")
 
 
 class TestCreateTable:

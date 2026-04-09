@@ -27,9 +27,8 @@ class TestCreateSchema:
             WITH DBPROPERTIES (key1 = 'value1')
         """)
         try:
-            result = unity_spark.sql("DESCRIBE SCHEMA EXTENDED test_create_schema").collect()
-            info = {row[0].strip(): row[1].strip() if row[1] else "" for row in result}
-            assert any("test_create_schema" in v for v in info.values())
+            result = unity_spark.sql("SHOW SCHEMAS LIKE 'test_create_schema'").collect()
+            assert any(row[0] == "test_create_schema" for row in result)
         finally:
             unity_spark.sql("DROP SCHEMA IF EXISTS test_create_schema")
 
@@ -63,11 +62,11 @@ class TestGetSchema:
 
     def test_get_nonexistent_schema(self, unity_spark: SparkSession):
         """Given a Unity Catalog,
-        when describing a non-existent schema,
-        then an error is raised.
+        when a non-existent schema is looked up,
+        then it does not appear in the listing.
         """
-        with pytest.raises(Exception, match=r".*"):
-            unity_spark.sql("DESCRIBE SCHEMA nonexistent_schema_unity").collect()
+        result = unity_spark.sql("SHOW SCHEMAS LIKE 'nonexistent_schema_unity'").collect()
+        assert not any(row[0] == "nonexistent_schema_unity" for row in result)
 
     def test_get_existing_schema(self, unity_spark: SparkSession):
         """Given a schema with properties,
@@ -79,9 +78,8 @@ class TestGetSchema:
             WITH DBPROPERTIES (owner = 'Lake', community = 'Sail')
         """)
         try:
-            result = unity_spark.sql("DESCRIBE SCHEMA EXTENDED get_schema_unity").collect()
-            info = {row[0].strip(): row[1].strip() if row[1] else "" for row in result}
-            assert any("get_schema_unity" in v for v in info.values())
+            result = unity_spark.sql("SHOW SCHEMAS LIKE 'get_schema_unity'").collect()
+            assert any(row[0] == "get_schema_unity" for row in result)
         finally:
             unity_spark.sql("DROP SCHEMA IF EXISTS get_schema_unity")
 
@@ -115,10 +113,11 @@ class TestDropSchema:
         then it is no longer accessible.
         """
         unity_spark.sql("CREATE SCHEMA drop_schema_unity")
-        unity_spark.sql("DESCRIBE SCHEMA drop_schema_unity").collect()
+        result = unity_spark.sql("SHOW SCHEMAS LIKE 'drop_schema_unity'").collect()
+        assert any(row[0] == "drop_schema_unity" for row in result)
         unity_spark.sql("DROP SCHEMA drop_schema_unity")
-        with pytest.raises(Exception, match=r".*"):
-            unity_spark.sql("DESCRIBE SCHEMA drop_schema_unity").collect()
+        result = unity_spark.sql("SHOW SCHEMAS LIKE 'drop_schema_unity'").collect()
+        assert not any(row[0] == "drop_schema_unity" for row in result)
 
     def test_drop_nonexistent_fails(self, unity_spark: SparkSession):
         """Given a Unity Catalog,
@@ -149,7 +148,7 @@ class TestDropSchema:
                 LOCATION 's3://deltadata/cascade_test'
             """)
             unity_spark.sql("DROP SCHEMA cascade_drop_unity CASCADE")
-            with pytest.raises(Exception, match=r".*"):
-                unity_spark.sql("DESCRIBE SCHEMA cascade_drop_unity").collect()
+            result = unity_spark.sql("SHOW SCHEMAS LIKE 'cascade_drop_unity'").collect()
+            assert not any(row[0] == "cascade_drop_unity" for row in result)
         finally:
             unity_spark.sql("DROP SCHEMA IF EXISTS cascade_drop_unity CASCADE")

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 def _table_test_db(glue_spark: SparkSession):
     """Create and clean up a test database for table tests."""
     glue_spark.sql("CREATE DATABASE IF NOT EXISTS table_test_db")
-    glue_spark.sql("USE table_test_db")
+    glue_spark.sql("USE DATABASE table_test_db")
     yield
     glue_spark.sql("DROP DATABASE IF EXISTS table_test_db CASCADE")
 
