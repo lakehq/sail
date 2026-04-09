@@ -161,20 +161,18 @@ pub(crate) fn variant_to_spark_type(variant: &Variant) -> String {
             if list.is_empty() {
                 return "ARRAY<VOID>".to_string();
             }
-            // Check if all elements have the same type
-            let mut element_types: Vec<String> = Vec::new();
-            for elem in list.iter() {
-                let ty = variant_to_spark_type(&elem);
-                if !element_types.contains(&ty) {
-                    element_types.push(ty);
+            // Check if all elements have the same type. Early return on first mismatch.
+            // Safety: list is non-empty (empty case handled above).
+            let Some(first) = list.get(0) else {
+                return "ARRAY<VOID>".to_string();
+            };
+            let first_type = variant_to_spark_type(&first);
+            for elem in list.iter().skip(1) {
+                if variant_to_spark_type(&elem) != first_type {
+                    return "ARRAY<VARIANT>".to_string();
                 }
             }
-            if element_types.len() == 1 {
-                format!("ARRAY<{}>", element_types[0])
-            } else {
-                // Mixed types → VARIANT
-                "ARRAY<VARIANT>".to_string()
-            }
+            format!("ARRAY<{}>", first_type)
         }
     }
 }
