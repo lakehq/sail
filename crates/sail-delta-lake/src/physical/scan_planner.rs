@@ -57,49 +57,66 @@ pub(crate) async fn plan_delta_scan(
         Some(schema.clone()),
     )?;
     let table_partition_cols = snapshot.metadata().partition_columns().clone();
-    let (logical_schema, scan_projection, projection_prefix_len) =
-        if let Some(used_columns) = projection {
-            let mut scan_projection = used_columns.to_vec();
-            let filter_expr = conjunction(filters.iter().cloned());
-
-            // Partition-filter columns can be removed from the original projection by the optimizer,
-            // but they still need to be present for predicate pruning and scan planning.
-            if let Some(expr) = &filter_expr {
-                for column in expr.column_refs() {
-                    let idx = full_logical_schema.index_of(column.name.as_str())?;
-                    if !scan_projection.contains(&idx) {
-                        scan_projection.push(idx);
-                    }
+    let logical_schema = if let Some(used_columns) = projection {
+        let mut fields = vec![];
+        for idx in used_columns {
+            fields.push(full_logical_schema.field(*idx).to_owned());
+        }
+        // partition filters with Exact pushdown were removed from projection by DF optimizer,
+        // we need to add them back for the predicate pruning to work
+        let filter_expr = conjunction(filters.iter().cloned());
+        if let Some(expr) = &filter_expr {
+            for c in expr.column_refs() {
+                let idx = full_logical_schema.index_of(c.name.as_str())?;
+                if !used_columns.contains(&idx) {
+                    fields.push(full_logical_schema.field(idx).to_owned());
                 }
             }
-
-            for partition_col in &table_partition_cols {
-                if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
-                    if !scan_projection.contains(&idx) {
-                        scan_projection.push(idx);
-                    }
+        }
+        // Ensure all partition columns are included in logical schema
+        for partition_col in table_partition_cols.iter() {
+            if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
+                if !used_columns.contains(&idx) && !fields.iter().any(|f| f.name() == partition_col)
+                {
+                    fields.push(full_logical_schema.field(idx).to_owned());
                 }
             }
+        }
+        Arc::new(ArrowSchema::new(fields))
+    } else {
+        Arc::clone(&full_logical_schema)
+    };
 
-            let fields = scan_projection
-                .iter()
-                .map(|idx| full_logical_schema.field(*idx).to_owned())
-                .collect::<Vec<_>>();
-            (
-                Arc::new(ArrowSchema::new(fields)),
-                Some(scan_projection),
-                Some(used_columns.len()),
-            )
-        } else {
-            (Arc::clone(&full_logical_schema), None, None)
-        };
+    let (scan_projection, projection_prefix_len) = if let Some(used_columns) = projection {
+        let mut scan_projection = used_columns.clone();
+        let filter_expr = conjunction(filters.iter().cloned());
+        if let Some(expr) = &filter_expr {
+            for c in expr.column_refs() {
+                let idx = full_logical_schema.index_of(c.name.as_str())?;
+                if !scan_projection.contains(&idx) {
+                    scan_projection.push(idx);
+                }
+            }
+        }
+        for partition_col in table_partition_cols.iter() {
+            if let Ok(idx) = full_logical_schema.index_of(partition_col.as_str()) {
+                if !scan_projection.contains(&idx) {
+                    scan_projection.push(idx);
+                }
+            }
+        }
+        (Some(scan_projection), Some(used_columns.len()))
+    } else {
+        (None, None)
+    };
 
     // Separate filters for pruning vs pushdown.
     //
     // Exact and Inexact filters are used for pruning; Inexact are additionally pushed down.
+    let partition_cols = &table_partition_cols;
     let predicates: Vec<&Expr> = filters.iter().collect();
     let pushdown_filters =
-        crate::datasource::get_pushdown_filters(&predicates, &table_partition_cols);
+        crate::datasource::get_pushdown_filters(&predicates, partition_cols.as_slice());
 
     let mut pruning_filters = Vec::new();
     let mut parquet_pushdown_filters = Vec::new();
@@ -134,7 +151,7 @@ pub(crate) async fn plan_delta_scan(
         None
     };
 
-    let (files, pruning_mask) = match files {
+    let (files, pruning_mask): (Option<Arc<Vec<Add>>>, Option<Vec<bool>>) = match files {
         Some(files) => {
             if let Some(predicate) = pruning_predicate.as_ref() {
                 let source_files = files.as_ref().clone();
@@ -147,7 +164,7 @@ pub(crate) async fn plan_delta_scan(
                     .into_iter()
                     .zip(pruning_mask.iter().copied())
                     .filter_map(|(add, keep)| keep.then_some(add))
-                    .collect::<Vec<Add>>();
+                    .collect::<Vec<_>>();
                 (Some(Arc::new(pruned_files)), Some(pruning_mask))
             } else {
                 (Some(files), None)
@@ -166,6 +183,7 @@ pub(crate) async fn plan_delta_scan(
         .into_iter()
         .map(|(_, physical)| physical)
         .collect();
+
     let file_fields = physical_arrow
         .fields()
         .iter()
