@@ -249,6 +249,9 @@ pub(crate) async fn plan_delta_scan(
     // should ideally come from read options or a dedicated configuration.
     let mut partial = DeltaWritePartialOptions::initialize();
     partial.delta_log_replay_strategy = Some(config.delta_log_replay_strategy);
+    // NonZeroUsize::new returns None for zero, causing finalize() to use the YAML default (100).
+    // A zero threshold is invalid and should not occur in practice since the option is now
+    // parsed with parse_non_zero_usize; falling back to the default is safe behavior.
     partial.delta_log_replay_hash_threshold =
         std::num::NonZeroUsize::new(config.delta_log_replay_hash_threshold);
     let planner_options = partial
