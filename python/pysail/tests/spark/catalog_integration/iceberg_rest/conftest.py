@@ -37,11 +37,24 @@ def docker_network() -> Generator[Network, None, None]:
 
 
 @pytest.fixture(scope="module")
-def seaweedfs_container(docker_network: Network) -> Generator[DockerContainer, None, None]:
+def seaweedfs_container(
+    docker_network: Network,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[DockerContainer, None, None]:
     """Start a SeaweedFS container with S3 API enabled."""
+    # Write S3 IAM config so signed S3 requests with admin/password are accepted.
+    s3_config = (
+        '{"identities":[{"name":"admin","credentials":[{"accessKey":"admin","secretKey":"password"}]'
+        ',"actions":["Admin","Read","Write"]}]}'
+    )
+    tmp_dir = tmp_path_factory.mktemp("seaweedfs")
+    config_path = tmp_dir / "s3_config.json"
+    config_path.write_text(s3_config)
+
     container = (
         DockerContainer("chrislusf/seaweedfs:latest")
-        .with_command("server -s3 -s3.port=8333 -master.volumeSizeLimitMB=64")
+        .with_command("server -s3 -s3.port=8333 -master.volumeSizeLimitMB=64 -s3.config=/etc/seaweedfs/s3_config.json")
+        .with_volume_mapping(str(config_path), "/etc/seaweedfs/s3_config.json", "ro")
         .with_exposed_ports(8333)
         .with_network(docker_network)
         .with_network_aliases("seaweedfs")
@@ -112,6 +125,7 @@ def iceberg_rest_container(
         .with_env("CATALOG_WAREHOUSE", "s3://icebergdata/demo")
         .with_env("CATALOG_IO__IMPL", "org.apache.iceberg.aws.s3.S3FileIO")
         .with_env("CATALOG_S3_ENDPOINT", seaweedfs_internal_endpoint)
+        .with_env("CATALOG_S3_PATH__STYLE__ACCESS", "true")
         .with_network(docker_network)
         .with_network_aliases("iceberg-rest")
     )
@@ -139,3 +153,9 @@ def iceberg_spark(iceberg_rest_endpoint: str) -> Generator[SparkSession, None, N
     with contextlib.suppress(Exception):
         spark.stop()
     stop_sail_server(server, saved_env)
+
+
+@pytest.fixture(scope="module")
+def spark(iceberg_spark: SparkSession) -> SparkSession:
+    """Alias for iceberg_spark, used by BDD step definitions."""
+    return iceberg_spark

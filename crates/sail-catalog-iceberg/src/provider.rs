@@ -686,10 +686,28 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     ) -> CatalogResult<()> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
-        let DropDatabaseOptions {
-            if_exists,
-            cascade: _,
-        } = options;
+        let DropDatabaseOptions { if_exists, cascade } = options;
+
+        if cascade {
+            // For CASCADE, first drop all tables in the namespace before dropping the namespace.
+            let prefix = catalog_config
+                .props
+                .get(REST_CATALOG_PROP_PREFIX)
+                .map(|s| s.as_str());
+            let ns_string = Self::namespace_string(database);
+            let tables_result = client
+                .catalog_api_api()
+                .list_tables(&ns_string, None, None, prefix)
+                .await;
+            if let Ok(tables) = tables_result {
+                for identifier in tables.identifiers.unwrap_or_default() {
+                    let _ = client
+                        .catalog_api_api()
+                        .drop_table(&ns_string, &identifier.name, Some(false), prefix)
+                        .await;
+                }
+            }
+        }
 
         match client
             .catalog_api_api()
