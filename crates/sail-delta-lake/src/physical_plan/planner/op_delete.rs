@@ -27,6 +27,7 @@ use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
     DeltaDiscoveryExec, DeltaPhysicalExprAdapterFactory, DeltaScanByAddsExec,
+    DeltaWriterExecOptions,
 };
 
 pub async fn build_delete_plan(
@@ -120,7 +121,7 @@ pub async fn build_delete_plan(
         filter_exec,
         Some(find_files_exec),
         ctx.table_url().clone(),
-        ctx.options().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone()),
         ctx.metadata_configuration().clone(),
         partition_columns,
         ctx.table_exists(),

@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::kernel::snapshot::SnapshotPruningStats;
-use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategyOption};
+use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategy};
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaSnapshot;
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
@@ -100,7 +100,7 @@ pub struct DeltaScanConfigBuilder {
     /// Column name that contains the commit timestamp.
     commit_timestamp_column_name: Option<String>,
     /// Strategy for log replay planning.
-    delta_log_replay_strategy: DeltaLogReplayStrategyOption,
+    delta_log_replay_strategy: DeltaLogReplayStrategy,
     /// Threshold for auto replay strategy.
     delta_log_replay_hash_threshold: usize,
 }
@@ -116,7 +116,7 @@ impl Default for DeltaScanConfigBuilder {
             include_commit_metadata: false,
             commit_version_column_name: None,
             commit_timestamp_column_name: None,
-            delta_log_replay_strategy: DeltaLogReplayStrategyOption::Auto,
+            delta_log_replay_strategy: DeltaLogReplayStrategy::Auto,
             delta_log_replay_hash_threshold: 100,
         }
     }
@@ -149,10 +149,7 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Configure replay strategy for log replay planning.
-    pub fn with_delta_log_replay_strategy(
-        mut self,
-        strategy: DeltaLogReplayStrategyOption,
-    ) -> Self {
+    pub fn with_delta_log_replay_strategy(mut self, strategy: DeltaLogReplayStrategy) -> Self {
         self.delta_log_replay_strategy = strategy;
         self
     }
@@ -273,7 +270,7 @@ pub struct DeltaScanConfig {
     pub commit_timestamp_column_name: Option<String>,
     /// Strategy for log replay planning.
     #[serde(default)]
-    pub delta_log_replay_strategy: DeltaLogReplayStrategyOption,
+    pub delta_log_replay_strategy: DeltaLogReplayStrategy,
     /// Threshold for `Auto` replay strategy.
     #[serde(default = "default_delta_log_replay_hash_threshold")]
     pub delta_log_replay_hash_threshold: usize,

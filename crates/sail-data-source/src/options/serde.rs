@@ -111,14 +111,3 @@ where
         .map_err(|e| Error::custom(format!("invalid u64 value: {e}")))?;
     Ok(Some(value))
 }
-
-pub fn deserialize_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    let value = value
-        .parse()
-        .map_err(|e| Error::custom(format!("invalid i64 value: {e}")))?;
-    Ok(Some(value))
-}

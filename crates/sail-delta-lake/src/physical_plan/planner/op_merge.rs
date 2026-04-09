@@ -25,6 +25,7 @@ use sail_common_datafusion::datasource::{
     MergePredicateInfo, OperationOverride, RowLevelWriteInfo,
 };
 
+use super::super::writer_options::DeltaWriterExecOptions;
 use super::commit::{assemble_commit_plan, build_remove_from_touched_files};
 use super::context::PlannerContext;
 use crate::datasource::PATH_COLUMN;
@@ -53,7 +54,7 @@ pub async fn build_merge_plan(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
-    let mut options = ctx.options().clone();
+    let mut options = DeltaWriterExecOptions::from(ctx.options().clone());
     if merge_info.with_schema_evolution {
         options.merge_schema = true;
     }

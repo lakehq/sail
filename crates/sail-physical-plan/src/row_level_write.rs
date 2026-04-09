@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::execution::SessionState;
@@ -6,16 +5,16 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::{internal_err, Result};
 use sail_common_datafusion::datasource::{
-    MergePredicateInfo, OperationOverride, RowLevelCommand, RowLevelTargetInfo, RowLevelWriteInfo,
-    TableFormatRegistry,
+    MergePredicateInfo, OperationOverride, OptionLayer, RowLevelCommand, RowLevelTargetInfo,
+    RowLevelWriteInfo, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::merge::RowLevelWriteNode;
 
-fn convert_options(options: &[Vec<(String, String)>]) -> Vec<HashMap<String, String>> {
+fn convert_options(options: &[Vec<(String, String)>]) -> Vec<OptionLayer> {
     options
         .iter()
-        .map(|set| set.iter().cloned().collect::<HashMap<_, _>>())
+        .map(|set| OptionLayer::OptionList { items: set.clone() })
         .collect()
 }
 

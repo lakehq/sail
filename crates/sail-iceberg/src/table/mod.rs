@@ -18,12 +18,12 @@ use datafusion::common::{DataFusionError, Result};
 pub use metadata_loader::find_latest_metadata_file;
 use object_store::path::Path as ObjectPath;
 use object_store::ObjectStoreExt;
+use sail_data_source::options::gen::IcebergReadOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
 use crate::io::StoreContext;
 use crate::operations::Transaction;
-use crate::options::TableIcebergOptions;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 
@@ -85,14 +85,14 @@ impl Table {
     /// Prepare scan components (schema, snapshot, partition specs) for the given options.
     pub fn scan_state(
         &self,
-        options: &TableIcebergOptions,
+        options: &IcebergReadOptions,
     ) -> Result<(Schema, Snapshot, Vec<PartitionSpec>)> {
         let (schema, snapshot) = self.select_snapshot(options)?;
         Ok((schema, snapshot, self.metadata.partition_specs.clone()))
     }
 
     /// Build an Iceberg table provider that reflects the requested snapshot options.
-    pub fn to_provider(&self, options: &TableIcebergOptions) -> Result<IcebergTableProvider> {
+    pub fn to_provider(&self, options: &IcebergReadOptions) -> Result<IcebergTableProvider> {
         let (schema, snapshot, partition_specs) = self.scan_state(options)?;
         IcebergTableProvider::new(
             self.table_url.to_string(),
@@ -111,7 +111,7 @@ impl Table {
             .map(|snapshot| Transaction::new(self.table_url.to_string(), snapshot))
     }
 
-    fn select_snapshot(&self, options: &TableIcebergOptions) -> Result<(Schema, Snapshot)> {
+    fn select_snapshot(&self, options: &IcebergReadOptions) -> Result<(Schema, Snapshot)> {
         let (chosen_snapshot, use_snapshot_schema) = if let Some(id) = options.snapshot_id {
             (
                 self.metadata

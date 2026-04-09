@@ -312,8 +312,42 @@ fn generate_build_partial_options_impl(
         quote! { let result = #partial_options_name::default(); }
     };
 
-    let wildcard_arm = if has_any_arm && !all_arms_present {
-        quote! { _ => {} }
+    // When not all arms are present, build an explicit fallback arm with the unhandled variants
+    // rather than using `_ => {}`. This avoids `clippy::single_match` (which fires for
+    // `match { Pat => body, _ => {} }` and suggests using `if let` instead).
+    let fallback_arm = if has_any_arm && !all_arms_present {
+        let mut fallback_patterns: Vec<TokenStream> = Vec::new();
+        if option_list_arm.is_empty() {
+            fallback_patterns.push(
+                quote! { sail_common_datafusion::datasource::OptionLayer::OptionList { .. } },
+            );
+        }
+        if table_property_list_arm.is_empty() {
+            fallback_patterns.push(
+                quote! { sail_common_datafusion::datasource::OptionLayer::TablePropertyList { .. } },
+            );
+        }
+        if table_location_arm.is_empty() {
+            fallback_patterns.push(
+                quote! { sail_common_datafusion::datasource::OptionLayer::TableLocation { .. } },
+            );
+        }
+        if timestamp_arm.is_empty() {
+            fallback_patterns.push(
+                quote! { sail_common_datafusion::datasource::OptionLayer::AsOfTimestamp { .. } },
+            );
+        }
+        if integer_version_arm.is_empty() {
+            fallback_patterns.push(
+                quote! { sail_common_datafusion::datasource::OptionLayer::AsOfIntegerVersion { .. } },
+            );
+        }
+        if string_version_arm.is_empty() {
+            fallback_patterns.push(
+                quote! { sail_common_datafusion::datasource::OptionLayer::AsOfStringVersion { .. } },
+            );
+        }
+        quote! { #(#fallback_patterns)|* => {} }
     } else {
         quote! {}
     };
@@ -327,7 +361,7 @@ fn generate_build_partial_options_impl(
                 #timestamp_arm
                 #integer_version_arm
                 #string_version_arm
-                #wildcard_arm
+                #fallback_arm
             }
         }
     } else {

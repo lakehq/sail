@@ -184,7 +184,7 @@ use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
-use sail_iceberg::TableIcebergOptions;
+use sail_iceberg::IcebergWriterExecOptions;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
@@ -997,7 +997,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|field| self.try_decode_catalog_partition_field(field))
                     .collect::<Result<Vec<_>>>()?;
                 let options = if options.is_empty() {
-                    TableIcebergOptions::default()
+                    IcebergWriterExecOptions::default()
                 } else {
                     serde_json::from_str(&options).map_err(|e| {
                         plan_datafusion_err!("failed to decode Iceberg options: {e}")

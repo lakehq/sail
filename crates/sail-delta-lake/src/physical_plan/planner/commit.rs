@@ -35,9 +35,9 @@ use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::datasource::PATH_COLUMN;
 use crate::kernel::DeltaOperation;
-use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    DeltaWriterExecOptions,
 };
 use crate::table::DeltaSnapshot;
 
@@ -57,7 +57,7 @@ pub fn assemble_commit_plan(
     writer_input: Arc<dyn ExecutionPlan>,
     remove_source: Option<Arc<dyn ExecutionPlan>>,
     table_url: Url,
-    options: TableDeltaOptions,
+    options: DeltaWriterExecOptions,
     metadata_configuration: HashMap<String, String>,
     partition_columns: Vec<String>,
     table_exists: bool,
