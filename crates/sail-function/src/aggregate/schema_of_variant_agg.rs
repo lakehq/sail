@@ -90,33 +90,37 @@ enum MergedType {
 
 impl MergedType {
     /// Parse a Spark type string back into a MergedType.
-    fn from_spark_type(s: &str) -> Self {
+    fn from_spark_type(s: &str) -> Result<Self> {
         if s == "VOID" {
-            return MergedType::Void;
+            return Ok(MergedType::Void);
         }
         if s == "VARIANT" {
-            return MergedType::Variant;
+            return Ok(MergedType::Variant);
         }
         if let Some(inner) = s.strip_prefix("OBJECT<").and_then(|s| s.strip_suffix('>')) {
             if inner.is_empty() {
-                return MergedType::Object(BTreeMap::new());
+                return Ok(MergedType::Object(BTreeMap::new()));
             }
-            // Parse fields: "name1: TYPE1, name2: TYPE2"
             let mut fields = BTreeMap::new();
             for field_str in split_top_level(inner) {
-                if let Some((name, type_str)) = field_str.split_once(": ") {
-                    fields.insert(
-                        name.trim().to_string(),
-                        MergedType::from_spark_type(type_str.trim()),
-                    );
-                }
+                let (name, type_str) = field_str.split_once(": ").ok_or_else(|| {
+                    datafusion::common::DataFusionError::Execution(format!(
+                        "schema_of_variant_agg: invalid object field entry '{field_str}'"
+                    ))
+                })?;
+                fields.insert(
+                    name.trim().to_string(),
+                    MergedType::from_spark_type(type_str.trim())?,
+                );
             }
-            return MergedType::Object(fields);
+            return Ok(MergedType::Object(fields));
         }
         if let Some(inner) = s.strip_prefix("ARRAY<").and_then(|s| s.strip_suffix('>')) {
-            return MergedType::Array(Box::new(MergedType::from_spark_type(inner)));
+            return Ok(MergedType::Array(Box::new(MergedType::from_spark_type(
+                inner,
+            )?)));
         }
-        MergedType::Primitive(s.to_string())
+        Ok(MergedType::Primitive(s.to_string()))
     }
 
     /// Convert to Spark type string.
@@ -138,6 +142,21 @@ impl MergedType {
             MergedType::Array(elem) => {
                 format!("ARRAY<{}>", elem.to_spark_type())
             }
+        }
+    }
+
+    /// Estimate heap memory usage recursively.
+    fn estimated_size(&self) -> usize {
+        match self {
+            MergedType::Void | MergedType::Variant => 0,
+            MergedType::Primitive(s) => s.len(),
+            MergedType::Object(fields) => fields
+                .iter()
+                .map(|(k, v)| {
+                    k.len() + v.estimated_size() + std::mem::size_of::<(String, MergedType)>()
+                })
+                .sum(),
+            MergedType::Array(elem) => std::mem::size_of::<MergedType>() + elem.estimated_size(),
         }
     }
 
@@ -262,7 +281,7 @@ impl Accumulator for SchemaOfVariantAggAccumulator {
             if schema_arr.is_null(i) {
                 continue;
             }
-            let other_schema = MergedType::from_spark_type(schema_arr.value(i));
+            let other_schema = MergedType::from_spark_type(schema_arr.value(i))?;
             self.merged_schema = Some(match self.merged_schema.take() {
                 Some(existing) => existing.merge(other_schema),
                 None => other_schema,
@@ -278,6 +297,10 @@ impl Accumulator for SchemaOfVariantAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of::<Self>() + 256 // rough estimate
+        std::mem::size_of::<Self>()
+            + self
+                .merged_schema
+                .as_ref()
+                .map_or(0, |s| s.estimated_size())
     }
 }
