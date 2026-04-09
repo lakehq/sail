@@ -14,7 +14,7 @@ import pyspark
 from pyspark.sql.conversion import LocalDataToArrowConversion
 from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import from_arrow_type
-from pyspark.sql.types import Row
+from pyspark.sql.types import DataType, Row
 
 _PYARROW_HAS_VIEW_TYPES = all(hasattr(pa, x) for x in ("list_view", "large_list_view", "string_view", "binary_view"))
 
@@ -388,7 +388,7 @@ def _pandas_to_arrow_array(data, data_type: pa.DataType, serializer: ArrowStream
 def _local_data_to_arrow_array(
     data, data_type: pa.DataType, spark_type: DataType, serializer: ArrowStreamPandasUDFSerializer
 ) -> pa.Array:
-    converter = LocalDataToArrowConversion._create_converter(
+    converter = LocalDataToArrowConversion._create_converter(  # noqa: SLF001
         spark_type,
         none_on_identity=True,
         int_to_decimal_coercion_enabled=False,
@@ -469,18 +469,20 @@ class PySparkArrowBatchUdf:
         )
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
+        spark_type_index = 2
         if len(args) == 0:
             inputs = tuple(pd.Series([pyspark._NoValue]).repeat(num_rows) for _ in range(1))  # noqa: SLF001
         else:
             inputs = tuple(_arrow_column_to_pandas(a, self._serializer) for a in args)
         [result] = list(self._udf(None, (inputs,)))
-        # Legacy behavior returns (output, arrow_return_type).
-        # PySpark 4.1+ may return (output, arrow_return_type, return_type)
-        # where output is a plain Python sequence instead of a pandas Series.
-        if len(result) == 3 and isinstance(result[1], pa.DataType) and isinstance(result[2], DataType):
-            output, output_type, spark_type = result
-            return _local_data_to_arrow_array(output, output_type, spark_type, self._serializer)
         output, output_type = result[0], result[1]
+        if not hasattr(output, "dtype"):
+            spark_type = (
+                result[spark_type_index]
+                if len(result) > spark_type_index and isinstance(result[spark_type_index], DataType)
+                else from_arrow_type(output_type)
+            )
+            return _local_data_to_arrow_array(output, output_type, spark_type, self._serializer)
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
