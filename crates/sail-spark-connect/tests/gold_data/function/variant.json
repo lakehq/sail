@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_variant_agg"
+        "success": "ok"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_variant_agg"
+        "success": "ok"
       }
     },
     {
