@@ -317,6 +317,11 @@ impl SailFlightSqlService {
     /// Row count is not tracked here because the wrapped function may return a stream whose
     /// rows are consumed lazily by the caller; callers that need row-level metrics should
     /// record them separately after consuming the result.
+    ///
+    /// TODO: For streaming results, the active-query gauge is decremented and
+    /// success/error metrics are recorded when the stream is created, not when it is
+    /// fully consumed. This means metrics may not accurately reflect the true query
+    /// lifetime. Consider wrapping the returned stream to track completion/errors.
     async fn execute_with_metrics_reporting<F, Fut, T>(
         &self,
         query_type: &'static str,
@@ -929,8 +934,24 @@ impl FlightSqlService for SailFlightSqlService {
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement: SQL = {}", query.query);
 
-        // Resolve schema without executing; treat all statement kinds uniformly
-        let schema = self.get_query_schema(&query.query).await?;
+        let statement = parse_one_statement(&query.query)
+            .map_err(|e| Status::invalid_argument(format!("Parse error: {}", e)))?;
+        let kind = QueryKind::from_statement(&statement);
+
+        let schema = match kind {
+            QueryKind::Ddl | QueryKind::Dml => {
+                // Execute DDL/DML eagerly so that side effects (e.g. creating a view)
+                // are visible to subsequent queries in the same session.
+                let stream = self.execute_sql_stream(&query.query).await?;
+                stream
+                    .err_into::<Box<dyn std::error::Error + Send + Sync>>()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(|e| Status::internal(format!("Execution error: {}", e)))?;
+                Arc::new(Schema::empty())
+            }
+            _ => self.get_query_schema(&query.query).await?,
+        };
 
         // Use the query as the prepared statement handle
         let handle = query.query.clone().into_bytes();
