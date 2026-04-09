@@ -17,6 +17,7 @@ from pyspark.sql.pandas.types import from_arrow_type
 from pyspark.sql.types import DataType, Row
 
 _PYARROW_HAS_VIEW_TYPES = all(hasattr(pa, x) for x in ("list_view", "large_list_view", "string_view", "binary_view"))
+_ARROW_BATCH_SPARK_TYPE_INDEX = 2
 
 if _PYARROW_HAS_VIEW_TYPES:
     _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType)
@@ -469,7 +470,6 @@ class PySparkArrowBatchUdf:
         )
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
-        spark_type_index = 2
         if len(args) == 0:
             inputs = tuple(pd.Series([pyspark._NoValue]).repeat(num_rows) for _ in range(1))  # noqa: SLF001
         else:
@@ -478,8 +478,9 @@ class PySparkArrowBatchUdf:
         output, output_type = result[0], result[1]
         if not hasattr(output, "dtype"):
             spark_type = (
-                result[spark_type_index]
-                if len(result) > spark_type_index and isinstance(result[spark_type_index], DataType)
+                result[_ARROW_BATCH_SPARK_TYPE_INDEX]
+                if len(result) > _ARROW_BATCH_SPARK_TYPE_INDEX
+                and isinstance(result[_ARROW_BATCH_SPARK_TYPE_INDEX], DataType)
                 else from_arrow_type(output_type)
             )
             return _local_data_to_arrow_array(output, output_type, spark_type, self._serializer)
