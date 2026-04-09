@@ -2,9 +2,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion_expr::{col, expr, lit, ExprSchemable, LogicalPlan, Projection, ScalarUDF};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::ScalarValue;
+use datafusion_expr::{
+    col, expr, lit, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, ScalarUDF,
+};
 use datafusion_functions_nested::expr_fn as nested_fn;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_function::scalar::explode;
 use sail_function::scalar::struct_function::StructFunction;
 
@@ -18,10 +24,174 @@ use crate::resolver::PlanResolver;
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_pivot(
         &self,
-        _pivot: spec::Pivot,
-        _state: &mut PlanResolverState,
+        pivot: spec::Pivot,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("pivot"))
+        let spec::Pivot {
+            input,
+            grouping,
+            aggregate: aggregate_exprs,
+            columns: pivot_columns,
+            values: pivot_values,
+        } = pivot;
+
+        // 1. Resolve the input plan.
+        let input = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
+        let schema = input.schema();
+
+        // 2. Resolve pivot column expressions.
+        let (pivot_col_names, pivot_col_exprs) = self
+            .resolve_expressions_and_names(pivot_columns, schema, state)
+            .await?;
+        if pivot_col_exprs.len() != 1 {
+            return Err(PlanError::todo("multi-column pivot"));
+        }
+        let pivot_col_expr = pivot_col_exprs[0].clone();
+
+        // 3. Resolve aggregate expressions.
+        let aggregate_named = self
+            .resolve_named_expressions(aggregate_exprs, schema, state)
+            .await?;
+
+        // 4. Determine grouping columns.
+        //    If grouping is empty (SQL case), infer from remaining columns
+        //    by excluding pivot columns and columns used in aggregates.
+        let grouping_named = if grouping.is_empty() {
+            let input_names = Self::get_field_names(schema, state)?;
+            let columns = Self::resolve_columns(self, schema, &input_names, state)?;
+
+            // Collect all column names referenced by pivot columns and aggregates.
+            let mut used_cols: HashSet<String> = HashSet::new();
+            for name in &pivot_col_names {
+                used_cols.insert(name.clone());
+            }
+            for agg in &aggregate_named {
+                collect_column_names(&agg.expr, &mut used_cols);
+            }
+
+            columns
+                .iter()
+                .zip(input_names.iter())
+                .filter(|(_, name)| !used_cols.contains(name.as_str()))
+                .map(|(c, name)| NamedExpr {
+                    name: vec![name.clone()],
+                    expr: col(c.flat_name()),
+                    metadata: vec![],
+                })
+                .collect::<Vec<_>>()
+        } else {
+            self.resolve_named_expressions(grouping, schema, state)
+                .await?
+        };
+
+        // 5. Determine pivot values.
+        //    If no values are specified, eagerly compute the distinct values.
+        let service = self.ctx.extension::<PlanService>()?;
+        let formatter = service.plan_formatter();
+        let pivot_scalar_values = if pivot_values.is_empty() {
+            self.compute_distinct_pivot_values(&input, &pivot_col_expr, state)
+                .await?
+        } else {
+            let mut values = Vec::with_capacity(pivot_values.len());
+            for pv in &pivot_values {
+                if pv.values.len() != 1 {
+                    return Err(PlanError::todo("multi-value pivot"));
+                }
+                let scalar = self.resolve_literal(pv.values[0].clone(), state)?;
+                let name = match &pv.alias {
+                    Some(alias) => alias.as_ref().to_string(),
+                    None => formatter.literal_to_string(&scalar, &self.config.session_timezone)?,
+                };
+                values.push((scalar, name));
+            }
+            values
+        };
+
+        // 6. Build the pivot aggregates.
+        //    For each pivot value and each aggregate function, create:
+        //    agg_func(CASE WHEN pivot_col = value THEN agg_arg END)
+        let mut pivot_projections: Vec<NamedExpr> = Vec::new();
+        let single_agg = aggregate_named.len() == 1;
+
+        for (scalar_value, value_name) in &pivot_scalar_values {
+            for agg_named in &aggregate_named {
+                let agg_display_name = &agg_named.name;
+                let filtered_agg = rewrite_aggregate_with_pivot_filter(
+                    &agg_named.expr,
+                    &pivot_col_expr,
+                    scalar_value,
+                )?;
+
+                // Column naming follows Spark convention:
+                // - Single aggregate: column name = <pivot_value>
+                // - Multiple aggregates: column name = <pivot_value>_<agg_name>
+                let col_name: String = if single_agg {
+                    value_name.clone()
+                } else {
+                    let agg_name = agg_display_name.join(", ");
+                    format!("{value_name}_{agg_name}")
+                };
+
+                pivot_projections.push(NamedExpr {
+                    name: vec![col_name],
+                    expr: filtered_agg,
+                    metadata: vec![],
+                });
+            }
+        }
+
+        // 7. Build the final plan using rewrite_aggregate.
+        //    The grouping expressions become the group-by,
+        //    and pivot_projections become the projection (aggregates).
+        self.rewrite_aggregate(
+            input,
+            pivot_projections,
+            grouping_named,
+            None,
+            true, // with_grouping_expressions: include group-by columns in output
+            state,
+        )
+    }
+
+    /// Compute distinct values for the pivot column by executing a query.
+    async fn compute_distinct_pivot_values(
+        &self,
+        input: &LogicalPlan,
+        pivot_col_expr: &Expr,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<(ScalarValue, String)>> {
+        let service = self.ctx.extension::<PlanService>()?;
+        let formatter = service.plan_formatter();
+
+        // Build: SELECT DISTINCT pivot_col FROM input ORDER BY pivot_col
+        let distinct_plan = LogicalPlanBuilder::from(input.clone())
+            .project(vec![pivot_col_expr.clone()])?
+            .distinct()?
+            .sort(vec![pivot_col_expr.clone().sort(true, true)])?
+            .build()?;
+
+        let batches = self
+            .ctx
+            .execute_logical_plan(distinct_plan)
+            .await?
+            .collect()
+            .await?;
+
+        let mut values = Vec::new();
+        for batch in &batches {
+            let array = batch.column(0);
+            for i in 0..array.len() {
+                if array.is_valid(i) {
+                    let scalar = ScalarValue::try_from_array(array, i)?;
+                    let name =
+                        formatter.literal_to_string(&scalar, &self.config.session_timezone)?;
+                    values.push((scalar, name));
+                }
+            }
+        }
+        Ok(values)
     }
 
     pub(super) async fn resolve_query_unpivot(
@@ -198,4 +368,76 @@ fn types_are_coercible(data_types: &[DataType]) -> bool {
             _ => None,
         })
         .is_some()
+}
+
+/// Rewrite an aggregate expression to include a pivot filter.
+/// For a given aggregate like `sum(col)`, this produces:
+/// `sum(CASE WHEN pivot_col = value THEN col END)`
+///
+/// For expressions that contain aggregate functions, the CASE WHEN is pushed
+/// into the aggregate function arguments. For bare column references or other
+/// expressions, the whole expression is wrapped in a CASE WHEN.
+fn rewrite_aggregate_with_pivot_filter(
+    agg_expr: &Expr,
+    pivot_col: &Expr,
+    pivot_value: &ScalarValue,
+) -> PlanResult<Expr> {
+    match agg_expr {
+        Expr::AggregateFunction(agg_func) => {
+            let filtered_args = agg_func
+                .params
+                .args
+                .iter()
+                .map(|arg| wrap_with_case_when(arg.clone(), pivot_col, pivot_value))
+                .collect();
+            Ok(Expr::AggregateFunction(expr::AggregateFunction {
+                func: agg_func.func.clone(),
+                params: expr::AggregateFunctionParams {
+                    args: filtered_args,
+                    distinct: agg_func.params.distinct,
+                    filter: agg_func.params.filter.clone(),
+                    order_by: agg_func.params.order_by.clone(),
+                    null_treatment: agg_func.params.null_treatment,
+                },
+            }))
+        }
+        Expr::Alias(alias) => {
+            let inner = rewrite_aggregate_with_pivot_filter(&alias.expr, pivot_col, pivot_value)?;
+            Ok(inner)
+        }
+        _ => {
+            // For non-aggregate expressions, just wrap the whole thing.
+            Ok(wrap_with_case_when(
+                agg_expr.clone(),
+                pivot_col,
+                pivot_value,
+            ))
+        }
+    }
+}
+
+/// Wrap an expression with `CASE WHEN pivot_col = value THEN expr END`.
+fn wrap_with_case_when(expr: Expr, pivot_col: &Expr, pivot_value: &ScalarValue) -> Expr {
+    Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(
+            Box::new(
+                pivot_col
+                    .clone()
+                    .eq(Expr::Literal(pivot_value.clone(), None)),
+            ),
+            Box::new(expr),
+        )],
+        else_expr: None,
+    })
+}
+
+/// Collect all column names referenced by an expression.
+fn collect_column_names(expr: &Expr, names: &mut HashSet<String>) {
+    let _ = expr.apply(|e| {
+        if let Expr::Column(col) = e {
+            names.insert(col.name().to_string());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
 }
