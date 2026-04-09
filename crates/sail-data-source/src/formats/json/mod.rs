@@ -23,12 +23,12 @@ impl ListingFormat for JsonListingFormat {
 
     fn create_read_format(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         options: Vec<OptionLayer>,
         compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options =
-            resolve_json_read_options(options).map_err(datafusion_common::DataFusionError::from)?;
+        let mut options = resolve_json_read_options(ctx, options)
+            .map_err(datafusion_common::DataFusionError::from)?;
         if let Some(compression) = compression {
             options.compression = compression;
         }
@@ -37,10 +37,10 @@ impl ListingFormat for JsonListingFormat {
 
     fn create_write_format(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         options: Vec<OptionLayer>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        let options = resolve_json_write_options(options)
+        let options = resolve_json_write_options(ctx, options)
             .map_err(datafusion_common::DataFusionError::from)?;
         Ok((Arc::new(JsonFormat::default().with_options(options)), None))
     }

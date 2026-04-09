@@ -135,7 +135,7 @@ impl ParquetWriteOptions {
             DFParquetWriterVersion::from_str(writer_version.as_str()).map_err(|e| {
                 DataSourceError::InvalidOption {
                     key: "writer_version".to_string(),
-                    value: e.to_string(),
+                    value: format!("{writer_version}: {e}"),
                 }
             })?;
         let compression = if let Some(v) = compression {
@@ -143,7 +143,7 @@ impl ParquetWriteOptions {
                 split_parquet_compression_string(&v.to_lowercase()).map_err(|e| {
                     DataSourceError::InvalidOption {
                         key: "compression".to_string(),
-                        value: e.to_string(),
+                        value: format!("{v}: {e}"),
                     }
                 })?;
             let resolved = match codec.as_str() {

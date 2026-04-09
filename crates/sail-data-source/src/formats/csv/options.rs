@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use datafusion::catalog::Session;
 use datafusion_common::config::CsvOptions;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::OptionLayer;
@@ -10,6 +11,40 @@ use crate::options::gen::{
 };
 use crate::options::{BuildPartialOptions, PartialOptions};
 use crate::utils::char_to_u8;
+
+impl BuildPartialOptions<CsvReadPartialOptions> for CsvOptions {
+    fn build_partial_options(self) -> DataSourceResult<CsvReadPartialOptions> {
+        Ok(CsvReadPartialOptions {
+            delimiter: Some(self.delimiter as char),
+            quote: Some(Some(self.quote as char)),
+            escape: Some(self.escape.map(|b| b as char)),
+            comment: Some(self.comment.map(|b| b as char)),
+            header: self.has_header,
+            null_value: self.null_value,
+            null_regex: self.null_regex,
+            line_sep: Some(self.terminator.map(|b| b as char)),
+            infer_schema: None,
+            schema_infer_max_records: self.schema_infer_max_rec,
+            multi_line: self.newlines_in_values,
+            compression: Some(self.compression.to_string()),
+            allow_truncated_rows: self.truncated_rows,
+        })
+    }
+}
+
+impl BuildPartialOptions<CsvWritePartialOptions> for CsvOptions {
+    fn build_partial_options(self) -> DataSourceResult<CsvWritePartialOptions> {
+        Ok(CsvWritePartialOptions {
+            delimiter: Some(self.delimiter as char),
+            quote: Some(Some(self.quote as char)),
+            escape: Some(self.escape.map(|b| b as char)),
+            header: self.has_header,
+            null_value: self.null_value,
+            escape_quotes: self.double_quote,
+            compression: Some(self.compression.to_string()),
+        })
+    }
+}
 
 impl CsvReadOptions {
     pub fn into_table_options(self) -> DataSourceResult<CsvOptions> {
@@ -85,7 +120,7 @@ impl CsvReadOptions {
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
                 key: "compression".to_string(),
-                value: e.to_string(),
+                value: format!("{compression}: {e}"),
             })?
             .into();
         Ok(CsvOptions {
@@ -146,7 +181,7 @@ impl CsvWriteOptions {
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
                 key: "compression".to_string(),
-                value: e.to_string(),
+                value: format!("{compression}: {e}"),
             })?
             .into();
         Ok(CsvOptions {
@@ -162,16 +197,24 @@ impl CsvWriteOptions {
     }
 }
 
-pub fn resolve_csv_read_options(options: Vec<OptionLayer>) -> DataSourceResult<CsvOptions> {
+pub fn resolve_csv_read_options(
+    ctx: &dyn Session,
+    options: Vec<OptionLayer>,
+) -> DataSourceResult<CsvOptions> {
     let mut partial = CsvReadPartialOptions::initialize();
+    partial.merge(ctx.default_table_options().csv.build_partial_options()?);
     for layer in options {
         partial.merge(layer.build_partial_options()?);
     }
     partial.finalize()?.into_table_options()
 }
 
-pub fn resolve_csv_write_options(options: Vec<OptionLayer>) -> DataSourceResult<CsvOptions> {
+pub fn resolve_csv_write_options(
+    ctx: &dyn Session,
+    options: Vec<OptionLayer>,
+) -> DataSourceResult<CsvOptions> {
     let mut partial = CsvWritePartialOptions::initialize();
+    partial.merge(ctx.default_table_options().csv.build_partial_options()?);
     for layer in options {
         partial.merge(layer.build_partial_options()?);
     }
@@ -180,6 +223,7 @@ pub fn resolve_csv_write_options(options: Vec<OptionLayer>) -> DataSourceResult<
 
 #[cfg(test)]
 mod tests {
+    use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
     use sail_common_datafusion::datasource::OptionLayer;
 
@@ -196,6 +240,9 @@ mod tests {
 
     #[test]
     fn test_resolve_csv_read_options() -> datafusion_common::Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+
         let kv = option_list(&[
             ("delimiter", "!"),
             ("quote", "("),
@@ -208,8 +255,8 @@ mod tests {
             ("multi_line", "true"),
             ("compression", "bzip2"),
         ]);
-        let options =
-            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
+        let options = resolve_csv_read_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
         assert_eq!(options.escape, Some(b'*'));
@@ -223,35 +270,35 @@ mod tests {
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         let kv = option_list(&[("inferSchema", "false")]);
-        let options =
-            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
+        let options = resolve_csv_read_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
         let kv = option_list(&[("inferSchema", "true")]);
-        let options =
-            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
+        let options = resolve_csv_read_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(1000));
 
         let kv = option_list(&[("infer_schema", "false")]);
-        let options =
-            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
+        let options = resolve_csv_read_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
         let kv = option_list(&[
             ("inferSchema", "false"),
             ("schema_infer_max_records", "500"),
         ]);
-        let options =
-            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
+        let options = resolve_csv_read_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
         let kv = option_list(&[("null_value", "MEOW"), ("null_regex", "MEOW")]);
-        let result = resolve_csv_read_options(vec![kv]);
+        let result = resolve_csv_read_options(&state, vec![kv]);
         assert!(result.is_err());
 
         let kv = option_list(&[("null_regex", "MEOW")]);
-        let options =
-            resolve_csv_read_options(vec![kv]).map_err(datafusion_common::DataFusionError::from)?;
+        let options = resolve_csv_read_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.null_value, None);
         assert_eq!(options.null_regex, Some("MEOW".to_string()));
 
@@ -260,6 +307,9 @@ mod tests {
 
     #[test]
     fn test_resolve_csv_write_options() -> datafusion_common::Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+
         let kv = option_list(&[
             ("delimiter", "!"),
             ("quote", "("),
@@ -269,7 +319,7 @@ mod tests {
             ("null_value", "MEOW"),
             ("compression", "bzip2"),
         ]);
-        let options = resolve_csv_write_options(vec![kv])
+        let options = resolve_csv_write_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
