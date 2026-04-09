@@ -457,7 +457,10 @@ class PySparkArrowBatchUdf:
             inputs = tuple(pd.Series([pyspark._NoValue]).repeat(num_rows) for _ in range(1))  # noqa: SLF001
         else:
             inputs = tuple(_arrow_column_to_pandas(a, self._serializer) for a in args)
-        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        [result] = list(self._udf(None, (inputs,)))
+        # PySpark 3.x returns (output, arrow_return_type).
+        # PySpark 4.x returns (output, arrow_return_type, return_type).
+        output, output_type = result[0], result[1]
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
