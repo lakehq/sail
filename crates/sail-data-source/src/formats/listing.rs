@@ -197,9 +197,16 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             partition_by,
             bucket_by,
             sort_order,
-            table_properties: _,
+            table_properties,
             options,
         } = info;
+        // Prepend table properties as an OptionLayer so that format-level options
+        // specified via TBLPROPERTIES (e.g. `option.delimiter`) are applied when writing,
+        // matching the behavior of the read path.
+        let mut write_options = vec![OptionLayer::TablePropertyList {
+            items: table_properties.into_iter().collect(),
+        }];
+        write_options.extend(options);
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
         }
@@ -228,7 +235,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .iter()
             .map(|field| (field.column.clone(), DataType::Null))
             .collect::<Vec<_>>();
-        let (format, compression) = self.inner.create_write_format(ctx, options)?;
+        let (format, compression) = self.inner.create_write_format(ctx, write_options)?;
         let file_extension = if let Some(file_compression_type) = format.compression_type() {
             match format.get_ext_with_compression(&file_compression_type) {
                 Ok(ext) => ext,
