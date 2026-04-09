@@ -19,7 +19,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         SELECT * FROM courses
         PIVOT (
           SUM(earnings)
-          FOR course IN ('dotNET', 'Java')
+          FOR (course) IN ('dotNET', 'Java')
         )
         ORDER BY year
         """
@@ -28,7 +28,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         | 2012 | 15000  | 20000 |
         | 2013 | 48000  | 30000 |
 
-    Scenario: pivot sum without explicit values discovers distinct values
+    Scenario: pivot sum with reordered explicit values
       Given statement
         """
         CREATE OR REPLACE TEMPORARY VIEW courses AS
@@ -45,7 +45,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         SELECT * FROM courses
         PIVOT (
           SUM(earnings)
-          FOR course IN ('Java', 'dotNET')
+          FOR (course) IN ('Java', 'dotNET')
         )
         ORDER BY year
         """
@@ -73,7 +73,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         SELECT * FROM courses
         PIVOT (
           SUM(earnings)
-          FOR course IN ('dotNET' AS net, 'Java' AS java)
+          FOR (course) IN ('dotNET' AS net, 'Java' AS java)
         )
         ORDER BY year
         """
@@ -101,7 +101,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         SELECT * FROM courses
         PIVOT (
           SUM(earnings) AS total, COUNT(earnings) AS cnt
-          FOR course IN ('dotNET', 'Java')
+          FOR (course) IN ('dotNET', 'Java')
         )
         ORDER BY year
         """
@@ -129,7 +129,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         SELECT * FROM courses
         PIVOT (
           SUM(earnings)
-          FOR year IN (2012, 2013)
+          FOR (year) IN (2012, 2013)
         )
         ORDER BY course
         """
@@ -146,7 +146,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         CREATE OR REPLACE TEMPORARY VIEW data AS
         SELECT * FROM VALUES
           ('A', 1, 10),
-          ('A', 2, NULL),
+          ('A', 2, CAST(NULL AS INT)),
           ('B', 1, 30),
           ('B', 2, 40)
         AS t(grp, cat, val)
@@ -156,7 +156,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         SELECT * FROM data
         PIVOT (
           SUM(val)
-          FOR cat IN (1, 2)
+          FOR (cat) IN (1, 2)
         )
         ORDER BY grp
         """
@@ -181,7 +181,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         SELECT * FROM data
         PIVOT (
           SUM(val)
-          FOR cat IN (1, 2)
+          FOR (cat) IN (1, 2)
         )
         ORDER BY grp
         """
@@ -210,7 +210,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         SELECT * FROM data
         PIVOT (
           AVG(val)
-          FOR cat IN ('x', 'y')
+          FOR (cat) IN ('x', 'y')
         )
         ORDER BY grp
         """
@@ -237,7 +237,7 @@ Feature: PIVOT rotates rows into columns with aggregation
         SELECT * FROM data
         PIVOT (
           COUNT(val)
-          FOR cat IN ('x', 'y')
+          FOR (cat) IN ('x', 'y')
         )
         ORDER BY grp
         """

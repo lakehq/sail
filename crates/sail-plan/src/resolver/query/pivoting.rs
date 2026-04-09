@@ -62,13 +62,20 @@ impl PlanResolver<'_> {
             let input_names = Self::get_field_names(schema, state)?;
             let columns = Self::resolve_columns(self, schema, &input_names, state)?;
 
-            // Collect all column names referenced by pivot columns and aggregates.
+            // Collect user-visible names referenced by pivot columns and aggregates.
             let mut used_cols: HashSet<String> = HashSet::new();
             for name in &pivot_col_names {
                 used_cols.insert(name.clone());
             }
+            // Extract opaque field IDs from aggregate expressions, then map to user-visible names.
             for agg in &aggregate_named {
-                collect_column_names(&agg.expr, &mut used_cols);
+                let mut opaque_ids: HashSet<String> = HashSet::new();
+                collect_column_names(&agg.expr, &mut opaque_ids);
+                for id in &opaque_ids {
+                    if let Ok(info) = state.get_field_info(id) {
+                        used_cols.insert(info.name().to_string());
+                    }
+                }
             }
 
             columns
