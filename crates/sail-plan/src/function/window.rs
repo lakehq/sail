@@ -22,6 +22,7 @@ use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
+use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -518,7 +519,10 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             "bitmap_construct_agg",
             F::aggregate(|| Arc::new(AggregateUDF::from(BitmapConstructAggFunction::new()))),
         ),
-        ("bitmap_or_agg", F::unknown("bitmap_or_agg")),
+        (
+            "bitmap_or_agg",
+            F::aggregate(|| Arc::new(AggregateUDF::from(BitmapOrAggFunction::new()))),
+        ),
         ("bool_and", F::aggregate(bool_and_or::bool_and_udaf)),
         ("bool_or", F::aggregate(bool_and_or::bool_or_udaf)),
         ("collect_list", F::aggregate(array_agg::array_agg_udaf)),
