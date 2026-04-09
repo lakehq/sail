@@ -156,3 +156,36 @@ Feature: Unity Catalog table operations
       """
     Then query result
       | database | tableName | isTemporary |
+
+  Scenario: Drop existing table removes it
+    Given statement
+      """
+      CREATE TABLE unity_table_test.drop_me (id INT)
+      USING delta
+      LOCATION 's3://deltadata/drop_me'
+      """
+    Given final statement
+      """
+      DROP TABLE IF EXISTS unity_table_test.drop_me
+      """
+    Given statement
+      """
+      DROP TABLE unity_table_test.drop_me
+      """
+    When query
+      """
+      DESCRIBE TABLE unity_table_test.drop_me
+      """
+    Then query error .*
+
+  Scenario: Drop non-existent table fails
+    Given statement with error .*
+      """
+      DROP TABLE unity_table_test.nonexistent_drop_t
+      """
+
+  Scenario: Drop non-existent table with IF EXISTS does not raise error
+    Given statement
+      """
+      DROP TABLE IF EXISTS unity_table_test.nonexistent_drop_t
+      """

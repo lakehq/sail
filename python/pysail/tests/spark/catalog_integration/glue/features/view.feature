@@ -131,3 +131,20 @@ Feature: Glue catalog view operations
       """
       DROP VIEW IF EXISTS nonexistent_drop_view
       """
+
+  Scenario: Describe table returns table not view
+    Given statement
+      """
+      CREATE TABLE get_view_table (id INT) USING parquet LOCATION 's3://bucket/get_view_table'
+      """
+    Given statement
+      """
+      CREATE VIEW get_view_target AS SELECT 1 AS id
+      """
+    When query
+      """
+      DESCRIBE TABLE get_view_table
+      """
+    Then query result
+      | col_name | data_type | comment |
+      | id       | int       | NULL    |

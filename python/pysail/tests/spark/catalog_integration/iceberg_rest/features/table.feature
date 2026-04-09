@@ -142,6 +142,12 @@ Feature: Iceberg REST catalog table operations
       DROP TABLE IF EXISTS iceberg_table_test.nonexistent_drop_t
       """
 
+  Scenario: Drop non-existent table fails
+    Given statement with error .*
+      """
+      DROP TABLE iceberg_table_test.nonexistent_drop_t
+      """
+
   Scenario: Create a table with year partition transform
     Given statement
       """
@@ -177,3 +183,21 @@ Feature: Iceberg REST catalog table operations
     Then query result
       | database           | tableName     | isTemporary |
       | iceberg_table_test | bucket_part_t | false       |
+
+  Scenario: Create a table with truncate partition transform
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.trunc_part_t (
+        code STRING,
+        value INT
+      )
+      USING iceberg
+      PARTITIONED BY (truncate(3, code))
+      """
+    When query
+      """
+      SHOW TABLES IN iceberg_table_test LIKE 'trunc_part_t'
+      """
+    Then query result
+      | database           | tableName    | isTemporary |
+      | iceberg_table_test | trunc_part_t | false       |

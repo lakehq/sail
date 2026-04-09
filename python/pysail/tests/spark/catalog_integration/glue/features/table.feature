@@ -219,3 +219,19 @@ Feature: Glue catalog table operations
       """
       DROP TABLE IF EXISTS nonexistent_drop_table
       """
+
+  Scenario: Hive format rejects non-identity partition transforms
+    Given statement with error .*
+      """
+      CREATE TABLE day_part_table (id INT, ts TIMESTAMP)
+      USING parquet
+      PARTITIONED BY (days(ts))
+      LOCATION 's3://bucket/day_part'
+      """
+
+  Scenario: Iceberg format requires location
+    Given statement with error .*
+      """
+      CREATE TABLE iceberg_no_loc (id INT)
+      USING iceberg
+      """

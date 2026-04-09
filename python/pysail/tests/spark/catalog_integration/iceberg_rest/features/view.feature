@@ -95,3 +95,26 @@ Feature: Iceberg REST catalog view operations
       """
       DROP VIEW IF EXISTS iceberg_view_test.nonexistent_drop_view
       """
+
+  Scenario: List views in a namespace
+    Given statement
+      """
+      CREATE VIEW iceberg_view_test.list_v1 AS SELECT 1 AS id
+      """
+    Given statement
+      """
+      CREATE VIEW iceberg_view_test.list_v2 AS SELECT 2 AS id
+      """
+    Given statement
+      """
+      CREATE TABLE iceberg_view_test.list_t1 (id INT) USING iceberg
+      """
+    When query
+      """
+      SHOW TABLES IN iceberg_view_test
+      """
+    Then query result
+      | database           | tableName | isTemporary |
+      | iceberg_view_test  | list_t1   | false       |
+      | iceberg_view_test  | list_v1   | false       |
+      | iceberg_view_test  | list_v2   | false       |
