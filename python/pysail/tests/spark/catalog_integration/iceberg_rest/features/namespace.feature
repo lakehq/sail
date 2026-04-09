@@ -194,3 +194,29 @@ Feature: Iceberg REST catalog namespace (database) operations
       """
       DROP DATABASE IF EXISTS nonexistent_drop_ns_iceberg
       """
+
+  Scenario: Describe an existing namespace
+    Given statement
+      """
+      CREATE DATABASE describe_ns_iceberg
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS describe_ns_iceberg
+      """
+    When query
+      """
+      DESCRIBE DATABASE describe_ns_iceberg
+      """
+    Then query result ordered
+      | info_name      | info_value          |
+      | Namespace Name | describe_ns_iceberg |
+      | Comment        |                     |
+      | Location       |                     |
+
+  Scenario: Describe non-existent namespace raises error
+    When query
+      """
+      DESCRIBE DATABASE nonexistent_describe_ns
+      """
+    Then query error .*

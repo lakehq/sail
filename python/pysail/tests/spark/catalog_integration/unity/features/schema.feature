@@ -162,3 +162,30 @@ Feature: Unity Catalog schema (database) operations
       """
     Then query result
       | name | catalog | description | locationUri |
+
+  Scenario: Describe an existing schema
+    Given statement
+      """
+      CREATE SCHEMA describe_schema_unity
+      COMMENT 'describe test'
+      """
+    Given final statement
+      """
+      DROP SCHEMA IF EXISTS describe_schema_unity
+      """
+    When query
+      """
+      DESCRIBE SCHEMA describe_schema_unity
+      """
+    Then query result ordered
+      | info_name      | info_value                              |
+      | Namespace Name | sail_test_catalog.describe_schema_unity |
+      | Comment        | describe test                           |
+      | Location       |                                         |
+
+  Scenario: Describe non-existent schema raises error
+    When query
+      """
+      DESCRIBE SCHEMA nonexistent_describe_schema
+      """
+    Then query error .*

@@ -141,3 +141,39 @@ Feature: Iceberg REST catalog table operations
       """
       DROP TABLE IF EXISTS iceberg_table_test.nonexistent_drop_t
       """
+
+  Scenario: Create a table with year partition transform
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.year_part_t (
+        id INT,
+        event_date DATE
+      )
+      USING iceberg
+      PARTITIONED BY (years(event_date))
+      """
+    When query
+      """
+      SHOW TABLES IN iceberg_table_test LIKE 'year_part_t'
+      """
+    Then query result
+      | database           | tableName   | isTemporary |
+      | iceberg_table_test | year_part_t | false       |
+
+  Scenario: Create a table with bucket partition transform
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.bucket_part_t (
+        user_id INT,
+        name STRING
+      )
+      USING iceberg
+      PARTITIONED BY (bucket(4, user_id))
+      """
+    When query
+      """
+      SHOW TABLES IN iceberg_table_test LIKE 'bucket_part_t'
+      """
+    Then query result
+      | database           | tableName     | isTemporary |
+      | iceberg_table_test | bucket_part_t | false       |
