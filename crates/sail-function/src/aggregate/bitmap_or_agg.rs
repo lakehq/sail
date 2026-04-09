@@ -83,9 +83,8 @@ impl BitmapOrAggAccumulator {
     }
 
     fn or_bytes(&mut self, other: &[u8]) {
-        let len = other.len().min(self.bitmap.len());
-        for (i, &byte) in other.iter().enumerate().take(len) {
-            self.bitmap[i] |= byte;
+        for (dst, &src) in self.bitmap.iter_mut().zip(other.iter()) {
+            *dst |= src;
         }
     }
 }
@@ -139,9 +138,7 @@ impl Accumulator for BitmapOrAggAccumulator {
                         other.len()
                     )));
                 }
-                for (j, byte) in other.iter().enumerate() {
-                    self.bitmap[j] |= byte;
-                }
+                self.or_bytes(other);
             }
         }
         Ok(())
