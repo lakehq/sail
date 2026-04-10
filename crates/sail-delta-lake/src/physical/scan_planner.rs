@@ -250,6 +250,12 @@ pub(crate) async fn plan_delta_scan(
 
         let renamed_schema = renamed.schema();
 
+        // TODO: RelaxedTzCastExec is currently only reachable for externally-written Delta
+        // tables whose physical Parquet files carry a different timestamp timezone than the
+        // logical schema (e.g. files written by a non-Sail writer that omits the TZ label).
+        // Native Sail read/write paths keep both schemas in sync, so the wrap is a no-op in
+        // practice today.  Investigate proper end-to-end test coverage once we have a
+        // reproducible external-table fixture.
         let needs_wrapping = output_schema.fields().iter().any(|field| {
             let Ok(input_field) = renamed_schema.field_with_name(field.name()) else {
                 return false;
