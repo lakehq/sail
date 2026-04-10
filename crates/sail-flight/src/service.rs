@@ -6,18 +6,10 @@ use std::time::Instant;
 use arrow::datatypes::Schema;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::flight_service_server::FlightService;
-use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
+use arrow_flight::sql::server::FlightSqlService;
 use arrow_flight::sql::{
-    ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
-    ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
-    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
-    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
-    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
-    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
-    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate,
-    DoPutPreparedStatementResult, ProstMessageExt, SqlInfo, TicketStatementQuery,
+    ActionClosePreparedStatementRequest, CommandStatementQuery, ProstMessageExt, SqlInfo,
+    TicketStatementQuery,
 };
 use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
@@ -298,14 +290,6 @@ impl FlightSqlService for SailFlightSqlService {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    async fn do_get_fallback(
-        &self,
-        _request: Request<Ticket>,
-        _message: Any,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
     async fn get_flight_info_statement(
         &self,
         query: CommandStatementQuery,
@@ -314,13 +298,11 @@ impl FlightSqlService for SailFlightSqlService {
         let sql = query.query.clone();
         debug!("get_flight_info_statement: {sql}");
 
-        // Create ticket containing the SQL query
         let ticket = TicketStatementQuery {
             statement_handle: sql.clone().into_bytes().into(),
         };
         let ticket_bytes = ticket.as_any().encode_to_vec();
 
-        // Resolve schema without executing the query
         let schema = self.get_query_schema(&sql).await?;
 
         let endpoint = FlightEndpoint {
@@ -332,7 +314,6 @@ impl FlightSqlService for SailFlightSqlService {
             app_metadata: Default::default(),
         };
 
-        // Use the builder pattern which handles schema encoding
         let info = FlightInfo::new()
             .with_endpoint(endpoint)
             .with_descriptor(request.into_inner())
@@ -340,102 +321,6 @@ impl FlightSqlService for SailFlightSqlService {
             .map_err(|e| Status::internal(format!("schema error: {e}")))?;
 
         Ok(Response::new(info))
-    }
-
-    async fn get_flight_info_substrait_plan(
-        &self,
-        _query: CommandStatementSubstraitPlan,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_substrait_plan"))
-    }
-
-    async fn get_flight_info_prepared_statement(
-        &self,
-        _cmd: CommandPreparedStatementQuery,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
-    async fn get_flight_info_catalogs(
-        &self,
-        _query: CommandGetCatalogs,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
-    async fn get_flight_info_schemas(
-        &self,
-        _query: CommandGetDbSchemas,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
-    async fn get_flight_info_tables(
-        &self,
-        _query: CommandGetTables,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
-    async fn get_flight_info_table_types(
-        &self,
-        _query: CommandGetTableTypes,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
-    async fn get_flight_info_sql_info(
-        &self,
-        _query: CommandGetSqlInfo,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_sql_info"))
-    }
-
-    async fn get_flight_info_primary_keys(
-        &self,
-        _query: CommandGetPrimaryKeys,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_primary_keys"))
-    }
-
-    async fn get_flight_info_exported_keys(
-        &self,
-        _query: CommandGetExportedKeys,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_exported_keys"))
-    }
-
-    async fn get_flight_info_imported_keys(
-        &self,
-        _query: CommandGetImportedKeys,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_imported_keys"))
-    }
-
-    async fn get_flight_info_cross_reference(
-        &self,
-        _query: CommandGetCrossReference,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_cross_reference"))
-    }
-
-    async fn get_flight_info_xdbc_type_info(
-        &self,
-        _query: CommandGetXdbcTypeInfo,
-        _request: Request<FlightDescriptor>,
-    ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("get_flight_info_xdbc_type_info"))
     }
 
     async fn do_get_statement(
@@ -446,14 +331,30 @@ impl FlightSqlService for SailFlightSqlService {
         let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
         debug!("do_get_statement: {sql}");
 
-        let query_type = parse_one_statement(&sql)
-            .map(|s| QueryKind::from_statement(&s).label())
-            .unwrap_or("OTHER");
+        let stmt = parse_one_statement(&sql).ok();
+        let kind = stmt
+            .as_ref()
+            .map(QueryKind::from_statement)
+            .unwrap_or(QueryKind::Other);
+        let query_type = kind.label();
 
-        let stream = self
+        let mut stream = self
             .execute_with_metrics_reporting(query_type, || self.execute_sql_stream(&sql))
             .await?;
         let schema = stream.schema();
+
+        if matches!(kind, QueryKind::Ddl | QueryKind::Dml) {
+            // Execute DDL/DML eagerly so that side effects (e.g. creating a view)
+            // are visible to subsequent queries in the same session.
+            while let Some(result) = stream.next().await {
+                result.map_err(|e| Status::internal(format!("execution error: {e}")))?;
+            }
+            let stream = FlightDataEncoderBuilder::new()
+                .with_schema(schema)
+                .build(stream::iter(vec![]))
+                .map(|result| result.map_err(|e| Status::internal(format!("encoding error: {e}"))));
+            return Ok(Response::new(Box::pin(stream)));
+        }
 
         let stream = stream.map(|result| {
             result.map_err(|e| {
@@ -470,182 +371,12 @@ impl FlightSqlService for SailFlightSqlService {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    async fn do_get_catalogs(
-        &self,
-        _query: CommandGetCatalogs,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
-    async fn do_get_schemas(
-        &self,
-        _query: CommandGetDbSchemas,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
-    async fn do_get_tables(
-        &self,
-        _query: CommandGetTables,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
-    async fn do_get_table_types(
-        &self,
-        _query: CommandGetTableTypes,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
-    async fn do_get_sql_info(
-        &self,
-        _query: CommandGetSqlInfo,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_sql_info"))
-    }
-
-    async fn do_get_primary_keys(
-        &self,
-        _query: CommandGetPrimaryKeys,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_primary_keys"))
-    }
-
-    async fn do_get_exported_keys(
-        &self,
-        _query: CommandGetExportedKeys,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_exported_keys"))
-    }
-
-    async fn do_get_imported_keys(
-        &self,
-        _query: CommandGetImportedKeys,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_imported_keys"))
-    }
-
-    async fn do_get_cross_reference(
-        &self,
-        _query: CommandGetCrossReference,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_cross_reference"))
-    }
-
-    async fn do_get_xdbc_type_info(
-        &self,
-        _query: CommandGetXdbcTypeInfo,
-        _request: Request<Ticket>,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        Err(Status::unimplemented("do_get_xdbc_type_info"))
-    }
-
-    async fn do_put_statement_update(
-        &self,
-        _ticket: CommandStatementUpdate,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented("do_put_statement_update"))
-    }
-
-    async fn do_put_prepared_statement_query(
-        &self,
-        _query: CommandPreparedStatementQuery,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<DoPutPreparedStatementResult, Status> {
-        Err(Status::unimplemented("do_put_prepared_statement_query"))
-    }
-
-    async fn do_put_prepared_statement_update(
-        &self,
-        _query: CommandPreparedStatementUpdate,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented("do_put_prepared_statement_update"))
-    }
-
-    async fn do_put_substrait_plan(
-        &self,
-        _ticket: CommandStatementSubstraitPlan,
-        _request: Request<PeekableFlightDataStream>,
-    ) -> Result<i64, Status> {
-        Err(Status::unimplemented("do_put_substrait_plan"))
-    }
-
-    async fn do_action_create_prepared_statement(
-        &self,
-        _query: ActionCreatePreparedStatementRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        Err(Status::unimplemented("not implemented"))
-    }
-
     async fn do_action_close_prepared_statement(
         &self,
         _query: ActionClosePreparedStatementRequest,
         _request: Request<Action>,
     ) -> Result<(), Status> {
         Ok(())
-    }
-
-    async fn do_action_create_prepared_substrait_plan(
-        &self,
-        _query: ActionCreatePreparedSubstraitPlanRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        Err(Status::unimplemented(
-            "do_action_create_prepared_substrait_plan",
-        ))
-    }
-
-    async fn do_action_begin_transaction(
-        &self,
-        _query: ActionBeginTransactionRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionBeginTransactionResult, Status> {
-        Err(Status::unimplemented("do_action_begin_transaction"))
-    }
-
-    async fn do_action_end_transaction(
-        &self,
-        _query: ActionEndTransactionRequest,
-        _request: Request<Action>,
-    ) -> Result<(), Status> {
-        Err(Status::unimplemented("do_action_end_transaction"))
-    }
-
-    async fn do_action_begin_savepoint(
-        &self,
-        _query: ActionBeginSavepointRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionBeginSavepointResult, Status> {
-        Err(Status::unimplemented("do_action_begin_savepoint"))
-    }
-
-    async fn do_action_end_savepoint(
-        &self,
-        _query: ActionEndSavepointRequest,
-        _request: Request<Action>,
-    ) -> Result<(), Status> {
-        Err(Status::unimplemented("do_action_end_savepoint"))
-    }
-
-    async fn do_action_cancel_query(
-        &self,
-        _query: ActionCancelQueryRequest,
-        _request: Request<Action>,
-    ) -> Result<ActionCancelQueryResult, Status> {
-        Err(Status::unimplemented("do_action_cancel_query"))
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
