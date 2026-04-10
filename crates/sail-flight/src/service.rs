@@ -98,8 +98,6 @@ impl QueryKind {
     }
 }
 
-pub struct SailFlightSqlOptions {}
-
 pub struct SailFlightSqlService {
     session_manager: SessionManager,
     config: Arc<PlanConfig>,
