@@ -266,8 +266,11 @@ impl Accumulator for SchemaOfVariantAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let schema_str = self.merged_schema.as_ref().map(|t| t.to_spark_type());
-        Ok(vec![ScalarValue::Utf8(schema_str)])
+        let schema_str = self
+            .merged_schema
+            .as_ref()
+            .map_or_else(|| "VOID".to_string(), |t| t.to_spark_type());
+        Ok(vec![ScalarValue::Utf8(Some(schema_str))])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -294,9 +297,12 @@ impl Accumulator for SchemaOfVariantAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Utf8(
-            self.merged_schema.as_ref().map(|t| t.to_spark_type()),
-        ))
+        // When no non-null values were seen, return "VOID" (matching Spark behavior)
+        let result = self
+            .merged_schema
+            .as_ref()
+            .map_or_else(|| "VOID".to_string(), |t| t.to_spark_type());
+        Ok(ScalarValue::Utf8(Some(result)))
     }
 
     fn size(&self) -> usize {

@@ -163,7 +163,6 @@ Feature: schema_of_variant_agg
         | result |
         | BIGINT |
 
-    @sail-bug
     Scenario: schema_of_variant_agg all SQL NULL
       When query
         """
