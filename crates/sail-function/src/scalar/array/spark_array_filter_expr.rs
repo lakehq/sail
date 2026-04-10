@@ -385,16 +385,27 @@ impl SparkArrayFilterExpr {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
 mod tests {
     use datafusion::arrow::array::{Int32Array, Int32Builder, ListBuilder};
+    use datafusion_common::exec_datafusion_err;
     use datafusion_expr::{col, lit, Operator};
 
     use super::*;
 
+    fn as_list(arr: &ArrayRef) -> Result<&ListArray> {
+        arr.as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| exec_datafusion_err!("expected ListArray"))
+    }
+
+    fn as_int32(arr: &ArrayRef) -> Result<&Int32Array> {
+        arr.as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| exec_datafusion_err!("expected Int32Array"))
+    }
+
     #[test]
     fn test_filter_with_gt_expr() -> Result<()> {
-        // Create array: [[1, 2, 3, 4, 5], [10, 20, 30]]
         let mut builder = ListBuilder::new(Int32Builder::new());
         builder.values().append_value(1);
         builder.values().append_value(2);
@@ -408,7 +419,6 @@ mod tests {
         builder.append(true);
         let array = Arc::new(builder.finish()) as ArrayRef;
 
-        // Filter: __lambda_element__ > 2
         let lambda_expr = Expr::BinaryExpr(datafusion_expr::expr::BinaryExpr {
             left: Box::new(col(LAMBDA_ELEMENT_COLUMN)),
             op: Operator::Gt,
@@ -417,31 +427,19 @@ mod tests {
 
         let filter = SparkArrayFilterExpr::new(lambda_expr, DataType::Int32);
         let result = filter.filter_array(&array)?;
-        let result_list = result
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .expect("downcast failed");
+        let result_list = as_list(&result)?;
 
-        // Expected: [[3, 4, 5], [10, 20, 30]]
         assert_eq!(result_list.len(), 2);
 
-        // First row: [3, 4, 5]
         let row0 = result_list.value(0);
-        let row0_ints = row0
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("downcast failed");
+        let row0_ints = as_int32(&row0)?;
         assert_eq!(row0_ints.len(), 3);
         assert_eq!(row0_ints.value(0), 3);
         assert_eq!(row0_ints.value(1), 4);
         assert_eq!(row0_ints.value(2), 5);
 
-        // Second row: [10, 20, 30]
         let row1 = result_list.value(1);
-        let row1_ints = row1
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("downcast failed");
+        let row1_ints = as_int32(&row1)?;
         assert_eq!(row1_ints.len(), 3);
 
         Ok(())
@@ -449,7 +447,6 @@ mod tests {
 
     #[test]
     fn test_filter_with_and_expr() -> Result<()> {
-        // Create array: [[1, 2, 3, 4, 5]]
         let mut builder = ListBuilder::new(Int32Builder::new());
         builder.values().append_value(1);
         builder.values().append_value(2);
@@ -459,7 +456,6 @@ mod tests {
         builder.append(true);
         let array = Arc::new(builder.finish()) as ArrayRef;
 
-        // Filter: __lambda_element__ > 1 AND __lambda_element__ < 5
         let lambda_expr = Expr::BinaryExpr(datafusion_expr::expr::BinaryExpr {
             left: Box::new(Expr::BinaryExpr(datafusion_expr::expr::BinaryExpr {
                 left: Box::new(col(LAMBDA_ELEMENT_COLUMN)),
@@ -476,19 +472,12 @@ mod tests {
 
         let filter = SparkArrayFilterExpr::new(lambda_expr, DataType::Int32);
         let result = filter.filter_array(&array)?;
-        let result_list = result
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .expect("downcast failed");
+        let result_list = as_list(&result)?;
 
-        // Expected: [[2, 3, 4]]
         assert_eq!(result_list.len(), 1);
 
         let row0 = result_list.value(0);
-        let row0_ints = row0
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("downcast failed");
+        let row0_ints = as_int32(&row0)?;
         assert_eq!(row0_ints.len(), 3);
         assert_eq!(row0_ints.value(0), 2);
         assert_eq!(row0_ints.value(1), 3);

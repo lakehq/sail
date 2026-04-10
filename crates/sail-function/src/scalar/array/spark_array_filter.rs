@@ -23,7 +23,7 @@ pub enum FilterOp {
 }
 
 impl FilterOp {
-    #[allow(clippy::should_implement_trait)]
+    #[expect(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             ">" => Some(FilterOp::GreaterThan),
@@ -368,15 +368,26 @@ impl SparkArrayFilter {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::{Int32Builder, ListBuilder};
+    use datafusion_common::exec_datafusion_err;
 
     use super::*;
 
+    fn as_list(arr: &ArrayRef) -> Result<&ListArray> {
+        arr.as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| exec_datafusion_err!("expected ListArray"))
+    }
+
+    fn as_int32(arr: &ArrayRef) -> Result<&Int32Array> {
+        arr.as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| exec_datafusion_err!("expected Int32Array"))
+    }
+
     #[test]
     fn test_filter_array_greater_than() -> Result<()> {
-        // Create array: [[1, 2, 3, 4, 5], [10, 20, 30]]
         let mut builder = ListBuilder::new(Int32Builder::new());
         builder.values().append_value(1);
         builder.values().append_value(2);
@@ -390,25 +401,21 @@ mod tests {
         builder.append(true);
         let array = Arc::new(builder.finish()) as ArrayRef;
 
-        // Filter: x > 2
         let filter = SparkArrayFilter::greater_than(ScalarValue::Int32(Some(2)));
         let result = filter.filter_array(&array)?;
-        let result_list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let result_list = as_list(&result)?;
 
-        // Expected: [[3, 4, 5], [10, 20, 30]]
         assert_eq!(result_list.len(), 2);
 
-        // First row: [3, 4, 5]
         let row0 = result_list.value(0);
-        let row0_ints = row0.as_any().downcast_ref::<Int32Array>().unwrap();
+        let row0_ints = as_int32(&row0)?;
         assert_eq!(row0_ints.len(), 3);
         assert_eq!(row0_ints.value(0), 3);
         assert_eq!(row0_ints.value(1), 4);
         assert_eq!(row0_ints.value(2), 5);
 
-        // Second row: [10, 20, 30]
         let row1 = result_list.value(1);
-        let row1_ints = row1.as_any().downcast_ref::<Int32Array>().unwrap();
+        let row1_ints = as_int32(&row1)?;
         assert_eq!(row1_ints.len(), 3);
         assert_eq!(row1_ints.value(0), 10);
         assert_eq!(row1_ints.value(1), 20);
@@ -419,7 +426,6 @@ mod tests {
 
     #[test]
     fn test_filter_array_less_than_or_equal() -> Result<()> {
-        // Create array: [[1, 2, 3, 4, 5]]
         let mut builder = ListBuilder::new(Int32Builder::new());
         builder.values().append_value(1);
         builder.values().append_value(2);
@@ -429,16 +435,14 @@ mod tests {
         builder.append(true);
         let array = Arc::new(builder.finish()) as ArrayRef;
 
-        // Filter: x <= 3
         let filter = SparkArrayFilter::less_than_or_equal(ScalarValue::Int32(Some(3)));
         let result = filter.filter_array(&array)?;
-        let result_list = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let result_list = as_list(&result)?;
 
-        // Expected: [[1, 2, 3]]
         assert_eq!(result_list.len(), 1);
 
         let row0 = result_list.value(0);
-        let row0_ints = row0.as_any().downcast_ref::<Int32Array>().unwrap();
+        let row0_ints = as_int32(&row0)?;
         assert_eq!(row0_ints.len(), 3);
         assert_eq!(row0_ints.value(0), 1);
         assert_eq!(row0_ints.value(1), 2);
