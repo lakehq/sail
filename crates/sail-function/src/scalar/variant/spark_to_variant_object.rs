@@ -20,7 +20,9 @@ fn contains_void_type(dt: &DataType) -> bool {
         DataType::List(f) | DataType::LargeList(f) => contains_void_type(f.data_type()),
         DataType::Map(f, _) => {
             if let DataType::Struct(fields) = f.data_type() {
-                fields.iter().any(|field| contains_void_type(field.data_type()))
+                fields
+                    .iter()
+                    .any(|field| contains_void_type(field.data_type()))
             } else {
                 false
             }
