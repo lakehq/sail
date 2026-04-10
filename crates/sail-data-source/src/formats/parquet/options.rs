@@ -295,7 +295,7 @@ mod tests {
     use crate::formats::parquet::options::{
         resolve_parquet_read_options, resolve_parquet_write_options,
     };
-    use crate::options::test_utils::option_list;
+    use crate::options::option_list;
 
     #[test]
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {
@@ -332,14 +332,14 @@ mod tests {
 
         // metadata_size_hint = "0": parse_optional_non_zero_usize("0") returns None
         // which explicitly clears the value (overrides session default)
-        let kv2 = option_list(&[("metadata_size_hint", "0")]);
-        let options = resolve_parquet_read_options(&state, vec![kv2])
+        let kv = option_list(&[("metadata_size_hint", "0")]);
+        let options = resolve_parquet_read_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.metadata_size_hint, None);
 
         // metadata_size_hint = "": parse_optional_non_zero_usize("") returns None
-        let kv3 = option_list(&[("metadata_size_hint", "")]);
-        let options = resolve_parquet_read_options(&state, vec![kv3])
+        let kv = option_list(&[("metadata_size_hint", "")]);
+        let options = resolve_parquet_read_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.metadata_size_hint, None);
 
@@ -469,6 +469,13 @@ mod tests {
             .options_mut()
             .execution
             .parquet
+            .statistics_truncate_length = Some(99);
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
             .encoding = Some("bit_packed".to_string());
         let state = ctx.state();
 
@@ -477,6 +484,7 @@ mod tests {
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
+        assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
 
         let kv = option_list(&[

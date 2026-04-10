@@ -28,6 +28,7 @@ impl ListingFormat for JsonListingFormat {
         compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
         let mut options = resolve_json_read_options(ctx, options)
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         if let Some(compression) = compression {
             options.compression = compression;
@@ -41,6 +42,7 @@ impl ListingFormat for JsonListingFormat {
         options: Vec<OptionLayer>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
         let options = resolve_json_write_options(ctx, options)
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         Ok((Arc::new(JsonFormat::default().with_options(options)), None))
     }

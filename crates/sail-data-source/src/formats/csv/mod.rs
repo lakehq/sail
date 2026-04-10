@@ -95,7 +95,7 @@ impl SchemaInfer for CsvSchemaInfer {
             .clone();
         let csv_options = resolve_csv_read_options(ctx, options.to_vec())
             .map_err(datafusion_common::DataFusionError::from)?;
-        if csv_options.schema_infer_max_rec == Some(0) {
+        if !csv_options.infer_schema {
             schema = convert_string_columns(schema);
         }
         // Rename default CSV columns (column_1 -> _c0, etc.)
@@ -120,6 +120,8 @@ impl ListingFormat for CsvListingFormat {
         compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
         let mut options = resolve_csv_read_options(ctx, options)
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         if let Some(compression) = compression {
             options.compression = compression;
@@ -133,6 +135,8 @@ impl ListingFormat for CsvListingFormat {
         options: Vec<OptionLayer>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
         let options = resolve_csv_write_options(ctx, options)
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         Ok((Arc::new(CsvFormat::default().with_options(options)), None))
     }

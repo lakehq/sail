@@ -50,8 +50,10 @@ impl ListingFormat for TextListingFormat {
         options: Vec<OptionLayer>,
         compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options =
-            resolve_text_read_options(options).map_err(datafusion_common::DataFusionError::from)?;
+        let mut options = resolve_text_read_options(options)
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
+            .map_err(datafusion_common::DataFusionError::from)?;
         if let Some(compression) = compression {
             options.compression = compression;
         }
@@ -64,6 +66,8 @@ impl ListingFormat for TextListingFormat {
         options: Vec<OptionLayer>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
         let options = resolve_text_write_options(options)
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         Ok((Arc::new(TextFileFormat::new(options)), None))
     }

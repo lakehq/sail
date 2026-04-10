@@ -1,13 +1,14 @@
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::DataSourceResult;
+use crate::formats::binary::TableBinaryOptions;
 use crate::options::gen::{BinaryReadOptions, BinaryReadPartialOptions};
 use crate::options::{BuildPartialOptions, PartialOptions};
 
 impl BinaryReadOptions {
-    pub fn into_table_options(self) -> crate::formats::binary::TableBinaryOptions {
+    pub fn into_table_options(self) -> TableBinaryOptions {
         let BinaryReadOptions { path_glob_filter } = self;
-        crate::formats::binary::TableBinaryOptions { path_glob_filter }
+        TableBinaryOptions { path_glob_filter }
     }
 }
 
@@ -24,7 +25,7 @@ pub fn resolve_binary_read_options(
 #[cfg(test)]
 mod tests {
     use crate::formats::binary::options::resolve_binary_read_options;
-    use crate::options::test_utils::option_list;
+    use crate::options::option_list;
 
     #[test]
     fn test_resolve_binary_read_options() -> datafusion_common::Result<()> {

@@ -69,25 +69,25 @@ impl JsonWriteOptions {
 pub fn resolve_json_read_options(
     ctx: &dyn Session,
     options: Vec<OptionLayer>,
-) -> DataSourceResult<JsonOptions> {
+) -> DataSourceResult<JsonReadOptions> {
     let mut partial = JsonReadPartialOptions::initialize();
     partial.merge(ctx.default_table_options().json.build_partial_options()?);
     for layer in options {
         partial.merge(layer.build_partial_options()?);
     }
-    partial.finalize()?.into_table_options()
+    partial.finalize()
 }
 
 pub fn resolve_json_write_options(
     ctx: &dyn Session,
     options: Vec<OptionLayer>,
-) -> DataSourceResult<JsonOptions> {
+) -> DataSourceResult<JsonWriteOptions> {
     let mut partial = JsonWritePartialOptions::initialize();
     partial.merge(ctx.default_table_options().json.build_partial_options()?);
     for layer in options {
         partial.merge(layer.build_partial_options()?);
     }
-    partial.finalize()?.into_table_options()
+    partial.finalize()
 }
 
 #[cfg(test)]
@@ -96,7 +96,7 @@ mod tests {
     use datafusion_common::parsers::CompressionTypeVariant;
 
     use crate::formats::json::options::{resolve_json_read_options, resolve_json_write_options};
-    use crate::options::test_utils::option_list;
+    use crate::options::option_list;
 
     #[test]
     fn test_resolve_json_read_options() -> datafusion_common::Result<()> {
@@ -108,6 +108,7 @@ mod tests {
             ("compression", "bzip2"),
         ]);
         let options = resolve_json_read_options(&state, vec![kv])
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(100));
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
@@ -122,6 +123,7 @@ mod tests {
 
         let kv = option_list(&[("compression", "bzip2")]);
         let options = resolve_json_write_options(&state, vec![kv])
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 

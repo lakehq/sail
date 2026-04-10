@@ -211,25 +211,25 @@ impl CsvWriteOptions {
 pub fn resolve_csv_read_options(
     ctx: &dyn Session,
     options: Vec<OptionLayer>,
-) -> DataSourceResult<CsvOptions> {
+) -> DataSourceResult<CsvReadOptions> {
     let mut partial = CsvReadPartialOptions::initialize();
     partial.merge(ctx.default_table_options().csv.build_partial_options()?);
     for layer in options {
         partial.merge(layer.build_partial_options()?);
     }
-    partial.finalize()?.into_table_options()
+    partial.finalize()
 }
 
 pub fn resolve_csv_write_options(
     ctx: &dyn Session,
     options: Vec<OptionLayer>,
-) -> DataSourceResult<CsvOptions> {
+) -> DataSourceResult<CsvWriteOptions> {
     let mut partial = CsvWritePartialOptions::initialize();
     partial.merge(ctx.default_table_options().csv.build_partial_options()?);
     for layer in options {
         partial.merge(layer.build_partial_options()?);
     }
-    partial.finalize()?.into_table_options()
+    partial.finalize()
 }
 
 #[cfg(test)]
@@ -238,7 +238,7 @@ mod tests {
     use datafusion_common::parsers::CompressionTypeVariant;
 
     use crate::formats::csv::options::{resolve_csv_read_options, resolve_csv_write_options};
-    use crate::options::test_utils::option_list;
+    use crate::options::option_list;
 
     #[test]
     fn test_resolve_csv_read_options() -> datafusion_common::Result<()> {
@@ -258,6 +258,7 @@ mod tests {
             ("compression", "bzip2"),
         ]);
         let options = resolve_csv_read_options(&state, vec![kv])
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
@@ -273,16 +274,19 @@ mod tests {
 
         let kv = option_list(&[("inferSchema", "false")]);
         let options = resolve_csv_read_options(&state, vec![kv])
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
         let kv = option_list(&[("inferSchema", "true")]);
         let options = resolve_csv_read_options(&state, vec![kv])
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(1000));
 
         let kv = option_list(&[("infer_schema", "false")]);
         let options = resolve_csv_read_options(&state, vec![kv])
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
@@ -291,15 +295,18 @@ mod tests {
             ("schema_infer_max_records", "500"),
         ]);
         let options = resolve_csv_read_options(&state, vec![kv])
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
         let kv = option_list(&[("null_value", "MEOW"), ("null_regex", "MEOW")]);
-        let result = resolve_csv_read_options(&state, vec![kv]);
+        let result =
+            resolve_csv_read_options(&state, vec![kv]).and_then(|o| o.into_table_options());
         assert!(result.is_err());
 
         let kv = option_list(&[("null_regex", "MEOW")]);
         let options = resolve_csv_read_options(&state, vec![kv])
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.null_value, None);
         assert_eq!(options.null_regex, Some("MEOW".to_string()));
@@ -322,6 +329,7 @@ mod tests {
             ("compression", "bzip2"),
         ]);
         let options = resolve_csv_write_options(&state, vec![kv])
+            .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
