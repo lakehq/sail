@@ -11,13 +11,11 @@ if TYPE_CHECKING:
 import pandas as pd
 import pyarrow as pa
 import pyspark
-from pyspark.sql.conversion import LocalDataToArrowConversion
 from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import from_arrow_type
-from pyspark.sql.types import DataType, Row
+from pyspark.sql.types import Row
 
 _PYARROW_HAS_VIEW_TYPES = all(hasattr(pa, x) for x in ("list_view", "large_list_view", "string_view", "binary_view"))
-_ARROW_BATCH_SPARK_TYPE_INDEX = 2
 
 if _PYARROW_HAS_VIEW_TYPES:
     _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType)
@@ -386,21 +384,6 @@ def _pandas_to_arrow_array(data, data_type: pa.DataType, serializer: ArrowStream
     return serializer._create_array(data, data_type, arrow_cast=serializer._arrow_cast)  # noqa: SLF001
 
 
-def _local_data_to_arrow_array(
-    data, data_type: pa.DataType, spark_type: DataType, serializer: ArrowStreamPandasUDFSerializer
-) -> pa.Array:
-    converter = LocalDataToArrowConversion._create_converter(  # noqa: SLF001
-        spark_type,
-        none_on_identity=True,
-        int_to_decimal_coercion_enabled=False,
-    )
-    converted = [converter(value) for value in data] if converter is not None else data
-    try:
-        return pa.array(converted, type=data_type)
-    except pa.lib.ArrowInvalid:
-        return pa.array(converted).cast(target_type=data_type, safe=serializer._safecheck)  # noqa: SLF001
-
-
 def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
     if len(data) == 0:
         return pa.array([], type=data_type)
@@ -474,16 +457,7 @@ class PySparkArrowBatchUdf:
             inputs = tuple(pd.Series([pyspark._NoValue]).repeat(num_rows) for _ in range(1))  # noqa: SLF001
         else:
             inputs = tuple(_arrow_column_to_pandas(a, self._serializer) for a in args)
-        [result] = list(self._udf(None, (inputs,)))
-        output, output_type = result[0], result[1]
-        if not hasattr(output, "dtype"):
-            spark_type = (
-                result[_ARROW_BATCH_SPARK_TYPE_INDEX]
-                if len(result) > _ARROW_BATCH_SPARK_TYPE_INDEX
-                and isinstance(result[_ARROW_BATCH_SPARK_TYPE_INDEX], DataType)
-                else from_arrow_type(output_type)
-            )
-            return _local_data_to_arrow_array(output, output_type, spark_type, self._serializer)
+        [(output, output_type)] = list(self._udf(None, (inputs,)))
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 

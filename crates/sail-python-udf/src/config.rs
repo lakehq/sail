@@ -57,6 +57,16 @@ impl PySparkUdfConfig {
             "spark.sql.execution.arrow.maxRecordsPerBatch".to_string(),
             self.arrow_max_records_per_batch.to_string(),
         ));
+        // Enable legacy pandas conversion for Arrow-batched UDFs.
+        // PySpark 4.1+ introduced a new non-legacy path (`wrap_arrow_batch_udf_arrow`)
+        // that returns plain Python lists instead of pandas Series.
+        // Sail's UDF bridge (`PySparkArrowBatchUdf`) expects pandas Series,
+        // so we opt into the legacy path to maintain compatibility.
+        // This config is ignored by PySpark versions before 4.1.
+        out.push((
+            "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled".to_string(),
+            "true".to_string(),
+        ));
         out
     }
 }
