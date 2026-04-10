@@ -71,6 +71,7 @@ runs:
         target/**/build/
         target/**/deps/
         target/**/.fingerprint/
+        tmp/mtime.jsonl
         TEXT
         EOF
         echo "label=${{ steps.versions.outputs.rust_release }}-${{ runner.os }}-${{ runner.arch }}" >> "$GITHUB_OUTPUT"
@@ -78,14 +79,22 @@ runs:
       shell: bash
 
     - uses: actions/cache@v4
+      id: cache
       if: ${{ github.event_name == 'push' }}
       with:
         path: ${{ steps.config.outputs.path }}
         key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
 
+    - name: Save mtime
+      if: ${{ github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true' }}
+      run: |
+        mkdir -p tmp
+        .github/workflows/mtime/save-mtime.sh > tmp/mtime.jsonl
+      shell: bash
+
     # We save the cache only for push events, so that more cache space can be reserved
     # for the default branch and cache eviction is less likely to happen.
-    # We always use caches of the default branch for pull requests. The cache is still useful
+    # We always use caches of the default branch for pull request events. The cache is still useful
     # if the dependencies do not differ too much between the default branch and the feature branch.
     - uses: actions/cache/restore@v4
       if: ${{ github.event_name != 'push' }}
@@ -94,6 +103,17 @@ runs:
         key: ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
         restore-keys: |
           ${{ inputs.cache-key }}-${{ steps.config.outputs.label }}-
+
+    - name: Restore mtime
+      # We only restore mtime for pull request events.
+      # For push events, we build all workspace crates for correctness,
+      # in case restoring mtime causes unexpected issues.
+      if: ${{ github.event_name != 'push' }}
+      run: |
+        if [[ -f tmp/mtime.jsonl ]]; then
+          .github/workflows/mtime/restore-mtime.sh < tmp/mtime.jsonl
+        fi
+      shell: bash
 
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.

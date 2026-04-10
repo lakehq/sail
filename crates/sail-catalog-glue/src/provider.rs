@@ -12,7 +12,9 @@ use sail_catalog::provider::{
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
 use tokio::sync::OnceCell;
 
 use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
@@ -180,7 +182,7 @@ impl GlueCatalogProvider {
                 constraints: vec![],
                 location,
                 format,
-                partition_by: partition_keys,
+                partition_by: identity_partition_fields(&partition_keys),
                 sort_by: vec![],
                 bucket_by: None,
                 options: vec![],

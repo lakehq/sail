@@ -52,13 +52,15 @@ use crate::conversion::DeltaTypeConverter;
 use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
-use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
+use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
-use crate::spec::{contains_timestampntz_arrow, Action, ColumnMappingMode, StructType};
+use crate::spec::{
+    contains_timestampntz_arrow, Action, ColumnMappingMode, StructType, TableProperties,
+};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
 
@@ -76,7 +78,8 @@ enum SchemaMode {
 pub struct DeltaWriterExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
-    options: TableDeltaOptions,
+    options: DeltaWriterExecOptions,
+    metadata_configuration: HashMap<String, String>,
     partition_columns: Vec<String>,
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
@@ -84,7 +87,7 @@ pub struct DeltaWriterExec {
     /// Optional override for commit operation metadata.
     operation_override: Option<DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaWriterExec {
@@ -102,10 +105,12 @@ impl DeltaWriterExec {
         }
         map
     }
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
-        options: TableDeltaOptions,
+        options: DeltaWriterExecOptions,
+        metadata_configuration: HashMap<String, String>,
         partition_columns: Vec<String>,
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
@@ -119,6 +124,7 @@ impl DeltaWriterExec {
             input,
             table_url,
             options,
+            metadata_configuration,
             partition_columns,
             sink_mode,
             table_exists,
@@ -129,21 +135,25 @@ impl DeltaWriterExec {
         })
     }
 
-    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(output_partitions.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     pub fn table_url(&self) -> &Url {
         &self.table_url
     }
 
-    pub fn options(&self) -> &TableDeltaOptions {
+    pub fn options(&self) -> &DeltaWriterExecOptions {
         &self.options
+    }
+
+    pub fn metadata_configuration(&self) -> &HashMap<String, String> {
+        &self.metadata_configuration
     }
 
     pub fn partition_columns(&self) -> &[String] {
@@ -181,7 +191,7 @@ impl ExecutionPlan for DeltaWriterExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -260,6 +270,7 @@ impl ExecutionPlan for DeltaWriterExec {
             Arc::clone(&children[0]),
             self.table_url.clone(),
             self.options.clone(),
+            self.metadata_configuration.clone(),
             self.partition_columns.clone(),
             self.sink_mode.clone(),
             self.table_exists,
@@ -301,6 +312,7 @@ impl DeltaWriterExec {
 
         let table_url = self.table_url.clone();
         let options = self.options.clone();
+        let metadata_configuration = self.metadata_configuration.clone();
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
@@ -317,7 +329,7 @@ impl DeltaWriterExec {
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let exec_start = Instant::now();
-            let TableDeltaOptions {
+            let DeltaWriterExecOptions {
                 target_file_size,
                 write_batch_size,
                 ..
@@ -425,96 +437,83 @@ impl DeltaWriterExec {
 
             // Determine effective column mapping mode
             let effective_mode = if let Some(table) = &table {
-                ColumnMappingModeOption::from(
-                    table
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .effective_column_mapping_mode(),
-                )
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .effective_column_mapping_mode()
             } else {
-                options.column_mapping_mode
+                // For new tables, column mapping only comes from the metadata configuration
+                // that will be written into the initial Metadata action.
+                metadata_configuration
+                    .get("delta.columnMapping.mode")
+                    .and_then(|v| ColumnMappingMode::try_from(v.as_str()).ok())
+                    .unwrap_or_default()
             };
 
             // Determine the kernel column mapping mode once for downstream conversions
-            let kernel_mode = ColumnMappingMode::from(effective_mode);
+            let kernel_mode = effective_mode;
 
-            // If creating a new table and column mapping or timestampNtz features are required,
-            // prepare initial protocol+metadata
+            // If creating a new table, always materialize protocol+metadata so explicit
+            // table properties are persisted in the first Delta log commit.
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
                 // Build kernel schema for feature detection
                 let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
                 let kernel_schema = StructType::try_from(final_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                if effective_mode.is_enabled() {
+                let mut configuration = metadata_configuration.clone();
+                let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
                     let annotated_schema = annotate_for_column_mapping(&kernel_schema);
-                    annotated_schema_opt = Some(annotated_schema.clone());
-
-                    let protocol = protocol_for_create(true, has_timestamp_ntz)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    let mut configuration = HashMap::new();
-                    let mode_str = effective_mode.as_str();
-                    configuration
-                        .insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
-                    // Set maxColumnId for new tables
-                    let max_id = compute_max_column_id(&annotated_schema);
+                    configuration.insert(
+                        "delta.columnMapping.mode".to_string(),
+                        effective_mode.as_ref().to_string(),
+                    );
                     configuration.insert(
                         "delta.columnMapping.maxColumnId".to_string(),
-                        max_id.to_string(),
+                        compute_max_column_id(&annotated_schema).to_string(),
                     );
+                    annotated_schema_opt = Some(annotated_schema.clone());
+                    annotated_schema
+                } else {
+                    kernel_schema
+                };
 
-                    let metadata = metadata_for_create_with_struct_type(
-                        annotated_schema.clone(),
-                        partition_columns.clone(),
-                        Utc::now().timestamp_millis(),
-                        configuration,
-                    )
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let protocol = protocol_for_create(
+                    !matches!(effective_mode, ColumnMappingMode::None),
+                    has_timestamp_ntz,
+                    TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
+                    &configuration,
+                )
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let metadata = metadata_for_create_with_struct_type(
+                    metadata_schema,
+                    partition_columns.clone(),
+                    Utc::now().timestamp_millis(),
+                    configuration,
+                )
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                    initial_actions.push(Action::Protocol(protocol.clone()));
-                    initial_actions.push(Action::Metadata(metadata.clone()));
-                    log::trace!(
-                        "init_protocol: {:?}, init_metadata_has_mode: {:?}",
-                        &protocol,
-                        metadata.configuration().get("delta.columnMapping.mode")
-                    );
+                initial_actions.push(Action::Protocol(protocol.clone()));
+                initial_actions.push(Action::Metadata(metadata.clone()));
 
-                    operation = Some(DeltaOperation::Create {
-                        mode: SaveMode::ErrorIfExists,
-                        location: table_url.to_string(),
-                        protocol: Box::new(protocol.clone()),
-                        metadata: Box::new(metadata.clone()),
-                    });
-                } else if has_timestamp_ntz {
-                    let protocol = protocol_for_create(false, true)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                log::trace!(
+                    "init_protocol: {:?}, init_metadata_has_mode: {:?}",
+                    &protocol,
+                    metadata.configuration().get("delta.columnMapping.mode")
+                );
 
-                    let metadata = metadata_for_create_with_struct_type(
-                        kernel_schema,
-                        partition_columns.clone(),
-                        Utc::now().timestamp_millis(),
-                        HashMap::new(),
-                    )
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    initial_actions.push(Action::Protocol(protocol.clone()));
-                    initial_actions.push(Action::Metadata(metadata.clone()));
-
-                    operation = Some(DeltaOperation::Create {
-                        mode: SaveMode::ErrorIfExists,
-                        location: table_url.to_string(),
-                        protocol: Box::new(protocol.clone()),
-                        metadata: Box::new(metadata.clone()),
-                    });
-                }
+                operation = Some(DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: table_url.to_string(),
+                    protocol: Box::new(protocol.clone()),
+                    metadata: Box::new(metadata.clone()),
+                });
             }
 
             // Build physical writer schema (use physical names and set parquet field ids)
             // Prefer schema from pending Metadata action (schema evolution) if present
             let (writer_schema, physical_partition_columns, logical_kernel_for_mapping) =
-                if effective_mode.is_enabled() {
+                if !matches!(effective_mode, ColumnMappingMode::None) {
                     // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
                     let logical_kernel: StructType = if let Some(meta_action_schema) =
                         schema_actions
@@ -546,9 +545,9 @@ impl DeltaWriterExec {
                     } else {
                         annotated_schema_opt.clone().ok_or_else(|| {
                             DataFusionError::Plan(
-                                "Annotated schema should be present for new table with column mapping"
-                                    .to_string(),
-                            )
+                            "Annotated schema should be present for new table with column mapping"
+                                .to_string(),
+                        )
                         })?
                     };
 
@@ -592,7 +591,7 @@ impl DeltaWriterExec {
                 physical_partition_columns.clone(),
                 None,
                 *target_file_size,
-                *write_batch_size,
+                write_batch_size.get(),
                 32,
                 None,
             );
@@ -739,7 +738,7 @@ impl DeltaWriterExec {
 impl DeltaWriterExec {
     /// Determine the schema mode based on options and save mode
     fn get_schema_mode(
-        options: &TableDeltaOptions,
+        options: &DeltaWriterExecOptions,
         save_mode: SaveMode,
     ) -> Result<Option<SchemaMode>> {
         match (options.merge_schema, options.overwrite_schema) {

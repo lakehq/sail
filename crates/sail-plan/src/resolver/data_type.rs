@@ -273,6 +273,15 @@ impl PlanResolver<'_> {
                 Ok(self.arrow_string_type(state))
             }
             DataType::ConfiguredBinary => Ok(self.arrow_binary_type(state)),
+            DataType::Variant => {
+                // Variant layout using Binary for PySpark compatibility.
+                // parquet-variant uses BinaryView internally but we convert to Binary
+                let fields = adt::Fields::from(vec![
+                    adt::Field::new("metadata", adt::DataType::Binary, false),
+                    adt::Field::new("value", adt::DataType::Binary, false),
+                ]);
+                Ok(adt::DataType::Struct(fields))
+            }
             DataType::UserDefined { .. } => Err(PlanError::unsupported(
                 "user defined data type should only exist in a field",
             )),
@@ -322,14 +331,17 @@ impl PlanResolver<'_> {
                 // and are automatically filtered from Spark client responses.
                 // Edges default to planar in GeoArrow, so we omit them for Geometry.
                 metadata.insert(
-                    "ARROW:extension:name".to_string(),
+                    spec::ARROW_EXTENSION_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
                 let mut ext = json!({});
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert("ARROW:extension:metadata".to_string(), ext.to_string());
+                metadata.insert(
+                    spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
+                    ext.to_string(),
+                );
                 data_type
             }
             spec::DataType::Geography { srid, algorithm: _ } => {
@@ -338,14 +350,24 @@ impl PlanResolver<'_> {
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
                 metadata.insert(
-                    "ARROW:extension:name".to_string(),
+                    spec::ARROW_EXTENSION_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
                 let mut ext = json!({"edges": "spherical"});
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert("ARROW:extension:metadata".to_string(), ext.to_string());
+                metadata.insert(
+                    spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
+                    ext.to_string(),
+                );
+                data_type
+            }
+            spec::DataType::Variant => {
+                metadata.insert(
+                    spec::ARROW_EXTENSION_NAME_KEY.to_string(),
+                    spec::VARIANT_EXTENSION_NAME.to_string(),
+                );
                 data_type
             }
             x => x,

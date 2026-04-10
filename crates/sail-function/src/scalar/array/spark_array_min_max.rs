@@ -51,15 +51,17 @@ impl ScalarUDFImpl for ArrayMin {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
-            _ => plan_err!("ArrayMin can only accept List, LargeList or FixedSizeList."),
+            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
+            DataType::Null => Ok(DataType::Null),
+            _ => plan_err!("ArrayMin can only accept List or LargeList."),
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
+        if args[0].data_type() == DataType::Null {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Null));
+        }
         make_scalar_function(array_min_inner)(&args)
     }
 }
@@ -98,15 +100,17 @@ impl ScalarUDFImpl for ArrayMax {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _) => Ok(field.data_type().clone()),
-            _ => plan_err!("ArrayMax can only accept List, LargeList or FixedSizeList."),
+            DataType::List(field) | DataType::LargeList(field) => Ok(field.data_type().clone()),
+            DataType::Null => Ok(DataType::Null),
+            _ => plan_err!("ArrayMax can only accept List or LargeList."),
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
+        if args[0].data_type() == DataType::Null {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Null));
+        }
         make_scalar_function(array_max_inner)(&args)
     }
 }
