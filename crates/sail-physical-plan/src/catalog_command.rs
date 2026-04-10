@@ -26,17 +26,17 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 pub struct CatalogCommandExec {
     command: CatalogCommand,
     schema: SchemaRef,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl CatalogCommandExec {
     pub fn new(command: CatalogCommand, schema: SchemaRef) -> Self {
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Self {
             command,
             schema,
@@ -64,7 +64,7 @@ impl ExecutionPlan for CatalogCommandExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -182,7 +182,7 @@ async fn list_partition_values(
     let prefix = table_url.prefix().clone();
 
     let depth = partition_by.len();
-    let expected_keys: Vec<&str> = partition_by.iter().map(|c| c.as_str()).collect();
+    let expected_keys: Vec<&str> = partition_by.iter().map(|c| c.column.as_str()).collect();
     let mut partitions = Vec::new();
     collect_partitions(
         &store,

@@ -21,3 +21,9 @@
 
 - name: execution.expression.name
   description: The name of the expression.
+
+- name: flight.query.type
+  description: The type of Flight SQL query (SELECT, DDL, DML, OTHER).
+
+- name: flight.query.status
+  description: The status of the Flight SQL query execution (success, error).

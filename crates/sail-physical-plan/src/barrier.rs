@@ -32,12 +32,12 @@ use futures::{StreamExt, TryStreamExt};
 pub struct BarrierExec {
     preconditions: Vec<Arc<dyn ExecutionPlan>>,
     plan: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl BarrierExec {
     pub fn new(preconditions: Vec<Arc<dyn ExecutionPlan>>, plan: Arc<dyn ExecutionPlan>) -> Self {
-        let properties = plan.properties().clone();
+        let properties = Arc::new(plan.properties().as_ref().clone());
         Self {
             preconditions,
             plan,
@@ -69,7 +69,7 @@ impl ExecutionPlan for BarrierExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

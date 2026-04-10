@@ -21,22 +21,28 @@
 use std::fmt;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
-use delta_kernel::Error as KernelError;
 use object_store::ObjectStore;
-pub use state::DeltaTableState;
 use url::Url;
 
 use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
-use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
+pub mod features;
+pub use features::{
+    ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
+    EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
+};
+use sail_data_source::options::gen::DeltaReadOptions;
+
+use crate::delta_log::resolve_version_timestamp;
+pub use crate::kernel::snapshot::DeltaSnapshot;
+use crate::kernel::DeltaTableConfig;
 use crate::logical::table_source::DeltaTableSource;
-use crate::options::TableDeltaOptions;
-use crate::storage::{commit_uri_from_version, default_logstore, LogStoreRef, StorageConfig};
-mod state;
+use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
+use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
 /// In memory representation of a Delta Table
 ///
@@ -47,7 +53,7 @@ mod state;
 #[derive(Clone)]
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
-    pub state: Option<DeltaTableState>,
+    pub state: Option<Arc<DeltaSnapshot>>,
     /// the load options used during load
     pub config: DeltaTableConfig,
     /// log store
@@ -84,17 +90,15 @@ impl DeltaTable {
 
     /// Get the timestamp of a given version commit.
     pub(crate) async fn get_version_timestamp(&self, version: i64) -> Result<i64, DeltaTableError> {
-        if let Some(ts) = self
-            .state
-            .as_ref()
-            .and_then(|s| s.version_timestamp(version))
-        {
-            return Ok(ts);
-        }
-
-        let commit_uri = commit_uri_from_version(version);
-        let meta = self.log_store.object_store(None).head(&commit_uri).await?;
-        Ok(meta.last_modified.timestamp_millis())
+        let snapshot = self.snapshot()?;
+        resolve_version_timestamp(
+            self.log_store.as_ref(),
+            version,
+            snapshot.version_timestamp(version),
+            snapshot.protocol(),
+            snapshot.metadata(),
+        )
+        .await
     }
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
@@ -104,22 +108,28 @@ impl DeltaTable {
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         match self.state.as_mut() {
-            Some(state) => state.update(self.log_store.as_ref(), max_version).await,
+            Some(state) => {
+                Arc::make_mut(state)
+                    .update(self.log_store.as_ref(), max_version.map(|v| v as u64))
+                    .await?;
+                Ok(())
+            }
             _ => {
-                let state = DeltaTableState::try_new(
+                let state = DeltaSnapshot::try_new(
                     self.log_store.as_ref(),
                     self.config.clone(),
                     max_version,
+                    None,
                 )
                 .await?;
-                self.state = Some(state);
+                self.state = Some(Arc::new(state));
                 Ok(())
             }
         }
     }
 
     /// Returns the currently loaded state snapshot.
-    pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
+    pub fn snapshot(&self) -> DeltaResult<&Arc<DeltaSnapshot>> {
         self.state
             .as_ref()
             .ok_or_else(|| DeltaTableError::generic("Table has not yet been initialized"))
@@ -237,7 +247,7 @@ pub async fn create_delta_provider(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
-    options: TableDeltaOptions,
+    options: DeltaReadOptions,
 ) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
@@ -271,14 +281,12 @@ pub async fn create_delta_provider(
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
         delta_log_replay_strategy: options.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold,
+        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
     };
 
     let mut table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
-    if !options.metadata_as_data_read && snapshot.log_data().num_files() > 0 {
-        let adds: Vec<crate::kernel::models::Add> =
-            snapshot.log_data().iter().map(|v| v.add_action()).collect();
-        table_provider = table_provider.with_files(adds);
+    if !options.metadata_as_data_read && !snapshot.adds().is_empty() {
+        table_provider = table_provider.with_files(snapshot.adds().to_vec());
     }
 
     Ok(Arc::new(table_provider))
@@ -289,7 +297,7 @@ pub async fn create_delta_source(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
-    options: TableDeltaOptions,
+    options: DeltaReadOptions,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
@@ -326,7 +334,7 @@ pub async fn create_delta_source(
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
         delta_log_replay_strategy: options.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold,
+        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
     };
 
     Ok(Arc::new(DeltaTableSource::try_new(
@@ -337,20 +345,17 @@ pub async fn create_delta_source(
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.
-async fn load_table_by_options(table: &mut DeltaTable, options: &TableDeltaOptions) -> Result<()> {
+async fn load_table_by_options(table: &mut DeltaTable, options: &DeltaReadOptions) -> Result<()> {
     // Precedence: version > timestamp > latest.
     if let Some(version) = options.version_as_of {
         table.load_version(version).await?;
     } else if let Some(timestamp_str) = &options.timestamp_as_of {
-        // This logic is adapted from delta-rs `DeltaTable::load_with_datetime`
-        let datetime = DateTime::parse_from_rfc3339(timestamp_str)
-            .map_err(|e| DeltaTableError::generic(format!("Invalid timestamp string: {}", e)))?
-            .with_timezone(&Utc);
+        let datetime = parse_timestamp_as_of(timestamp_str)?;
 
         let target_version = find_version_for_timestamp(table, datetime)
             .await
             .map_err(|e| {
-                if matches!(e, DeltaTableError::Kernel(KernelError::MissingVersion)) {
+                if matches!(e, DeltaTableError::MissingVersion) {
                     DeltaTableError::generic(format!(
                         "No version of the Delta table exists at or before timestamp {}",
                         timestamp_str
@@ -374,14 +379,25 @@ async fn find_version_for_timestamp(
     datetime: DateTime<Utc>,
 ) -> DeltaResult<i64> {
     let log_store = table.log_store();
-    let mut max_version = log_store.get_latest_version(0).await?;
-    let mut min_version = 0;
-
-    // In case the table is not initialized yet (e.g. state is None),
-    // get_version_timestamp needs some state to work with. Let's load version 0.
-    if table.version().is_none() {
-        table.load_version(0).await?;
+    let latest_version = log_store.get_latest_version(0).await?;
+    if table.version() != Some(latest_version) {
+        table.load_version(latest_version).await?;
     }
+    let snapshot = table.snapshot()?;
+    let (mut min_version, mut max_version) =
+        if let Some((enablement_version, enablement_timestamp)) =
+            snapshot.in_commit_timestamp_enablement()
+        {
+            if datetime.timestamp_millis() >= enablement_timestamp {
+                (enablement_version, latest_version)
+            } else if enablement_version == 0 {
+                return Err(DeltaError::MissingVersion);
+            } else {
+                (0, enablement_version - 1)
+            }
+        } else {
+            (0, latest_version)
+        };
 
     let target_ts = datetime.timestamp_millis();
     let mut target_version = -1;
@@ -403,8 +419,41 @@ async fn find_version_for_timestamp(
 
     if target_version == -1 {
         // If no version was found, it means the provided timestamp is before the first commit.
-        Err(KernelError::MissingVersion.into())
+        Err(DeltaError::MissingVersion)
     } else {
         Ok(target_version)
     }
+}
+
+fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
+    let rfc3339_result = DateTime::parse_from_rfc3339(timestamp);
+    if let Ok(datetime) = rfc3339_result {
+        return Ok(datetime.with_timezone(&Utc));
+    }
+
+    let mut last_error = rfc3339_result
+        .err()
+        .map(|e| format!("RFC3339 parsing error: {e}"));
+
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ] {
+        match NaiveDateTime::parse_from_str(timestamp, format) {
+            Ok(naive) => return Ok(Utc.from_utc_datetime(&naive)),
+            Err(e) => {
+                last_error = Some(format!("Failed to parse with format '{format}': {e}"));
+            }
+        }
+    }
+
+    let detail = last_error
+        .map(|e| format!(" Details: {e}"))
+        .unwrap_or_default();
+
+    Err(DeltaTableError::generic(format!(
+        "Invalid timestamp string: {timestamp}. Supported formats are: RFC3339 (e.g. '2024-01-02T03:04:05Z'), '%Y-%m-%d %H:%M:%S%.f', '%Y-%m-%dT%H:%M:%S%.f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'.{detail}",
+    )))
 }

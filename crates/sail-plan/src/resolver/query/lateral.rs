@@ -74,6 +74,7 @@ impl PlanResolver<'_> {
                     &function_name,
                     input,
                     arguments,
+                    &[], // lateral view kwargs come via named_arguments, not NamedArgument exprs
                     output_names,
                     output_qualifier,
                     f.deterministic(),

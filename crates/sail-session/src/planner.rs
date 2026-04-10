@@ -235,8 +235,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node,
             );
             return internal_err!(
-                "MERGE planning expects a pre-expanded logical plan (MergeIntoWriteNode). \
-Ensure expand_merge is enabled; MERGE is currently only supported for Delta tables."
+                "MERGE planning expects a pre-expanded logical plan (RowLevelWriteNode). \
+Ensure expand_row_level_op is enabled; MERGE is currently only supported for lakehouse tables."
             );
         } else if let Some(node) = node.as_any().downcast_ref::<ExplicitRepartitionNode>() {
             let [input] = physical_inputs else {

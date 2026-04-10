@@ -9,6 +9,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{not_impl_err, plan_datafusion_err, plan_err, DataFusionError, Result};
 use glob::Pattern;
 use log::debug;
+use object_store::ObjectStoreExt;
 use percent_encoding::percent_decode;
 use url::Url;
 

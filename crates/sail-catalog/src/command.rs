@@ -55,6 +55,14 @@ pub enum CatalogCommand {
     GetTable {
         table: Vec<String>,
     },
+    ShowTables {
+        database: Vec<String>,
+        pattern: Option<String>,
+    },
+    ShowTableExtended {
+        database: Vec<String>,
+        pattern: String,
+    },
     ListTables {
         database: Vec<String>,
         pattern: Option<String>,
@@ -146,6 +154,8 @@ impl CatalogCommand {
             CatalogCommand::CreateTable { .. } => "CreateTable",
             CatalogCommand::TableExists { .. } => "TableExists",
             CatalogCommand::GetTable { .. } => "GetTable",
+            CatalogCommand::ShowTables { .. } => "ShowTables",
+            CatalogCommand::ShowTableExtended { .. } => "ShowTableExtended",
             CatalogCommand::ListTables { .. } => "ListTables",
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
@@ -176,6 +186,12 @@ impl CatalogCommand {
             CatalogCommand::GetTable { .. }
             | CatalogCommand::ListTables { .. }
             | CatalogCommand::ListViews { .. } => display.tables().schema()?,
+            CatalogCommand::ShowTables { .. } => {
+                ArrowSerializer::default().schema::<ShowTablesRow>()?
+            }
+            CatalogCommand::ShowTableExtended { .. } => {
+                ArrowSerializer::default().schema::<ShowTableExtendedRow>()?
+            }
             CatalogCommand::ListColumns { .. } => display.table_columns().schema()?,
             CatalogCommand::ListPartitions { .. } => {
                 ArrowSerializer::default().schema::<ShowPartitionRow>()?
@@ -291,6 +307,38 @@ impl CatalogCommand {
                 // We are supposed to return an error if the table or view does not exist.
                 let table = manager.get_table_or_view(&table).await?;
                 display.tables().to_record_batch(vec![table])?
+            }
+            CatalogCommand::ShowTables { database, pattern } => {
+                let rows = manager
+                    .list_tables_and_temporary_views(&database, pattern.as_deref())
+                    .await?;
+                let rows = rows
+                    .into_iter()
+                    .map(|row| ShowTablesRow {
+                        database: quote_names_if_needed(&row.database),
+                        table_name: row.name,
+                        is_temporary: row.kind.is_temporary(),
+                    })
+                    .collect::<Vec<_>>();
+                ArrowSerializer::default().build_record_batch(&rows)?
+            }
+            CatalogCommand::ShowTableExtended { database, pattern } => {
+                let rows = manager
+                    .list_tables_and_temporary_views(&database, Some(pattern.as_str()))
+                    .await?;
+                let formatter = service.plan_formatter();
+                let rows = rows
+                    .into_iter()
+                    .map(|row| {
+                        Ok(ShowTableExtendedRow {
+                            database: quote_names_if_needed(&row.database),
+                            table_name: row.name.clone(),
+                            is_temporary: row.kind.is_temporary(),
+                            information: row.show_table_extended_information(formatter)?,
+                        })
+                    })
+                    .collect::<CatalogResult<Vec<_>>>()?;
+                ArrowSerializer::default().build_record_batch(&rows)?
             }
             CatalogCommand::ListTables { database, pattern } => {
                 let rows = manager
@@ -477,4 +525,23 @@ struct DescribeTableRow {
 #[derive(Serialize, Deserialize)]
 pub struct ShowPartitionRow {
     pub partition: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShowTablesRow {
+    database: String,
+    #[serde(rename = "tableName")]
+    table_name: String,
+    is_temporary: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShowTableExtendedRow {
+    database: String,
+    #[serde(rename = "tableName")]
+    table_name: String,
+    is_temporary: bool,
+    information: String,
 }

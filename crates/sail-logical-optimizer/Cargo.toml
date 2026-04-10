@@ -8,3 +8,5 @@ workspace = true
 
 [dependencies]
 datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }

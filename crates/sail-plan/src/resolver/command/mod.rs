@@ -49,6 +49,18 @@ impl PlanResolver<'_> {
                     pattern,
                 })
             }
+            CommandNode::ShowTables { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ShowTables {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ShowTableExtended { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ShowTableExtended {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
             CommandNode::ListTables { database, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ListTables {
                     database: database.map(|x| x.into()).unwrap_or_default(),
