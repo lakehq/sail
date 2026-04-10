@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -144,12 +145,20 @@ impl ExecutionPlan for RelaxedTzCastExec {
         }
 
         let input_schema = self.input.schema();
+        // Pre-build a name→index map to avoid O(n²) linear scans in the loop below.
+        let name_to_idx: HashMap<&str, usize> = input_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.name().as_str(), i))
+            .collect();
+
         let column_statistics = self
             .schema
             .fields()
             .iter()
             .map(|field| {
-                let Some(input_idx) = input_schema.index_of(field.name()).ok() else {
+                let Some(&input_idx) = name_to_idx.get(field.name().as_str()) else {
                     return ColumnStatistics::new_unknown();
                 };
                 let input_field = input_schema.field(input_idx);
