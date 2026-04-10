@@ -316,32 +316,35 @@ mod tests {
             ("max_predicate_cache_size", "0"),
         ]);
         let options = resolve_parquet_read_options(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?;
-        assert!(options.enable_page_index);
-        assert!(options.pruning);
-        assert!(!options.skip_metadata);
-        assert_eq!(options.metadata_size_hint, Some(1024));
-        assert!(options.pushdown_filters);
-        assert!(!options.reorder_filters);
-        assert!(options.schema_force_view_types);
-        assert!(options.binary_as_string);
-        assert_eq!(options.coerce_int96, Some("ms".to_string()));
-        assert!(options.bloom_filter_on_read);
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options();
+        assert!(options.global.enable_page_index);
+        assert!(options.global.pruning);
+        assert!(!options.global.skip_metadata);
+        assert_eq!(options.global.metadata_size_hint, Some(1024));
+        assert!(options.global.pushdown_filters);
+        assert!(!options.global.reorder_filters);
+        assert!(options.global.schema_force_view_types);
+        assert!(options.global.binary_as_string);
+        assert_eq!(options.global.coerce_int96, Some("ms".to_string()));
+        assert!(options.global.bloom_filter_on_read);
         // max_predicate_cache_size uses parse_optional_usize: "0" = Some(0)
-        assert_eq!(options.max_predicate_cache_size, Some(0));
+        assert_eq!(options.global.max_predicate_cache_size, Some(0));
 
         // metadata_size_hint = "0": parse_optional_non_zero_usize("0") returns None
         // which explicitly clears the value (overrides session default)
         let kv = option_list(&[("metadata_size_hint", "0")]);
         let options = resolve_parquet_read_options(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.metadata_size_hint, None);
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options();
+        assert_eq!(options.global.metadata_size_hint, None);
 
         // metadata_size_hint = "": parse_optional_non_zero_usize("") returns None
         let kv = option_list(&[("metadata_size_hint", "")]);
         let options = resolve_parquet_read_options(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.metadata_size_hint, None);
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options();
+        assert_eq!(options.global.metadata_size_hint, None);
 
         Ok(())
     }
@@ -362,14 +365,16 @@ mod tests {
         // When metadata_size_hint is not provided, the session value is used
         let kv = option_list(&[]);
         let options = resolve_parquet_read_options(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.metadata_size_hint, Some(123));
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options();
+        assert_eq!(options.global.metadata_size_hint, Some(123));
 
         // When metadata_size_hint = "0" is provided, the value is explicitly cleared
         let kv = option_list(&[("metadata_size_hint", "0")]);
         let options = resolve_parquet_read_options(&state, vec![kv])
-            .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.metadata_size_hint, None);
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options();
+        assert_eq!(options.global.metadata_size_hint, None);
 
         Ok(())
     }
