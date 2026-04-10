@@ -66,8 +66,9 @@ impl PySparkUdfPayload {
             }
         }
 
-        // PySpark 4.x reads input types for ArrowBatched UDFs.
-        if matches!(pyspark_version, PySparkVersion::V4)
+        // PySpark 4.1+ reads input types for ArrowBatched UDFs.
+        // PySpark 4.0.x does not read input types and would misparse the stream.
+        if matches!(pyspark_version, PySparkVersion::V4_1)
             && matches!(eval_type, spec::PySparkUdfType::ArrowBatched)
         {
             let schema_json = build_input_types_json(input_types)?;
@@ -75,7 +76,7 @@ impl PySparkUdfPayload {
             data.extend(schema_json.as_bytes());
         }
 
-        if matches!(pyspark_version, PySparkVersion::V4) {
+        if pyspark_version.is_v4() {
             data.extend(0u8.to_be_bytes()); // profiling is not enabled
         }
 
@@ -87,8 +88,7 @@ impl PySparkUdfPayload {
             .map_err(|e| PyUdfError::invalid(format!("num args: {e}")))?;
         data.extend(num_arg_offsets.to_be_bytes()); // number of argument offsets
 
-        let allow_kwargs =
-            matches!(pyspark_version, PySparkVersion::V4) && supports_kwargs(eval_type);
+        let allow_kwargs = pyspark_version.is_v4() && supports_kwargs(eval_type);
 
         for (i, offset) in arg_offsets.iter().enumerate() {
             let offset: i32 = (*offset)

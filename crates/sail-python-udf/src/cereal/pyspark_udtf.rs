@@ -8,7 +8,7 @@ use sail_common::spec;
 
 use crate::cereal::{
     check_python_udf_version, get_pyspark_version, should_write_config, supports_kwargs,
-    write_kwarg, PySparkVersion,
+    write_kwarg,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -68,8 +68,7 @@ impl PySparkUdtfPayload {
         let num_args: i32 = num_args
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;
-        let allow_kwargs =
-            matches!(pyspark_version, PySparkVersion::V4) && supports_kwargs(eval_type);
+        let allow_kwargs = pyspark_version.is_v4() && supports_kwargs(eval_type);
         data.extend(num_args.to_be_bytes()); // number of arguments
         for index in 0..num_args {
             data.extend(index.to_be_bytes()); // argument offset
@@ -78,7 +77,7 @@ impl PySparkUdtfPayload {
             }
         }
 
-        if matches!(pyspark_version, PySparkVersion::V4) {
+        if pyspark_version.is_v4() {
             data.extend(0i32.to_be_bytes()); // number of partition child indexes
             data.extend(0u8.to_be_bytes()); // pickled analyze result is not present
         }
@@ -98,7 +97,7 @@ impl PySparkUdtfPayload {
         data.extend((type_string.len() as u32).to_be_bytes());
         data.extend(type_string.as_bytes());
 
-        if matches!(pyspark_version, PySparkVersion::V4) {
+        if pyspark_version.is_v4() {
             // TODO: support UDTF name
             data.extend(0u32.to_be_bytes()); // length of UDTF name
         }
