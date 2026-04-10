@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_schema::DataType;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
@@ -245,9 +246,24 @@ pub(crate) async fn plan_delta_scan(
         } else {
             Arc::clone(&full_logical_schema)
         };
-        return Ok(
-            Arc::new(RelaxedTzCastExec::new(renamed, output_schema)) as Arc<dyn ExecutionPlan>
-        );
+
+        let renamed_schema = renamed.schema();
+
+        let needs_wrapping = output_schema.fields().iter().any(|field| {
+            let Ok(input_field) = renamed_schema.field_with_name(field.name()) else {
+                return false;
+            };
+            matches!(
+                (input_field.data_type(), field.data_type()),
+                (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+            ) && input_field.data_type() != field.data_type()
+        });
+        if needs_wrapping {
+            return Ok(
+                Arc::new(RelaxedTzCastExec::new(renamed, output_schema)) as Arc<dyn ExecutionPlan>
+            );
+        }
+        return Ok(renamed);
     }
 
     // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
