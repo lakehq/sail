@@ -1,10 +1,9 @@
 use std::any::Any;
+use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use jiter::{Jiter, Peek};
 
 use crate::error::invalid_arg_count_exec_err;
@@ -33,10 +32,42 @@ impl Default for SparkSchemaOfJson {
 impl SparkSchemaOfJson {
     pub fn new() -> Self {
         Self {
-            signature: Signature::new(
-                TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]),
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
+        }
+    }
+
+    fn validate_args_are_literal(cols: &[ColumnarValue]) -> Result<()> {
+        if let Some(ColumnarValue::Array(_)) = cols.first() {
+            return exec_err!(
+                "[DATATYPE_MISMATCH.NON_FOLDABLE_INPUT] Cannot resolve \"schema_of_json()\" \
+                 due to data type mismatch: the input `json` should be a foldable \"STRING\" \
+                 expression; however, got a column reference."
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
+        match arg_types {
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
+                if let DataType::Struct(fields) = map_field.data_type() {
+                    let key = &fields[0];
+                    let value = &fields[1];
+                    if !key.data_type().is_string() || !value.data_type().is_string() {
+                        return exec_err!(
+                            "schema_of_json options map keys/values must both be string type, got key: {}, value: {}",
+                            key.data_type(),
+                            value.data_type()
+                        );
+                    }
+                    Ok(())
+                } else {
+                    exec_err!("schema_of_json: invalid arg types: {:?}", arg_types)
+                }
+            }
+            [DataType::Null] => Ok(()),
+            _ => exec_err!("schema_of_json: invalid arg types: {:?}", arg_types),
         }
     }
 }
@@ -58,6 +89,32 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
         Ok(DataType::Utf8)
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.is_empty() || arg_types.len() > 2 {
+            return Err(invalid_arg_count_exec_err(
+                "schema_of_json",
+                (1, 2),
+                arg_types.len(),
+            ));
+        }
+        Self::validate_arg_types(arg_types)?;
+        let mut coerced = vec![DataType::Utf8];
+        if arg_types.len() > 1 {
+            coerced.push(DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, true),
+                    ])),
+                    false,
+                )),
+                false,
+            ));
+        }
+        Ok(coerced)
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
@@ -68,6 +125,8 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
                 args.len(),
             ));
         }
+
+        Self::validate_args_are_literal(&args)?;
 
         // First argument is the JSON string.
         // Spark requires the input to be a foldable (constant/literal) expression.
@@ -90,7 +149,9 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
             }
             ColumnarValue::Array(_) => {
                 exec_err!(
-                    "[DATATYPE_MISMATCH.NON_FOLDABLE_INPUT] Cannot resolve \"schema_of_json()\" due to data type mismatch: the input `json` should be a foldable \"STRING\" expression; however, got a column reference."
+                    "[DATATYPE_MISMATCH.NON_FOLDABLE_INPUT] Cannot resolve \"schema_of_json()\" \
+                     due to data type mismatch: the input `json` should be a foldable \"STRING\" \
+                     expression; however, got a column reference."
                 )
             }
         }
