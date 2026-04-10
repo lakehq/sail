@@ -144,7 +144,6 @@ Feature: schema_of_variant
         | result                 |
         | ARRAY<OBJECT<a: BIGINT>> |
 
-    @sail-bug
     Scenario: schema_of_variant array of mixed objects merges fields
       When query
         """
@@ -255,7 +254,6 @@ Feature: schema_of_variant
         | result      |
         | ARRAY<VOID> |
 
-    @sail-bug
     Scenario: schema_of_variant array with null and int merges type
       When query
         """
@@ -292,7 +290,6 @@ Feature: schema_of_variant
         | result              |
         | ARRAY<ARRAY<VOID>> |
 
-    @sail-bug
     Scenario: schema_of_variant array with objects and null merges
       When query
         """

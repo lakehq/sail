@@ -161,20 +161,101 @@ pub(crate) fn variant_to_spark_type(variant: &Variant) -> String {
             if list.is_empty() {
                 return "ARRAY<VOID>".to_string();
             }
-            // Check if all elements have the same type. Early return on first mismatch.
-            // Safety: list is non-empty (empty case handled above).
-            let Some(first) = list.get(0) else {
-                return "ARRAY<VOID>".to_string();
-            };
-            let first_type = variant_to_spark_type(&first);
-            for elem in list.iter().skip(1) {
-                if variant_to_spark_type(&elem) != first_type {
-                    return "ARRAY<VARIANT>".to_string();
-                }
-            }
-            format!("ARRAY<{}>", first_type)
+            let element_types: Vec<String> =
+                list.iter().map(|e| variant_to_spark_type(&e)).collect();
+            let merged = merge_types(&element_types);
+            format!("ARRAY<{merged}>")
         }
     }
+}
+
+/// Merge a list of Spark type strings into a single type.
+///
+/// Rules (matching Spark behavior):
+/// - VOID is absorbed by any non-VOID type: `[VOID, BIGINT]` → `BIGINT`
+/// - OBJECT types with different fields are merged (field union): `[OBJECT<a: X>, OBJECT<b: Y>]` → `OBJECT<a: X, b: Y>`
+/// - All other mismatches → `VARIANT`
+fn merge_types(types: &[String]) -> String {
+    // Filter out VOIDs
+    let non_void: Vec<&String> = types.iter().filter(|t| t.as_str() != "VOID").collect();
+
+    if non_void.is_empty() {
+        return "VOID".to_string();
+    }
+
+    // Check if all non-void types are identical
+    if non_void.iter().all(|t| *t == non_void[0]) {
+        return non_void[0].clone();
+    }
+
+    // Try merging OBJECTs: if all non-void types are OBJECT<...>, union their fields
+    if non_void.iter().all(|t| t.starts_with("OBJECT<")) {
+        return merge_object_types(&non_void);
+    }
+
+    "VARIANT".to_string()
+}
+
+/// Merge multiple OBJECT<...> type strings by unioning their fields.
+fn merge_object_types(types: &[&String]) -> String {
+    let mut merged_fields: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+
+    for ty in types {
+        // Strip "OBJECT<" prefix and ">" suffix
+        let inner = ty
+            .strip_prefix("OBJECT<")
+            .and_then(|s| s.strip_suffix('>'))
+            .unwrap_or("");
+
+        if inner.is_empty() {
+            continue;
+        }
+
+        // Parse fields: "a: BIGINT, b: STRING" → [("a", "BIGINT"), ("b", "STRING")]
+        // Handle nested types by tracking angle bracket depth
+        for field_str in split_fields(inner) {
+            if let Some((name, field_type)) = field_str.split_once(':') {
+                let name = name.trim().to_string();
+                let field_type = field_type.trim().to_string();
+                merged_fields.entry(name).or_insert(field_type);
+            }
+        }
+    }
+
+    if merged_fields.is_empty() {
+        return "OBJECT<>".to_string();
+    }
+
+    let fields_str: Vec<String> = merged_fields
+        .iter()
+        .map(|(name, ty)| format!("{name}: {ty}"))
+        .collect();
+    format!("OBJECT<{}>", fields_str.join(", "))
+}
+
+/// Split a comma-separated field list respecting nested angle brackets.
+/// e.g. "a: OBJECT<x: BIGINT>, b: ARRAY<STRING>" → ["a: OBJECT<x: BIGINT>", "b: ARRAY<STRING>"]
+fn split_fields(s: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut depth = 0;
+    let mut start = 0;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                result.push(s[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = s[start..].trim();
+    if !last.is_empty() {
+        result.push(last);
+    }
+    result
 }
 
 /// Compute the decimal precision from the integer value and scale.
