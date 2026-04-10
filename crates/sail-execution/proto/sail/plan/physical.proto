@@ -54,6 +54,7 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 39;
     CatalogCommandExecNode catalog_command = 40;
     BarrierExecNode barrier = 41;
+    RelaxedTzCastExecNode relaxed_tz_cast = 42;
   }
 }
 
@@ -566,6 +567,11 @@ message MonotonicIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message RelaxedTzCastExecNode {
+  bytes input = 1;
+  bytes schema = 2;
 }
 
 message JoinOn {

@@ -92,6 +92,7 @@ use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    RelaxedTzCastExec,
 };
 use sail_delta_lake::spec::DeltaOperation;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
@@ -982,6 +983,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                Ok(Arc::new(RelaxedTzCastExec::new(input, schema)))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1621,6 +1627,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: monotonic_id.column_name().to_string(),
                 schema,
             })
+        } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {
+            let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
+            let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
+            NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
