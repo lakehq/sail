@@ -17,19 +17,24 @@ use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
-    PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
-use sail_data_source::options::{
-    load_default_options, load_options, IcebergReadOptions, IcebergWriteOptions,
+use sail_data_source::error::DataSourceResult;
+use sail_data_source::options::gen::{
+    IcebergReadOptions, IcebergReadPartialOptions, IcebergWriteOptions, IcebergWritePartialOptions,
 };
+use sail_data_source::options::{BuildPartialOptions, PartialOptions};
 use url::Url;
 
-use crate::options::TableIcebergOptions;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
+use crate::physical_plan::IcebergWriterExecOptions;
 use crate::spec::{PartitionSpec, Schema, Snapshot};
 use crate::table::{find_latest_metadata_file, Table};
-use crate::utils::partition_transform::format_partition_expr;
+use crate::utils::partition_transform::{
+    catalog_partition_field_from_iceberg, format_partition_exprs,
+};
 
 /// Iceberg implementation of [`TableFormat`].
 #[derive(Debug, Default)]
@@ -63,7 +68,8 @@ impl TableFormat for IcebergTableFormat {
         } = info;
 
         let table_url = Self::parse_table_url(paths).await?;
-        let iceberg_options = resolve_iceberg_read_options(options)?;
+        let iceberg_options = resolve_iceberg_read_options(options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         create_iceberg_provider(ctx, table_url, iceberg_options).await
     }
@@ -75,9 +81,9 @@ impl TableFormat for IcebergTableFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use datafusion::physical_plan::empty::EmptyExec;
 
+        let path = info.path();
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             bucket_by,
@@ -91,7 +97,8 @@ impl TableFormat for IcebergTableFormat {
         }
 
         let table_url = Self::parse_table_url(vec![path]).await?;
-        let iceberg_options = resolve_iceberg_write_options(options)?;
+        let iceberg_options = resolve_iceberg_write_options(options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let store = ctx
             .runtime_env()
@@ -135,8 +142,8 @@ impl TableFormat for IcebergTableFormat {
                         return plan_err!(
                             "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                             Cannot change partitioning on append.",
-                            existing_partitions,
-                            partition_by
+                            format_partition_exprs(existing_partitions),
+                            format_partition_exprs(&partition_by)
                         );
                     }
                     PhysicalSinkMode::Overwrite => {
@@ -145,8 +152,8 @@ impl TableFormat for IcebergTableFormat {
                             return plan_err!(
                                 "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                                 Set overwriteSchema=true to change partitioning.",
-                                existing_partitions,
-                                partition_by
+                                format_partition_exprs(existing_partitions),
+                                format_partition_exprs(&partition_by)
                             );
                         }
                     }
@@ -165,7 +172,7 @@ impl TableFormat for IcebergTableFormat {
             table_url,
             partition_columns: resolved_partition_columns,
             table_exists,
-            options: iceberg_options,
+            options: IcebergWriterExecOptions::from(iceberg_options),
         };
 
         let physical_sort = sort_order.map(|req| {
@@ -187,7 +194,7 @@ impl TableFormat for IcebergTableFormat {
 pub async fn create_iceberg_provider(
     ctx: &dyn Session,
     table_url: Url,
-    options: TableIcebergOptions,
+    options: IcebergReadOptions,
 ) -> Result<Arc<dyn TableProvider>> {
     let table = Table::load(ctx, table_url).await?;
     let provider = table.to_provider(&options)?;
@@ -199,7 +206,7 @@ pub async fn create_iceberg_provider(
 pub(crate) async fn load_table_metadata_with_options(
     ctx: &dyn Session,
     table_url: &Url,
-    options: TableIcebergOptions,
+    options: IcebergReadOptions,
 ) -> Result<(Schema, Snapshot, Vec<PartitionSpec>)> {
     log::trace!(
         "Loading table metadata (with options) from: {}, options: {:?}",
@@ -228,7 +235,7 @@ impl IcebergTableFormat {
         Ok(table_url)
     }
 
-    fn partition_columns_from_metadata(table: &Table) -> Result<Vec<String>> {
+    fn partition_columns_from_metadata(table: &Table) -> Result<Vec<CatalogPartitionField>> {
         let metadata = table.metadata();
         let spec = match metadata.default_partition_spec() {
             Some(spec) => spec,
@@ -253,60 +260,30 @@ impl IcebergTableFormat {
                         field.source_id
                     ))
                 })?;
-            columns.push(format_partition_expr(&col_name, field.transform));
+            columns.push(
+                catalog_partition_field_from_iceberg(col_name, field.transform)
+                    .map_err(DataFusionError::Plan)?,
+            );
         }
 
         Ok(columns)
     }
 }
 
-fn apply_iceberg_read_options(
-    from: IcebergReadOptions,
-    to: &mut TableIcebergOptions,
-) -> Result<()> {
-    if let Some(use_ref) = from.use_ref {
-        to.use_ref = Some(use_ref);
+fn resolve_iceberg_read_options(options: Vec<OptionLayer>) -> DataSourceResult<IcebergReadOptions> {
+    let mut partial = IcebergReadPartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    if let Some(snapshot_id) = from.snapshot_id {
-        to.snapshot_id = Some(snapshot_id);
-    }
-    if let Some(ts) = from.timestamp_as_of {
-        to.timestamp_as_of = Some(ts);
-    }
-    Ok(())
-}
-
-fn resolve_iceberg_read_options(
-    options: Vec<std::collections::HashMap<String, String>>,
-) -> Result<TableIcebergOptions> {
-    let mut iceberg = TableIcebergOptions::default();
-    apply_iceberg_read_options(load_default_options()?, &mut iceberg)?;
-    for opt in options {
-        apply_iceberg_read_options(load_options(opt)?, &mut iceberg)?;
-    }
-    Ok(iceberg)
-}
-
-fn apply_iceberg_write_options(
-    from: IcebergWriteOptions,
-    to: &mut TableIcebergOptions,
-) -> Result<()> {
-    if let Some(merge_schema) = from.merge_schema {
-        to.merge_schema = merge_schema;
-    }
-    if let Some(overwrite_schema) = from.overwrite_schema {
-        to.overwrite_schema = overwrite_schema;
-    }
-    Ok(())
+    partial.finalize()
 }
 
 fn resolve_iceberg_write_options(
-    options: Vec<std::collections::HashMap<String, String>>,
-) -> Result<TableIcebergOptions> {
-    let mut iceberg = TableIcebergOptions::default();
-    apply_iceberg_write_options(load_default_options()?, &mut iceberg)?;
-    for opt in options {
-        apply_iceberg_write_options(load_options(opt)?, &mut iceberg)?;
+    options: Vec<OptionLayer>,
+) -> DataSourceResult<IcebergWriteOptions> {
+    let mut partial = IcebergWritePartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    Ok(iceberg)
+    partial.finalize()
 }

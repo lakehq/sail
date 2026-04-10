@@ -54,11 +54,11 @@ impl ScalarUDFImpl for StGeomFromWKB {
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Arc<Field>> {
         let mut metadata = HashMap::new();
         metadata.insert(
-            "ARROW:extension:name".to_string(),
+            sail_common::spec::ARROW_EXTENSION_NAME_KEY.to_string(),
             "geoarrow.wkb".to_string(),
         );
         metadata.insert(
-            "ARROW:extension:metadata".to_string(),
+            sail_common::spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
             r#"{"crs":"SRID:0"}"#.to_string(),
         );
         Ok(Arc::new(

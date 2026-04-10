@@ -363,6 +363,7 @@ impl IcebergTableProvider {
                 partition_values,
                 range: None,
                 statistics: Some(Arc::new(self.create_file_statistics(&data_file))),
+                ordering: None,
                 extensions,
                 metadata_size_hint: None,
             };

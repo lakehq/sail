@@ -27,6 +27,7 @@ pub struct AppConfig {
     pub catalog: CatalogConfig,
     pub optimizer: OptimizerConfig,
     pub spark: SparkConfig,
+    pub flight: FlightConfig,
     pub python: PythonConfig,
     pub telemetry: TelemetryConfig,
     /// Reserved for internal use.
@@ -88,7 +89,6 @@ pub enum ExecutionMode {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub stack_size: usize,
-    pub enable_secondary: bool,
     pub memory_pool: MemoryPoolConfig,
     pub temporary_files: TemporaryFilesConfig,
 }
@@ -506,6 +506,13 @@ pub struct PythonConfig {
     pub data_source_write_channel_capacity: usize,
     pub data_source_slow_write_warn_ms: u64,
     pub data_source_slow_read_warn_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlightConfig {
+    pub max_rows: usize,
+    pub session_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

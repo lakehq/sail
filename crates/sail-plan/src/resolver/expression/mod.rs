@@ -324,6 +324,10 @@ impl PlanResolver<'_> {
                 self.resolve_expression_identifier_clause(*expr, schema, state)
                     .await
             }
+            // NamedArgument should only appear inside UDF argument lists, not standalone
+            Expr::NamedArgument { .. } => Err(PlanError::invalid(
+                "named argument expression can only be used in UDF arguments",
+            )),
         }
     }
 
@@ -592,10 +596,14 @@ mod tests {
         let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
         let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
 
-        assert_metadata_value(&metadata_map, "ARROW:extension:name", "geoarrow.wkb");
         assert_metadata_value(
             &metadata_map,
-            "ARROW:extension:metadata",
+            spec::ARROW_EXTENSION_NAME_KEY,
+            "geoarrow.wkb",
+        );
+        assert_metadata_value(
+            &metadata_map,
+            spec::ARROW_EXTENSION_METADATA_KEY,
             r#"{"crs":"SRID:0"}"#,
         );
 
@@ -632,10 +640,14 @@ mod tests {
         let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
         let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
 
-        assert_metadata_value(&metadata_map, "ARROW:extension:name", "geoarrow.wkb");
         assert_metadata_value(
             &metadata_map,
-            "ARROW:extension:metadata",
+            spec::ARROW_EXTENSION_NAME_KEY,
+            "geoarrow.wkb",
+        );
+        assert_metadata_value(
+            &metadata_map,
+            spec::ARROW_EXTENSION_METADATA_KEY,
             r#"{"crs":"OGC:CRS84","edges":"spherical"}"#,
         );
 

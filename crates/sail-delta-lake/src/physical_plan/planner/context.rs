@@ -17,11 +17,11 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
 use crate::kernel::DeltaTableConfig as KernelDeltaTableConfig;
-use crate::options::TableDeltaOptions;
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store_and_table_config, DeltaTable};
 
@@ -29,7 +29,7 @@ use crate::table::{open_table_with_object_store_and_table_config, DeltaTable};
 #[derive(Clone)]
 pub struct DeltaTableConfig {
     pub table_url: Url,
-    pub options: TableDeltaOptions,
+    pub options: DeltaWriteOptions,
     pub metadata_configuration: HashMap<String, String>,
     pub partition_columns: Vec<String>,
     pub table_schema_for_cond: Option<SchemaRef>,
@@ -39,7 +39,7 @@ pub struct DeltaTableConfig {
 impl DeltaTableConfig {
     pub fn new(
         table_url: Url,
-        options: TableDeltaOptions,
+        options: DeltaWriteOptions,
         metadata_configuration: HashMap<String, String>,
         partition_columns: Vec<String>,
         table_schema_for_cond: Option<SchemaRef>,
@@ -86,7 +86,7 @@ impl<'a> PlannerContext<'a> {
         &self.config.table_url
     }
 
-    pub fn options(&self) -> &TableDeltaOptions {
+    pub fn options(&self) -> &DeltaWriteOptions {
         &self.config.options
     }
 

@@ -82,6 +82,21 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    # Normalize Delta V2 UUID-named checkpoint files:
+    # e.g. 00000000000000000001.checkpoint.{uuid}.parquet -> 00000000000000000001.checkpoint.<uuid>.parquet
+    text = re.sub(
+        r"(\d{20}\.checkpoint\.)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",
+        r"\1<uuid>\2",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Normalize Delta V2 sidecar files: _sidecars/{uuid}.parquet -> _sidecars/<uuid>.parquet
+    text = re.sub(
+        r"(_sidecars/)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",
+        r"\1<uuid>\2",
+        text,
+        flags=re.IGNORECASE,
+    )
 
     # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
     # TODO: consider sorting the file groups during planner.
@@ -154,6 +169,7 @@ def _collect_plan(query: str, spark) -> str:
     df = spark.sql(query)
     rows = df.collect()
     assert len(rows) == 1, f"expected single row, got {len(rows)}"
+    assert len(rows[0]) == 1, f"expected single column, got {len(rows[0])}"
     plan = rows[0][0]
     assert isinstance(plan, str), "expected string plan output"
     assert plan, "expected non-empty plan output"

@@ -29,6 +29,16 @@ _ICEBERG_SNAP_FILE_RE = re.compile(r"^snap-\d+\.avro$")
 
 _UUID_SUFFIX_RE = re.compile(r"^(.+)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
+# Delta V2 checkpoint patterns
+_DELTA_UUID_CHECKPOINT_RE = re.compile(
+    r"^(\d{20}\.checkpoint\.)"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"\.parquet$"
+)
+_DELTA_SIDECAR_FILE_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.parquet$"
+)
+
 
 def _normalize_name(name: str) -> str | None:
     """
@@ -51,10 +61,6 @@ def _normalize_name(name: str) -> str | None:
     if name == "_SUCCESS":
         return None
 
-    # Ignore filesystem checksum noise.
-    if name.endswith(".crc"):
-        return None
-
     # Ignore Iceberg version-hint.text (internal file)
     if name == "version-hint.text":
         return None
@@ -74,6 +80,18 @@ def _normalize_name(name: str) -> str | None:
     # Normalize Iceberg snapshot files (snap-<id>.avro)
     if _ICEBERG_SNAP_FILE_RE.match(name):
         return "snap-*.avro"
+
+    # Normalize Delta V2 UUID-named checkpoint files
+    # e.g., `00000000000000000001.checkpoint.80a083e8-7026-4e79-81be-64bd76c43a11.parquet`
+    #     → `00000000000000000001.checkpoint.<uuid>.parquet`
+    m = _DELTA_UUID_CHECKPOINT_RE.match(name)
+    if m is not None:
+        return f"{m.group(1)}<uuid>.parquet"
+
+    # Normalize Delta V2 sidecar files (UUID-named parquet in _sidecars/)
+    # e.g., `3a0d65cd-4056-49b8-937b-95f9e3ee90e5.parquet` → `<uuid>.parquet`
+    if _DELTA_SIDECAR_FILE_RE.match(name):
+        return "<uuid>.parquet"
 
     # Normalize Spark data file names.
     m = _SPARK_PART_FILE_RE.match(name)
@@ -126,13 +144,7 @@ def render_normalized_file_tree(root_path: Path) -> str:
             lines.append(f"{indent}📂 {name}")
             render_dir(p, depth=depth + 1)
 
-        dedup_names = {"*.parquet", "*.metadata.json", "snap-*.avro"}
-        seen_files = set()
         for name in files:
-            if name in dedup_names:
-                if name in seen_files:
-                    continue
-                seen_files.add(name)
             indent = "  " * depth
             lines.append(f"{indent}📄 {name}")
 
@@ -141,8 +153,11 @@ def render_normalized_file_tree(root_path: Path) -> str:
     return "\n".join(lines)
 
 
-@then(parsers.parse("file tree in {location_var} matches"))
-def file_tree_matches_docstring(location_var: str, variables: dict, docstring: str) -> None:
+def _assert_file_tree_matches_docstring(
+    location_var: str,
+    variables: dict,
+    docstring: str,
+) -> None:
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
 
@@ -154,6 +169,11 @@ def file_tree_matches_docstring(location_var: str, variables: dict, docstring: s
     assert actual == expected
 
 
+@then(parsers.parse("file tree in {location_var} matches"))
+def file_tree_matches_docstring(location_var: str, variables: dict, docstring: str) -> None:
+    _assert_file_tree_matches_docstring(location_var, variables, docstring)
+
+
 @given(parsers.parse("file {filename} in {location_var} is deleted"))
 def file_in_location_is_deleted(filename: str, location_var: str, variables: dict) -> None:
     """Deletes a named file from the given location directory."""
@@ -162,6 +182,21 @@ def file_in_location_is_deleted(filename: str, location_var: str, variables: dic
     file_path = Path(location.path) / filename
     assert file_path.exists(), f"File {file_path} does not exist"
     file_path.unlink()
+
+
+@given(parsers.parse("file {filename} in {location_var} is replaced with"))
+def file_in_location_is_replaced_with(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    docstring: str,
+) -> None:
+    """Replaces a named file in the given location directory with the provided text."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    file_path = Path(location.path) / filename
+    assert file_path.exists(), f"File {file_path} does not exist"
+    file_path.write_text(docstring, encoding="utf-8")
 
 
 @then(parsers.parse("data files in {location_var} count is {n:d}"))

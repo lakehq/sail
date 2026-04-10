@@ -9,7 +9,9 @@ use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    OptionLayer, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+};
 
 use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
@@ -172,7 +174,12 @@ impl TableFormat for PythonTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         // Create PythonDataSource from options
-        let datasource = self.create_datasource(&info.options)?;
+        let opaque_options: Vec<HashMap<String, String>> = info
+            .options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let datasource = self.create_datasource(&opaque_options)?;
 
         // Get schema (use provided schema or discover from Python).
         // When a table is created without column definitions (e.g. `CREATE TABLE t USING fmt`),
@@ -200,7 +207,6 @@ impl TableFormat for PythonTableFormat {
 
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             table_properties: _,
@@ -217,13 +223,9 @@ impl TableFormat for PythonTableFormat {
             );
         }
 
-        // Inject save path into options so the Python DataSource receives it
-        // via self.options["path"] in __init__ (matches PySpark behavior).
-        if !path.is_empty() {
-            let path_option: HashMap<String, String> =
-                [("path".to_string(), path)].into_iter().collect();
-            options.push(path_option);
-        }
+        // The path (if any) is already present in options under the "path" key,
+        // so it will be forwarded to the Python DataSource via self.options["path"]
+        // in __init__ (matches PySpark behavior). No additional injection needed.
 
         // Map save mode to overwrite bool (PySpark convention).
         // PySpark's DataSource.writer(schema, overwrite) only receives a boolean:
@@ -248,14 +250,17 @@ impl TableFormat for PythonTableFormat {
             PhysicalSinkMode::OverwriteIf { .. } => "overwrite",
             PhysicalSinkMode::OverwritePartitions => "overwrite",
         };
-        let mode_option: HashMap<String, String> = [("mode".to_string(), mode_str.to_string())]
-            .into_iter()
-            .collect();
-        options.push(mode_option);
+        options.push(OptionLayer::OptionList {
+            items: vec![("mode".to_string(), mode_str.to_string())],
+        });
 
         // Create datasource and get writer using the same executor configuration
         // path as write execution for consistent Python datasource behavior.
-        let datasource = self.create_datasource(&options)?;
+        let opaque_options: Vec<HashMap<String, String>> = options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let datasource = self.create_datasource(&opaque_options)?;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
         let schema = input.schema();

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pytest_bdd import parsers, then
+from pyspark.sql import Row
+from pytest_bdd import given, parsers, then
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -45,6 +48,42 @@ def _find_latest_metadata(table_location: Path) -> dict:
         return json.load(f)
 
 
+def _latest_metadata_path(table_location: Path) -> Path:
+    metadata_dir = table_location / "metadata"
+    if not metadata_dir.exists():
+        msg = f"metadata directory not found: {metadata_dir}"
+        raise AssertionError(msg)
+
+    metadata_files = sorted(metadata_dir.glob("*.metadata.json"))
+    if not metadata_files:
+        msg = f"no metadata files found in {metadata_dir}"
+        raise AssertionError(msg)
+    return metadata_files[-1]
+
+
+def _ordered_snapshots(metadata: dict) -> list[dict]:
+    snapshots_by_id = {
+        snapshot["snapshot-id"]: snapshot for snapshot in metadata.get("snapshots", []) if "snapshot-id" in snapshot
+    }
+    ordered = []
+    for entry in metadata.get("snapshot-log", []):
+        snapshot = snapshots_by_id.get(entry.get("snapshot-id"))
+        if snapshot is not None:
+            ordered.append(snapshot)
+    if ordered:
+        return ordered
+    return sorted(
+        snapshots_by_id.values(),
+        key=lambda snapshot: (snapshot.get("timestamp-ms", 0), snapshot["snapshot-id"]),
+    )
+
+
+def _write_metadata(table_location: Path, metadata: dict) -> None:
+    path = _latest_metadata_path(table_location)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(metadata, f, separators=(",", ":"))
+
+
 def _find_latest_snapshot(table_location: Path) -> dict | None:
     """Find the latest snapshot from an Iceberg table's metadata."""
     metadata = _find_latest_metadata(table_location)
@@ -59,6 +98,104 @@ def _find_latest_snapshot(table_location: Path) -> dict | None:
 
     msg = f"current snapshot {current_snapshot_id} not found in snapshots list"
     raise AssertionError(msg)
+
+
+@given(
+    parsers.parse("variable {name} for iceberg snapshot ids in {location_var}"),
+    target_fixture="variables",
+)
+def variable_for_iceberg_snapshot_ids(name: str, location_var: str, variables: dict) -> dict:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    metadata = _find_latest_metadata(Path(location.path))
+    variables[name] = [snapshot["snapshot-id"] for snapshot in _ordered_snapshots(metadata)]
+    return variables
+
+
+@given(
+    parsers.parse(
+        "iceberg snapshot timestamps in {location_var} are rewritten to consecutive seconds starting {seconds_ago:d} seconds ago"
+    )
+)
+def rewrite_iceberg_snapshot_timestamps(location_var: str, seconds_ago: int, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    table_path = Path(location.path)
+    metadata = _find_latest_metadata(table_path)
+    ordered = _ordered_snapshots(metadata)
+    assert ordered, "no iceberg snapshots found"
+
+    base_timestamp_ms = int(time.time() * 1000) - seconds_ago * 1000
+    timestamp_by_id = {
+        snapshot["snapshot-id"]: base_timestamp_ms + index * 1000 for index, snapshot in enumerate(ordered)
+    }
+
+    for snapshot in metadata.get("snapshots", []):
+        snapshot_id = snapshot.get("snapshot-id")
+        if snapshot_id in timestamp_by_id:
+            snapshot["timestamp-ms"] = timestamp_by_id[snapshot_id]
+
+    for entry in metadata.get("snapshot-log", []):
+        snapshot_id = entry.get("snapshot-id")
+        if snapshot_id in timestamp_by_id:
+            entry["timestamp-ms"] = timestamp_by_id[snapshot_id]
+
+    metadata["last-updated-ms"] = max(timestamp_by_id.values())
+    _write_metadata(table_path, metadata)
+
+
+@given(
+    parsers.parse("variable {name} for iceberg snapshot timestamp strings in {location_var}"),
+    target_fixture="variables",
+)
+def variable_for_iceberg_snapshot_timestamps(name: str, location_var: str, variables: dict) -> dict:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    metadata = _find_latest_metadata(Path(location.path))
+    timestamps = []
+    for snapshot in _ordered_snapshots(metadata):
+        ts_ms = snapshot["timestamp-ms"]
+        timestamps.append(datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat())
+    variables[name] = timestamps
+    return variables
+
+
+@given(parsers.parse("iceberg tag {tag_name} in {location_var} points to snapshot index {index:d}"))
+def iceberg_tag_points_to_snapshot_index(
+    tag_name: str,
+    location_var: str,
+    index: int,
+    variables: dict,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    table_path = Path(location.path)
+    metadata = _find_latest_metadata(table_path)
+    ordered = _ordered_snapshots(metadata)
+    assert 0 <= index < len(ordered), f"snapshot index {index} out of range"
+    snapshot_id = ordered[index]["snapshot-id"]
+    metadata.setdefault("refs", {})[tag_name] = {
+        "snapshot-id": snapshot_id,
+        "type": "tag",
+    }
+    _write_metadata(table_path, metadata)
+
+
+# FIXME: Remove this workaround once we get a proper solution.
+@given(parsers.parse("append JSON row {row_json} to iceberg table in {location_var} with mergeSchema"))
+def append_json_row_to_iceberg_table_with_merge_schema(
+    row_json: str,
+    location_var: str,
+    variables: dict,
+    spark,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    row = json.loads(row_json)
+    spark.createDataFrame([Row(**row)]).write.format("iceberg").mode("append").option(
+        "mergeSchema",
+        "true",
+    ).save(location.path.absolute().as_uri())
 
 
 def _sanitize_iceberg_metadata(metadata: dict) -> dict:

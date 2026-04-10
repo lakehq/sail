@@ -240,8 +240,8 @@ fn parse_struct_fields(s: &str) -> Vec<(String, String)> {
 
     for (i, ch) in inner.char_indices() {
         match ch {
-            '<' => depth += 1,
-            '>' => depth -= 1,
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth -= 1,
             ',' if depth == 0 => {
                 let field = inner[start..i].trim();
                 if let Some((name, typ)) = field.split_once(": ") {

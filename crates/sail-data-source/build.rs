@@ -2,6 +2,7 @@ use std::iter::once;
 use std::path::PathBuf;
 
 use quote::{format_ident, quote};
+use sail_build_scripts::data_source::options::build_data_source_options;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -135,13 +136,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     build_options("JsonWriteOptions", "json_write")?;
     build_options("ParquetReadOptions", "parquet_read")?;
     build_options("ParquetWriteOptions", "parquet_write")?;
-    build_options("DeltaReadOptions", "delta_read")?;
-    build_options("DeltaWriteOptions", "delta_write")?;
-    build_options("IcebergReadOptions", "iceberg_read")?;
-    build_options("IcebergWriteOptions", "iceberg_write")?;
+    build_data_source_options("Delta", "delta")?;
+    build_data_source_options("Iceberg", "iceberg")?;
     build_options("TextReadOptions", "text_read")?;
     build_options("TextWriteOptions", "text_write")?;
-    build_options("SocketReadOptions", "socket_read")?;
-    build_options("RateReadOptions", "rate_read")?;
+    build_data_source_options("Socket", "socket")?;
+    build_data_source_options("Rate", "rate")?;
     Ok(())
 }

@@ -7,7 +7,8 @@ use pyo3::{intern, Bound, IntoPyObject, PyAny, PyResult, Python};
 use sail_common::spec;
 
 use crate::cereal::{
-    check_python_udf_version, get_pyspark_version, should_write_config, PySparkVersion,
+    check_python_udf_version, get_pyspark_version, should_write_config, supports_kwargs,
+    write_kwarg, PySparkVersion,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -43,6 +44,7 @@ impl PySparkUdtfPayload {
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         num_args: usize,
+        kwargs: &[Option<String>],
         return_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
@@ -66,12 +68,13 @@ impl PySparkUdtfPayload {
         let num_args: i32 = num_args
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;
+        let allow_kwargs =
+            matches!(pyspark_version, PySparkVersion::V4) && supports_kwargs(eval_type);
         data.extend(num_args.to_be_bytes()); // number of arguments
         for index in 0..num_args {
-            // TODO: support keyword arguments
             data.extend(index.to_be_bytes()); // argument offset
-            if matches!(pyspark_version, PySparkVersion::V4) {
-                data.extend(0u8.to_be_bytes()); // not a keyword argument
+            if allow_kwargs {
+                write_kwarg(&mut data, kwargs, index as usize);
             }
         }
 

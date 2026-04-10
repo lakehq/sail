@@ -57,7 +57,7 @@ impl ScalarUDFImpl for ArraysZip {
         let struct_field = struct_result_field(
             &params
                 .iter()
-                .map(|row| row.field_type.clone())
+                .map(|row| row.inner_field.clone())
                 .collect::<Vec<_>>(),
         );
 
@@ -95,15 +95,15 @@ impl ScalarUDFImpl for ArraysZip {
 }
 
 struct ListParams {
-    field_type: DataType,
+    inner_field: Arc<Field>,
     is_large: bool,
     fixed_size_opt: Option<i32>,
 }
 
 impl ListParams {
-    pub fn new(field_type: DataType, is_large: bool, fixed_size_opt: Option<i32>) -> Self {
+    pub fn new(inner_field: Arc<Field>, is_large: bool, fixed_size_opt: Option<i32>) -> Self {
         Self {
-            field_type,
+            inner_field,
             is_large,
             fixed_size_opt,
         }
@@ -113,50 +113,50 @@ impl ListParams {
 fn get_list_params(data_type: &DataType) -> Result<ListParams> {
     match data_type {
         DataType::List(field) | DataType::ListView(field) => {
-            Ok(ListParams::new(field.data_type().clone(), false, None))
+            Ok(ListParams::new(field.clone(), false, None))
         }
-        DataType::FixedSizeList(field, size) => Ok(ListParams::new(
-            field.data_type().clone(),
-            false,
-            Some(*size),
-        )),
+        DataType::FixedSizeList(field, size) => {
+            Ok(ListParams::new(field.clone(), false, Some(*size)))
+        }
         DataType::LargeList(field) | DataType::LargeListView(field) => {
-            Ok(ListParams::new(field.data_type().clone(), true, None))
+            Ok(ListParams::new(field.clone(), true, None))
         }
         _ => plan_err!("`arrays_zip` can only accept List, LargeList or FixedSizeList."),
     }
 }
 
-fn struct_result_field_names(data_types: &[DataType]) -> Vec<String> {
-    (0..data_types.len())
-        .map(|i| format!("{i}"))
-        .collect::<Vec<_>>()
+fn struct_result_field_names(count: usize) -> Vec<String> {
+    (0..count).map(|i| format!("{i}")).collect::<Vec<_>>()
 }
 
-fn struct_result_field(data_types: &[DataType]) -> Arc<Field> {
-    let fields = struct_result_field_names(data_types)
+/// Build the struct field for the list result, preserving metadata from inner fields.
+fn struct_result_field(inner_fields: &[Arc<Field>]) -> Arc<Field> {
+    let field_names = struct_result_field_names(inner_fields.len());
+    let fields = field_names
         .iter()
-        .zip(data_types)
-        .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
+        .zip(inner_fields)
+        .map(|(name, f)| {
+            Field::new(name, f.data_type().clone(), true).with_metadata(f.metadata().clone())
+        })
         .collect::<Vec<_>>();
     Arc::new(Field::new_struct(SAIL_LIST_FIELD_NAME, fields, true))
 }
 
-fn num_rows_data_types_field_names(
+fn num_rows_inner_fields_and_names(
     args: &[ArrayRef],
-) -> Result<(usize, Vec<DataType>, Vec<String>)> {
+) -> Result<(usize, Vec<Arc<Field>>, Vec<String>)> {
     let num_rows = args[0].len();
     for arg in args {
         if arg.len() != num_rows {
             return exec_err!("`arrays_zip`: all ListArrays must have the same number of rows");
         }
     }
-    let data_types = args
+    let inner_fields = args
         .iter()
-        .map(|arg| Ok(get_list_params(arg.data_type())?.field_type))
+        .map(|arg| Ok(get_list_params(arg.data_type())?.inner_field))
         .collect::<Result<Vec<_>>>()?;
-    let field_names = struct_result_field_names(&data_types);
-    Ok((num_rows, data_types, field_names))
+    let field_names = struct_result_field_names(inner_fields.len());
+    Ok((num_rows, inner_fields, field_names))
 }
 
 fn combine_validity_masks(arrays: &[ArrayRef]) -> Option<NullBuffer> {
@@ -182,12 +182,23 @@ fn combine_validity_masks(arrays: &[ArrayRef]) -> Option<NullBuffer> {
 }
 
 fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32) -> Result<ArrayRef> {
-    let (_num_rows, data_types, field_names) = num_rows_data_types_field_names(args)?;
+    let (_num_rows, inner_fields, field_names) = num_rows_inner_fields_and_names(args)?;
 
     let lists = args
         .iter()
         .map(|arr| arr.as_fixed_size_list())
         .collect::<Vec<_>>();
+
+    // Create fields with nullable=true, preserving metadata from inner fields
+    let arg_fields: Vec<Arc<Field>> = inner_fields
+        .iter()
+        .zip(field_names.iter())
+        .map(|(f, name)| {
+            Arc::new(
+                Field::new(name, f.data_type().clone(), true).with_metadata(f.metadata().clone()),
+            )
+        })
+        .collect();
 
     let values = to_struct_array(
         lists
@@ -196,10 +207,11 @@ fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32) -> Result<ArrayRef
             .collect::<Vec<_>>()
             .as_slice(),
         &field_names,
+        &arg_fields,
     )?;
 
     Ok(Arc::new(FixedSizeListArray::try_new(
-        struct_result_field(&data_types),
+        struct_result_field(&inner_fields),
         *fixed_size,
         values,
         combine_validity_masks(args),
@@ -207,8 +219,19 @@ fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32) -> Result<ArrayRef
 }
 
 fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let (num_rows, data_types, field_names) = num_rows_data_types_field_names(args)?;
+    let (num_rows, inner_fields, field_names) = num_rows_inner_fields_and_names(args)?;
     let validity_mask_opt = combine_validity_masks(args);
+
+    // Create fields with nullable=true, preserving metadata from inner fields
+    let arg_fields: Vec<Arc<Field>> = inner_fields
+        .iter()
+        .zip(field_names.iter())
+        .map(|(f, name)| {
+            Arc::new(
+                Field::new(name, f.data_type().clone(), true).with_metadata(f.metadata().clone()),
+            )
+        })
+        .collect();
 
     let casted_lists = args
         .iter()
@@ -278,7 +301,11 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let struct_array = to_struct_array(arrays_padded.as_slice(), field_names.as_slice())?;
+        let struct_array = to_struct_array(
+            arrays_padded.as_slice(),
+            field_names.as_slice(),
+            &arg_fields,
+        )?;
         let offset = O::from_usize(struct_array.len()).ok_or_else(|| {
             DataFusionError::Execution("`arrays_zip` offset overflow error".to_string())
         })?;
@@ -292,11 +319,15 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
         // When all rows are null, struct_arrays is empty. Create an empty struct array.
         let fields: Fields = field_names
             .iter()
-            .zip(data_types.iter())
-            .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
+            .zip(inner_fields.iter())
+            .map(|(name, f)| {
+                Field::new(name, f.data_type().clone(), true).with_metadata(f.metadata().clone())
+            })
             .collect();
-        // Create empty arrays for each field
-        let empty_arrays: Vec<ArrayRef> = data_types.iter().map(|dt| new_empty_array(dt)).collect();
+        let empty_arrays: Vec<ArrayRef> = inner_fields
+            .iter()
+            .map(|f| new_empty_array(f.data_type()))
+            .collect();
         Arc::new(StructArray::try_new(fields, empty_arrays, None)?)
     } else {
         concat(
@@ -309,7 +340,7 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
     };
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        struct_result_field(&data_types),
+        struct_result_field(&inner_fields),
         OffsetBuffer::<O>::new(offsets.into()),
         values,
         validity_mask_opt,

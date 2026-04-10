@@ -8,7 +8,7 @@ use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::physical_plan::FileSinkConfig;
+use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -121,8 +121,14 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             options,
         } = info;
 
+        let opaque_options: Vec<std::collections::HashMap<String, String>> = options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
-        let file_format = self.inner.create_read_format(ctx, options.clone(), None)?;
+        let file_format = self
+            .inner
+            .create_read_format(ctx, opaque_options.clone(), None)?;
         let extension_with_compression =
             file_format.compression_type().and_then(|compression_type| {
                 match file_format.get_ext_with_compression(&compression_type) {
@@ -149,7 +155,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                     &urls,
                     &mut listing_options,
                     &extension_with_compression,
-                    options,
+                    opaque_options,
                     self,
                 )
                 .await?;
@@ -190,9 +196,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let path = info.path();
         let SinkInfo {
             input,
-            path,
             // TODO: sink mode is ignored since the file formats only support append operation
             mode: _,
             partition_by,
@@ -206,6 +212,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         }
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for writing listing table format");
+        }
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for writing listing table format");
         }
         // always write multi-file output
         let path = if path.ends_with(object_store::path::DELIMITER) {
@@ -224,9 +233,13 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // This is how DataFusion handles physical planning for `LogicalPlan::Copy`.
         let table_partition_cols = partition_by
             .iter()
-            .map(|s| (s.clone(), DataType::Null))
+            .map(|field| (field.column.clone(), DataType::Null))
             .collect::<Vec<_>>();
-        let (format, compression) = self.inner.create_write_format(ctx, options)?;
+        let listing_options_raw: Vec<std::collections::HashMap<String, String>> = options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let (format, compression) = self.inner.create_write_format(ctx, listing_options_raw)?;
         let file_extension = if let Some(file_compression_type) = format.compression_type() {
             match format.get_ext_with_compression(&file_compression_type) {
                 Ok(ext) => ext,
@@ -266,6 +279,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             insert_op: InsertOp::Append,
             keep_partition_by_columns: false,
             file_extension,
+            file_output_mode: FileOutputMode::Automatic,
         };
         format
             .create_writer_physical_plan(input, ctx, conf, sort_order)

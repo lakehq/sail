@@ -30,7 +30,7 @@ pub struct DeltaMetadataStatsExec {
     input: Arc<dyn ExecutionPlan>,
     stats_schema: SchemaRef,
     output_schema: SchemaRef,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaMetadataStatsExec {
@@ -42,12 +42,12 @@ impl DeltaMetadataStatsExec {
             true,
         )));
         let output_schema = Arc::new(Schema::new(fields));
-        let cache = PlanProperties::new(
+        let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(output_schema.clone()),
             input.output_partitioning().clone(),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Self {
             input,
             stats_schema,
@@ -146,7 +146,7 @@ impl ExecutionPlan for DeltaMetadataStatsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

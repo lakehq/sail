@@ -22,7 +22,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::fields::{
-    STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
+    STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT,
+    STATS_FIELD_NUM_RECORDS, STATS_FIELD_TIGHT_BOUNDS,
 };
 use crate::spec::{
     ColumnName, DataSkippingNumIndexedCols, DataType, PrimitiveType, Schema, StructField,
@@ -115,13 +116,25 @@ impl ColumnCountStat {
 }
 
 /// Statistics associated with an Add action.
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
     pub num_records: i64,
     pub min_values: HashMap<String, ColumnValueStat>,
     pub max_values: HashMap<String, ColumnValueStat>,
     pub null_count: HashMap<String, ColumnCountStat>,
+    /// Whether `min_values`/`max_values` represent *exact* statistics (`true`, default)
+    /// or merely *loose bounds* (`false`). When `false`, the recorded minimums may be
+    /// lower than the actual minimum (i.e. they are lower bounds), and the maximums may be
+    /// higher than the actual maximum (i.e. they are upper bounds).
+    ///
+    /// Serialised only when `false` to avoid bloating the log; `tightBounds` defaults to
+    /// `true` per the Delta Protocol specification.
+    #[serde(
+        default = "default_tight_bounds",
+        skip_serializing_if = "tight_bounds_is_true"
+    )]
+    pub tight_bounds: bool,
 }
 
 impl Stats {
@@ -146,7 +159,32 @@ impl Stats {
     }
 
     pub fn null_count_value(&self, name: &str) -> Option<i64> {
-        lookup_count_stat(&self.null_count, name)
+        let value = lookup_count_stat(&self.null_count, name)?;
+        if self.tight_bounds || value == 0 || value == self.num_records {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    /// Return the minimum statistic for a column, annotated with whether it is
+    /// an *exact* value or merely a *lower bound* (when `tight_bounds = false`).
+    pub fn get_min_stat(&self, name: &str) -> MinStat {
+        match lookup_value_stat(&self.min_values, name).cloned() {
+            Some(val) if self.tight_bounds => MinStat::Exact(val),
+            Some(val) => MinStat::LowerBound(val),
+            None => MinStat::Absent,
+        }
+    }
+
+    /// Return the maximum statistic for a column, annotated with whether it is
+    /// an *exact* value or merely an *upper bound* (when `tight_bounds = false`).
+    pub fn get_max_stat(&self, name: &str) -> MaxStat {
+        match lookup_value_stat(&self.max_values, name).cloned() {
+            Some(val) if self.tight_bounds => MaxStat::Exact(val),
+            Some(val) => MaxStat::UpperBound(val),
+            None => MaxStat::Absent,
+        }
     }
 }
 
@@ -180,6 +218,8 @@ struct PartialStats {
     pub min_values: Option<HashMap<String, ColumnValueStat>>,
     pub max_values: Option<HashMap<String, ColumnValueStat>>,
     pub null_count: Option<HashMap<String, ColumnCountStat>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tight_bounds: Option<bool>,
 }
 
 impl PartialStats {
@@ -189,13 +229,91 @@ impl PartialStats {
             min_values,
             max_values,
             null_count,
+            tight_bounds,
         } = self;
         Stats {
             num_records,
             min_values: min_values.unwrap_or_default(),
             max_values: max_values.unwrap_or_default(),
             null_count: null_count.unwrap_or_default(),
+            // Per Delta Protocol, tightBounds defaults to true when absent.
+            tight_bounds: tight_bounds.unwrap_or(true),
         }
+    }
+}
+
+fn default_tight_bounds() -> bool {
+    true
+}
+
+fn tight_bounds_is_true(v: &bool) -> bool {
+    *v
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Self {
+            num_records: 0,
+            min_values: HashMap::default(),
+            max_values: HashMap::default(),
+            null_count: HashMap::default(),
+            tight_bounds: true,
+        }
+    }
+}
+
+/// Type-safe representation of a per-column minimum statistic.
+///
+/// The variant is determined by the `tightBounds` field of the enclosing [`Stats`]:
+/// - [`MinStat::Exact`] — `tightBounds = true` (default): the value is the precise minimum.
+/// - [`MinStat::LowerBound`] — `tightBounds = false`: the value is only a lower bound; the
+///   actual minimum may be equal to or greater than this value.  DataFusion pruning predicates
+///   **must not** negate this value when filtering.
+/// - [`MinStat::Absent`] — no minimum statistic was recorded for this column.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MinStat {
+    Exact(StatValue),
+    LowerBound(StatValue),
+    Absent,
+}
+
+impl MinStat {
+    /// Return the inner value regardless of tightness, or `None` if absent.
+    pub fn value(&self) -> Option<&StatValue> {
+        match self {
+            Self::Exact(v) | Self::LowerBound(v) => Some(v),
+            Self::Absent => None,
+        }
+    }
+
+    /// Returns `true` only when this is an exact (tight) minimum.
+    pub fn is_exact(&self) -> bool {
+        matches!(self, Self::Exact(_))
+    }
+}
+
+/// Type-safe representation of a per-column maximum statistic.
+///
+/// Mirror of [`MinStat`]; see its documentation for the semantics of each variant.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MaxStat {
+    Exact(StatValue),
+    UpperBound(StatValue),
+    Absent,
+}
+
+impl MaxStat {
+    /// Return the inner value regardless of tightness, or `None` if absent.
+    pub fn value(&self) -> Option<&StatValue> {
+        match self {
+            Self::Exact(v) | Self::UpperBound(v) => Some(v),
+            Self::Absent => None,
+        }
+    }
+
+    /// Returns `true` only when this is an exact (tight) maximum.
+    pub fn is_exact(&self) -> bool {
+        matches!(self, Self::Exact(_))
     }
 }
 
@@ -205,10 +323,14 @@ pub(crate) fn stats_schema(
     physical_file_schema: &Schema,
     table_properties: &TableProperties,
 ) -> crate::spec::DeltaResult<Schema> {
-    let mut fields = Vec::with_capacity(4);
+    let mut fields = Vec::with_capacity(5);
     fields.push(StructField::nullable(
         STATS_FIELD_NUM_RECORDS,
         DataType::LONG,
+    ));
+    fields.push(StructField::nullable(
+        STATS_FIELD_TIGHT_BOUNDS,
+        DataType::BOOLEAN,
     ));
 
     if let Some(base_schema) = base_stats_schema(physical_file_schema, table_properties) {
@@ -410,7 +532,7 @@ fn is_skipping_eligible_datatype(data_type: &PrimitiveType) -> bool {
 mod tests {
     use std::collections::HashMap;
 
-    use super::{lookup_value_stat, ColumnValueStat, StatValue};
+    use super::{lookup_value_stat, ColumnCountStat, ColumnValueStat, StatValue, Stats};
 
     #[test]
     fn test_lookup_value_stat_supports_top_level_keys_containing_dots() {
@@ -422,5 +544,37 @@ mod tests {
         let value = lookup_value_stat(&stats, "first.name");
 
         assert_eq!(value, Some(&StatValue::String("alice".to_string())));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn stats_default_tight_bounds_to_true_when_absent() {
+        let stats = Stats::from_json_str(r#"{"numRecords":3,"minValues":{"value":1}}"#).unwrap();
+
+        assert!(stats.tight_bounds);
+    }
+
+    #[test]
+    fn wide_bounds_only_expose_protocol_safe_null_counts() {
+        let base = Stats {
+            num_records: 10,
+            min_values: HashMap::new(),
+            max_values: HashMap::new(),
+            null_count: HashMap::from([("value".to_string(), ColumnCountStat::Value(3))]),
+            tight_bounds: false,
+        };
+        assert_eq!(base.null_count_value("value"), None);
+
+        let zero_nulls = Stats {
+            null_count: HashMap::from([("value".to_string(), ColumnCountStat::Value(0))]),
+            ..base
+        };
+        assert_eq!(zero_nulls.null_count_value("value"), Some(0));
+
+        let all_nulls = Stats {
+            null_count: HashMap::from([("value".to_string(), ColumnCountStat::Value(10))]),
+            ..zero_nulls
+        };
+        assert_eq!(all_nulls.null_count_value("value"), Some(10));
     }
 }

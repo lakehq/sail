@@ -235,8 +235,13 @@ impl TryFrom<Expression> for spec::Expr {
                         .collect::<SparkResult<_>>()?,
                 })
             }
-            ExprType::NamedArgumentExpression(_) => {
-                Err(SparkError::todo("named argument expression"))
+            ExprType::NamedArgumentExpression(named) => {
+                // Convert named argument (used for Python UDF kwargs)
+                let value = named.value.required("named argument value")?;
+                Ok(spec::Expr::NamedArgument {
+                    key: named.key,
+                    value: Box::new((*value).try_into()?),
+                })
             }
             ExprType::MergeAction(_) => Err(SparkError::todo("merge action expression")),
             ExprType::TypedAggregateExpression(_) => {

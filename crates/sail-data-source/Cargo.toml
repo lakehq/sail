@@ -38,6 +38,8 @@ once_cell = { workspace = true }
 thiserror = { workspace = true }
 
 [build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }
+
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 syn = { workspace = true }

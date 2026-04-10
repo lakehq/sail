@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 
-use crate::catalog::{CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort};
+use crate::catalog::{
+    CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+};
+use crate::session::plan::PlanFormatter;
 
 #[derive(Debug, Clone)]
 pub struct DatabaseStatus {
@@ -30,7 +34,7 @@ pub enum TableKind {
         constraints: Vec<CatalogTableConstraint>,
         location: Option<String>,
         format: String,
-        partition_by: Vec<String>,
+        partition_by: Vec<CatalogPartitionField>,
         sort_by: Vec<CatalogTableSort>,
         bucket_by: Option<CatalogTableBucketBy>,
         options: Vec<(String, String)>,
@@ -82,6 +86,13 @@ impl TableKind {
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
         }
+    }
+
+    pub fn is_temporary(&self) -> bool {
+        matches!(
+            self,
+            TableKind::TemporaryView { .. } | TableKind::GlobalTemporaryView { .. }
+        )
     }
 
     pub fn properties(&self) -> &[(String, String)] {
@@ -167,6 +178,28 @@ impl TableStatus {
 
         rows
     }
+
+    pub fn show_table_extended_information(&self, formatter: &dyn PlanFormatter) -> Result<String> {
+        let mut output = String::new();
+
+        for (key, value) in self.describe_extended_metadata() {
+            output.push_str(&format!("{key}: {value}\n"));
+        }
+
+        output.push_str("Schema: root\n");
+        for column in self.kind.columns() {
+            let data_type = formatter
+                .data_type_to_simple_string(&column.data_type)
+                .unwrap_or_else(|_| "invalid".to_string());
+            let nullable = if column.nullable { "true" } else { "false" };
+            output.push_str(&format!(
+                " |-- {}: {} (nullable = {})\n",
+                column.name, data_type, nullable
+            ));
+        }
+
+        Ok(output)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,4 +219,15 @@ impl TableColumnStatus {
     pub fn field(&self) -> Field {
         Field::new(self.name.clone(), self.data_type.clone(), self.nullable)
     }
+}
+
+pub fn identity_partition_fields(columns: &[String]) -> Vec<CatalogPartitionField> {
+    columns
+        .iter()
+        .cloned()
+        .map(|column| CatalogPartitionField {
+            column,
+            transform: None,
+        })
+        .collect()
 }

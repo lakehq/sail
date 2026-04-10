@@ -11,20 +11,17 @@ use sail_data_source::resolve_listing_urls;
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
-use sail_logical_plan::merge::{MergeCardinalityCheckNode, MergeIntoWriteNode};
+use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
-use sail_physical_plan::merge::create_preexpanded_merge_physical_plan;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
+use sail_physical_plan::row_level_write::create_row_level_write_physical_plan;
 use url::Url;
 
 mod optimizer;
 
-pub use optimizer::{lakehouse_optimizer_rules, ExpandMerge};
-
-fn is_lakehouse_format(format: &str) -> bool {
-    format.eq_ignore_ascii_case("delta")
-}
+pub use optimizer::{lakehouse_optimizer_rules, ExpandRowLevelOp};
+use sail_common_datafusion::datasource::is_lakehouse_format;
 
 async fn delta_table_schema(session_state: &SessionState, path: &str) -> Result<DFSchemaRef> {
     let mut urls = resolve_listing_urls(session_state, vec![path.to_string()]).await?;
@@ -90,6 +87,9 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
             if !is_lakehouse_format(node.options().format.as_str()) {
                 return Ok(None);
             }
+            // Non-lakehouse DELETE falls through to session planner.
+            // Lakehouse DELETE is handled via RowLevelWriteNode after optimizer expansion.
+            // This branch catches FileDeleteNode that wasn't expanded (shouldn't normally happen).
             if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
                 return internal_err!("FileDeleteNode should have no inputs");
             }
@@ -105,24 +105,12 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
             return Ok(Some(plan));
         }
 
-        if let Some(node) = node.as_any().downcast_ref::<MergeIntoWriteNode>() {
-            if !is_lakehouse_format(&node.options().target.format) {
+        if let Some(node) = node.as_any().downcast_ref::<RowLevelWriteNode>() {
+            if !is_lakehouse_format(node.target_format()) {
                 return Ok(None);
             }
 
-            let physical_write = planner
-                .create_physical_plan(node.input(), session_state)
-                .await?;
-            let physical_touched = planner
-                .create_physical_plan(node.touched_files_plan(), session_state)
-                .await?;
-
-            let plan = create_preexpanded_merge_physical_plan(
-                session_state,
-                &[physical_write, physical_touched],
-                node,
-            )
-            .await?;
+            let plan = create_row_level_write_physical_plan(session_state, planner, node).await?;
             return Ok(Some(plan));
         }
 

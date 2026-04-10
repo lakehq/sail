@@ -54,6 +54,7 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 39;
     CatalogCommandExecNode catalog_command = 40;
     BarrierExecNode barrier = 41;
+    RelaxedTzCastExecNode relaxed_tz_cast = 42;
   }
 }
 
@@ -82,6 +83,7 @@ message ExtendedScalarUdf {
     SparkTimestampUdf spark_timestamp = 10;
     SparkDateUdf spark_date = 11;
     SparkFromCsvUdf spark_from_csv = 12;
+    XpathTypedUdf xpath_typed = 13;
   }
 }
 
@@ -134,6 +136,10 @@ message ExplodeUdf {
   string name = 1;
 }
 
+message XpathTypedUdf {
+  string name = 1;
+}
+
 message SparkUnixTimestampUdf {
   string timezone = 1;
 }
@@ -166,6 +172,12 @@ message SparkFromCsvUdf {
 
 message StandardUdaf {}
 
+// Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
+enum PySparkGroupAggKind {
+  PY_SPARK_GROUP_AGG_KIND_PANDAS = 0;
+  PY_SPARK_GROUP_AGG_KIND_ARROW = 1;
+}
+
 message PySparkGroupAggUdaf {
   string name = 1;
   bytes payload = 2;
@@ -174,6 +186,11 @@ message PySparkGroupAggUdaf {
   repeated bytes input_types = 5;
   bytes output_type = 6;
   PySparkUdfConfig config = 7;
+  PySparkGroupAggKind kind = 8;
+  // Number of arguments the Python function actually accepts.
+  // Absent for backward compatibility: if not set, defaults to input_types.len().
+  // When a dummy Int64 argument has been injected (0-arg UDF), this is 0.
+  optional uint64 actual_arg_count = 9;
 }
 
 message PySparkGroupMapUdaf {
@@ -219,6 +236,9 @@ enum PySparkUdfKind {
   PY_SPARK_UDF_KIND_ARROW_BATCH = 1;
   PY_SPARK_UDF_KIND_SCALAR_PANDAS = 2;
   PY_SPARK_UDF_KIND_SCALAR_PANDAS_ITER = 3;
+  // Spark 4.0 Arrow-native scalar UDF kinds
+  PY_SPARK_UDF_KIND_SCALAR_ARROW = 4;
+  PY_SPARK_UDF_KIND_SCALAR_ARROW_ITER = 5;
 }
 
 enum PySparkMapIterKind {
@@ -549,6 +569,11 @@ message MonotonicIdExecNode {
   bytes schema = 3;
 }
 
+message RelaxedTzCastExecNode {
+  bytes input = 1;
+  bytes schema = 2;
+}
+
 message JoinOn {
   bytes left = 1;
   bytes right = 2;
@@ -582,10 +607,27 @@ enum CompressionTypeVariant {
   COMPRESSION_TYPE_VARIANT_UNCOMPRESSED = 4;
 }
 
+enum PartitionTransformKind {
+  PARTITION_TRANSFORM_KIND_UNSPECIFIED = 0;
+  PARTITION_TRANSFORM_KIND_IDENTITY = 1;
+  PARTITION_TRANSFORM_KIND_YEAR = 2;
+  PARTITION_TRANSFORM_KIND_MONTH = 3;
+  PARTITION_TRANSFORM_KIND_DAY = 4;
+  PARTITION_TRANSFORM_KIND_HOUR = 5;
+  PARTITION_TRANSFORM_KIND_BUCKET = 6;
+  PARTITION_TRANSFORM_KIND_TRUNCATE = 7;
+}
+
+message CatalogPartitionFieldNode {
+  string column = 1;
+  PartitionTransformKind transform_kind = 2;
+  uint32 transform_value = 3;
+}
+
 message IcebergWriterExecNode {
   bytes input = 1;
   string table_url = 2;
-  repeated string partition_columns = 3;
+  repeated CatalogPartitionFieldNode partition_columns = 3;
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;

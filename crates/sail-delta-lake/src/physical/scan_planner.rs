@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_schema::DataType;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
-use datafusion::common::{Result, ToDFSchema};
+use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
@@ -13,16 +14,17 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_data_source::options::gen::DeltaWritePartialOptions;
+use sail_data_source::options::PartialOptions;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
-use crate::options::TableDeltaOptions;
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
 use crate::physical_plan::planner::utils::LogReplayOptions;
 use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
-use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
+use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::storage::LogStoreRef;
@@ -39,6 +41,9 @@ pub(crate) async fn plan_delta_scan(
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let config = config.clone();
+    snapshot
+        .ensure_data_read_supported()
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
     let schema = match config.schema.clone() {
         Some(value) => Ok(value),
@@ -233,17 +238,52 @@ pub(crate) async fn plan_delta_scan(
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
         let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
+        let output_schema = if let Some(used_columns) = projection {
+            let fields = used_columns
+                .iter()
+                .map(|idx| full_logical_schema.field(*idx).to_owned())
+                .collect::<Vec<_>>();
+            Arc::new(ArrowSchema::new(fields))
+        } else {
+            Arc::clone(&full_logical_schema)
+        };
+
+        let renamed_schema = renamed.schema();
+
+        let needs_wrapping = output_schema.fields().iter().any(|field| {
+            let Ok(input_field) = renamed_schema.field_with_name(field.name()) else {
+                return false;
+            };
+            matches!(
+                (input_field.data_type(), field.data_type()),
+                (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+            ) && input_field.data_type() != field.data_type()
+        });
+        if needs_wrapping {
+            return Ok(
+                Arc::new(RelaxedTzCastExec::new(renamed, output_schema)) as Arc<dyn ExecutionPlan>
+            );
+        }
         return Ok(renamed);
     }
 
     // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
     let table_url = log_store.config().location.clone();
 
-    let planner_options = TableDeltaOptions {
-        delta_log_replay_strategy: config.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: config.delta_log_replay_hash_threshold,
-        ..TableDeltaOptions::default()
-    };
+    // TODO: Decouple planning for reading and writing. It is strange to require
+    // construction of write options (DeltaWritePartialOptions) just to drive the
+    // log-replay strategy for a read scan. The replay strategy and hash threshold
+    // should ideally come from read options or a dedicated configuration.
+    let mut partial = DeltaWritePartialOptions::initialize();
+    partial.delta_log_replay_strategy = Some(config.delta_log_replay_strategy);
+    // NonZeroUsize::new returns None for zero, causing finalize() to use the YAML default (100).
+    // A zero threshold is invalid and should not occur in practice since the option is now
+    // parsed with parse_non_zero_usize; falling back to the default is safe behavior.
+    partial.delta_log_replay_hash_threshold =
+        std::num::NonZeroUsize::new(config.delta_log_replay_hash_threshold);
+    let planner_options = partial
+        .finalize()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let planner_ctx = PlannerContext::new(
         session,
