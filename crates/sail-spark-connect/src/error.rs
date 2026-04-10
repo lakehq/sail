@@ -294,24 +294,7 @@ impl From<SparkThrowable> for Status {
         // The original Spark Connect server implementation uses the "INTERNAL" status code
         // for all Spark exceptions, so we do the same here.
         // Reference: org.apache.spark.sql.connect.utils.ErrorUtils#buildStatusFromThrowable
-        //
-        // Truncate the message to avoid exceeding the gRPC trailing metadata size limit (~8KB).
-        // The message appears both in `grpc-message` (percent-encoded) and
-        // `grpc-status-details-bin` (base64-encoded), so the effective budget per message
-        // is roughly a quarter of the limit after encoding overhead.
-        const TRUNCATION_SUFFIX: &str = " (truncated)";
-        const MAX_ERROR_MESSAGE_LEN: usize = 1024;
-        let message = throwable.message();
-        let message = if message.len() > MAX_ERROR_MESSAGE_LEN {
-            let available = MAX_ERROR_MESSAGE_LEN.saturating_sub(TRUNCATION_SUFFIX.len());
-            let end = message.floor_char_boundary(available);
-            let mut truncated = String::from(&message[..end]);
-            truncated.push_str(TRUNCATION_SUFFIX);
-            truncated
-        } else {
-            message.to_string()
-        };
-        Status::with_error_details(Code::Internal, &message, details)
+        Status::with_error_details(Code::Internal, throwable.message(), details)
     }
 }
 

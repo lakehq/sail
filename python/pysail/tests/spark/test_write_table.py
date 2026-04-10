@@ -137,6 +137,38 @@ def test_save_as_table(spark, tmp_path):
         assert_frame_equal(actual, expected(1))
 
 
+def test_create_or_replace_table_as_select(spark, tmp_path):
+    location = str(tmp_path / "t7")
+    table_name = "t7"
+
+    try:
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {table_name}
+                USING DELTA
+            LOCATION '{escape_sql_string_literal(location)}'
+            AS SELECT 1 AS id, 'Alice' AS name
+            """
+        )
+        actual = spark.sql(f"SELECT * FROM {table_name}").toPandas()  # noqa: S608
+        expected = pd.DataFrame({"id": [1], "name": ["Alice"]})
+        assert_frame_equal(actual, expected, check_dtype=False)
+
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {table_name}
+                USING DELTA
+            LOCATION '{escape_sql_string_literal(location)}'
+            AS SELECT 2 AS id, 'Bob' AS name
+            """
+        )
+        actual = spark.sql(f"SELECT * FROM {table_name}").toPandas()  # noqa: S608
+        expected = pd.DataFrame({"id": [2], "name": ["Bob"]})
+        assert_frame_equal(actual, expected, check_dtype=False)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
 def test_save_as_table_append_creates_table(spark):
     # `saveAsTable` with `mode="append"` should create the table if it does not exist.

@@ -1,11 +1,11 @@
 mod loader;
 pub mod parsers;
 mod serde;
+pub mod types;
 
 pub use internal::{
-    BinaryReadOptions, CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions,
-    IcebergReadOptions, IcebergWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions,
-    ParquetWriteOptions, TextReadOptions, TextWriteOptions,
+    BinaryReadOptions, CsvReadOptions, CsvWriteOptions, JsonReadOptions, JsonWriteOptions,
+    ParquetReadOptions, ParquetWriteOptions, TextReadOptions, TextWriteOptions,
 };
 #[cfg(test)]
 pub use loader::build_options;
@@ -21,10 +21,6 @@ pub(crate) mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/json_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/parquet_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/parquet_write.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/delta_read.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/delta_write.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/iceberg_read.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/iceberg_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text_write.rs"));
 }
@@ -32,6 +28,8 @@ pub(crate) mod internal {
 pub mod gen {
     include!(concat!(env!("OUT_DIR"), "/options/socket.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/rate.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/delta.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/iceberg.rs"));
 }
 
 pub trait DataSourceOptions: for<'de> serde::Deserialize<'de> {
