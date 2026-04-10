@@ -19,7 +19,8 @@ impl TextReadOptions {
         if let Some(c) = line_sep {
             char_to_u8(c, "line_sep").map_err(|e| DataSourceError::InvalidOption {
                 key: "line_sep".to_string(),
-                value: e.to_string(),
+                value: c.to_string(),
+                cause: Some(e.to_string()),
             })?;
         }
         Ok(TableTextOptions {
@@ -38,7 +39,8 @@ impl TextWriteOptions {
         } = self;
         char_to_u8(line_sep, "line_sep").map_err(|e| DataSourceError::InvalidOption {
             key: "line_sep".to_string(),
-            value: e.to_string(),
+            value: line_sep.to_string(),
+            cause: Some(e.to_string()),
         })?;
         let compression_str = if compression.to_uppercase() == "NONE" {
             "UNCOMPRESSED"
@@ -49,7 +51,8 @@ impl TextWriteOptions {
             .parse::<CompressionTypeVariant>()
             .map_err(|e| DataSourceError::InvalidOption {
                 key: "compression".to_string(),
-                value: e.to_string(),
+                value: compression.to_string(),
+                cause: Some(e.to_string()),
             })?;
         Ok(TableTextOptions {
             line_sep: Some(line_sep),
@@ -78,18 +81,9 @@ pub fn resolve_text_write_options(options: Vec<OptionLayer>) -> DataSourceResult
 #[cfg(test)]
 mod tests {
     use datafusion_common::parsers::CompressionTypeVariant;
-    use sail_common_datafusion::datasource::OptionLayer;
 
     use crate::formats::text::options::{resolve_text_read_options, resolve_text_write_options};
-
-    fn option_list(items: &[(&str, &str)]) -> OptionLayer {
-        OptionLayer::OptionList {
-            items: items
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        }
-    }
+    use crate::options::test_utils::option_list;
 
     #[test]
     fn test_resolve_text_read_options() -> datafusion_common::Result<()> {

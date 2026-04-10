@@ -40,7 +40,8 @@ impl ListingFormat for BinaryListingFormat {
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(BinaryFileFormat::new(
             resolve_binary_read_options(options)
-                .map_err(datafusion_common::DataFusionError::from)?,
+                .map_err(datafusion_common::DataFusionError::from)?
+                .into_table_options(),
         )))
     }
 

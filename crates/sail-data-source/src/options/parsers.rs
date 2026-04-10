@@ -10,6 +10,7 @@ pub fn parse_usize(key: &str, value: &str) -> DataSourceResult<usize> {
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })
 }
 
@@ -20,6 +21,7 @@ pub fn parse_bool(key: &str, value: &str) -> DataSourceResult<bool> {
         _ => Err(DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         }),
     }
 }
@@ -30,6 +32,7 @@ pub fn parse_u16(key: &str, value: &str) -> DataSourceResult<u16> {
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })
 }
 
@@ -39,6 +42,7 @@ pub fn parse_u64(key: &str, value: &str) -> DataSourceResult<u64> {
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })
 }
 
@@ -48,6 +52,7 @@ pub fn parse_i64(key: &str, value: &str) -> DataSourceResult<i64> {
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })
 }
 
@@ -61,6 +66,7 @@ pub fn parse_optional_i64(key: &str, value: &str) -> DataSourceResult<Option<i64
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })
 }
 
@@ -77,10 +83,12 @@ pub fn parse_non_zero_usize(key: &str, value: &str) -> DataSourceResult<std::num
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })?;
     std::num::NonZeroUsize::new(n).ok_or_else(|| DataSourceError::InvalidOption {
         key: key.to_string(),
         value: value.to_string(),
+        cause: None,
     })
 }
 
@@ -90,6 +98,7 @@ pub fn parse_f64(key: &str, value: &str) -> DataSourceResult<f64> {
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })
 }
 
@@ -100,6 +109,7 @@ pub fn parse_char(key: &str, value: &str) -> DataSourceResult<char> {
         _ => Err(DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         }),
     }
 }
@@ -121,6 +131,7 @@ pub fn parse_optional_usize(key: &str, value: &str) -> DataSourceResult<Option<u
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })
 }
 
@@ -133,6 +144,7 @@ pub fn parse_optional_non_zero_usize(key: &str, value: &str) -> DataSourceResult
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })?;
     Ok(if n == 0 { None } else { Some(n) })
 }
@@ -161,5 +173,6 @@ pub fn parse_optional_u64(key: &str, value: &str) -> DataSourceResult<Option<u64
         .map_err(|_| DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         })
 }

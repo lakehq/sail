@@ -68,6 +68,7 @@ impl CsvReadOptions {
                 return Err(DataSourceError::InvalidOption {
                     key: "null_value/null_regex".to_string(),
                     value: "CSV `null_value` and `null_regex` cannot be both set".to_string(),
+                    cause: None,
                 });
             }
             (nv, _) if !nv.is_empty() => Some(regex::escape(nv)),
@@ -77,13 +78,15 @@ impl CsvReadOptions {
         let delimiter =
             char_to_u8(delimiter, "delimiter").map_err(|e| DataSourceError::InvalidOption {
                 key: "delimiter".to_string(),
-                value: e.to_string(),
+                value: delimiter.to_string(),
+                cause: Some(e.to_string()),
             })?;
         let quote = quote
             .map(|c| {
                 char_to_u8(c, "quote").map_err(|e| DataSourceError::InvalidOption {
                     key: "quote".to_string(),
-                    value: e.to_string(),
+                    value: c.to_string(),
+                    cause: Some(e.to_string()),
                 })
             })
             .transpose()?
@@ -92,7 +95,8 @@ impl CsvReadOptions {
             .map(|c| {
                 char_to_u8(c, "escape").map_err(|e| DataSourceError::InvalidOption {
                     key: "escape".to_string(),
-                    value: e.to_string(),
+                    value: c.to_string(),
+                    cause: Some(e.to_string()),
                 })
             })
             .transpose()?;
@@ -100,7 +104,8 @@ impl CsvReadOptions {
             .map(|c| {
                 char_to_u8(c, "comment").map_err(|e| DataSourceError::InvalidOption {
                     key: "comment".to_string(),
-                    value: e.to_string(),
+                    value: c.to_string(),
+                    cause: Some(e.to_string()),
                 })
             })
             .transpose()?;
@@ -108,7 +113,8 @@ impl CsvReadOptions {
             .map(|c| {
                 char_to_u8(c, "line_sep").map_err(|e| DataSourceError::InvalidOption {
                     key: "line_sep".to_string(),
-                    value: e.to_string(),
+                    value: c.to_string(),
+                    cause: Some(e.to_string()),
                 })
             })
             .transpose()?;
@@ -120,7 +126,8 @@ impl CsvReadOptions {
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
                 key: "compression".to_string(),
-                value: format!("{compression}: {e}"),
+                value: compression.to_string(),
+                cause: Some(e.to_string()),
             })?
             .into();
         Ok(CsvOptions {
@@ -154,13 +161,15 @@ impl CsvWriteOptions {
         let delimiter =
             char_to_u8(delimiter, "delimiter").map_err(|e| DataSourceError::InvalidOption {
                 key: "delimiter".to_string(),
-                value: e.to_string(),
+                value: delimiter.to_string(),
+                cause: Some(e.to_string()),
             })?;
         let quote = quote
             .map(|c| {
                 char_to_u8(c, "quote").map_err(|e| DataSourceError::InvalidOption {
                     key: "quote".to_string(),
-                    value: e.to_string(),
+                    value: c.to_string(),
+                    cause: Some(e.to_string()),
                 })
             })
             .transpose()?
@@ -169,7 +178,8 @@ impl CsvWriteOptions {
             .map(|c| {
                 char_to_u8(c, "escape").map_err(|e| DataSourceError::InvalidOption {
                     key: "escape".to_string(),
-                    value: e.to_string(),
+                    value: c.to_string(),
+                    cause: Some(e.to_string()),
                 })
             })
             .transpose()?;
@@ -181,7 +191,8 @@ impl CsvWriteOptions {
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
                 key: "compression".to_string(),
-                value: format!("{compression}: {e}"),
+                value: compression.to_string(),
+                cause: Some(e.to_string()),
             })?
             .into();
         Ok(CsvOptions {
@@ -225,18 +236,9 @@ pub fn resolve_csv_write_options(
 mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
-    use sail_common_datafusion::datasource::OptionLayer;
 
     use crate::formats::csv::options::{resolve_csv_read_options, resolve_csv_write_options};
-
-    fn option_list(items: &[(&str, &str)]) -> OptionLayer {
-        OptionLayer::OptionList {
-            items: items
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        }
-    }
+    use crate::options::test_utils::option_list;
 
     #[test]
     fn test_resolve_csv_read_options() -> datafusion_common::Result<()> {

@@ -66,3 +66,410 @@
         - option.compression
         - option.codec
       parser: crate::options::parsers::parse_string
+
+- key: time_zone
+  description: |
+    Sets the string that indicates a time zone ID to be used to format timestamps.
+    Defaults to the Sail configuration option `session.time_zone`.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - time_zone
+        - timeZone
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.time_zone
+        - option.timeZone
+      parser: crate::options::parsers::parse_string
+
+- key: primitives_as_string
+  description: |
+    Infers all primitive values as a string type.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - primitives_as_string
+        - primitivesAsString
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.primitives_as_string
+        - option.primitivesAsString
+      parser: crate::options::parsers::parse_bool
+
+- key: prefers_decimal
+  description: |
+    Infers all floating-point values as a decimal type.
+    If the values do not fit in decimal, then it infers them as doubles.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - prefers_decimal
+        - prefersDecimal
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.prefers_decimal
+        - option.prefersDecimal
+      parser: crate::options::parsers::parse_bool
+
+- key: allow_comments
+  description: |
+    Ignores Java/C++ style comment in JSON records.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_comments
+        - allowComments
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_comments
+        - option.allowComments
+      parser: crate::options::parsers::parse_bool
+
+- key: allow_unquoted_field_names
+  description: |
+    Allows unquoted JSON field names.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_unquoted_field_names
+        - allowUnquotedFieldNames
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_unquoted_field_names
+        - option.allowUnquotedFieldNames
+      parser: crate::options::parsers::parse_bool
+
+- key: allow_single_quotes
+  description: |
+    Allows single quotes in addition to double quotes.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_single_quotes
+        - allowSingleQuotes
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_single_quotes
+        - option.allowSingleQuotes
+      parser: crate::options::parsers::parse_bool
+
+- key: allow_numeric_leading_zeros
+  description: |
+    Allows leading zeros in numbers (e.g. 00012).
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_numeric_leading_zeros
+        - allowNumericLeadingZeros
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_numeric_leading_zeros
+        - option.allowNumericLeadingZeros
+      parser: crate::options::parsers::parse_bool
+
+- key: allow_backslash_escaping_any_character
+  description: |
+    Allows accepting quoting of all character using backslash quoting mechanism.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_backslash_escaping_any_character
+        - allowBackslashEscapingAnyCharacter
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_backslash_escaping_any_character
+        - option.allowBackslashEscapingAnyCharacter
+      parser: crate::options::parsers::parse_bool
+
+- key: mode
+  description: |
+    Allows a mode for dealing with corrupt records during parsing.
+    Supported modes: PERMISSIVE, DROPMALFORMED, FAILFAST.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - mode
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.mode
+      parser: crate::options::parsers::parse_string
+
+- key: column_name_of_corrupt_record
+  description: |
+    Allows renaming the new field having malformed string created by PERMISSIVE mode.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - column_name_of_corrupt_record
+        - columnNameOfCorruptRecord
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.column_name_of_corrupt_record
+        - option.columnNameOfCorruptRecord
+      parser: crate::options::parsers::parse_string
+
+- key: date_format
+  description: |
+    Sets the string that indicates a date format. Custom date formats follow the formats at Datetime Patterns.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - date_format
+        - dateFormat
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.date_format
+        - option.dateFormat
+      parser: crate::options::parsers::parse_string
+
+- key: timestamp_format
+  description: |
+    Sets the string that indicates a timestamp format. Custom date formats follow the formats at Datetime Patterns.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - timestamp_format
+        - timestampFormat
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.timestamp_format
+        - option.timestampFormat
+      parser: crate::options::parsers::parse_string
+
+- key: timestamp_ntz_format
+  description: |
+    Sets the string that indicates a timestamp without timezone format.
+    Custom date formats follow the formats at Datetime Patterns.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - timestamp_ntz_format
+        - timestampNTZFormat
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.timestamp_ntz_format
+        - option.timestampNTZFormat
+      parser: crate::options::parsers::parse_string
+
+- key: multi_line
+  description: |
+    Parse one record, which may span multiple lines, per file.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - multi_line
+        - multiLine
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.multi_line
+        - option.multiLine
+      parser: crate::options::parsers::parse_bool
+
+- key: encoding
+  description: |
+    For reading, allows to forcibly set one of standard basic or extended encoding for the JSON files.
+    For writing, specifies encoding (charset) of saved JSON files.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - encoding
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.encoding
+      parser: crate::options::parsers::parse_string
+
+- key: line_sep
+  description: |
+    Sets the single character line separator that should be used for parsing/writing.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - line_sep
+        - lineSep
+        - terminator
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.line_sep
+        - option.lineSep
+        - option.terminator
+      parser: crate::options::parsers::parse_string
+
+- key: sampling_ratio
+  description: |
+    Defines fraction of input JSON objects used for schema inferring.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - sampling_ratio
+        - samplingRatio
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.sampling_ratio
+        - option.samplingRatio
+      parser: crate::options::parsers::parse_string
+
+- key: drop_field_if_all_null
+  description: |
+    Whether to ignore column of all null values or empty array during schema inference.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - drop_field_if_all_null
+        - dropFieldIfAllNull
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.drop_field_if_all_null
+        - option.dropFieldIfAllNull
+      parser: crate::options::parsers::parse_bool
+
+- key: locale
+  description: |
+    Sets a locale as language tag in IETF BCP 47 format.
+    For instance, locale is used while parsing dates and timestamps.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - locale
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.locale
+      parser: crate::options::parsers::parse_string
+
+- key: allow_non_numeric_numbers
+  description: |
+    Allows JSON parser to recognize set of "Not-a-Number" (NaN) tokens as legal floating number values.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_non_numeric_numbers
+        - allowNonNumericNumbers
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_non_numeric_numbers
+        - option.allowNonNumericNumbers
+      parser: crate::options::parsers::parse_bool
+
+- key: ignore_null_fields
+  description: |
+    Whether to ignore null fields when generating JSON objects.
+  supported: false
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - ignore_null_fields
+        - ignoreNullFields
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.ignore_null_fields
+        - option.ignoreNullFields
+      parser: crate::options::parsers::parse_bool

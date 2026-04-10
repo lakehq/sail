@@ -17,7 +17,8 @@ fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> DataSourceRe
     if level.is_some() {
         return Err(DataSourceError::InvalidOption {
             key: "compression".to_string(),
-            value: format!("Compression {codec} does not support specifying a level"),
+            value: codec.to_string(),
+            cause: Some("does not support specifying a level".to_string()),
         });
     }
     Ok(())
@@ -29,15 +30,15 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
             enable_page_index: Some(self.global.enable_page_index),
             pruning: Some(self.global.pruning),
             skip_metadata: Some(self.global.skip_metadata),
-            // For Option<T> fields: only set if session has a value so YAML defaults apply when session has None
-            metadata_size_hint: self.global.metadata_size_hint.map(Some),
+            // Always provide the session value so the user can override it to None via "0" or ""
+            metadata_size_hint: Some(self.global.metadata_size_hint),
             pushdown_filters: Some(self.global.pushdown_filters),
             reorder_filters: Some(self.global.reorder_filters),
             schema_force_view_types: Some(self.global.schema_force_view_types),
             binary_as_string: Some(self.global.binary_as_string),
             coerce_int96: self.global.coerce_int96.map(Some),
             bloom_filter_on_read: Some(self.global.bloom_filter_on_read),
-            max_predicate_cache_size: self.global.max_predicate_cache_size.map(Some),
+            max_predicate_cache_size: Some(self.global.max_predicate_cache_size),
         })
     }
 }
@@ -135,7 +136,8 @@ impl ParquetWriteOptions {
             DFParquetWriterVersion::from_str(writer_version.as_str()).map_err(|e| {
                 DataSourceError::InvalidOption {
                     key: "writer_version".to_string(),
-                    value: format!("{writer_version}: {e}"),
+                    value: writer_version.to_string(),
+                    cause: Some(e.to_string()),
                 }
             })?;
         let compression = if let Some(v) = compression {
@@ -143,7 +145,8 @@ impl ParquetWriteOptions {
                 split_parquet_compression_string(&v.to_lowercase()).map_err(|e| {
                     DataSourceError::InvalidOption {
                         key: "compression".to_string(),
-                        value: format!("{v}: {e}"),
+                        value: v.to_string(),
+                        cause: Some(e.to_string()),
                     }
                 })?;
             let resolved = match codec.as_str() {
@@ -199,10 +202,12 @@ impl ParquetWriteOptions {
                 }
                 _ => Err(DataSourceError::InvalidOption {
                     key: "compression".to_string(),
-                    value: format!(
-                        "Unknown or unsupported parquet compression: \
-        {v}. Valid values are: uncompressed, snappy, gzip(level), \
-        lzo, brotli(level), lz4, zstd(level), and lz4_raw."
+                    value: v.to_string(),
+                    cause: Some(
+                        "unknown or unsupported parquet compression. Valid values are: \
+                        uncompressed, snappy, gzip(level), lzo, brotli(level), lz4, zstd(level), \
+                        and lz4_raw."
+                            .to_string(),
                     ),
                 }),
             }?;
@@ -286,20 +291,11 @@ mod tests {
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::parquet_config::DFParquetWriterVersion;
-    use sail_common_datafusion::datasource::OptionLayer;
 
     use crate::formats::parquet::options::{
         resolve_parquet_read_options, resolve_parquet_write_options,
     };
-
-    fn option_list(items: &[(&str, &str)]) -> OptionLayer {
-        OptionLayer::OptionList {
-            items: items
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        }
-    }
+    use crate::options::test_utils::option_list;
 
     #[test]
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {
@@ -338,6 +334,12 @@ mod tests {
         // which explicitly clears the value (overrides session default)
         let kv2 = option_list(&[("metadata_size_hint", "0")]);
         let options = resolve_parquet_read_options(&state, vec![kv2])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.global.metadata_size_hint, None);
+
+        // metadata_size_hint = "": parse_optional_non_zero_usize("") returns None
+        let kv3 = option_list(&[("metadata_size_hint", "")]);
+        let options = resolve_parquet_read_options(&state, vec![kv3])
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.metadata_size_hint, None);
 
@@ -429,6 +431,17 @@ mod tests {
             10
         );
 
+        let kv = option_list(&[
+            ("column_index_truncate_length", "0"),
+            ("statistics_truncate_length", "0"),
+            ("encoding", ""),
+        ]);
+        let options = resolve_parquet_write_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.global.column_index_truncate_length, None);
+        assert_eq!(options.global.statistics_truncate_length, None);
+        assert_eq!(options.global.encoding, None);
+
         Ok(())
     }
 
@@ -465,6 +478,17 @@ mod tests {
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
+
+        let kv = option_list(&[
+            ("column_index_truncate_length", "0"),
+            ("statistics_truncate_length", "0"),
+            ("encoding", ""),
+        ]);
+        let options = resolve_parquet_write_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(options.global.column_index_truncate_length, None);
+        assert_eq!(options.global.statistics_truncate_length, None);
+        assert_eq!(options.global.encoding, None);
 
         Ok(())
     }

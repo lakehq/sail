@@ -9,6 +9,8 @@
 - key: enable_page_index
   description: |
     (Reading) Whether to enable page index when reading Parquet files.
+    If the value is true, the Parquet reader reads the page index if present.
+    This can reduce I/O and the number of rows decoded.
     Defaults to the session configuration option `parquet.enable_page_index`.
   supported: true
   rust_type: bool
@@ -29,6 +31,8 @@
 - key: pruning
   description: |
     (Reading) Whether to prune row groups when reading Parquet files.
+    If the value is true, the Parquet reader attempts to skip entire row groups based on the predicate
+    and metadata (minimum/maximum values) in the file.
     Defaults to the session configuration option `parquet.pruning`.
   supported: true
   rust_type: bool
@@ -47,6 +51,7 @@
 - key: skip_metadata
   description: |
     (Reading) Whether to skip the metadata when reading Parquet files.
+    If the value is true, skip the optional embedded metadata in the file schema.
     Defaults to the session configuration option `parquet.skip_metadata`.
   supported: true
   rust_type: bool
@@ -67,10 +72,9 @@
 - key: metadata_size_hint
   description: |
     (Reading) If specified, the reader will try to fetch the last `size_hint` bytes of the parquet file optimistically.
+    If not specified, two reads are required: one for the 8-byte footer, another for the metadata length.
+    Setting this can reduce one I/O per file.
     Setting to 0 or empty clears the hint. Defaults to the session configuration option `parquet.metadata_size_hint`.
-  default:
-    value: ""
-    parser: crate::options::parsers::parse_optional_non_zero_usize
   supported: true
   rust_type: "Option<usize>"
   scopes:
@@ -90,6 +94,8 @@
 - key: pushdown_filters
   description: |
     (Reading) Whether to push down filter expressions when reading Parquet files.
+    If the value is true, the Parquet reader applies filter expressions in decoding operations to reduce
+    the number of rows decoded. This optimization is sometimes called 'late materialization'.
     Defaults to the session configuration option `parquet.pushdown_filters`.
   supported: true
   rust_type: bool
@@ -110,6 +116,8 @@
 - key: reorder_filters
   description: |
     (Reading) Whether to reorder filter expressions when reading Parquet files.
+    If the value is true, the Parquet reader reorders filter expressions heuristically to minimize
+    the cost of evaluation.
     Defaults to the session configuration option `parquet.reorder_filters`.
   supported: true
   rust_type: bool
@@ -130,6 +138,8 @@
 - key: schema_force_view_types
   description: |
     (Reading) Whether to force view types for binary and string columns when reading Parquet files.
+    If the value is true, the Parquet reader will read columns of Utf8/Utf8Large types as Utf8View,
+    and Binary/BinaryLarge types as BinaryView.
     Defaults to the session configuration option `parquet.schema_force_view_types`.
   supported: true
   rust_type: bool
@@ -150,6 +160,7 @@
 - key: binary_as_string
   description: |
     (Reading) Whether to read binary columns as string columns when reading Parquet files.
+    If the value is true, binary columns with no encoding metadata are read as UTF-8 strings.
     Defaults to the session configuration option `parquet.binary_as_string`.
   supported: true
   rust_type: bool
@@ -215,9 +226,6 @@
   description: |
     (Reading) The maximum predicate cache size in bytes. Setting to 0 means no caching.
     Defaults to the session configuration option `parquet.max_predicate_cache_size`.
-  default:
-    value: ""
-    parser: crate::options::parsers::parse_optional_usize
   supported: true
   rust_type: "Option<usize>"
   scopes:
@@ -492,7 +500,11 @@
 
 - key: encoding
   description: |
-    (Writing) The default encoding for any column. Set to empty for automatic selection.
+    (Writing) The default encoding for any column.
+    Valid values are `plain`, `plain_dictionary`, `rle`, `bit_packed` (deprecated),
+    `delta_binary_packed`, `delta_length_byte_array`, `delta_byte_array`, `rle_dictionary`,
+    and `byte_stream_split`. These values are not case sensitive.
+    Set to empty to use automatic selection.
     Defaults to the session configuration option `parquet.encoding`.
   default:
     value: ""

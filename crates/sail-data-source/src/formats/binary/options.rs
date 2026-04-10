@@ -1,41 +1,30 @@
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::DataSourceResult;
-use crate::formats::binary::TableBinaryOptions;
 use crate::options::gen::{BinaryReadOptions, BinaryReadPartialOptions};
 use crate::options::{BuildPartialOptions, PartialOptions};
 
 impl BinaryReadOptions {
-    pub fn into_table_options(self) -> TableBinaryOptions {
+    pub fn into_table_options(self) -> crate::formats::binary::TableBinaryOptions {
         let BinaryReadOptions { path_glob_filter } = self;
-        TableBinaryOptions { path_glob_filter }
+        crate::formats::binary::TableBinaryOptions { path_glob_filter }
     }
 }
 
 pub fn resolve_binary_read_options(
     options: Vec<OptionLayer>,
-) -> DataSourceResult<TableBinaryOptions> {
+) -> DataSourceResult<BinaryReadOptions> {
     let mut partial = BinaryReadPartialOptions::initialize();
     for layer in options {
         partial.merge(layer.build_partial_options()?);
     }
-    Ok(partial.finalize()?.into_table_options())
+    partial.finalize()
 }
 
 #[cfg(test)]
 mod tests {
-    use sail_common_datafusion::datasource::OptionLayer;
-
     use crate::formats::binary::options::resolve_binary_read_options;
-
-    fn option_list(items: &[(&str, &str)]) -> OptionLayer {
-        OptionLayer::OptionList {
-            items: items
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        }
-    }
+    use crate::options::test_utils::option_list;
 
     #[test]
     fn test_resolve_binary_read_options() -> datafusion_common::Result<()> {

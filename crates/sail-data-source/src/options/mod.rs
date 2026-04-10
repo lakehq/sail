@@ -37,3 +37,17 @@ pub trait BuildPartialOptions<T> {
     /// Builds the partial options from data.
     fn build_partial_options(self) -> DataSourceResult<T>;
 }
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use sail_common_datafusion::datasource::OptionLayer;
+
+    pub(crate) fn option_list(items: &[(&str, &str)]) -> OptionLayer {
+        OptionLayer::OptionList {
+            items: items
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}

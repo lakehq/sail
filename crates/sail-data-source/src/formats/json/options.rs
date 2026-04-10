@@ -37,7 +37,8 @@ impl JsonReadOptions {
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
                 key: "compression".to_string(),
-                value: format!("{compression}: {e}"),
+                value: compression.to_string(),
+                cause: Some(e.to_string()),
             })?
             .into();
         Ok(JsonOptions {
@@ -54,7 +55,8 @@ impl JsonWriteOptions {
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
                 key: "compression".to_string(),
-                value: format!("{compression}: {e}"),
+                value: compression.to_string(),
+                cause: Some(e.to_string()),
             })?
             .into();
         Ok(JsonOptions {
@@ -92,18 +94,9 @@ pub fn resolve_json_write_options(
 mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
-    use sail_common_datafusion::datasource::OptionLayer;
 
     use crate::formats::json::options::{resolve_json_read_options, resolve_json_write_options};
-
-    fn option_list(items: &[(&str, &str)]) -> OptionLayer {
-        OptionLayer::OptionList {
-            items: items
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        }
-    }
+    use crate::options::test_utils::option_list;
 
     #[test]
     fn test_resolve_json_read_options() -> datafusion_common::Result<()> {

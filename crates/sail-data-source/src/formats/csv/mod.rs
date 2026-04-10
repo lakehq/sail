@@ -9,8 +9,6 @@ use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::csv::options::{resolve_csv_read_options, resolve_csv_write_options};
 use crate::formats::listing::{ListingFormat, ListingTableFormat, SchemaInfer};
-use crate::options::gen::CsvReadPartialOptions;
-use crate::options::{BuildPartialOptions, PartialOptions};
 
 mod options;
 
@@ -95,13 +93,9 @@ impl SchemaInfer for CsvSchemaInfer {
             .await?
             .as_ref()
             .clone();
-        let mut partial = CsvReadPartialOptions::initialize();
-        for layer in options {
-            if let Ok(p) = layer.clone().build_partial_options() {
-                partial.merge(p);
-            }
-        }
-        if partial.infer_schema == Some(false) {
+        let csv_options = resolve_csv_read_options(ctx, options.to_vec())
+            .map_err(datafusion_common::DataFusionError::from)?;
+        if csv_options.schema_infer_max_rec == Some(0) {
             schema = convert_string_columns(schema);
         }
         // Rename default CSV columns (column_1 -> _c0, etc.)
