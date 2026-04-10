@@ -9,12 +9,11 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_datafusion_err, Result, Statistics};
+use datafusion_common::stats::{ColumnStatistics, Precision};
+use datafusion_common::{internal_datafusion_err, Result, ScalarValue, Statistics};
 use futures::StreamExt;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::utils::items::ItemTaker;
-
-use crate::physical_plan::scan_by_adds_exec::map_statistics_to_schema;
 
 #[derive(Debug, Clone)]
 pub struct RelaxedTzCastExec {
@@ -38,7 +37,9 @@ impl RelaxedTzCastExec {
         }
     }
 
-    fn aligned_timestamp_columns(&self) -> Vec<String> {
+    /// Returns per-column retag info: `(column_name, from_tz, to_tz)` for every
+    /// timestamp column whose timezone label is changed by this node.
+    fn timestamp_retag_info(&self) -> Vec<(String, String, String)> {
         let input_schema = self.input.schema();
         self.schema
             .fields()
@@ -46,10 +47,12 @@ impl RelaxedTzCastExec {
             .filter_map(|field| {
                 let input_field = input_schema.field_with_name(field.name()).ok()?;
                 match (input_field.data_type(), field.data_type()) {
-                    (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+                    (DataType::Timestamp(_, src_tz), DataType::Timestamp(_, tgt_tz))
                         if input_field.data_type() != field.data_type() =>
                     {
-                        Some(field.name().clone())
+                        let from = src_tz.as_deref().unwrap_or("none").to_string();
+                        let to = tgt_tz.as_deref().unwrap_or("none").to_string();
+                        Some((field.name().clone(), from, to))
                     }
                     _ => None,
                 }
@@ -60,22 +63,18 @@ impl RelaxedTzCastExec {
 
 impl DisplayAs for RelaxedTzCastExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        let schema_changed = self.input.schema() != self.schema;
-        let timestamp_columns = self.aligned_timestamp_columns().join(", ");
+        let retag_info = self.timestamp_retag_info();
+        let retag_str = retag_info
+            .iter()
+            .map(|(col, from, to)| format!("{col}: {from} -> {to}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "RelaxedTzCastExec(schema_changed={}, timestamp_columns=[{}])",
-                    schema_changed, timestamp_columns
-                )
+                write!(f, "RelaxedTzCastExec: retag [{}]", retag_str)
             }
             DisplayFormatType::TreeRender => {
-                write!(
-                    f,
-                    "schema_changed={}, timestamp_columns=[{}]",
-                    schema_changed, timestamp_columns
-                )
+                write!(f, "retag [{}]", retag_str)
             }
         }
     }
@@ -141,14 +140,72 @@ impl ExecutionPlan for RelaxedTzCastExec {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let statistics = self.input.partition_statistics(partition)?;
         if self.input.schema() == self.schema {
-            Ok(statistics)
-        } else {
-            Ok(map_statistics_to_schema(
-                &statistics,
-                &self.input.schema(),
-                &self.schema,
-            ))
+            return Ok(statistics);
         }
+
+        let input_schema = self.input.schema();
+        let column_statistics = self
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let Some(input_idx) = input_schema.index_of(field.name()).ok() else {
+                    return ColumnStatistics::new_unknown();
+                };
+                let input_field = input_schema.field(input_idx);
+                let Some(col_stats) = statistics.column_statistics.get(input_idx).cloned() else {
+                    return ColumnStatistics::new_unknown();
+                };
+
+                // For relaxed-tz retagging, retag the timezone label on timestamp bounds
+                // instead of converting the underlying epoch values via cast_to.
+                match (input_field.data_type(), field.data_type()) {
+                    (DataType::Timestamp(_, _), DataType::Timestamp(_, target_tz)) => {
+                        ColumnStatistics {
+                            min_value: retag_scalar_tz_bound(
+                                &col_stats.min_value,
+                                target_tz.clone(),
+                            ),
+                            max_value: retag_scalar_tz_bound(
+                                &col_stats.max_value,
+                                target_tz.clone(),
+                            ),
+                            ..col_stats
+                        }
+                    }
+                    _ => col_stats,
+                }
+            })
+            .collect();
+
+        Ok(Statistics {
+            num_rows: statistics.num_rows,
+            total_byte_size: statistics.total_byte_size,
+            column_statistics,
+        })
+    }
+}
+
+/// Retag the timezone label of a `Precision<ScalarValue>` timestamp bound without
+/// converting the underlying epoch value.  Non-timestamp values are returned unchanged.
+fn retag_scalar_tz_bound(
+    bound: &Precision<ScalarValue>,
+    target_tz: Option<Arc<str>>,
+) -> Precision<ScalarValue> {
+    match bound {
+        Precision::Exact(v) => Precision::Exact(retag_scalar_tz(v, target_tz)),
+        Precision::Inexact(v) => Precision::Inexact(retag_scalar_tz(v, target_tz)),
+        Precision::Absent => Precision::Absent,
+    }
+}
+
+fn retag_scalar_tz(value: &ScalarValue, target_tz: Option<Arc<str>>) -> ScalarValue {
+    match value {
+        ScalarValue::TimestampSecond(v, _) => ScalarValue::TimestampSecond(*v, target_tz),
+        ScalarValue::TimestampMillisecond(v, _) => ScalarValue::TimestampMillisecond(*v, target_tz),
+        ScalarValue::TimestampMicrosecond(v, _) => ScalarValue::TimestampMicrosecond(*v, target_tz),
+        ScalarValue::TimestampNanosecond(v, _) => ScalarValue::TimestampNanosecond(*v, target_tz),
+        _ => value.clone(),
     }
 }
 
@@ -157,6 +214,7 @@ impl ExecutionPlan for RelaxedTzCastExec {
 mod tests {
     use datafusion::arrow::array::{RecordBatch, TimestampMicrosecondArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion::physical_plan::display::DisplayableExecutionPlan;
     use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion::physical_plan::Partitioning;
     use datafusion_common::stats::{ColumnStatistics, Precision};
@@ -262,10 +320,15 @@ mod tests {
 
         let stats = exec.partition_statistics(None)?;
 
+        // Non-timestamp column statistics must be fully preserved.
         assert_eq!(stats.num_rows, Precision::Exact(42));
         assert_eq!(stats.total_byte_size, Precision::Exact(1024));
         assert_eq!(stats.column_statistics.len(), 2);
         assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(1));
+        assert_eq!(
+            stats.column_statistics[0].distinct_count,
+            Precision::Exact(7)
+        );
         assert_eq!(
             stats.column_statistics[0].min_value,
             Precision::Exact(ScalarValue::Int64(Some(1)))
@@ -275,6 +338,108 @@ mod tests {
             Precision::Exact(ScalarValue::Int64(Some(9)))
         );
 
+        // Timestamp column statistics must be retagged (same epoch value, new TZ label).
+        assert_eq!(stats.column_statistics[1].null_count, Precision::Exact(0));
+        assert_eq!(
+            stats.column_statistics[1].min_value,
+            Precision::Exact(ScalarValue::TimestampMicrosecond(
+                Some(1_000_000),
+                Some(Arc::from("America/Los_Angeles")),
+            ))
+        );
+        assert_eq!(
+            stats.column_statistics[1].max_value,
+            Precision::Exact(ScalarValue::TimestampMicrosecond(
+                Some(2_000_000),
+                Some(Arc::from("America/Los_Angeles")),
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn relaxed_tz_cast_exec_fmt_shows_retag_info() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new(
+                "event_time",
+                DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+                true,
+            ),
+        ]));
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new(
+                "event_time",
+                DataType::Timestamp(
+                    TimeUnit::Microsecond,
+                    Some(Arc::from("America/Los_Angeles")),
+                ),
+                true,
+            ),
+        ]));
+        let input = Arc::new(TestExec::new(Arc::clone(&input_schema), vec![]));
+        let exec = RelaxedTzCastExec::new(input, Arc::clone(&target_schema));
+
+        let default_fmt = DisplayableExecutionPlan::new(&exec)
+            .indent(false)
+            .to_string();
+        let first_line = default_fmt.lines().next().unwrap();
+        assert!(
+            first_line.contains("RelaxedTzCastExec"),
+            "expected RelaxedTzCastExec in fmt output, got: {first_line}"
+        );
+        assert!(
+            first_line.contains("event_time"),
+            "expected column name in fmt output, got: {first_line}"
+        );
+        assert!(
+            first_line.contains("UTC"),
+            "expected source timezone in fmt output, got: {first_line}"
+        );
+        assert!(
+            first_line.contains("America/Los_Angeles"),
+            "expected target timezone in fmt output, got: {first_line}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn relaxed_tz_cast_exec_passthrough_when_no_timestamp_columns() -> Result<()> {
+        // When both schemas are identical (no retagging needed), statistics are passed through.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let statistics = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Exact(256),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+                    max_value: Precision::Exact(ScalarValue::Int64(Some(10))),
+                    ..ColumnStatistics::new_unknown()
+                },
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+        let input = Arc::new(TestExec::with_statistics(
+            Arc::clone(&schema),
+            vec![],
+            statistics.clone(),
+        ));
+        let exec = RelaxedTzCastExec::new(input, Arc::clone(&schema));
+
+        let stats = exec.partition_statistics(None)?;
+        assert_eq!(stats.num_rows, Precision::Exact(10));
+        assert_eq!(stats.column_statistics.len(), 2);
+        assert_eq!(
+            stats.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int64(Some(1)))
+        );
         Ok(())
     }
 

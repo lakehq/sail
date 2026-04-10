@@ -1,5 +1,12 @@
 # serializer version: 1
 ---
+name: "test_explain_omits_relaxedtzcastexec_for_driver_path_with_no_timestamp_columns"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as id, #3@1 as name]
+      DataSourceExec: file_groups={1 group: [[<tmp>/delta_read_driver_no_timestamp/part-<id>.snappy.parquet]]}, projection=[id@0 as #2, name@1 as #3], file_type=parquet
+---
 name: "test_explain_select_with_default_options_and_partition_filter_prunes_driver_file_scan"
 data:
   |-
@@ -28,3 +35,10 @@ data:
                   ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: file_groups={1 group: [[<tmp>/delta_read_metadata/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+---
+name: "test_explain_shows_correct_plan_for_driver_path_with_timestamp_column"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as id, #3@1 as event_time]
+      DataSourceExec: file_groups={1 group: [[<tmp>/delta_read_driver_timestamp/part-<id>.snappy.parquet]]}, projection=[id@0 as #2, event_time@1 as #3], file_type=parquet
