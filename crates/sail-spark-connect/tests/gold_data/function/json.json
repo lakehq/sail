@@ -385,7 +385,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: schema_of_json currently doesn't support option allowNumericLeadingZeros"
       }
     },
     {

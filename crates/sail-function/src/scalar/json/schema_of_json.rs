@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use datafusion::arrow::array::{downcast_array, Array, MapArray, StringArray, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -118,19 +119,17 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
-        if args.is_empty() || args.len() > 2 {
-            return Err(invalid_arg_count_exec_err(
-                "schema_of_json",
-                (1, 2),
-                args.len(),
-            ));
-        }
-
         Self::validate_args_are_literal(&args)?;
 
-        // First argument is the JSON string.
-        // Spark requires the input to be a foldable (constant/literal) expression.
-        // Second argument (optional) is a map of options - we ignore options for now.
+        // Parse and validate options from the optional second argument.
+        // TODO: apply mode option to inference behavior.
+        if args.len() > 1 {
+            if let ColumnarValue::Scalar(ScalarValue::Map(map_arr)) = &args[1] {
+                let _options =
+                    SparkSchemaOfJsonOptions::default().map_to_options(map_arr.as_ref())?;
+            }
+        }
+
         match &args[0] {
             ColumnarValue::Scalar(scalar) => {
                 let json_str = match scalar {
@@ -320,6 +319,92 @@ fn parse_struct_fields(s: &str) -> Vec<(String, String)> {
     }
 
     fields
+}
+
+#[derive(Debug, Default)]
+enum ModeOptions {
+    #[default]
+    Permissive,
+    FailFast,
+    DropMalformed,
+}
+
+impl ModeOptions {
+    fn from_str(value: String) -> Result<Self> {
+        match value.as_str() {
+            "PERMISSIVE" => Ok(ModeOptions::Permissive),
+            "FAILFAST" => Ok(ModeOptions::FailFast),
+            "DROPMALFORMED" => Ok(ModeOptions::DropMalformed),
+            other => exec_err!("Invalid mode option: {other}"),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct SparkSchemaOfJsonOptions {
+    mode: ModeOptions,
+    _allow_numeric_leading_zeros: bool,
+}
+
+impl SparkSchemaOfJsonOptions {
+    pub fn map_to_options(mut self, map_array: &MapArray) -> Result<Self> {
+        let inner_struct = map_array.value(0);
+        let (keys, values) = Self::get_keys_values_from_map(inner_struct)?;
+        for (key, value) in keys.iter().zip(values.iter()) {
+            let (key, value) = Self::unwrap_or_key_value(key, value)?;
+            match key {
+                "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
+                "allowNumericLeadingZeros" => {
+                    return exec_err!(
+                        "schema_of_json currently doesn't support option allowNumericLeadingZeros"
+                    );
+                }
+                other => {
+                    return exec_err!(
+                        "Found unsupported option type when parsing options: {other}"
+                    );
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    fn get_keys_values_from_map(inner_struct: StructArray) -> Result<(StringArray, StringArray)> {
+        let (keys, values) = match inner_struct.data_type() {
+            DataType::Struct(fields) => {
+                let key_type = fields[0].data_type();
+                let value_type = fields[1].data_type();
+                if key_type == &DataType::Utf8 && value_type == &DataType::Utf8 {
+                    let keys = downcast_array::<StringArray>(inner_struct.column(0));
+                    let values = downcast_array::<StringArray>(inner_struct.column(1));
+                    (keys, values)
+                } else {
+                    return exec_err!(
+                        "Expected options to be type map<string, string> but found key type {:?} and value type {:?}",
+                        key_type,
+                        value_type
+                    );
+                }
+            }
+            other => {
+                return exec_err!(
+                    "options should be a map with an inner struct but instead got {:?}",
+                    other
+                );
+            }
+        };
+        Ok((keys, values))
+    }
+
+    fn unwrap_or_key_value<'a>(
+        key: Option<&'a str>,
+        value: Option<&'a str>,
+    ) -> Result<(&'a str, &'a str)> {
+        match (key, value) {
+            (Some(k), Some(v)) => Ok((k, v)),
+            _ => exec_err!("Unexpected options key value pair: {:?}: {:?}", key, value),
+        }
+    }
 }
 
 fn infer_struct_type(jiter: &mut Jiter) -> String {
