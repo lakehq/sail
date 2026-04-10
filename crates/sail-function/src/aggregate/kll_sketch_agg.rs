@@ -52,7 +52,7 @@ fn extract_k(acc_args: &AccumulatorArgs) -> Result<u16> {
     };
     if !(8..=65535).contains(&k_i64) {
         return Err(DataFusionError::Plan(format!(
-            "kll_sketch_agg requires k to be in the range 8..65535, got {k_i64}",
+            "kll_sketch_agg requires k to be in the range 8 to 65535, got {k_i64}",
         )));
     }
     Ok(k_i64 as u16)
@@ -61,7 +61,7 @@ fn extract_k(acc_args: &AccumulatorArgs) -> Result<u16> {
 // ---------------------------------------------------------------------------
 // Binary serialization helpers
 //
-// The serialised format is intentionally simple:
+// The serialized format is intentionally simple:
 //   [k: 2 bytes LE] [n: 8 bytes LE] [values …]
 // where each value is encoded in little-endian in its native width
 // (8 bytes for i64/f64, 4 bytes for f32).
