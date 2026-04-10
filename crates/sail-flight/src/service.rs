@@ -3,23 +3,19 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow::datatypes::Schema;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::flight_service_server::FlightService;
 use arrow_flight::sql::server::FlightSqlService;
-use arrow_flight::sql::{
-    ActionClosePreparedStatementRequest, CommandStatementQuery, ProstMessageExt, SqlInfo,
-    TicketStatementQuery,
-};
+use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt, SqlInfo, TicketStatementQuery};
 use arrow_flight::{
-    Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
-    Ticket,
+    FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
 };
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures::{stream, Stream, StreamExt};
 use log::{debug, error, info};
 use prost::Message;
+use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::config::PlanConfig;
@@ -27,74 +23,19 @@ use sail_plan::resolve_and_execute_plan;
 use sail_session::session_manager::SessionManager;
 use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
-use sail_sql_parser::ast::statement::Statement;
 use sail_telemetry::metrics::{MetricAttribute, MetricRegistry};
 use sail_telemetry::telemetry::global_metrics;
+use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, Streaming};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QueryKind {
-    Select,
-    Ddl,
-    Dml,
-    Other,
-}
-
-impl QueryKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Select => "SELECT",
-            Self::Ddl => "DDL",
-            Self::Dml => "DML",
-            Self::Other => "OTHER",
-        }
-    }
-
-    fn from_statement(stmt: &Statement) -> Self {
-        match stmt {
-            Statement::Query(_) | Statement::Explain { .. } => Self::Select,
-            Statement::ShowDatabases { .. }
-            | Statement::ShowCatalogs { .. }
-            | Statement::ShowTables { .. }
-            | Statement::ShowCreateTable { .. }
-            | Statement::ShowColumns { .. }
-            | Statement::ShowViews { .. }
-            | Statement::ShowFunctions { .. }
-            | Statement::Describe { .. } => Self::Select,
-            Statement::CreateDatabase { .. }
-            | Statement::CreateTable { .. }
-            | Statement::ReplaceTable { .. }
-            | Statement::CreateView { .. }
-            | Statement::AlterDatabase { .. }
-            | Statement::AlterTable { .. }
-            | Statement::AlterView { .. }
-            | Statement::DropDatabase { .. }
-            | Statement::DropTable { .. }
-            | Statement::DropView { .. }
-            | Statement::DropFunction { .. }
-            | Statement::CommentOnCatalog { .. }
-            | Statement::CommentOnDatabase { .. }
-            | Statement::CommentOnTable { .. }
-            | Statement::CommentOnColumn { .. }
-            | Statement::RefreshTable { .. }
-            | Statement::RefreshFunction { .. } => Self::Ddl,
-            Statement::InsertInto { .. }
-            | Statement::InsertOverwriteDirectory { .. }
-            | Statement::InsertIntoAndReplace { .. }
-            | Statement::Update { .. }
-            | Statement::Delete { .. }
-            | Statement::MergeInto { .. }
-            | Statement::LoadData { .. } => Self::Dml,
-            _ => Self::Other,
-        }
-    }
-}
+use crate::state::{QueryTicket, SailFlightSqlState};
 
 pub struct SailFlightSqlService {
     session_manager: SessionManager,
     config: Arc<PlanConfig>,
     /// Optional metric registry for OTLP metrics (None if telemetry disabled)
     metrics: Option<Arc<MetricRegistry>>,
+    state: Arc<Mutex<SailFlightSqlState>>,
 }
 
 impl SailFlightSqlService {
@@ -111,6 +52,7 @@ impl SailFlightSqlService {
             session_manager,
             config,
             metrics,
+            state: Arc::new(Mutex::new(SailFlightSqlState::new())),
         }
     }
 
@@ -187,61 +129,7 @@ impl SailFlightSqlService {
         }
     }
 
-    /// Convert a SQL string to an `ExecutionPlan` using `resolve_and_execute_plan`.
-    ///
-    /// This method is the single entry point for SQL execution and schema resolution.
-    /// It parses, resolves, and creates a physical execution plan without actually running
-    /// the plan. The returned plan can be used either to retrieve the output schema or to
-    /// execute it via the `JobService` runner.
-    async fn sql_to_execution_plan(
-        &self,
-        sql: &str,
-        ctx: &datafusion::prelude::SessionContext,
-    ) -> Result<Arc<dyn ExecutionPlan>, Status> {
-        let statement = parse_one_statement(sql)
-            .map_err(|e| Status::invalid_argument(format!("parse error: {e}")))?;
-        let plan = from_ast_statement(statement)
-            .map_err(|e| Status::internal(format!("AST conversion error: {e}")))?;
-        let (plan, _) = resolve_and_execute_plan(ctx, self.config.clone(), plan)
-            .await
-            .map_err(|e| Status::internal(format!("plan error: {e}")))?;
-        Ok(plan)
-    }
-
-    /// Execute SQL and return a stream of `RecordBatch`es.
-    ///
-    /// The schema is accessible via `stream.schema()`.
-    async fn execute_sql_stream(&self, sql: &str) -> Result<SendableRecordBatchStream, Status> {
-        let ctx = self.get_session_context().await?;
-        let plan = self.sql_to_execution_plan(sql, &ctx).await?;
-        let service = ctx
-            .extension::<JobService>()
-            .map_err(|e| Status::internal(format!("job service not found: {e}")))?;
-        let stream = service
-            .runner()
-            .execute(&ctx, plan)
-            .await
-            .map_err(|e| Status::internal(format!("execution error: {e}")))?;
-        Ok(stream)
-    }
-
-    /// Resolve SQL to get its output schema without executing the query.
-    async fn get_query_schema(&self, sql: &str) -> Result<Arc<Schema>, Status> {
-        let ctx = self.get_session_context().await?;
-        let plan = self.sql_to_execution_plan(sql, &ctx).await?;
-        Ok(plan.schema())
-    }
-
     /// Wrap an async operation with metrics reporting (active query count, duration, status).
-    ///
-    /// Row count is not tracked here because the wrapped function may return a stream whose
-    /// rows are consumed lazily by the caller; callers that need row-level metrics should
-    /// record them separately after consuming the result.
-    ///
-    /// TODO: For streaming results, the active-query gauge is decremented and
-    /// success/error metrics are recorded when the stream is created, not when it is
-    /// fully consumed. This means metrics may not accurately reflect the true query
-    /// lifetime. Consider wrapping the returned stream to track completion/errors.
     async fn execute_with_metrics_reporting<F, Fut, T>(
         &self,
         query_type: &'static str,
@@ -286,8 +174,8 @@ impl FlightSqlService for SailFlightSqlService {
             protocol_version: 0,
             payload: Default::default(),
         };
-        let stream = stream::iter(vec![Ok(response)]);
-        Ok(Response::new(Box::pin(stream)))
+        let output = stream::iter(vec![Ok(response)]);
+        Ok(Response::new(Box::pin(output)))
     }
 
     async fn get_flight_info_statement(
@@ -298,12 +186,54 @@ impl FlightSqlService for SailFlightSqlService {
         let sql = query.query.clone();
         debug!("get_flight_info_statement: {sql}");
 
-        let ticket = TicketStatementQuery {
-            statement_handle: sql.clone().into_bytes().into(),
-        };
-        let ticket_bytes = ticket.as_any().encode_to_vec();
+        let statement = parse_one_statement(&sql)
+            .map_err(|e| Status::invalid_argument(format!("parse error: {e}")))?;
+        let spec_plan = from_ast_statement(statement)
+            .map_err(|e| Status::internal(format!("AST conversion error: {e}")))?;
+        let is_command = matches!(spec_plan, spec::Plan::Command(_));
+        let query_type = if is_command { "COMMAND" } else { "SELECT" };
+        let config = self.config.clone();
 
-        let schema = self.get_query_schema(&sql).await?;
+        let (stream, schema) = self
+            .execute_with_metrics_reporting(query_type, || async {
+                let ctx = self.get_session_context().await?;
+                let (execution_plan, _) =
+                    resolve_and_execute_plan(&ctx, config, spec_plan)
+                        .await
+                        .map_err(|e| Status::internal(format!("plan error: {e}")))?;
+                let schema = execution_plan.schema();
+                let service = ctx
+                    .extension::<JobService>()
+                    .map_err(|e| Status::internal(format!("job service not found: {e}")))?;
+                let mut raw_stream = service
+                    .runner()
+                    .execute(&ctx, execution_plan)
+                    .await
+                    .map_err(|e| Status::internal(format!("execution error: {e}")))?;
+                let stream: SendableRecordBatchStream = if is_command {
+                    // Eagerly drain command (DDL/DML) so side effects take place
+                    // before the client issues the next statement.
+                    while let Some(result) = raw_stream.next().await {
+                        result.map_err(|e| Status::internal(format!("execution error: {e}")))?;
+                    }
+                    Box::pin(RecordBatchStreamAdapter::new(
+                        schema.clone(),
+                        stream::empty(),
+                    ))
+                } else {
+                    raw_stream
+                };
+                Ok((stream, schema))
+            })
+            .await?;
+
+        let ticket = QueryTicket::new();
+        self.state.lock().await.insert(ticket.clone(), stream);
+
+        let ticket_proto = TicketStatementQuery {
+            statement_handle: ticket.as_bytes().to_vec().into(),
+        };
+        let ticket_bytes = ticket_proto.as_any().encode_to_vec();
 
         let endpoint = FlightEndpoint {
             ticket: Some(Ticket {
@@ -328,55 +258,30 @@ impl FlightSqlService for SailFlightSqlService {
         ticket: TicketStatementQuery,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
-        debug!("do_get_statement: {sql}");
+        let ticket = QueryTicket::try_from(ticket.statement_handle.as_ref())?;
+        debug!("do_get_statement: {ticket:?}");
 
-        let stmt = parse_one_statement(&sql).ok();
-        let kind = stmt
-            .as_ref()
-            .map(QueryKind::from_statement)
-            .unwrap_or(QueryKind::Other);
-        let query_type = kind.label();
-
-        let mut stream = self
-            .execute_with_metrics_reporting(query_type, || self.execute_sql_stream(&sql))
-            .await?;
+        let stream = self
+            .state
+            .lock()
+            .await
+            .take(&ticket)
+            .ok_or_else(|| Status::not_found("query ticket not found or already consumed"))?;
         let schema = stream.schema();
 
-        if matches!(kind, QueryKind::Ddl | QueryKind::Dml) {
-            // Execute DDL/DML eagerly so that side effects (e.g. creating a view)
-            // are visible to subsequent queries in the same session.
-            while let Some(result) = stream.next().await {
-                result.map_err(|e| Status::internal(format!("execution error: {e}")))?;
-            }
-            let stream = FlightDataEncoderBuilder::new()
-                .with_schema(schema)
-                .build(stream::iter(vec![]))
-                .map(|result| result.map_err(|e| Status::internal(format!("encoding error: {e}"))));
-            return Ok(Response::new(Box::pin(stream)));
-        }
-
-        let stream = stream.map(|result| {
+        let output = stream.map(|result| {
             result.map_err(|e| {
                 error!("batch streaming error: {e}");
                 arrow_flight::error::FlightError::ExternalError(Box::new(e))
             })
         });
 
-        let stream = FlightDataEncoderBuilder::new()
+        let output = FlightDataEncoderBuilder::new()
             .with_schema(schema)
-            .build(stream)
+            .build(output)
             .map(|result| result.map_err(|e| Status::internal(format!("encoding error: {e}"))));
 
-        Ok(Response::new(Box::pin(stream)))
-    }
-
-    async fn do_action_close_prepared_statement(
-        &self,
-        _query: ActionClosePreparedStatementRequest,
-        _request: Request<Action>,
-    ) -> Result<(), Status> {
-        Ok(())
+        Ok(Response::new(Box::pin(output)))
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}

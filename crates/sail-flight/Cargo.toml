@@ -29,6 +29,7 @@ prost = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
+uuid = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

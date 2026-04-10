@@ -6981,6 +6981,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tonic-health",
+ "uuid",
 ]
 
 [[package]]
