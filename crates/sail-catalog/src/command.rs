@@ -10,7 +10,7 @@ use crate::error::{CatalogError, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    CatalogPartitionField, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
+    CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
     CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
     DropTemporaryViewOptions, DropViewOptions,
 };
@@ -624,13 +624,7 @@ impl CatalogCommand {
                     constraints,
                     location,
                     format,
-                    partition_by: partition_by
-                        .into_iter()
-                        .map(|col| CatalogPartitionField {
-                            column: col,
-                            transform: None,
-                        })
-                        .collect(),
+                    partition_by,
                     sort_by,
                     bucket_by,
                     if_not_exists: false,
