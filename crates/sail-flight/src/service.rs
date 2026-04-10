@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow::array::{Array, Float64Array, Int32Array, Int64Array, StringArray};
+use arrow::array::{Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::record_batch::RecordBatch;
@@ -26,13 +26,15 @@ use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
     Ticket,
 };
-use futures::{stream, Stream, StreamExt};
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::ExecutionPlan;
+use futures::{stream, Stream, StreamExt, TryStreamExt};
 use log::{debug, error, info, warn};
 use prost::Message;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::job::JobService;
 use sail_plan::config::PlanConfig;
-use sail_plan::execute_logical_plan;
-use sail_plan::resolver::plan::NamedPlan;
-use sail_plan::resolver::PlanResolver;
+use sail_plan::resolve_and_execute_plan;
 use sail_session::session_manager::SessionManager;
 use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
@@ -226,340 +228,124 @@ impl SailFlightSqlService {
         Ok((dataset_schema_data.0, param_schema_data.0))
     }
 
-    /// Execute SQL using Sail's full pipeline (parser + resolver + executor)
+    /// Convert a SQL string to an `ExecutionPlan` using `resolve_and_execute_plan`.
     ///
-    /// # Execution Pipeline (shared with sail-spark-connect)
-    ///
-    /// 1. **Parse SQL** → AST using `sail-sql-analyzer::parse_one_statement()`
-    /// 2. **Convert AST** → `spec::Plan` using `from_ast_statement()`
-    /// 3. **Resolve Plan** → Logical plan using `PlanResolver` (handles Spark semantics)
-    /// 4. **Execute** → Via DataFusion's execution engine
-    ///
-    /// # Arguments
-    ///
-    /// * `query` - SQL query string to execute
-    ///
-    /// # Returns
-    ///
-    /// All `RecordBatch`es containing the query results.
-    async fn execute_sql_batches(&self, query: &str) -> Result<Vec<RecordBatch>, Status> {
-        let total_start = Instant::now();
-        self.record_active_query(1);
+    /// This method is the single entry point for SQL execution and schema resolution.
+    /// It parses, resolves, and creates a physical execution plan without actually running
+    /// the plan. The returned plan can be used either to retrieve the output schema or to
+    /// execute it via the `JobService` runner.
+    async fn sql_to_execution_plan(
+        &self,
+        sql: &str,
+        ctx: &datafusion::prelude::SessionContext,
+    ) -> Result<Arc<dyn ExecutionPlan>, Status> {
+        let statement = parse_one_statement(sql)
+            .map_err(|e| Status::invalid_argument(format!("Parse error: {}", e)))?;
+        let plan = from_ast_statement(statement)
+            .map_err(|e| Status::internal(format!("AST conversion error: {}", e)))?;
+        let (exec_plan, _) = resolve_and_execute_plan(ctx, self.config.clone(), plan)
+            .await
+            .map_err(|e| Status::internal(format!("Plan error: {}", e)))?;
+        Ok(exec_plan)
+    }
 
-        // Step 1: Parse SQL to AST
-        let parse_start = Instant::now();
-        let statement = match parse_one_statement(query) {
-            Ok(s) => s,
-            Err(e) => {
-                self.record_active_query(-1);
-                error!("Parse error for query '{}': {}", query, e);
-                return Err(Status::invalid_argument(format!("Parse error: {}", e)));
-            }
-        };
-        let query_kind = QueryKind::from_statement(&statement);
-        let query_type = query_kind.label();
-        debug!("  [parse_sql] completed in {:?}", parse_start.elapsed());
-        info!("Executing SQL query (type={}): {}", query_type, query);
-
-        macro_rules! fail {
-            ($err:expr) => {{
-                self.record_active_query(-1);
-                self.record_query_metrics(
-                    query_type,
-                    "error",
-                    total_start.elapsed().as_secs_f64(),
-                    0,
-                );
-                return Err($err);
-            }};
-        }
-
-        // Step 2: Convert AST to spec::Plan
-        let convert_start = Instant::now();
-        let plan = match from_ast_statement(statement) {
-            Ok(p) => p,
-            Err(e) => {
-                error!("AST conversion error for query '{}': {}", query, e);
-                fail!(Status::internal(format!("AST conversion error: {}", e)));
-            }
-        };
-        debug!(
-            "  [convert_ast_to_plan] completed in {:?}",
-            convert_start.elapsed()
-        );
-
-        // Step 3: Resolve the plan using PlanResolver
-        let resolve_start = Instant::now();
+    /// Execute SQL and return a stream of `RecordBatch`es.
+    ///
+    /// The schema is accessible via `stream.schema()`.
+    async fn execute_sql_stream(&self, sql: &str) -> Result<SendableRecordBatchStream, Status> {
         let ctx = self.get_session_context().await?;
-        let resolver = PlanResolver::new(&ctx, self.config.clone());
-        let NamedPlan {
-            plan: logical_plan,
-            fields: _,
-        } = match resolver.resolve_named_plan(plan).await {
-            Ok(np) => np,
-            Err(e) => {
-                error!("Plan resolution error for query '{}': {}", query, e);
-                fail!(Status::internal(format!("Plan resolution error: {}", e)));
-            }
-        };
-        debug!(
-            "  [resolve_plan] completed in {:?}",
-            resolve_start.elapsed()
-        );
+        let plan = self.sql_to_execution_plan(sql, &ctx).await?;
+        let service = ctx
+            .extension::<JobService>()
+            .map_err(|e| Status::internal(format!("Job service not found: {}", e)))?;
+        let stream = service
+            .runner()
+            .execute(&ctx, plan)
+            .await
+            .map_err(|e| Status::internal(format!("Execution error: {}", e)))?;
+        Ok(stream)
+    }
 
-        // Step 4: Execute the logical plan
-        let exec_start = Instant::now();
-        let df = match execute_logical_plan(&ctx, logical_plan).await {
-            Ok(df) => df,
-            Err(e) => {
-                error!("Execution error for query '{}': {}", query, e);
-                fail!(Status::internal(format!("Execution error: {}", e)));
-            }
-        };
-        debug!("  [execute_plan] completed in {:?}", exec_start.elapsed());
+    /// Execute SQL and collect all `RecordBatch`es into memory.
+    ///
+    /// Applies the `max_rows` limit if configured.
+    async fn execute_sql_batches(&self, sql: &str) -> Result<Vec<RecordBatch>, Status> {
+        let stream = self.execute_sql_stream(sql).await?;
+        let batches: Vec<RecordBatch> = stream
+            .err_into::<Box<dyn std::error::Error + Send + Sync>>()
+            .try_collect()
+            .await
+            .map_err(|e| Status::internal(format!("Collection error: {}", e)))?;
 
-        // Step 5: Collect results
-        let collect_start = Instant::now();
-        let batches = match df.collect().await {
-            Ok(b) => b,
-            Err(e) => {
-                error!("Collection error for query '{}': {}", query, e);
-                fail!(Status::internal(format!("Collection error: {}", e)));
-            }
-        };
-        debug!(
-            "  [collect_results] completed in {:?}",
-            collect_start.elapsed()
-        );
-
-        // Calculate statistics across all batches
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        let total_bytes: usize = batches.iter().map(|b| b.get_array_memory_size()).sum();
-        let num_batches = batches.len();
 
-        // Apply max_rows limit if configured (0 = unlimited)
-        let (batches, was_truncated) =
-            if self.options.max_rows > 0 && total_rows > self.options.max_rows {
-                let mut limited_batches = Vec::new();
-                let mut rows_remaining = self.options.max_rows;
-
-                for batch in batches {
-                    if rows_remaining == 0 {
-                        break;
-                    }
-                    if batch.num_rows() <= rows_remaining {
-                        rows_remaining -= batch.num_rows();
-                        limited_batches.push(batch);
-                    } else {
-                        // Slice the batch to fit the limit
-                        let sliced = batch.slice(0, rows_remaining);
-                        limited_batches.push(sliced);
-                        rows_remaining = 0;
-                    }
+        if self.options.max_rows > 0 && total_rows > self.options.max_rows {
+            let mut limited = Vec::new();
+            let mut remaining = self.options.max_rows;
+            for batch in batches {
+                if remaining == 0 {
+                    break;
                 }
-                (limited_batches, true)
-            } else {
-                (batches, false)
-            };
-
-        let final_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-
-        if was_truncated {
+                if batch.num_rows() <= remaining {
+                    remaining -= batch.num_rows();
+                    limited.push(batch);
+                } else {
+                    limited.push(batch.slice(0, remaining));
+                    remaining = 0;
+                }
+            }
+            let final_rows: usize = limited.iter().map(|b| b.num_rows()).sum();
             warn!(
                 "Query results truncated: {} rows returned (limit: {}), original: {} rows",
                 final_rows, self.options.max_rows, total_rows
             );
+            Ok(limited)
+        } else {
+            Ok(batches)
         }
-
-        let duration_secs = total_start.elapsed().as_secs_f64();
-
-        info!(
-            "Query completed: time={:.3}s, rows={}{}, batches={}, memory={:.2} KB",
-            duration_secs,
-            final_rows,
-            if was_truncated {
-                format!(" (truncated from {})", total_rows)
-            } else {
-                String::new()
-            },
-            num_batches,
-            total_bytes as f64 / 1024.0
-        );
-
-        // Record success metrics
-        self.record_active_query(-1);
-        self.record_query_metrics(query_type, "success", duration_secs, final_rows);
-
-        Ok(batches)
     }
 
-    /// Execute SQL and return a stream of RecordBatches (true streaming)
-    ///
-    /// Unlike `execute_sql_batches`, this does not collect all results into memory.
-    /// Batches are streamed directly as they are produced by DataFusion.
-    async fn execute_sql_stream(
-        &self,
-        query: &str,
-    ) -> Result<
-        (
-            Arc<Schema>,
-            datafusion::execution::SendableRecordBatchStream,
-        ),
-        Status,
-    > {
-        self.record_active_query(1);
-
-        // Step 1: Parse SQL to AST
-        let statement = parse_one_statement(query).map_err(|e| {
-            self.record_active_query(-1);
-            error!("Parse error for query '{}': {}", query, e);
-            Status::invalid_argument(format!("Parse error: {}", e))
-        })?;
-        let query_type = QueryKind::from_statement(&statement).label();
-        info!(
-            "Executing SQL query (streaming, type={}): {}",
-            query_type, query
-        );
-
-        // Step 2: Convert AST to spec::Plan
-        let plan = from_ast_statement(statement).map_err(|e| {
-            self.record_active_query(-1);
-            error!("AST conversion error for query '{}': {}", query, e);
-            Status::internal(format!("AST conversion error: {}", e))
-        })?;
-
-        // Step 3: Resolve the plan
+    /// Resolve SQL to get its output schema without executing the query.
+    async fn get_query_schema(&self, sql: &str) -> Result<Arc<Schema>, Status> {
         let ctx = self.get_session_context().await?;
-        let resolver = PlanResolver::new(&ctx, self.config.clone());
-        let NamedPlan {
-            plan: logical_plan,
-            fields: _,
-        } = resolver.resolve_named_plan(plan).await.map_err(|e| {
-            self.record_active_query(-1);
-            error!("Plan resolution error for query '{}': {}", query, e);
-            Status::internal(format!("Plan resolution error: {}", e))
-        })?;
-
-        // Step 4: Execute and get stream
-        let df = execute_logical_plan(&ctx, logical_plan)
-            .await
-            .map_err(|e| {
-                self.record_active_query(-1);
-                error!("Execution error for query '{}': {}", query, e);
-                Status::internal(format!("Execution error: {}", e))
-            })?;
-
-        let schema = Arc::new(df.schema().inner().as_ref().clone());
-        let stream = df.execute_stream().await.map_err(|e| {
-            self.record_active_query(-1);
-            error!("Stream error for query '{}': {}", query, e);
-            Status::internal(format!("Stream error: {}", e))
-        })?;
-
-        info!("Query stream started for: {}", query);
-        Ok((schema, stream))
+        let plan = self.sql_to_execution_plan(sql, &ctx).await?;
+        Ok(plan.schema())
     }
 
-    /// Execute SQL and return a single batch (for backwards compatibility)
-    async fn execute_sql(&self, query: &str) -> Result<RecordBatch, Status> {
-        let batches = self.execute_sql_batches(query).await?;
-
-        match batches.into_iter().next() {
-            Some(batch) => Ok(batch),
-            None => {
-                debug!("Query returned no rows, returning success batch");
-                self.create_success_batch()
+    /// Wrap an async operation with metrics reporting (active query count, duration, status).
+    ///
+    /// Row count is not tracked here because the wrapped function may return a stream whose
+    /// rows are consumed lazily by the caller; callers that need row-level metrics should
+    /// record them separately after consuming the result.
+    ///
+    /// TODO: For streaming results, the active-query gauge is decremented and
+    /// success/error metrics are recorded when the stream is created, not when it is
+    /// fully consumed. This means metrics may not accurately reflect the true query
+    /// lifetime. Consider wrapping the returned stream to track completion/errors.
+    async fn execute_with_metrics_reporting<F, Fut, T>(
+        &self,
+        query_type: &'static str,
+        f: F,
+    ) -> Result<T, Status>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T, Status>>,
+    {
+        let start = Instant::now();
+        self.record_active_query(1);
+        let result = f().await;
+        self.record_active_query(-1);
+        let duration = start.elapsed().as_secs_f64();
+        match result {
+            Ok(val) => {
+                self.record_query_metrics(query_type, "success", duration, 0);
+                Ok(val)
+            }
+            Err(e) => {
+                self.record_query_metrics(query_type, "error", duration, 0);
+                Err(e)
             }
         }
-    }
-
-    /// Resolve SQL plan to get schema without executing
-    ///
-    /// This is used for prepared statements to get the result schema
-    /// without actually executing the query.
-    ///
-    /// # Arguments
-    ///
-    /// * `query` - SQL query string to analyze
-    ///
-    /// # Returns
-    ///
-    /// The schema that would be returned by executing this query
-    async fn get_query_schema(&self, query: &str) -> Result<Arc<Schema>, Status> {
-        info!("Resolving schema WITHOUT executing: {}", query);
-
-        // Step 1: Parse SQL to AST
-        let statement = parse_one_statement(query).map_err(|e| {
-            error!("Parse error for query '{}': {}", query, e);
-            Status::invalid_argument(format!("Parse error: {}", e))
-        })?;
-
-        // Step 2: Convert AST to spec::Plan
-        let plan = from_ast_statement(statement).map_err(|e| {
-            error!("AST conversion error for query '{}': {}", query, e);
-            Status::internal(format!("AST conversion error: {}", e))
-        })?;
-
-        // Step 3: Resolve the plan to get logical plan (and schema)
-        let ctx = self.get_session_context().await?;
-        let resolver = PlanResolver::new(&ctx, self.config.clone());
-        let NamedPlan {
-            plan: logical_plan,
-            fields: _,
-        } = resolver.resolve_named_plan(plan).await.map_err(|e| {
-            error!("Plan resolution error for query '{}': {}", query, e);
-            Status::internal(format!("Plan resolution error: {}", e))
-        })?;
-
-        // ✅ Extract schema from logical plan WITHOUT executing
-        let schema = logical_plan.schema();
-        let arrow_schema = schema.inner().as_ref().clone();
-
-        info!(
-            "Schema resolved successfully (NOT executed): {:?}",
-            arrow_schema
-        );
-        Ok(Arc::new(arrow_schema))
-    }
-
-    /// Create an empty batch for DDL statements (no result set expected)
-    ///
-    /// DDL statements (CREATE TABLE, DROP TABLE, etc.) should return 0 rows
-    /// according to JDBC/Flight SQL standards. Clients like DBeaver expect
-    /// either an empty result set or an update count, not a result table.
-    fn create_success_batch(&self) -> Result<RecordBatch, Status> {
-        // Return empty schema with 0 rows - this is the standard for DDL
-        let schema = Arc::new(Schema::empty());
-        Ok(RecordBatch::new_empty(schema))
-    }
-
-    fn create_one_batch(&self) -> Result<RecordBatch, Status> {
-        let schema = Schema::new(vec![Field::new("1", DataType::Int64, false)]);
-        let array = Int64Array::from(vec![1]);
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)])
-            .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))
-    }
-
-    fn create_demo_batch(&self) -> Result<RecordBatch, Status> {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, false),
-            Field::new("value", DataType::Float64, false),
-        ]);
-
-        let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let name_array = StringArray::from(vec!["Alice", "Bob", "Charlie", "Diana", "Eve"]);
-        let value_array = Float64Array::from(vec![10.5, 20.3, 15.7, 25.1, 18.9]);
-
-        RecordBatch::try_new(
-            Arc::new(schema),
-            vec![
-                Arc::new(id_array),
-                Arc::new(name_array),
-                Arc::new(value_array),
-            ],
-        )
-        .map_err(|e| Status::internal(format!("Failed to create batch: {}", e)))
     }
 }
 
@@ -592,52 +378,30 @@ impl FlightSqlService for SailFlightSqlService {
         let ticket_data = request.into_inner().ticket;
         debug!("do_get_fallback: ticket_data len = {}", ticket_data.len());
 
-        if let Ok(ticket) = TicketStatementQuery::decode(ticket_data.as_ref()) {
-            let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
-            debug!("do_get_fallback: decoded SQL = {}", sql);
+        let ticket = TicketStatementQuery::decode(ticket_data.as_ref())
+            .map_err(|_| Status::not_found("Unknown ticket"))?;
+        let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
+        debug!("do_get_fallback: decoded SQL = {}", sql);
 
-            // Special case for SELECT 1
-            if sql.trim().eq_ignore_ascii_case("SELECT 1") {
-                let batch = self.create_one_batch()?;
-                let schema = batch.schema();
-                let batch_stream = futures::stream::iter(vec![Ok(batch)]);
-                let flight_data_stream = FlightDataEncoderBuilder::new()
-                    .with_schema(schema)
-                    .build(batch_stream)
-                    .map(|result| {
-                        result.map_err(|e| Status::internal(format!("Encoding error: {}", e)))
-                    });
-                return Ok(Response::new(Box::pin(flight_data_stream)));
-            }
+        let query_type = parse_one_statement(&sql)
+            .map(|s| QueryKind::from_statement(&s).label())
+            .unwrap_or("OTHER");
 
-            // Use true streaming for regular queries
-            let (schema, record_stream) = self.execute_sql_stream(&sql).await?;
+        let stream = self
+            .execute_with_metrics_reporting(query_type, || self.execute_sql_stream(&sql))
+            .await?;
+        let schema = stream.schema();
 
-            let mapped_stream = record_stream.map(|result| {
-                result.map_err(|e| {
-                    error!("Batch streaming error: {}", e);
-                    arrow_flight::error::FlightError::ExternalError(Box::new(e))
-                })
-            });
-
-            let flight_data_stream = FlightDataEncoderBuilder::new()
-                .with_schema(schema)
-                .build(mapped_stream)
-                .map(|result| {
-                    result.map_err(|e| Status::internal(format!("Encoding error: {}", e)))
-                });
-
-            return Ok(Response::new(Box::pin(flight_data_stream)));
-        }
-
-        debug!("do_get_fallback: using demo data");
-        let batch = self.create_demo_batch()?;
-        let schema = batch.schema();
-        let batch_stream = futures::stream::iter(vec![Ok(batch)]);
+        let mapped_stream = stream.map(|result| {
+            result.map_err(|e| {
+                error!("Batch streaming error: {}", e);
+                arrow_flight::error::FlightError::ExternalError(Box::new(e))
+            })
+        });
 
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .with_schema(schema)
-            .build(batch_stream)
+            .build(mapped_stream)
             .map(|result| result.map_err(|e| Status::internal(format!("Encoding error: {}", e))));
 
         Ok(Response::new(Box::pin(flight_data_stream)))
@@ -657,9 +421,8 @@ impl FlightSqlService for SailFlightSqlService {
         };
         let ticket_bytes = ticket.as_any().encode_to_vec();
 
-        // Execute to get schema
-        let batch = self.execute_sql(&sql).await?;
-        let schema = batch.schema();
+        // Resolve schema without executing the query
+        let schema = self.get_query_schema(&sql).await?;
 
         let endpoint = FlightEndpoint {
             ticket: Some(Ticket {
@@ -902,26 +665,17 @@ impl FlightSqlService for SailFlightSqlService {
         let sql = String::from_utf8_lossy(&ticket.statement_handle).to_string();
         debug!("do_get_statement: SQL = {}", sql);
 
-        // Special case for SELECT 1 (common health check)
-        if sql.trim().eq_ignore_ascii_case("SELECT 1") {
-            let batch = self.create_one_batch()?;
-            let schema = batch.schema();
-            let batch_stream = futures::stream::iter(vec![Ok(batch)]);
-            let flight_data_stream = FlightDataEncoderBuilder::new()
-                .with_schema(schema)
-                .build(batch_stream)
-                .map(|result| {
-                    result.map_err(|e| Status::internal(format!("Encoding error: {}", e)))
-                });
-            return Ok(Response::new(Box::pin(flight_data_stream)));
-        }
+        let query_type = parse_one_statement(&sql)
+            .map(|s| QueryKind::from_statement(&s).label())
+            .unwrap_or("OTHER");
 
-        // Use true streaming for regular queries
-        info!("Executing query with streaming: {}", sql);
-        let (schema, record_stream) = self.execute_sql_stream(&sql).await?;
+        let stream = self
+            .execute_with_metrics_reporting(query_type, || self.execute_sql_stream(&sql))
+            .await?;
+        let schema = stream.schema();
 
         // Wrap the DataFusion stream to convert errors to FlightError
-        let mapped_stream = record_stream.map(|result| {
+        let mapped_stream = stream.map(|result| {
             result.map_err(|e| {
                 error!("Batch streaming error: {}", e);
                 arrow_flight::error::FlightError::ExternalError(Box::new(e))
@@ -1159,27 +913,10 @@ impl FlightSqlService for SailFlightSqlService {
 
     async fn do_put_prepared_statement_update(
         &self,
-        query: CommandPreparedStatementUpdate,
+        _query: CommandPreparedStatementUpdate,
         _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        let sql = String::from_utf8_lossy(&query.prepared_statement_handle).to_string();
-        info!("do_put_prepared_statement_update: SQL = {}", sql);
-
-        let kind = parse_one_statement(&sql)
-            .map(|s| QueryKind::from_statement(&s))
-            .unwrap_or(QueryKind::Other);
-
-        if kind == QueryKind::Ddl {
-            info!(
-                "DDL already executed in prepare phase, skipping re-execution: {}",
-                sql
-            );
-            return Ok(0);
-        }
-
-        info!("Executing update statement: {}", sql);
-        let _batch = self.execute_sql(&sql).await?;
-        Ok(0)
+        Err(Status::unimplemented("do_put_prepared_statement_update"))
     }
 
     async fn do_put_substrait_plan(
@@ -1197,28 +934,23 @@ impl FlightSqlService for SailFlightSqlService {
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement: SQL = {}", query.query);
 
-        let kind = parse_one_statement(&query.query)
-            .map(|s| QueryKind::from_statement(&s))
-            .unwrap_or(QueryKind::Other);
+        let statement = parse_one_statement(&query.query)
+            .map_err(|e| Status::invalid_argument(format!("Parse error: {}", e)))?;
+        let kind = QueryKind::from_statement(&statement);
 
         let schema = match kind {
-            QueryKind::Ddl => {
-                info!("DDL detected, executing immediately: {}", query.query);
-                let _batch = self.execute_sql(&query.query).await?;
+            QueryKind::Ddl | QueryKind::Dml => {
+                // Execute DDL/DML eagerly so that side effects (e.g. creating a view)
+                // are visible to subsequent queries in the same session.
+                let stream = self.execute_sql_stream(&query.query).await?;
+                stream
+                    .err_into::<Box<dyn std::error::Error + Send + Sync>>()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(|e| Status::internal(format!("Execution error: {}", e)))?;
                 Arc::new(Schema::empty())
             }
-            QueryKind::Dml => {
-                info!("DML detected, executing immediately: {}", query.query);
-                let _batch = self.execute_sql(&query.query).await?;
-                Arc::new(Schema::empty())
-            }
-            _ => {
-                info!(
-                    "SELECT detected, resolving plan for schema only: {}",
-                    query.query
-                );
-                self.get_query_schema(&query.query).await?
-            }
+            _ => self.get_query_schema(&query.query).await?,
         };
 
         // Use the query as the prepared statement handle
