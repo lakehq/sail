@@ -372,7 +372,7 @@
 
 - key: date_format
   description: |
-    Sets the string that indicates a date format. Custom date formats follow the formats at Datetime Patterns.
+    Sets the string that indicates a date format. Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
   supported: false
   rust_type: String
   scopes:
@@ -392,7 +392,7 @@
 
 - key: timestamp_format
   description: |
-    Sets the string that indicates a timestamp format. Custom date formats follow the formats at Datetime Patterns.
+    Sets the string that indicates a timestamp format. Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
   supported: false
   rust_type: String
   scopes:
@@ -413,7 +413,7 @@
 - key: timestamp_ntz_format
   description: |
     Sets the string that indicates a timestamp without timezone format.
-    Custom date formats follow the formats at Datetime Patterns.
+    Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
   supported: false
   rust_type: String
   scopes:
