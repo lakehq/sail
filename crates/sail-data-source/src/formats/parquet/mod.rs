@@ -31,7 +31,8 @@ impl ListingFormat for ParquetListingFormat {
         _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         let options = resolve_parquet_read_options(ctx, options)
-            .map_err(datafusion_common::DataFusionError::from)?;
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options();
         Ok(Arc::new(ParquetFormat::default().with_options(options)))
     }
 
@@ -41,6 +42,8 @@ impl ListingFormat for ParquetListingFormat {
         options: Vec<OptionLayer>,
     ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
         let options = resolve_parquet_write_options(ctx, options)
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         let compression = options.global.compression.clone();
         Ok((

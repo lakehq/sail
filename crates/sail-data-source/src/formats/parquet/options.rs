@@ -256,7 +256,7 @@ impl ParquetWriteOptions {
 pub fn resolve_parquet_read_options(
     ctx: &dyn Session,
     options: Vec<OptionLayer>,
-) -> DataSourceResult<TableParquetOptions> {
+) -> DataSourceResult<ParquetReadOptions> {
     let mut partial = ParquetReadPartialOptions::initialize();
     partial.merge(
         ctx.default_table_options()
@@ -266,13 +266,13 @@ pub fn resolve_parquet_read_options(
     for layer in options {
         partial.merge(layer.build_partial_options()?);
     }
-    Ok(partial.finalize()?.into_table_options())
+    partial.finalize()
 }
 
 pub fn resolve_parquet_write_options(
     ctx: &dyn Session,
     options: Vec<OptionLayer>,
-) -> DataSourceResult<TableParquetOptions> {
+) -> DataSourceResult<ParquetWriteOptions> {
     let mut partial = ParquetWritePartialOptions::initialize();
     partial.merge(
         ctx.default_table_options()
@@ -282,7 +282,7 @@ pub fn resolve_parquet_write_options(
     for layer in options {
         partial.merge(layer.build_partial_options()?);
     }
-    partial.finalize()?.into_table_options()
+    partial.finalize()
 }
 
 #[cfg(test)]
@@ -317,31 +317,31 @@ mod tests {
         ]);
         let options = resolve_parquet_read_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?;
-        assert!(options.global.enable_page_index);
-        assert!(options.global.pruning);
-        assert!(!options.global.skip_metadata);
-        assert_eq!(options.global.metadata_size_hint, Some(1024));
-        assert!(options.global.pushdown_filters);
-        assert!(!options.global.reorder_filters);
-        assert!(options.global.schema_force_view_types);
-        assert!(options.global.binary_as_string);
-        assert_eq!(options.global.coerce_int96, Some("ms".to_string()));
-        assert!(options.global.bloom_filter_on_read);
+        assert!(options.enable_page_index);
+        assert!(options.pruning);
+        assert!(!options.skip_metadata);
+        assert_eq!(options.metadata_size_hint, Some(1024));
+        assert!(options.pushdown_filters);
+        assert!(!options.reorder_filters);
+        assert!(options.schema_force_view_types);
+        assert!(options.binary_as_string);
+        assert_eq!(options.coerce_int96, Some("ms".to_string()));
+        assert!(options.bloom_filter_on_read);
         // max_predicate_cache_size uses parse_optional_usize: "0" = Some(0)
-        assert_eq!(options.global.max_predicate_cache_size, Some(0));
+        assert_eq!(options.max_predicate_cache_size, Some(0));
 
         // metadata_size_hint = "0": parse_optional_non_zero_usize("0") returns None
         // which explicitly clears the value (overrides session default)
         let kv = option_list(&[("metadata_size_hint", "0")]);
         let options = resolve_parquet_read_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.global.metadata_size_hint, None);
+        assert_eq!(options.metadata_size_hint, None);
 
         // metadata_size_hint = "": parse_optional_non_zero_usize("") returns None
         let kv = option_list(&[("metadata_size_hint", "")]);
         let options = resolve_parquet_read_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.global.metadata_size_hint, None);
+        assert_eq!(options.metadata_size_hint, None);
 
         Ok(())
     }
@@ -363,13 +363,13 @@ mod tests {
         let kv = option_list(&[]);
         let options = resolve_parquet_read_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.global.metadata_size_hint, Some(123));
+        assert_eq!(options.metadata_size_hint, Some(123));
 
         // When metadata_size_hint = "0" is provided, the value is explicitly cleared
         let kv = option_list(&[("metadata_size_hint", "0")]);
         let options = resolve_parquet_read_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.global.metadata_size_hint, None);
+        assert_eq!(options.metadata_size_hint, None);
 
         Ok(())
     }
@@ -401,6 +401,8 @@ mod tests {
             ("maximum_buffered_record_batches_per_stream", "10"),
         ]);
         let options = resolve_parquet_write_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
         assert_eq!(options.global.write_batch_size, 1000);
@@ -437,6 +439,8 @@ mod tests {
             ("encoding", ""),
         ]);
         let options = resolve_parquet_write_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.column_index_truncate_length, None);
         assert_eq!(options.global.statistics_truncate_length, None);
@@ -481,6 +485,8 @@ mod tests {
 
         let kv = option_list(&[]);
         let options = resolve_parquet_write_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
@@ -493,6 +499,8 @@ mod tests {
             ("encoding", ""),
         ]);
         let options = resolve_parquet_write_options(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.global.column_index_truncate_length, None);
         assert_eq!(options.global.statistics_truncate_length, None);
