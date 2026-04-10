@@ -176,12 +176,15 @@ impl MergedType {
             // Object + Object → merge fields
             (MergedType::Object(mut a), MergedType::Object(b)) => {
                 for (key, val) in b {
-                    a.entry(key)
-                        .and_modify(|existing| {
-                            let old = std::mem::replace(existing, MergedType::Void);
-                            *existing = old.merge(val.clone());
-                        })
-                        .or_insert(val);
+                    match a.entry(key) {
+                        std::collections::btree_map::Entry::Occupied(mut entry) => {
+                            let old = std::mem::replace(entry.get_mut(), MergedType::Void);
+                            *entry.get_mut() = old.merge(val);
+                        }
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(val);
+                        }
+                    }
                 }
                 MergedType::Object(a)
             }
