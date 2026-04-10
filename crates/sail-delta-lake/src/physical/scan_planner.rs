@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_schema::DataType;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
@@ -23,7 +24,7 @@ use crate::physical_plan::planner::metadata_predicate::{
 };
 use crate::physical_plan::planner::utils::LogReplayOptions;
 use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
-use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
+use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::storage::LogStoreRef;
@@ -237,6 +238,32 @@ pub(crate) async fn plan_delta_scan(
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
         let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
+        let output_schema = if let Some(used_columns) = projection {
+            let fields = used_columns
+                .iter()
+                .map(|idx| full_logical_schema.field(*idx).to_owned())
+                .collect::<Vec<_>>();
+            Arc::new(ArrowSchema::new(fields))
+        } else {
+            Arc::clone(&full_logical_schema)
+        };
+
+        let renamed_schema = renamed.schema();
+
+        let needs_wrapping = output_schema.fields().iter().any(|field| {
+            let Ok(input_field) = renamed_schema.field_with_name(field.name()) else {
+                return false;
+            };
+            matches!(
+                (input_field.data_type(), field.data_type()),
+                (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+            ) && input_field.data_type() != field.data_type()
+        });
+        if needs_wrapping {
+            return Ok(
+                Arc::new(RelaxedTzCastExec::new(renamed, output_schema)) as Arc<dyn ExecutionPlan>
+            );
+        }
         return Ok(renamed);
     }
 
