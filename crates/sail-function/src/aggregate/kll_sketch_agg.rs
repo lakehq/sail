@@ -148,9 +148,7 @@ impl AggregateUDFImpl for KllSketchAggBigintFunction {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new("sketch", DataType::Binary, true).into()
-        ])
+        Ok(vec![Field::new("sketch", DataType::Binary, true).into()])
     }
 }
 
@@ -299,9 +297,7 @@ impl AggregateUDFImpl for KllSketchAggFloatFunction {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new("sketch", DataType::Binary, true).into()
-        ])
+        Ok(vec![Field::new("sketch", DataType::Binary, true).into()])
     }
 }
 
@@ -337,9 +333,7 @@ impl Accumulator for KllSketchAggFloatAccumulator {
             .as_any()
             .downcast_ref::<Float32Array>()
             .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "kll_sketch_agg_float expected Float32Array".to_string(),
-                )
+                DataFusionError::Internal("kll_sketch_agg_float expected Float32Array".to_string())
             })?;
         for value in array.iter().flatten() {
             self.values.push(value);
@@ -457,9 +451,7 @@ impl AggregateUDFImpl for KllSketchAggDoubleFunction {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        Ok(vec![
-            Field::new("sketch", DataType::Binary, true).into()
-        ])
+        Ok(vec![Field::new("sketch", DataType::Binary, true).into()])
     }
 }
 
@@ -495,9 +487,7 @@ impl Accumulator for KllSketchAggDoubleAccumulator {
             .as_any()
             .downcast_ref::<Float64Array>()
             .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "kll_sketch_agg_double expected Float64Array".to_string(),
-                )
+                DataFusionError::Internal("kll_sketch_agg_double expected Float64Array".to_string())
             })?;
         for value in array.iter().flatten() {
             self.values.push(value);
