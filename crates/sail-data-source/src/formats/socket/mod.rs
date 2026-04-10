@@ -13,9 +13,9 @@ use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
 use crate::formats::socket::options::resolve_socket_read_options;
-pub use crate::formats::socket::options::TableSocketOptions;
 pub use crate::formats::socket::reader::SocketSourceExec;
 use crate::formats::socket::reader::SocketStreamSource;
+pub use crate::options::gen::SocketReadOptions;
 
 /// Read test data from a TCP socket for testing purposes.
 /// The record batches contain a single string column corresponding to lines read from the socket.

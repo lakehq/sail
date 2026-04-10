@@ -101,6 +101,7 @@ impl TryFrom<Relation> for spec::CommandPlan {
     }
 }
 
+#[derive(Debug)]
 enum RelationNode {
     Query(spec::QueryNode),
     Command(spec::CommandNode),
@@ -1047,7 +1048,39 @@ impl TryFrom<RelType> for RelationNode {
             RelType::UnresolvedTableValuedFunction(_) => {
                 Err(SparkError::todo("unresolved table valued function"))
             }
-            RelType::LateralJoin(_) => Err(SparkError::todo("lateral join")),
+            RelType::LateralJoin(lateral_join) => {
+                use sc::join::JoinType;
+
+                let sc::LateralJoin {
+                    left,
+                    right,
+                    join_condition,
+                    join_type,
+                } = *lateral_join;
+
+                let left = left.required("lateral join left")?;
+                let right = right.required("lateral join right")?;
+                let join_type = match JoinType::try_from(join_type)? {
+                    JoinType::Unspecified => {
+                        return Err(SparkError::invalid("unspecified join type"))
+                    }
+                    JoinType::Inner => spec::JoinType::Inner,
+                    JoinType::FullOuter => spec::JoinType::FullOuter,
+                    JoinType::LeftOuter => spec::JoinType::LeftOuter,
+                    JoinType::RightOuter => spec::JoinType::RightOuter,
+                    JoinType::LeftAnti => spec::JoinType::LeftAnti,
+                    JoinType::LeftSemi => spec::JoinType::LeftSemi,
+                    JoinType::Cross => spec::JoinType::Cross,
+                };
+                let join_condition = join_condition.map(|x| x.try_into()).transpose()?;
+
+                Ok(RelationNode::Query(spec::QueryNode::LateralJoin {
+                    left: Box::new((*left).try_into()?),
+                    right: Box::new((*right).try_into()?),
+                    join_condition,
+                    join_type,
+                }))
+            }
             RelType::ChunkedCachedLocalRelation(_) => {
                 Err(SparkError::todo("chunked cached local relation"))
             }
@@ -1578,7 +1611,14 @@ impl TryFrom<WriteOperation> for spec::Write {
                 null_ordering: spec::NullOrdering::Unspecified,
             })
             .collect();
-        let partitioning_columns = partitioning_columns.into_iter().map(|x| x.into()).collect();
+        let partitioning_columns = partitioning_columns
+            .into_iter()
+            .map(|name| spec::Expr::UnresolvedAttribute {
+                name: spec::ObjectName::bare(name),
+                plan_id: None,
+                is_metadata_column: false,
+            })
+            .collect();
         let clustering_columns = clustering_columns.into_iter().map(|x| x.into()).collect();
         let bucket_by = match bucket_by {
             Some(x) => {

@@ -29,6 +29,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
+use object_store::ObjectStoreExt;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -43,14 +44,13 @@ use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
-
 const MAX_COMMIT_RETRIES: usize = 5;
 
 #[derive(Debug)]
 pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl IcebergCommitExec {
@@ -60,12 +60,12 @@ impl IcebergCommitExec {
             DataType::UInt64,
             true,
         )]));
-        let cache = PlanProperties::new(
+        let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Self {
             input,
             table_url,
@@ -209,7 +209,7 @@ impl ExecutionPlan for IcebergCommitExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

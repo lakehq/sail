@@ -36,15 +36,20 @@ use url::Url;
 
 use super::context::PlannerContext;
 use super::log_scan::{build_delta_log_datasource_scans_with_options, LogScanOptions};
+use super::log_segment::{resolve_log_segment_files, LogSegmentResolveOptions};
 use crate::datasource::{
     simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
 };
-use crate::options::DeltaLogReplayStrategyOption;
+use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION,
-    COL_REPLAY_PATH,
+    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions, COL_LOG_IS_REMOVE,
+    COL_LOG_VERSION, COL_REPLAY_PATH,
 };
+use crate::spec::fields::{
+    FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
+};
+use crate::table::DeltaSnapshot;
 
 /// Options that control what the log replay pipeline materializes as payload columns.
 ///
@@ -116,7 +121,8 @@ pub fn build_standard_write_layers(
     let writer = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
-        ctx.options().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone()),
+        ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         sink_mode.clone(),
         ctx.table_exists(),
@@ -190,41 +196,51 @@ pub fn align_schemas_for_union(
 /// -> `DeltaLogReplayExec`.
 pub async fn build_log_replay_pipeline(
     ctx: &PlannerContext<'_>,
-    table_url: Url,
-    version: i64,
-    partition_columns: Vec<String>,
-    checkpoint_files: Vec<String>,
-    commit_files: Vec<String>,
+    snapshot: &DeltaSnapshot,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let partition_columns = partition_columns
-        .into_iter()
-        .map(|col| (col.clone(), col))
-        .collect::<Vec<_>>();
-    build_log_replay_pipeline_with_options(
-        ctx,
-        table_url,
-        version,
-        partition_columns,
-        checkpoint_files,
-        commit_files,
-        LogReplayOptions::default(),
-    )
-    .await
+    build_log_replay_pipeline_with_options(ctx, snapshot, LogReplayOptions::default()).await
 }
 
 /// Same as [`build_log_replay_pipeline`], but allows controlling projected payload columns.
 pub async fn build_log_replay_pipeline_with_options(
+    ctx: &PlannerContext<'_>,
+    snapshot: &DeltaSnapshot,
+    options: LogReplayOptions,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let version = snapshot.version();
+    let log_segment_files = resolve_log_segment_files(
+        ctx,
+        version,
+        LogSegmentResolveOptions {
+            commit_version_range: options.commit_version_range,
+        },
+    )
+    .await?;
+    build_log_replay_pipeline_with_files(
+        ctx,
+        ctx.table_url().clone(),
+        version,
+        snapshot.physical_partition_columns(),
+        log_segment_files.checkpoint_files,
+        log_segment_files.commit_files,
+        log_segment_files.sidecar_files,
+        options,
+    )
+    .await
+}
+
+async fn build_log_replay_pipeline_with_files(
     ctx: &PlannerContext<'_>,
     table_url: Url,
     version: i64,
     partition_columns: Vec<(String, String)>,
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
+    sidecar_files: Vec<String>,
     options: LogReplayOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let log_scan_options = LogScanOptions {
         projection: Some(vec!["add".to_string(), "remove".to_string()]),
-        commit_version_range: options.commit_version_range,
         parquet_predicate: options.parquet_predicate,
     };
     let (checkpoint_scan_opt, commit_scan_opt, checkpoint_files, commit_files) =
@@ -232,6 +248,7 @@ pub async fn build_log_replay_pipeline_with_options(
             ctx,
             checkpoint_files,
             commit_files,
+            sidecar_files,
             log_scan_options,
         )
         .await?;
@@ -265,7 +282,9 @@ pub async fn build_log_replay_pipeline_with_options(
 
         let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
             let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-            let adapter = adapter_factory.create(filter.table_schema, replay.schema());
+            let adapter = adapter_factory
+                .create(filter.table_schema, replay.schema())
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let adapted = adapter
                 .rewrite(filter.predicate)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -312,14 +331,14 @@ pub async fn build_log_replay_pipeline_with_options(
     // struct's validity to avoid spurious values.
     let add_path = guard_with(
         add_is_not_null.clone(),
-        get_field_expr(add_col_expr.clone(), "path"),
+        get_field_expr(add_col_expr.clone(), FIELD_NAME_PATH),
     );
     let remove_path = remove_col_expr
         .as_ref()
         .map(|e| {
             guard_with(
                 remove_is_not_null.clone(),
-                get_field_expr(e.clone(), "path"),
+                get_field_expr(e.clone(), FIELD_NAME_PATH),
             )
         })
         .unwrap_or_else(lit_utf8_null);
@@ -344,8 +363,8 @@ pub async fn build_log_replay_pipeline_with_options(
         }
     };
     let has_add_field = |name: &str| add_struct_fields.iter().any(|f| f.name() == name);
-    let mod_time_field = if has_add_field("modificationTime") {
-        "modificationTime"
+    let mod_time_field = if has_add_field(FIELD_NAME_MODIFICATION_TIME) {
+        FIELD_NAME_MODIFICATION_TIME
     } else {
         "modification_time"
     };
@@ -354,8 +373,8 @@ pub async fn build_log_replay_pipeline_with_options(
     } else {
         "partition_values"
     };
-    let stats_field = if has_add_field("stats") {
-        "stats"
+    let stats_field = if has_add_field(FIELD_NAME_STATS) {
+        FIELD_NAME_STATS
     } else {
         "stats_json"
     };
@@ -364,12 +383,12 @@ pub async fn build_log_replay_pipeline_with_options(
     let guard_add = |e: Expr| guard_with(add_is_not_null.clone(), e);
 
     let path_expr = simplify(Expr::Cast(Cast::new(
-        Box::new(guard_add(get_add_field("path"))),
+        Box::new(guard_add(get_add_field(FIELD_NAME_PATH))),
         DataType::Utf8,
     )))?;
 
     let size_expr_i64 = Expr::Cast(Cast::new(
-        Box::new(guard_add(get_add_field("size"))),
+        Box::new(guard_add(get_add_field(FIELD_NAME_SIZE))),
         DataType::Int64,
     ));
     let size_expr = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
@@ -525,12 +544,12 @@ pub async fn build_log_replay_pipeline_with_options(
     };
 
     let replay_strategy = ctx.options().delta_log_replay_strategy;
-    let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.max(1);
+    let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.get();
     let has_checkpoint = !checkpoint_files.is_empty();
     let use_hash = match replay_strategy {
-        DeltaLogReplayStrategyOption::Sort => false,
-        DeltaLogReplayStrategyOption::Hash => has_checkpoint,
-        DeltaLogReplayStrategyOption::Auto => {
+        DeltaLogReplayStrategy::Sort => false,
+        DeltaLogReplayStrategy::Hash => has_checkpoint,
+        DeltaLogReplayStrategy::Auto => {
             has_checkpoint && commit_files.len() <= replay_hash_threshold
         }
     };
@@ -571,7 +590,9 @@ pub async fn build_log_replay_pipeline_with_options(
 
     let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
         let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-        let adapter = adapter_factory.create(filter.table_schema, replay.schema());
+        let adapter = adapter_factory
+            .create(filter.table_schema, replay.schema())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let adapted = adapter
             .rewrite(filter.predicate)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;

@@ -32,7 +32,7 @@ pub(crate) async fn create_hive_table(
     table: &str,
     options: CreateTableOptions,
 ) -> CatalogResult<TableStatus> {
-    let db_name = database.to_string();
+    let database_name = GlueCatalogProvider::database_name(database)?;
 
     let ValidatedHiveOptions {
         columns,
@@ -61,7 +61,7 @@ pub(crate) async fn create_hive_table(
 
     let result = client
         .create_table()
-        .database_name(&db_name)
+        .database_name(&database_name)
         .table_input(table_input)
         .send()
         .await;

@@ -19,11 +19,12 @@ use sail_catalog::provider::{
     CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
     DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
-use sail_catalog::utils::get_property;
+use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
     CatalogTableConstraint, CatalogTableSort, DatabaseStatus, TableColumnStatus, TableKind,
     TableStatus,
 };
+use sail_iceberg::utils::partition_transform::catalog_partition_field_from_iceberg;
 use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField, StructType};
 use tokio::sync::OnceCell;
 
@@ -149,6 +150,18 @@ impl IcebergRestCatalogProvider {
         Ok((client, merged_catalog_config))
     }
 
+    /// Converts a `Namespace` into a string representation for the REST API URL.
+    /// The Iceberg REST API separates namespace components with `\x1F`.
+    fn namespace_string(database: &Namespace) -> String {
+        // TODO: The separator is actually configurable and we should support it as an option.
+        let mut result = database.head.to_string();
+        for s in &database.tail {
+            result.push('\x1F');
+            result.push_str(s.as_ref());
+        }
+        result
+    }
+
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
     fn load_table_result_to_status(
         &self,
@@ -205,9 +218,30 @@ impl IcebergRestCatalogProvider {
             })
             .unwrap_or_default();
 
-        let partition_by: Vec<String> = default_partition_spec
-            .map(|spec| spec.fields.iter().map(|f| f.name.clone()).collect())
-            .unwrap_or_default();
+        let partition_by = match (current_schema, default_partition_spec) {
+            (Some(schema), Some(spec)) => spec
+                .fields
+                .iter()
+                .map(|field| {
+                    let source_column = schema
+                        .fields
+                        .iter()
+                        .find(|f| f.id == field.source_id)
+                        .ok_or_else(|| {
+                            CatalogError::External(format!(
+                                "Partition field source id {} not found in schema",
+                                field.source_id
+                            ))
+                        })?
+                        .name
+                        .clone();
+                    let transform = field.transform.parse().map_err(CatalogError::External)?;
+                    catalog_partition_field_from_iceberg(source_column, transform)
+                        .map_err(CatalogError::External)
+                })
+                .collect::<CatalogResult<Vec<_>>>()?,
+            _ => Vec::new(),
+        };
 
         let columns = if let Some(schema) = current_schema {
             let mut cols = Vec::new();
@@ -562,12 +596,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
-        let namespace_str = database.to_string();
+        let namespace = Self::namespace_string(database);
 
         let result = client
             .catalog_api_api()
             .load_namespace_metadata(
-                &namespace_str,
+                &namespace,
                 catalog_config
                     .props
                     .get(REST_CATALOG_PROP_PREFIX)
@@ -577,12 +611,18 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map_err(|e| match e {
                 apis::Error::ResponseError(apis::ResponseContent { status, .. }) => {
                     if status == 404 {
-                        CatalogError::NotFound("namespace", database.to_string())
+                        CatalogError::NotFound("namespace", quote_namespace_if_needed(database))
                     } else {
-                        CatalogError::External(format!("Failed to load namespace {database}: {e}"))
+                        CatalogError::External(format!(
+                            "Failed to load namespace {}: {e}",
+                            quote_namespace_if_needed(database)
+                        ))
                     }
                 }
-                _ => CatalogError::External(format!("Failed to load namespace {database}: {e}")),
+                _ => CatalogError::External(format!(
+                    "Failed to load namespace {}: {e}",
+                    quote_namespace_if_needed(database)
+                )),
             })?;
 
         let comment = result
@@ -609,7 +649,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
-        let parent = prefix.map(|namespace| namespace.to_string());
+        let parent = prefix.map(|namespace| Self::namespace_string(namespace));
 
         let result = client
             .catalog_api_api()
@@ -654,7 +694,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         match client
             .catalog_api_api()
             .drop_namespace(
-                &database.to_string(),
+                &Self::namespace_string(database),
                 catalog_config
                     .props
                     .get(REST_CATALOG_PROP_PREFIX)
@@ -776,7 +816,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .create_table(
-                &database.to_string(),
+                &Self::namespace_string(database),
                 request,
                 None,
                 catalog_config
@@ -795,7 +835,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .load_table(
-                &database.to_string(),
+                &Self::namespace_string(database),
                 table,
                 None,
                 None,
@@ -810,11 +850,20 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 apis::Error::ResponseError(apis::ResponseContent { status, .. })
                     if status == 404 =>
                 {
-                    CatalogError::NotFound("table", format!("{database}.{table}"))
+                    CatalogError::NotFound(
+                        "table",
+                        format!(
+                            "{}.{}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ),
+                    )
                 }
-                _ => {
-                    CatalogError::External(format!("Failed to load table {database}.{table}: {e}"))
-                }
+                _ => CatalogError::External(format!(
+                    "Failed to load table {}.{}: {e}",
+                    quote_namespace_if_needed(database),
+                    quote_name_if_needed(table),
+                )),
             })?;
         self.load_table_result_to_status(table, database, result)
     }
@@ -825,7 +874,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .list_tables(
-                &database.to_string(),
+                &Self::namespace_string(database),
                 None,
                 None,
                 catalog_config
@@ -871,7 +920,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         match client
             .catalog_api_api()
             .drop_table(
-                &database.to_string(),
+                &Self::namespace_string(database),
                 table,
                 Some(purge),
                 catalog_config
@@ -996,7 +1045,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .create_view(
-                &database.to_string(),
+                &Self::namespace_string(database),
                 request,
                 catalog_config
                     .props
@@ -1014,7 +1063,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .load_view(
-                &database.to_string(),
+                &Self::namespace_string(database),
                 view,
                 catalog_config
                     .props
@@ -1023,7 +1072,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             )
             .await
             .map_err(|e| {
-                CatalogError::External(format!("Failed to load view {database}.{view}: {e}"))
+                CatalogError::External(format!(
+                    "Failed to load view {}.{}: {e}",
+                    quote_namespace_if_needed(database),
+                    quote_name_if_needed(view)
+                ))
             })?;
         self.load_view_result_to_status(view, database, result)
     }
@@ -1034,7 +1087,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .list_views(
-                &database.to_string(),
+                &Self::namespace_string(database),
                 None,
                 None,
                 catalog_config
@@ -1074,7 +1127,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         match client
             .catalog_api_api()
             .drop_view(
-                &database.to_string(),
+                &Self::namespace_string(database),
                 view,
                 catalog_config
                     .props
@@ -1858,7 +1911,13 @@ mod tests {
                 assert_eq!(location, Some("s3://bucket/table".to_string()));
                 assert_eq!(format, "iceberg");
 
-                assert_eq!(partition_by, vec!["category".to_string()]);
+                assert_eq!(
+                    partition_by,
+                    vec![CatalogPartitionField {
+                        column: "category".to_string(),
+                        transform: None,
+                    }]
+                );
 
                 assert_eq!(sort_by.len(), 1);
                 assert_eq!(sort_by[0].column, "id");

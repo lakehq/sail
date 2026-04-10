@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::kernel::DeltaTableConfig;
 use crate::storage::StorageConfig;
-use crate::table::open_table_with_object_store_and_table_config_at_version;
+use crate::table::{open_table_with_object_store_and_table_config_at_version, DeltaSnapshot};
 
 const DEFAULT_MAX_ENTRIES: u64 = 1024;
 
@@ -19,7 +19,7 @@ pub(crate) struct TableCacheKey {
 }
 
 pub(crate) struct CachedTable {
-    pub(crate) snapshot: crate::table::DeltaTableState,
+    pub(crate) snapshot: Arc<DeltaSnapshot>,
     pub(crate) log_store: crate::storage::LogStoreRef,
 }
 
@@ -29,8 +29,6 @@ pub struct DeltaTableCache {
 
 impl DeltaTableCache {
     pub fn new(max_entries: u64) -> Self {
-        // NOTE: We intentionally scope this cache to the SessionConfig (via extension).
-        // This avoids leaking state across sessions / RuntimeEnvs (per-user credentials, etc).
         let cache = FutureCache::builder().max_capacity(max_entries).build();
         Self { cache }
     }
@@ -78,8 +76,6 @@ pub(crate) async fn load_table_uncached(
         .get_store(table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let table_config = DeltaTableConfig {
-        // Avoid eagerly materializing file-level metadata on the driver; the scan exec
-        // will consume Add actions from upstream to find the actual files to read.
         require_files: false,
         ..Default::default()
     };

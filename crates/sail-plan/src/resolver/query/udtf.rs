@@ -35,6 +35,7 @@ impl PlanResolver<'_> {
         let function_name: String = function_name.into();
         let function = self.resolve_python_udtf(function, state)?;
         let input = self.resolve_query_empty(true)?;
+        let (arguments, kwargs) = Self::extract_kwargs(arguments);
         let arguments = self
             .resolve_named_expressions(arguments, input.schema(), state)
             .await?;
@@ -43,6 +44,7 @@ impl PlanResolver<'_> {
             &function_name,
             input,
             arguments,
+            &kwargs,
             None,
             None,
             deterministic,
@@ -57,6 +59,7 @@ impl PlanResolver<'_> {
         name: &str,
         plan: LogicalPlan,
         arguments: Vec<NamedExpr>,
+        kwargs: &[Option<String>],
         function_output_names: Option<Vec<String>>,
         function_output_qualifier: Option<TableReference>,
         deterministic: bool,
@@ -71,12 +74,15 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             arguments.len(),
+            kwargs,
             &function.return_type,
             &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
-            spec::PySparkUdfType::ArrowTable => PySparkUdtfKind::ArrowTable,
+            spec::PySparkUdfType::ArrowTable | spec::PySparkUdfType::ArrowUdtf => {
+                PySparkUdtfKind::ArrowTable
+            }
             _ => {
                 return Err(PlanError::invalid(format!(
                     "PySpark UDTF type: {:?}",

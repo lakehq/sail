@@ -9,6 +9,11 @@ use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
 
+///
+/// This is part of the shared contract for bitmap aggregate functions that
+/// interoperate on the same binary bitmap representation.
+pub(crate) const BITMAP_NUM_BYTES: usize = 4 * 1024;
+
 /// Casts an array to the target type if it doesn't already match.
 pub fn cast_to_type(array: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
     if array.data_type() != target_type {
