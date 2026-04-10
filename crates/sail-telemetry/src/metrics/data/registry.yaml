@@ -434,18 +434,6 @@
   value_type: i64
   attributes: []
 
-- name: flight.cache.hits
-  description: The number of Flight prepared statement cache hits.
-  type: Counter
-  value_type: u64
-  attributes: []
-
-- name: flight.cache.misses
-  description: The number of Flight prepared statement cache misses.
-  type: Counter
-  value_type: u64
-  attributes: []
-
 - name: flight.connections
   description: The total number of Flight SQL client connections.
   type: Counter

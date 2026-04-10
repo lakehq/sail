@@ -9,7 +9,7 @@ use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::{ServerBuilder, ServerBuilderOptions};
-use service::{SailFlightSqlOptions, SailFlightSqlService};
+use service::SailFlightSqlService;
 use session::create_flight_session_manager;
 use tokio::net::TcpListener;
 
@@ -22,11 +22,8 @@ pub async fn serve<F>(
 where
     F: Future<Output = ()>,
 {
-    let options = SailFlightSqlOptions {
-        max_rows: config.flight.max_rows,
-    };
     let session_manager = create_flight_session_manager(config, runtime)?;
-    let service = SailFlightSqlService::new(session_manager, options);
+    let service = SailFlightSqlService::new(session_manager);
     let flight_service = FlightServiceServer::new(service);
 
     let builder = ServerBuilder::new("flight-sql", ServerBuilderOptions::default())
