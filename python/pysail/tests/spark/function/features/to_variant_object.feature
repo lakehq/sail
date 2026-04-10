@@ -221,7 +221,6 @@ Feature: to_variant_object
         """
       Then query error (DATATYPE_MISMATCH|cannot cast|VARIANT)
 
-    @sail-bug
     Scenario: to_variant_object rejects empty array
       When query
         """
@@ -229,7 +228,6 @@ Feature: to_variant_object
         """
       Then query error (DATATYPE_MISMATCH|cannot cast|VARIANT|VOID)
 
-    @sail-bug
     Scenario: to_variant_object rejects empty map
       When query
         """

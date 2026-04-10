@@ -10,8 +10,27 @@ use datafusion::logical_expr::{
 use datafusion::scalar::ScalarValue;
 use parquet_variant_compute::{cast_to_variant, VariantType};
 
-use crate::error::invalid_arg_count_exec_err;
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::variant::spark_json_to_variant::convert_binaryview_to_binary;
+
+/// Recursively checks if a DataType contains Null (VOID) anywhere.
+fn contains_void_type(dt: &DataType) -> bool {
+    match dt {
+        DataType::Null => true,
+        DataType::List(f) | DataType::LargeList(f) => contains_void_type(f.data_type()),
+        DataType::Map(f, _) => {
+            if let DataType::Struct(fields) = f.data_type() {
+                fields.iter().any(|field| contains_void_type(field.data_type()))
+            } else {
+                false
+            }
+        }
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| contains_void_type(field.data_type())),
+        _ => false,
+    }
+}
 
 /// Converts a complex type (struct, array, or map) into a Variant.
 ///
@@ -95,6 +114,13 @@ impl ScalarUDFImpl for SparkToVariantObjectUdf {
                 );
             }
         }
+        // Reject types containing VOID (e.g. ARRAY<VOID>, MAP<VOID, VOID>)
+        if contains_void_type(&input_type) {
+            return exec_err!(
+                "to_variant_object: cannot cast \"{}\" to \"VARIANT\"",
+                input_type
+            );
+        }
 
         let arg = &args.args[0];
         match arg {
@@ -111,7 +137,7 @@ impl ScalarUDFImpl for SparkToVariantObjectUdf {
                 }
                 let arr = scalar.to_array()?;
                 let variant_array = cast_to_variant(&arr).map_err(|e| {
-                    exec_datafusion_err!("to_variant_object: failed to convert struct: {e}")
+                    exec_datafusion_err!("to_variant_object: failed to convert to VARIANT: {e}")
                 })?;
                 let struct_array: StructArray = variant_array.into();
                 let struct_array = convert_binaryview_to_binary(struct_array)?;
@@ -121,7 +147,7 @@ impl ScalarUDFImpl for SparkToVariantObjectUdf {
             }
             ColumnarValue::Array(arr) => {
                 let variant_array = cast_to_variant(arr.as_ref()).map_err(|e| {
-                    exec_datafusion_err!("to_variant_object: failed to convert struct: {e}")
+                    exec_datafusion_err!("to_variant_object: failed to convert to VARIANT: {e}")
                 })?;
                 let struct_array: StructArray = variant_array.into();
                 let struct_array = convert_binaryview_to_binary(struct_array)?;
@@ -136,6 +162,15 @@ impl ScalarUDFImpl for SparkToVariantObjectUdf {
                 "to_variant_object",
                 (1, 1),
                 arg_types.len(),
+            ));
+        }
+        // Reject types containing Null/VOID (e.g. ARRAY<VOID>, MAP<VOID, VOID>)
+        // Spark cannot cast these to VARIANT
+        if contains_void_type(&arg_types[0]) {
+            return Err(unsupported_data_type_exec_err(
+                "to_variant_object",
+                "non-void complex type",
+                &arg_types[0],
             ));
         }
         Ok(vec![arg_types[0].clone()])
