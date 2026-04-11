@@ -194,6 +194,7 @@ use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
+use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -1854,6 +1855,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(safe))));
+            }
             UdfKind::SparkArrayFilter(gen::SparkArrayFilterUdf {
                 lambda_expr,
                 element_type,
@@ -1906,8 +1910,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
             "parse_json" => Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
-            "variant_get" => Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(false)))),
-            "try_variant_get" => Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(true)))),
+            "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
@@ -2113,7 +2116,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkJsonToVariantUdf>()
-            || node_inner.is::<SparkVariantGet>()
+            || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
@@ -2249,6 +2252,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkVariantGet>() {
+            let safe = func.safe();
+            UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
