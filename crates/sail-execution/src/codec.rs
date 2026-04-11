@@ -187,6 +187,7 @@ use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
+use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -988,6 +989,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                Ok(Arc::new(RelaxedTzCastExec::new(input, schema)))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1632,6 +1638,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: monotonic_id.column_name().to_string(),
                 schema,
             })
+        } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {
+            let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
+            let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
+            NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
@@ -1874,6 +1884,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
             "parse_json" => Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
+            "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "variant_get" => Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(false)))),
             "try_variant_get" => Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(true)))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
@@ -2081,6 +2092,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkJsonToVariantUdf>()
+            || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkVariantGet>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()

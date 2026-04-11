@@ -38,6 +38,10 @@ impl RelaxedTzCastExec {
         }
     }
 
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
     /// Returns per-column retag info: `(column_name, from_tz, to_tz)` for every
     /// timestamp column whose timezone label is changed by this node.
     fn timestamp_retag_info(&self) -> Vec<(String, String, String)> {
