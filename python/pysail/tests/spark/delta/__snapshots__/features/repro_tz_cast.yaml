@@ -1,0 +1,60 @@
+# serializer version: 1
+---
+name: "test_explain_select_coalescenullifsome_date_some_date_null_shows_no_relaxedtzcastexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as coalesce(nullif(some_date, some_date), NULL)]
+      DataSourceExec: file_groups={1 group: [[<tmp>/repro_b/part-<id>.snappy.parquet]]}, projection=[CASE WHEN nullif(some_date@2, some_date@2) IS NOT NULL THEN nullif(some_date@2, some_date@2) END as #3], file_type=parquet
+---
+name: "test_explain_select_coalescenullifts_ts_null_shows_no_relaxedtzcastexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as coalesce(nullif(ts, ts), NULL)]
+      DataSourceExec: file_groups={1 group: [[<tmp>/repro_a/part-<id>.snappy.parquet]]}, projection=[CASE WHEN nullif(ts@0, ts@0) IS NOT NULL THEN nullif(ts@0, ts@0) END as #1], file_type=parquet
+---
+name: "test_explain_select_nullifts_ts_shows_no_relaxedtzcastexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as nullif(ts, ts)]
+      DataSourceExec: file_groups={1 group: [[<tmp>/repro_a/part-<id>.snappy.parquet]]}, projection=[nullif(ts@0, ts@0) as #1], file_type=parquet
+---
+name: "test_explain_select_ts_shows_no_relaxedtzcastexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as ts]
+      DataSourceExec: file_groups={1 group: [[<tmp>/repro_a/part-<id>.snappy.parquet]]}, projection=[ts@0 as #1], file_type=parquet
+---
+name: "test_explain_select_with_dbt_valid_from_and_dbt_valid_to_pattern_shows_no_relaxedtzcastexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as dbt_valid_from, #4@1 as dbt_valid_to]
+      DataSourceExec: file_groups={1 group: [[<tmp>/repro_b/part-<id>.snappy.parquet]]}, projection=[some_date@2 as #3, CASE WHEN nullif(some_date@2, some_date@2) IS NOT NULL THEN nullif(some_date@2, some_date@2) END as #4], file_type=parquet
+---
+name: "test_explain_shows_plan_for_dbt_scd_snapshot_select_with_md5_hash_and_nullif_pattern"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as id, #7@1 as name, #8@2 as some_date, #9@3 as dbt_scd_id, #10@4 as dbt_updated_at, #11@5 as dbt_valid_from, #12@6 as dbt_valid_to]
+      DataSourceExec: file_groups={1 group: [[<tmp>/repro_base_c/part-<id>.snappy.parquet]]}, projection=[id@0 as #6, name@1 as #7, some_date@2 as #8, md5(spark_concat(spark_concat(CASE WHEN CAST(id@0 AS Utf8) IS NOT NULL THEN CAST(id@0 AS Utf8) ELSE  END, |), CASE WHEN spark_to_utf8(some_date@2) IS NOT NULL THEN spark_to_utf8(some_date@2) ELSE  END)) as #9, some_date@2 as #10, some_date@2 as #11, CASE WHEN nullif(some_date@2, some_date@2) IS NOT NULL THEN nullif(some_date@2, some_date@2) END as #12], file_type=parquet
+---
+name: "test_explain_shows_plan_for_reading_snapshot_table_timestamp_columns"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as dbt_valid_from, #8@1 as dbt_valid_to]
+      DataSourceExec: file_groups={1 group: [[<tmp>/repro_snap_d/part-<id>.snappy.parquet]]}, projection=[dbt_valid_from@5 as #7, dbt_valid_to@6 as #8], file_type=parquet
+---
+name: "test_explain_shows_plan_for_snapshotted_data_cte_reading_from_snapshot_table"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#15@0 as id, #16@1 as name, #17@2 as some_date, #18@3 as dbt_scd_id, #19@4 as dbt_updated_at, #20@5 as dbt_valid_from, #21@6 as dbt_valid_to, #22@7 as dbt_unique_key]
+      ProjectionExec: expr=[id@0 as #15, name@1 as #16, some_date@2 as #17, dbt_scd_id@3 as #18, dbt_updated_at@4 as #19, dbt_valid_from@5 as #20, dbt_valid_to@6 as #21, id@0 as #22]
+        FilterExec: dbt_valid_to@6 IS NULL
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/repro_snap_d/part-<id>.snappy.parquet]]}, projection=[id, name, some_date, dbt_scd_id, dbt_updated_at, dbt_valid_from, dbt_valid_to], file_type=parquet, predicate=dbt_valid_to@6 IS NULL AND dbt_valid_to@6 IS NULL, pruning_predicate=dbt_valid_to_null_count@0 > 0 AND dbt_valid_to_null_count@0 > 0, required_guarantees=[]
