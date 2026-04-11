@@ -784,11 +784,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(DeltaRemoveActionsExec::new(input)?))
             }
-            NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
-                let schema = Arc::new(self.try_decode_schema(&schema)?);
-                Ok(Arc::new(RelaxedTzCastExec::new(input, schema)))
-            }
             NodeKind::DeltaLogReplay(gen::DeltaLogReplayExecNode {
                 input,
                 table_url,
@@ -1473,11 +1468,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         {
             let input = self.try_encode_plan(delta_remove_actions_exec.children()[0].clone())?;
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input })
-        } else if let Some(relaxed_tz_cast_exec) = node.as_any().downcast_ref::<RelaxedTzCastExec>()
-        {
-            let input = self.try_encode_plan(relaxed_tz_cast_exec.children()[0].clone())?;
-            let schema = self.try_encode_schema(&relaxed_tz_cast_exec.schema())?;
-            NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema })
         } else if let Some(delta_log_replay_exec) =
             node.as_any().downcast_ref::<DeltaLogReplayExec>()
         {

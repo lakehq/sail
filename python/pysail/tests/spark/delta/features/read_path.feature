@@ -170,3 +170,28 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         | 2  | b    | 20    |
         | 3  | c    | 30    |
         | 4  | d    | 40    |
+
+  @sail-only
+  Rule: EXPLAIN shows no RelaxedTzCastExec for timestamps written by Sail
+
+    Background:
+      Given variable location for temporary directory delta_read_repro_tz
+      Given final statement
+        """
+        DROP TABLE IF EXISTS t_repro
+        """
+      Given statement template
+        """
+        CREATE TABLE t_repro (ts TIMESTAMP) USING delta LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO t_repro VALUES (TIMESTAMP '1981-05-20 06:46:51')
+        """
+
+    Scenario: EXPLAIN shows no RelaxedTzCastExec when selecting nullif on a timestamp column
+      When query
+        """
+        EXPLAIN SELECT nullif(ts, ts) FROM t_repro
+        """
+      Then query plan matches snapshot

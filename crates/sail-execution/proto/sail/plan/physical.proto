@@ -574,11 +574,6 @@ message MonotonicIdExecNode {
   bytes schema = 3;
 }
 
-message RelaxedTzCastExecNode {
-  bytes input = 1;
-  bytes schema = 2;
-}
-
 message JoinOn {
   bytes left = 1;
   bytes right = 2;
