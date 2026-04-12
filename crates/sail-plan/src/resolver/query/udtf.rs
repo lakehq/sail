@@ -69,6 +69,8 @@ impl PlanResolver<'_> {
         let state = scope.state();
         state.config_mut().arrow_allow_large_var_types = true;
 
+        let arguments_len = arguments.len();
+
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
             spec::PySparkUdfType::ArrowTable | spec::PySparkUdfType::ArrowUdtf => {
@@ -111,7 +113,7 @@ impl PlanResolver<'_> {
             &function.python_version,
             &function.command,
             function.eval_type,
-            input_types.len(),
+            arguments_len,
             &input_types,
             kwargs,
             &function.return_type,

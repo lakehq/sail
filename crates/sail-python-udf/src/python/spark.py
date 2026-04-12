@@ -881,6 +881,7 @@ class PySparkArrowTableUdf:
         self,
         udf: Callable[..., Iterator[pa.RecordBatch]],
         input_names: Sequence[str],
+        input_types: Sequence[pa.DataType],
         passthrough_columns: int,
         output_schema: pa.Schema,
         config,
@@ -894,9 +895,18 @@ class PySparkArrowTableUdf:
             ("3.", "4.0.")
         )
         if self._use_legacy:
-            self._serializer = ArrowStreamPandasUDTFSerializer(
-                timezone=config.session_timezone, safecheck=config.arrow_convert_safely
-            )
+            if pyspark.__version__.startswith(("3.", "4.0.")):
+                self._serializer = ArrowStreamPandasUDTFSerializer(
+                    timezone=config.session_timezone, safecheck=config.arrow_convert_safely
+                )
+            else:
+                spark_input_types = [from_arrow_type(t) for t in input_types]
+                self._serializer = ArrowStreamPandasUDTFSerializer(
+                    timezone=config.session_timezone,
+                    safecheck=config.arrow_convert_safely,
+                    input_types=spark_input_types,
+                    int_to_decimal_coercion_enabled=config.python_udf_pandas_int_to_decimal_coercion_enabled,
+                )
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         if self._use_legacy:
@@ -925,7 +935,7 @@ class PySparkArrowTableUdf:
                 passthrough = last  # noqa: PLW2901
             passthrough_arrays = []
             passthrough_fields = []
-            for i, name in enumerate(self._input_names):
+            for i, name in enumerate(self._input_names[: self._passthrough_columns]):
                 field = self._output_schema.field(self._output_schema.get_field_index(name))
                 if passthrough is not None:
                     val = passthrough[i].as_py() if isinstance(passthrough[i], pa.Scalar) else passthrough[i]
