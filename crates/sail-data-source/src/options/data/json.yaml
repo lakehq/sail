@@ -237,6 +237,26 @@
         - option.allowBackslashEscapingAnyCharacter
       parser: crate::options::parsers::parse_bool
 
+- key: allow_unquoted_control_chars
+  description: |
+    Allows JSON Strings to contain unquoted control characters (ASCII characters with value less than 32,
+    including tab and line feed characters) or not.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_unquoted_control_chars
+        - allowUnquotedControlChars
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_unquoted_control_chars
+        - option.allowUnquotedControlChars
+      parser: crate::options::parsers::parse_bool
+
 - key: mode
   description: |
     Allows a mode for dealing with corrupt records during parsing. It supports the following case-insensitive modes.
