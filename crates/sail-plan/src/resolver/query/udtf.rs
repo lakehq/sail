@@ -7,7 +7,7 @@ use sail_common::spec;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
-use sail_python_udf::cereal::pyspark_udtf::PySparkUdtfPayload;
+use sail_python_udf::cereal::pyspark_udtf::{PySparkUdtfPayload, UdtfAnalyzeResult};
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 
@@ -75,6 +75,25 @@ impl PlanResolver<'_> {
             .iter()
             .map(|arg| arg.expr.get_type(input_schema))
             .collect::<datafusion_common::Result<Vec<DataType>, DataFusionError>>()?;
+
+        // If return_type is None, invoke the UDTF's `analyze` method to determine it.
+        let (return_type, analyze_result) = match function.return_type {
+            Some(rt) => (rt, None),
+            None => {
+                let result = PySparkUdtfPayload::analyze(
+                    &function.command,
+                    &input_types[..arguments.len()],
+                    kwargs,
+                )
+                .map_err(|e| PlanError::invalid(format!("failed to analyze Python UDTF: {e}")))?;
+                let UdtfAnalyzeResult {
+                    return_type,
+                    pickled_analyze_result,
+                } = result;
+                (return_type, Some(pickled_analyze_result))
+            }
+        };
+
         let payload = PySparkUdtfPayload::build(
             &function.python_version,
             &function.command,
@@ -82,8 +101,9 @@ impl PlanResolver<'_> {
             arguments.len(),
             &input_types,
             kwargs,
-            &function.return_type,
+            &return_type,
             &self.config.pyspark_udf_config,
+            analyze_result.as_deref(),
         )?;
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
@@ -130,7 +150,7 @@ impl PlanResolver<'_> {
             input_names,
             input_types,
             passthrough_columns,
-            function.return_type,
+            return_type,
             function_output_names,
             deterministic,
             self.config.pyspark_udf_config.clone(),

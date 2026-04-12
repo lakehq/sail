@@ -13,6 +13,14 @@ use crate::cereal::{
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
 
+/// The result of invoking a UDTF's `analyze` static method.
+pub struct UdtfAnalyzeResult {
+    /// The resolved return type (a struct type).
+    pub return_type: DataType,
+    /// The pickled `AnalyzeResult` object.
+    pub pickled_analyze_result: Vec<u8>,
+}
+
 pub struct PySparkUdtfPayload;
 
 impl PySparkUdtfPayload {
@@ -39,6 +47,95 @@ impl PySparkUdtfPayload {
             .map_err(|e| PyUdfError::PythonError(e.into()))
     }
 
+    /// Invokes the Python UDTF's `analyze` static method to determine the return type.
+    ///
+    /// This is called when the UDTF was defined without a fixed return type
+    /// (i.e., it has an `analyze` static method that dynamically determines the schema).
+    ///
+    /// Returns the resolved return type (as an Arrow DataType) and the pickled AnalyzeResult.
+    pub fn analyze(
+        command: &[u8],
+        input_types: &[DataType],
+        kwargs: &[Option<String>],
+    ) -> PyUdfResult<UdtfAnalyzeResult> {
+        Python::attach(|py| -> PyResult<UdtfAnalyzeResult> {
+            let pickle_ser = PyModule::import(py, intern!(py, "pyspark.serializers"))?
+                .getattr(intern!(py, "CPickleSerializer"))?
+                .call0()?;
+
+            // Deserialize the UDTF handler class from the command bytes.
+            let infile = PyModule::import(py, intern!(py, "io"))?
+                .getattr(intern!(py, "BytesIO"))?
+                .call1((command,))?;
+            let read_command_fn = PyModule::import(py, intern!(py, "pyspark.worker_util"))?
+                .getattr(intern!(py, "read_command"))?;
+            let handler = read_command_fn.call1((&pickle_ser, &infile))?;
+
+            // Build AnalyzeArgument list from the input types.
+            let analyze_arg_cls = PyModule::import(py, intern!(py, "pyspark.sql.udtf"))?
+                .getattr(intern!(py, "AnalyzeArgument"))?;
+            let types_module = PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?;
+            let from_arrow_type = types_module.getattr(intern!(py, "from_arrow_type"))?;
+
+            let mut args: Vec<Bound<'_, PyAny>> = Vec::new();
+            let mut kw_args: Vec<(String, Bound<'_, PyAny>)> = Vec::new();
+
+            for (i, dt) in input_types.iter().enumerate() {
+                let arrow_type = dt.to_pyarrow(py)?;
+                let spark_type = from_arrow_type.call1((&arrow_type,))?;
+                let kw = pyo3::types::PyDict::new(py);
+                kw.set_item("dataType", &spark_type)?;
+                kw.set_item("value", py.None())?;
+                kw.set_item("isTable", false)?;
+                kw.set_item("isConstantExpression", false)?;
+                let arg = analyze_arg_cls.call((), Some(&kw))?;
+
+                if let Some(name) = kwargs.get(i).and_then(|k| k.as_deref()) {
+                    kw_args.push((name.to_string(), arg));
+                } else {
+                    args.push(arg);
+                }
+            }
+
+            // Call handler.analyze(*args, **kwargs)
+            let analyze_method = handler.getattr(intern!(py, "analyze"))?;
+            let py_args = pyo3::types::PyTuple::new(py, &args)?;
+            let py_kwargs = pyo3::types::PyDict::new(py);
+            for (name, arg) in &kw_args {
+                py_kwargs.set_item(name, arg)?;
+            }
+            let result = analyze_method.call(&py_args, Some(&py_kwargs))?;
+
+            // Extract the schema from the AnalyzeResult
+            let schema = result.getattr(intern!(py, "schema"))?;
+            let schema_json: String = schema.getattr(intern!(py, "json"))?.call0()?.extract()?;
+
+            // Convert the schema JSON to an Arrow DataType
+            let parse_datatype = PyModule::import(py, intern!(py, "pyspark.sql.types"))?
+                .getattr(intern!(py, "_parse_datatype_json_string"))?;
+            let spark_type = parse_datatype.call1((&schema_json,))?;
+
+            // Convert PySpark StructType to Arrow schema
+            let to_arrow_type = types_module.getattr(intern!(py, "to_arrow_type"))?;
+            let arrow_type = to_arrow_type.call1((&spark_type,))?;
+            let return_type: DataType =
+                arrow_pyarrow::FromPyArrow::from_pyarrow_bound(&arrow_type)?;
+
+            // Pickle the AnalyzeResult
+            let pickled: Vec<u8> = pickle_ser
+                .getattr(intern!(py, "dumps"))?
+                .call1((&result,))?
+                .extract()?;
+
+            Ok(UdtfAnalyzeResult {
+                return_type,
+                pickled_analyze_result: pickled,
+            })
+        })
+        .map_err(PyUdfError::from)
+    }
+
+    #[expect(clippy::too_many_arguments)]
     pub fn build(
         python_version: &str,
         command: &[u8],
@@ -48,6 +145,7 @@ impl PySparkUdtfPayload {
         kwargs: &[Option<String>],
         return_type: &DataType,
         config: &PySparkUdfConfig,
+        pickled_analyze_result: Option<&[u8]>,
     ) -> PyUdfResult<Vec<u8>> {
         check_python_udf_version(python_version)?;
         let pyspark_version = get_pyspark_version()?;
@@ -90,7 +188,13 @@ impl PySparkUdtfPayload {
 
         if pyspark_version.is_v4() {
             data.extend(0i32.to_be_bytes()); // number of partition child indexes
-            data.extend(0u8.to_be_bytes()); // pickled analyze result is not present
+            if let Some(pickled) = pickled_analyze_result {
+                data.extend(1u8.to_be_bytes()); // pickled analyze result is present
+                data.extend((pickled.len() as i32).to_be_bytes()); // length of pickled data
+                data.extend(pickled);
+            } else {
+                data.extend(0u8.to_be_bytes()); // pickled analyze result is not present
+            }
         }
 
         data.extend((command.len() as i32).to_be_bytes()); // length of the function

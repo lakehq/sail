@@ -17,7 +17,7 @@ pub(super) struct PythonUdtf {
     pub python_version: String,
     pub eval_type: spec::PySparkUdfType,
     pub command: Vec<u8>,
-    pub return_type: DataType,
+    pub return_type: Option<DataType>,
 }
 
 impl PlanResolver<'_> {
@@ -71,7 +71,9 @@ impl PlanResolver<'_> {
                 python_version,
             } => (return_type, eval_type, command, python_version),
         };
-        let return_type = self.resolve_data_type(&return_type, state)?;
+        let return_type = return_type
+            .map(|rt| self.resolve_data_type(&rt, state))
+            .transpose()?;
         Ok(PythonUdtf {
             python_version,
             eval_type,
