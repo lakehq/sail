@@ -56,8 +56,14 @@ except ImportError:
 
 
 try:
-    from pyspark.sql.conversion import LocalDataToArrowConversion as _LocalDataToArrowConversion
+    from pyspark.sql.conversion import (
+        ArrowTableToRowsConversion as _ArrowTableToRowsConversion,
+    )
+    from pyspark.sql.conversion import (
+        LocalDataToArrowConversion as _LocalDataToArrowConversion,
+    )
 except ImportError:
+    _ArrowTableToRowsConversion = None
     _LocalDataToArrowConversion = None
 
 
@@ -390,6 +396,27 @@ def _pandas_to_arrow_array(data, data_type: pa.DataType, serializer: ArrowStream
     return serializer._create_array(data, data_type, arrow_cast=serializer._arrow_cast)  # noqa: SLF001
 
 
+def _arrow_columns_to_python(args: list[pa.Array]) -> tuple:
+    """Convert Arrow arrays to Python lists with proper type conversion,
+    matching PySpark's ArrowBatchUDFSerializer.load_stream.
+    Uses ArrowTableToRowsConversion to convert Arrow-native representations
+    to Python-native types (e.g. map arrays become dicts, not list-of-tuples).
+    Requires PySpark 4.1+."""
+    if _ArrowTableToRowsConversion is None:
+        msg = "_arrow_columns_to_python requires PySpark 4.1+ (ArrowTableToRowsConversion not found)"
+        raise ImportError(msg)
+    # `none_on_identity=True` returns None when no conversion is needed for the type,
+    # so we can skip the per-element loop and pass the list directly.
+    converters = [
+        _ArrowTableToRowsConversion._create_converter(from_arrow_type(a.type), none_on_identity=True)  # noqa: SLF001
+        for a in args
+    ]
+    return tuple(
+        [conv(v) for v in a.to_pylist()] if conv is not None else a.to_pylist()
+        for a, conv in zip(args, converters, strict=False)
+    )
+
+
 def _python_values_to_arrow_array(data: list, arrow_type: pa.DataType, spark_type) -> pa.Array:
     """Convert a Python list of values to an Arrow array, using
     PySpark's LocalDataToArrowConversion for proper type coercion
@@ -492,7 +519,11 @@ class PySparkArrowBatchUdf:
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
     def _call_arrow(self, args: list[pa.Array], num_rows: int) -> pa.Array:
-        inputs = (pa.nulls(num_rows),) if len(args) == 0 else tuple(args)
+        # Convert Arrow arrays to Python lists with proper type conversion,
+        # matching PySpark's ArrowBatchUDFSerializer.load_stream which calls
+        # .to_pylist() with ArrowTableToRowsConversion converters
+        # (e.g. map arrays → dicts instead of list-of-tuples).
+        inputs = ([pyspark._NoValue] * num_rows,) if len(args) == 0 else _arrow_columns_to_python(args)  # noqa: SLF001
         [result] = list(self._udf(None, (inputs,)))
         output, output_type, spark_return_type = result[0], result[1], result[2]
         if isinstance(output, pa.ChunkedArray):
