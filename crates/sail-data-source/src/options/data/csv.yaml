@@ -361,6 +361,9 @@
 - key: positive_inf
   description: |
     Sets the string representation of a positive infinity value.
+  default:
+    value: "Inf"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -380,6 +383,9 @@
 - key: negative_inf
   description: |
     Sets the string representation of a negative infinity value.
+  default:
+    value: "-Inf"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -399,6 +405,9 @@
 - key: date_format
   description: |
     Sets the string that indicates a date format. Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
+  default:
+    value: "yyyy-MM-dd"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -419,6 +428,9 @@
 - key: timestamp_format
   description: |
     Sets the string that indicates a timestamp format. Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
+  default:
+    value: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -440,6 +452,9 @@
   description: |
     Sets the string that indicates a timestamp without timezone format.
     Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
+  default:
+    value: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -460,6 +475,9 @@
 - key: ignore_leading_white_space
   description: |
     A flag indicating whether or not leading whitespaces from values being read should be skipped.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -479,6 +497,9 @@
 - key: ignore_trailing_white_space
   description: |
     A flag indicating whether or not trailing whitespaces from values being read/written should be skipped.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -504,6 +525,9 @@
     are checked by their positions taking into account the Sail configuration option `sql.case_sensitive` (to be
     implemented). Though the default value is true, it is recommended to disable the `enforce_schema` option to avoid
     incorrect results. CSV built-in functions ignore this option.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -523,6 +547,9 @@
 - key: nan_value
   description: |
     Sets the string representation of a non-number value.
+  default:
+    value: "NaN"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -542,6 +569,9 @@
 - key: max_columns
   description: |
     Defines a hard limit of how many columns a record can have.
+  default:
+    value: "20480"
+    parser: crate::options::parsers::parse_usize
   supported: false
   rust_type: usize
   scopes:
@@ -562,6 +592,9 @@
   description: |
     Defines the maximum number of characters allowed for any given value being read.
     Defaults to -1 meaning unlimited length.
+  default:
+    value: "-1"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -585,6 +618,9 @@
         `column_name_of_corrupt_record`, and sets malformed fields to null.
       - `DROPMALFORMED`: Ignores the whole corrupted records. This mode is unsupported in the CSV built-in functions.
       - `FAILFAST`: Throws an exception when it meets corrupted records.
+  default:
+    value: "PERMISSIVE"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -603,6 +639,9 @@
   description: |
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
     Defaults to the Sail configuration option `sql.column_name_of_corrupt_record` (to be implemented).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -623,6 +662,9 @@
   description: |
     Sets a single character used for escaping the escape for the quote character.
     The default value is the escape character when escape and quote characters are different, \\0 otherwise.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -643,6 +685,9 @@
 - key: sampling_ratio
   description: |
     Defines fraction of rows used for schema inferring. CSV built-in functions ignore this option.
+  default:
+    value: "1.0"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -662,6 +707,9 @@
 - key: empty_value
   description: |
     Sets the string representation of an empty value.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -683,6 +731,9 @@
   description: |
     Sets a locale as language tag in IETF BCP 47 format.
     For instance, this is used while parsing dates and timestamps.
+  default:
+    value: "en-US"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -709,6 +760,9 @@
       - `SKIP_VALUE`: If unescaped quotes are found in the input, the content parsed for the given value will be 
         skipped and the value set in nullValue will be produced instead.
       - `RAISE_ERROR`: If unescaped quotes are found in the input, a `TextParsingException` will be thrown.
+  default:
+    value: "STOP_AT_DELIMITER"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -734,6 +788,9 @@
         Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
     Other short names like 'CST' are not recommended to use because they can be ambiguous.
     Defaults to the Sail configuration option `session.time_zone` (to be implemented).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -755,6 +812,9 @@
   description: |
     A flag indicating whether all values should always be enclosed in quotes.
     Default is to only escape values containing a quote character.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -774,6 +834,9 @@
 - key: encoding
   description: |
     For reading, decodes the CSV files by the given encoding type. CSV built-in functions ignore this option.
+  default:
+    value: "UTF-8"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -796,6 +859,9 @@
     values satisfy the dateFormat option or default date format. For columns that contain a mixture of dates and
     timestamps, try inferring them as `TimestampType` if timestamp format not specified, otherwise infer them as
     `StringType`.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -817,6 +883,9 @@
     Allows falling back to the backward compatible behavior of parsing dates and timestamps if values do not match the
     set patterns. Defaults to being enabled if the time parser policy has legacy settings or if no custom date or
     timestamp pattern was provided.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -836,6 +905,9 @@
 - key: extension
   description: |
     Sets the file extension for the output files. Limited to letters. Length must equal 3.
+  default:
+    value: "csv"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -853,6 +925,9 @@
 - key: encoding
   description: |
     For writing, specifies encoding (charset) of saved CSV files. CSV built-in functions ignore this option.
+  default:
+    value: "UTF-8"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -874,6 +949,9 @@
     Sets the single character line separator that should be used for writing.
     CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
     For writing, defaults to \\n.
+  default:
+    value: "\n"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -896,6 +974,9 @@
   description: |
     A flag indicating whether or not leading whitespaces from values being written should be skipped.
     Defaults to true for writing.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:

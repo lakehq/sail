@@ -86,6 +86,9 @@
         Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
     Other short names like 'CST' are not recommended to use because they can be ambiguous.
     Defaults to the Sail configuration option `session.time_zone` (to be implemented).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -106,6 +109,9 @@
 - key: primitives_as_string
   description: |
     Infers all primitive values as a string type.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -126,6 +132,9 @@
   description: |
     Infers all floating-point values as a decimal type.
     If the values do not fit in decimal, then it infers them as doubles.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -145,6 +154,9 @@
 - key: allow_comments
   description: |
     Ignores Java/C++ style comment in JSON records.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -164,6 +176,9 @@
 - key: allow_unquoted_field_names
   description: |
     Allows unquoted JSON field names.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -183,6 +198,9 @@
 - key: allow_single_quotes
   description: |
     Allows single quotes in addition to double quotes.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -202,6 +220,9 @@
 - key: allow_numeric_leading_zeros
   description: |
     Allows leading zeros in numbers (e.g. 00012).
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -221,6 +242,9 @@
 - key: allow_backslash_escaping_any_character
   description: |
     Allows accepting quoting of all character using backslash quoting mechanism.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -241,6 +265,9 @@
   description: |
     Allows JSON Strings to contain unquoted control characters (ASCII characters with value less than 32,
     including tab and line feed characters) or not.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -264,6 +291,9 @@
         `column_name_of_corrupt_record`, and sets malformed fields to null.
       - `DROPMALFORMED`: Ignores the whole corrupted records. This mode is unsupported in the JSON built-in functions.
       - `FAILFAST`: Throws an exception when it meets corrupted records.
+  default:
+    value: "PERMISSIVE"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -282,6 +312,9 @@
   description: |
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
     Defaults to the Sail configuration option `sql.column_name_of_corrupt_record` (to be implemented).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -301,6 +334,9 @@
 - key: date_format
   description: |
     Sets the string that indicates a date format. Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
+  default:
+    value: "yyyy-MM-dd"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -321,6 +357,9 @@
 - key: timestamp_format
   description: |
     Sets the string that indicates a timestamp format. Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
+  default:
+    value: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -342,6 +381,9 @@
   description: |
     Sets the string that indicates a timestamp without timezone format.
     Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
+  default:
+    value: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -364,6 +406,9 @@
     Allows falling back to the backward compatible behavior of parsing dates and timestamps if values do not match the
     set patterns. Defaults to being enabled if the time parser policy has legacy settings or if no custom date or
     timestamp pattern was provided.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -383,6 +428,9 @@
 - key: multi_line
   description: |
     Parse one record, which may span multiple lines, per file. JSON built-in functions ignore this option.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -447,6 +495,9 @@
 - key: sampling_ratio
   description: |
     Defines fraction of input JSON objects used for schema inferring.
+  default:
+    value: "1.0"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -466,6 +517,9 @@
 - key: drop_field_if_all_null
   description: |
     Whether to ignore column of all null values or empty array during schema inference.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -486,6 +540,9 @@
   description: |
     Sets a locale as language tag in IETF BCP 47 format.
     For instance, locale is used while parsing dates and timestamps.
+  default:
+    value: "en-US"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
@@ -506,6 +563,9 @@
       - `+INF`: For positive infinity, as well as alias of +Infinity and Infinity.
       - `-INF`: For negative infinity, alias -Infinity.
       - `NaN`: For other not-a-numbers, like result of division by zero.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
   supported: false
   rust_type: bool
   scopes:
@@ -546,6 +606,9 @@
   description: |
     Whether to use UnsafeRow to represent struct result in the JSON parser.
     Defaults to the Sail configuration option `json.use_unsafe_row` (to be implemented).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:

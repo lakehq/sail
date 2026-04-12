@@ -415,8 +415,11 @@
 
 - key: compression
   description: |
-    (Writing) The default Parquet compression codec. Valid values are `uncompressed`, `snappy`,
-    `gzip(level)`, `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`.
+    (Writing) The default Parquet compression codec.
+    Valid values are `uncompressed`, `snappy`, `gzip(level)`,
+    `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`,
+    where `level` is an integer defining the compression level.
+    These values are not case-sensitive.
     Defaults to the Sail configuration option `parquet.compression`.
   supported: true
   rust_type: "Option<String>"
@@ -476,7 +479,9 @@
 
 - key: statistics_enabled
   description: |
-    (Writing) Whether statistics are enabled for any column. Valid values are `none`, `chunk`, `page`.
+    (Writing) Whether statistics are enabled for any column for the Parquet writer.
+    Valid values are `none`, `chunk`, and `page`.
+    These values are not case-sensitive.
     Defaults to the Sail configuration option `parquet.statistics_enabled`.
   supported: true
   rust_type: "Option<String>"
@@ -579,10 +584,12 @@
 - key: encoding
   description: |
     (Writing) The default encoding for any column.
-    Valid values are `plain`, `plain_dictionary`, `rle`, `bit_packed` (deprecated),
-    `delta_binary_packed`, `delta_length_byte_array`, `delta_byte_array`, `rle_dictionary`,
-    and `byte_stream_split`. These values are not case sensitive.
-    Set to empty to use automatic selection.
+    Valid values are `plain`, `plain_dictionary`, `rle`,
+    `bit_packed` (deprecated), `delta_binary_packed`, `delta_length_byte_array`,
+    `delta_byte_array`, `rle_dictionary`, and `byte_stream_split`.
+    These values are not case sensitive.
+    An empty value can also be used, which allows the Parquet writer to choose
+    the encoding for each column to achieve good performance.
     Defaults to the Sail configuration option `parquet.encoding`.
   supported: true
   rust_type: "Option<String>"
