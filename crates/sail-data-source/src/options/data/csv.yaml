@@ -28,6 +28,8 @@
 - key: quote
   description: |
     Sets a single character used for escaping quoted values where the delimiter can be part of the value.
+    For reading, if you would like to turn off quotations, you need to set not null but an empty string.
+    For writing, if an empty string is set, it uses u0000 (null character).
   default:
     value: "\""
     parser: crate::options::parsers::parse_optional_char
@@ -71,6 +73,7 @@
   description: |
     For reading, uses the first line as names of columns.
     For writing, writes the names of columns as the first line.
+    CSV built-in functions ignore this option.
   default:
     value: "false"
     parser: crate::options::parsers::parse_bool
@@ -91,7 +94,8 @@
 
 - key: null_value
   description: |
-    Sets the string representation of a null value.
+    Sets the string representation of a null value. Throws an exception if `null_regex` is also set.
+    Defaults to treating empty values as null.
   default:
     value: ""
     parser: crate::options::parsers::parse_string
@@ -135,6 +139,7 @@
 - key: null_regex
   description: |
     Optional regex to match null values. Throws an exception if `null_value` is also set.
+    Defaults to treating empty values as null.
   default:
     value: ""
     parser: crate::options::parsers::parse_string
@@ -156,7 +161,9 @@
 
 - key: line_sep
   description: |
-    Sets the single character line separator for reading. Defaults to None (CRLF/LF/CR).
+    Sets the single character line separator that should be used for parsing.
+    CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+    For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
   default:
     value: ""
     parser: crate::options::parsers::parse_optional_char
@@ -180,7 +187,9 @@
 
 - key: infer_schema
   description: |
-    Infers the input schema automatically from data.
+    Infers the input schema automatically from data. It requires one extra pass over the data.
+    Ignored if the schema is specified explicitly. If False, the schema must be specified explicitly.
+    CSV built-in functions ignore this option.
   default:
     value: "true"
     parser: crate::options::parsers::parse_bool
@@ -225,6 +234,9 @@
 - key: multi_line
   description: |
     Specifies whether newlines in quoted values are supported.
+    Allows a row to span multiple lines, by parsing line breaks within quoted values as part of the value itself.
+    Parsing newlines in quoted values may be affected by execution behavior such as parallel file scanning.
+    Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
   default:
     value: "false"
     parser: crate::options::parsers::parse_bool
@@ -246,7 +258,12 @@
 
 - key: compression
   description: |
-    Specifies the file compression type for reading.
+    Specifies the file compression type. The following compression types are supported:
+      - `GZIP` or `GZ`
+      - `BZIP2` or `BZ2`
+      - `XZ`
+      - `ZSTD` or `ZST`
+      - `UNCOMPRESSED` or ""
   default:
     value: "UNCOMPRESSED"
     parser: crate::options::parsers::parse_string
@@ -269,6 +286,8 @@
 - key: allow_truncated_rows
   description: |
     Whether rows with fewer columns should be allowed.
+    If true, when parsing a row that has fewer columns than the schema requires, the
+    missing columns are filled with null values.
   default:
     value: "false"
     parser: crate::options::parsers::parse_bool
@@ -291,6 +310,8 @@
 - key: escape_quotes
   description: |
     A flag indicating whether values containing quotes should always be enclosed in quotes.
+    When enabled (which is the default), quotes are escaped by doubling them (e.g., `"` escapes to `""`).
+    When disabled, quotes are escaped with the escape character (which is `\\` by default).
   default:
     value: "true"
     parser: crate::options::parsers::parse_bool
@@ -312,7 +333,12 @@
 
 - key: compression
   description: |
-    Specifies the file compression type for writing.
+    Specifies the file compression type. The following compression types are supported:
+      - `GZIP` or `GZ`
+      - `BZIP2` or `BZ2`
+      - `XZ`
+      - `ZSTD` or `ZST`
+      - `UNCOMPRESSED` or ""
   default:
     value: "UNCOMPRESSED"
     parser: crate::options::parsers::parse_string
@@ -472,8 +498,12 @@
 
 - key: enforce_schema
   description: |
-    If it is set to true, the specified or inferred schema will be forcibly applied to datasource files,
-    and headers in CSV files will be ignored.
+    If it is set to true, the specified or inferred schema will be forcibly applied to datasource files, and headers in
+    CSV files will be ignored. If the option is set to false, the schema will be validated against all headers in CSV
+    files in the case when the header option is set to true. Field names in the schema and column names in CSV headers
+    are checked by their positions taking into account the Sail configuration option `sql.case_sensitive` (to be
+    implemented). Though the default value is true, it is recommended to disable the `enforce_schema` option to avoid
+    incorrect results. CSV built-in functions ignore this option.
   supported: false
   rust_type: bool
   scopes:
@@ -550,8 +580,11 @@
 
 - key: mode
   description: |
-    Allows a mode for dealing with corrupt records during parsing.
-    Supported modes: PERMISSIVE, DROPMALFORMED, FAILFAST.
+    Allows a mode for dealing with corrupt records during parsing. It supports the following case-insensitive modes.
+      - `PERMISSIVE`: When it meets a corrupted record, puts the malformed string into a field configured by
+        `column_name_of_corrupt_record`, and sets malformed fields to null.
+      - `DROPMALFORMED`: Ignores the whole corrupted records. This mode is unsupported in the CSV built-in functions.
+      - `FAILFAST`: Throws an exception when it meets corrupted records.
   supported: false
   rust_type: String
   scopes:
@@ -568,7 +601,8 @@
 
 - key: column_name_of_corrupt_record
   description: |
-    Allows renaming the new field having malformed string created by PERMISSIVE mode.
+    Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
+    Defaults to the Sail configuration option `sql.column_name_of_corrupt_record` (to be implemented).
   supported: false
   rust_type: String
   scopes:
@@ -588,6 +622,7 @@
 - key: char_to_escape_quote_escaping
   description: |
     Sets a single character used for escaping the escape for the quote character.
+    The default value is escape character when escape and quote characters are different, \\0 otherwise.
   supported: false
   rust_type: String
   scopes:
@@ -607,7 +642,7 @@
 
 - key: sampling_ratio
   description: |
-    Defines fraction of rows used for schema inferring.
+    Defines fraction of rows used for schema inferring. CSV built-in functions ignore this option.
   supported: false
   rust_type: String
   scopes:
@@ -665,7 +700,15 @@
 - key: unescaped_quote_handling
   description: |
     Defines how the CSV Parser will handle values with unescaped quotes.
-    Supported values: STOP_AT_CLOSING_QUOTE, BACK_TO_DELIMITER, STOP_AT_DELIMITER, SKIP_VALUE, RAISE_ERROR.
+      - `STOP_AT_CLOSING_QUOTE`: If unescaped quotes are found in the input, accumulate the quote character and proceed
+        parsing the value as a quoted value, until a closing quote is found.
+      - `BACK_TO_DELIMITER`: If unescaped quotes are found in the input, consider the value as an unquoted value.
+        This will make the parser accumulate all characters of the current parsed value until the delimiter is found.
+      - `STOP_AT_DELIMITER`: If unescaped quotes are found in the input, consider the value as an unquoted value.
+        This will make the parser accumulate all characters until the delimiter or a line ending is found in the input. 
+      - `SKIP_VALUE`: If unescaped quotes are found in the input, the content parsed for the given value will be 
+        skipped and the value set in nullValue will be produced instead.
+      - `RAISE_ERROR`: If unescaped quotes are found in the input, a `TextParsingException` will be thrown.
   supported: false
   rust_type: String
   scopes:
@@ -684,8 +727,13 @@
 
 - key: time_zone
   description: |
-    Sets the string that indicates a time zone ID to be used to format timestamps.
-    Defaults to the Sail configuration option `session.time_zone`.
+    Sets the string that indicates a time zone ID to be used to format timestamps in the CSV data sources or
+    partition values. The following formats of timeZone are supported:
+      - Region-based zone ID: It should have the form 'area/city', such as 'America/Los_Angeles'.
+      - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
+        Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
+    Other short names like 'CST' are not recommended to use because they can be ambiguous.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
   supported: false
   rust_type: String
   scopes:
@@ -706,6 +754,7 @@
 - key: quote_all
   description: |
     A flag indicating whether all values should always be enclosed in quotes.
+    Default is to only escape values containing a quote character.
   supported: false
   rust_type: bool
   scopes:
@@ -720,4 +769,145 @@
       keys:
         - option.quote_all
         - option.quoteAll
+      parser: crate::options::parsers::parse_bool
+
+- key: encoding
+  description: |
+    For reading, decodes the CSV files by the given encoding type. CSV built-in functions ignore this option.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - encoding
+        - charset
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.encoding
+        - option.charset
+      parser: crate::options::parsers::parse_string
+
+- key: prefer_date
+  description: |
+    During schema inference (`infer_schema`), attempts to infer string columns that contain dates as `Date` if the
+    values satisfy the dateFormat option or default date format. For columns that contain a mixture of dates and
+    timestamps, try inferring them as `TimestampType` if timestamp format not specified, otherwise infer them as
+    `StringType`.
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - prefer_date
+        - preferDate
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.prefer_date
+        - option.preferDate
+      parser: crate::options::parsers::parse_bool
+
+- key: enable_date_time_parsing_fallback
+  description: |
+    Allows falling back to the backward compatible behavior of parsing dates and timestamps if values do not match the
+    set patterns. Defaults to being enabled if the time parser policy has legacy settings or if no custom date or
+    timestamp pattern was provided.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - enable_date_time_parsing_fallback
+        - enableDateTimeParsingFallback
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.enable_date_time_parsing_fallback
+        - option.enableDateTimeParsingFallback
+      parser: crate::options::parsers::parse_string
+
+- key: extension
+  description: |
+    Sets the file extension for the output files. Limited to letters. Length must equal 3.
+  supported: false
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - extension
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.extension
+      parser: crate::options::parsers::parse_string
+
+- key: encoding
+  description: |
+    For writing, specifies encoding (charset) of saved CSV files. CSV built-in functions ignore this option.
+  supported: false
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - encoding
+        - charset
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.encoding
+        - option.charset
+      parser: crate::options::parsers::parse_string
+
+- key: line_sep
+  description: |
+    Sets the single character line separator that should be used for writing.
+    CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+    For writing, defaults to \\n.
+  supported: false
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - line_sep
+        - lineSep
+        - terminator
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.line_sep
+        - option.lineSep
+        - option.terminator
+      parser: crate::options::parsers::parse_string
+
+- key: ignore_leading_white_space
+  description: |
+    A flag indicating whether or not leading whitespaces from values being written should be skipped.
+    Defaults to true for writing.
+  supported: false
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - ignore_leading_white_space
+        - ignoreLeadingWhiteSpace
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.ignore_leading_white_space
+        - option.ignoreLeadingWhiteSpace
       parser: crate::options::parsers::parse_bool

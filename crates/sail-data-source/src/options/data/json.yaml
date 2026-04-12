@@ -25,7 +25,12 @@
 
 - key: compression
   description: |
-    Specifies the file compression type for reading.
+    Specifies the file compression type. The following compression types are supported:
+      - `GZIP` or `GZ`
+      - `BZIP2` or `BZ2`
+      - `XZ`
+      - `ZSTD` or `ZST`
+      - `UNCOMPRESSED` or ""
   default:
     value: "UNCOMPRESSED"
     parser: crate::options::parsers::parse_string
@@ -47,7 +52,12 @@
 
 - key: compression
   description: |
-    Specifies the file compression type for writing.
+    Specifies the compression codec to use when saving to file. The following compression types are supported:
+      - `GZIP` or `GZ`
+      - `BZIP2` or `BZ2`
+      - `XZ`
+      - `ZSTD` or `ZST`
+      - `UNCOMPRESSED` or ""
   default:
     value: "UNCOMPRESSED"
     parser: crate::options::parsers::parse_string
@@ -69,8 +79,13 @@
 
 - key: time_zone
   description: |
-    Sets the string that indicates a time zone ID to be used to format timestamps.
-    Defaults to the Sail configuration option `session.time_zone`.
+    Sets the string that indicates a time zone ID to be used to format timestamps in the JSON data sources or
+    partition values. The following formats of timeZone are supported:
+      - Region-based zone ID: It should have the form 'area/city', such as 'America/Los_Angeles'.
+      - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
+        Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
+    Other short names like 'CST' are not recommended to use because they can be ambiguous.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
   supported: false
   rust_type: String
   scopes:
@@ -224,8 +239,11 @@
 
 - key: mode
   description: |
-    Allows a mode for dealing with corrupt records during parsing.
-    Supported modes: PERMISSIVE, DROPMALFORMED, FAILFAST.
+    Allows a mode for dealing with corrupt records during parsing. It supports the following case-insensitive modes.
+      - `PERMISSIVE`: When it meets a corrupted record, puts the malformed string into a field configured by
+        `column_name_of_corrupt_record`, and sets malformed fields to null.
+      - `DROPMALFORMED`: Ignores the whole corrupted records. This mode is unsupported in the JSON built-in functions.
+      - `FAILFAST`: Throws an exception when it meets corrupted records.
   supported: false
   rust_type: String
   scopes:
@@ -242,7 +260,8 @@
 
 - key: column_name_of_corrupt_record
   description: |
-    Allows renaming the new field having malformed string created by PERMISSIVE mode.
+    Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
+    Defaults to the Sail configuration option `sql.column_name_of_corrupt_record` (to be implemented).
   supported: false
   rust_type: String
   scopes:
@@ -320,9 +339,30 @@
         - option.timestampNTZFormat
       parser: crate::options::parsers::parse_string
 
+- key: enable_date_time_parsing_fallback
+  description: |
+    Allows falling back to the backward compatible behavior of parsing dates and timestamps if values do not match the
+    set patterns. Defaults to being enabled if the time parser policy has legacy settings or if no custom date or
+    timestamp pattern was provided.
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - enable_date_time_parsing_fallback
+        - enableDateTimeParsingFallback
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.enable_date_time_parsing_fallback
+        - option.enableDateTimeParsingFallback
+      parser: crate::options::parsers::parse_string
+
 - key: multi_line
   description: |
-    Parse one record, which may span multiple lines, per file.
+    Parse one record, which may span multiple lines, per file. JSON built-in functions ignore this option.
   supported: false
   rust_type: bool
   scopes:
@@ -342,7 +382,9 @@
 - key: encoding
   description: |
     For reading, allows to forcibly set one of standard basic or extended encoding for the JSON files.
-    For writing, specifies encoding (charset) of saved JSON files.
+    For example UTF-16BE, UTF-32LE. The default value is detected automatically when `multi_line` is set to true.
+    JSON built-in functions ignore this option.
+    For writing, specifies encoding (charset) of saved JSON files. JSON built-in functions ignore this option.
   supported: false
   rust_type: String
   scopes:
@@ -360,7 +402,9 @@
 
 - key: line_sep
   description: |
-    Sets the single character line separator that should be used for parsing/writing.
+    Sets the single character line separator that should be used for parsing.
+    JSON built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+    For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
   supported: false
   rust_type: String
   scopes:
@@ -439,6 +483,9 @@
 - key: allow_non_numeric_numbers
   description: |
     Allows JSON parser to recognize set of "Not-a-Number" (NaN) tokens as legal floating number values.
+      - `+INF`: For positive infinity, as well as alias of +Infinity and Infinity.
+      - `-INF`: For negative infinity, alias -Infinity.
+      - `NaN`: For other not-a-numbers, like result of division by zero.
   supported: false
   rust_type: bool
   scopes:
@@ -458,6 +505,7 @@
 - key: ignore_null_fields
   description: |
     Whether to ignore null fields when generating JSON objects.
+    Defaults to the Sail configuration option `json_generator.ignore_null_fields` (to be implemented).
   supported: false
   rust_type: bool
   scopes:
@@ -473,3 +521,23 @@
         - option.ignore_null_fields
         - option.ignoreNullFields
       parser: crate::options::parsers::parse_bool
+
+- key: use_unsafe_row
+  description: |
+    Whether to use UnsafeRow to represent struct result in the JSON parser.
+    Defaults to the Sail configuration option `json.use_unsafe_row` (to be implemented).
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - use_unsafe_row
+        - useUnsafeRow
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.use_unsafe_row
+        - option.useUnsafeRow
+      parser: crate::options::parsers::parse_string

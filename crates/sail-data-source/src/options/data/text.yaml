@@ -25,7 +25,9 @@
 
 - key: line_sep
   description: |
-    Sets the single character line separator for reading. Defaults to None (CRLF/LF/CR).
+    Sets the single character line separator that should be used for parsing.
+    Supports \\r, \\r\\n and \\n.
+    For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
   default:
     value: ""
     parser: crate::options::parsers::parse_optional_char
@@ -49,7 +51,9 @@
 
 - key: line_sep
   description: |
-    Sets the single character line separator for writing. Defaults to "\\n".
+    Sets the single character line separator that should be used for writing.
+    Supports \\r, \\r\\n and \\n.
+    For writing, defaults to \\n.
   default:
     value: "\n"
     parser: crate::options::parsers::parse_char
@@ -73,8 +77,12 @@
 
 - key: compression
   description: |
-    Specifies the file compression type for writing.
-    Supported values: NONE, UNCOMPRESSED, BZIP2, BZ2, GZIP, GZ, ZSTD, ZST, XZ.
+    Specifies the file compression type. The following case-insensitive compression types are supported:
+      - `"NONE"`, `"UNCOMPRESSED"`, or `""`
+      - `"BZIP2"` or `"BZ2"`
+      - `"GZIP"` or `"GZ"`
+      - `"ZSTD"` or `"ZST"`
+      - `"XZ"`
   default:
     value: "UNCOMPRESSED"
     parser: crate::options::parsers::parse_string
