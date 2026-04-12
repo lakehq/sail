@@ -959,7 +959,13 @@ class PySparkArrowTableUdf:
     def _iter_input_legacy(self, args: Iterator[pa.RecordBatch]) -> Iterator[tuple[pd.Series]]:
         for batch in args:
             arrays = batch.to_struct_array().flatten()
-            yield tuple(_arrow_column_to_pandas(x, self._serializer) for x in arrays)
+            columns = tuple(_arrow_column_to_pandas(x, self._serializer) for x in arrays)
+            if len(columns) == 0 and not pyspark.__version__.startswith(("3.", "4.0.")):
+                # PySpark 4.1+ legacy mapper uses len(a[0]) for num_rows.
+                # Preserve the row count for 0-column batches (e.g. 0-arg UDTFs).
+                yield (pd.Series(range(batch.num_rows)),)
+            else:
+                yield columns
 
     def _iter_output_legacy(self, args: Iterator[pa.RecordBatch]) -> Iterator[pd.DataFrame]:
         args1, args2 = itertools.tee(args)
