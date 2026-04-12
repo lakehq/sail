@@ -1,4 +1,4 @@
->>> from pyspark.sql.functions import lit, udtf
+>>> from pyspark.sql.functions import udtf
 
 Test that a UDTF registered with a specific name works correctly when called by that name.
 
