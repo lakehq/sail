@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, TableReference};
+use datafusion_common::TableReference;
 use datafusion_expr::{Expr, ExprSchemable, Extension, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_common_datafusion::udf::StreamUDF;
@@ -70,21 +69,6 @@ impl PlanResolver<'_> {
         let state = scope.state();
         state.config_mut().arrow_allow_large_var_types = true;
 
-        let input_schema = plan.schema();
-        let input_types: Vec<DataType> = arguments
-            .iter()
-            .map(|arg| arg.expr.get_type(input_schema))
-            .collect::<datafusion_common::Result<Vec<DataType>, DataFusionError>>()?;
-        let payload = PySparkUdtfPayload::build(
-            &function.python_version,
-            &function.command,
-            function.eval_type,
-            arguments.len(),
-            &input_types,
-            kwargs,
-            &function.return_type,
-            &self.config.pyspark_udf_config,
-        )?;
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
             spec::PySparkUdfType::ArrowTable | spec::PySparkUdfType::ArrowUdtf => {
@@ -123,6 +107,16 @@ impl PlanResolver<'_> {
             .iter()
             .map(|e| e.get_type(plan.schema()))
             .collect::<datafusion_common::Result<Vec<_>>>()?;
+        let payload = PySparkUdtfPayload::build(
+            &function.python_version,
+            &function.command,
+            function.eval_type,
+            input_types.len(),
+            &input_types,
+            kwargs,
+            &function.return_type,
+            &self.config.pyspark_udf_config,
+        )?;
         let udtf = PySparkUDTF::try_new(
             kind,
             get_udf_name(name, &payload),
