@@ -149,6 +149,7 @@ impl PlanResolver<'_> {
                     temporal: None,
                     sample: None,
                     options: vec![],
+                    partition: Default::default(),
                 })),
                 is_streaming: false,
             }),

@@ -37,6 +37,7 @@ impl PlanResolver<'_> {
             temporal,
             sample,
             options,
+            partition: _,
         } = table;
 
         // Check if the name is in the form `<format>.<path>` where `<format>` is a
@@ -168,6 +169,7 @@ impl PlanResolver<'_> {
                 temporal: None,
                 sample,
                 options,
+                partition: Default::default(),
             },
             state,
         )

@@ -629,6 +629,7 @@ pub struct ReadNamedTable {
     pub temporal: Option<TableTemporal>,
     pub sample: Option<TableSample>,
     pub options: Vec<(String, String)>,
+    pub partition: Vec<(Identifier, Option<Expr>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

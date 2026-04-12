@@ -149,6 +149,7 @@ impl TryFrom<RelType> for RelationNode {
                             temporal: None,
                             sample: None,
                             options: options.into_iter().collect(),
+                            partition: Default::default(),
                         }))
                     }
                     ReadType::DataSource(x) => {

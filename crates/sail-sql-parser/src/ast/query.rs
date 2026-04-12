@@ -19,6 +19,7 @@ use crate::ast::keywords::{
     SystemVersion, Table, Tablesample, Timestamp, Union, Unpivot, Using, Values, Version, View,
     Where, Window, With,
 };
+use crate::ast::statement::PartitionClause;
 use crate::ast::literal::IntegerLiteral;
 use crate::ast::operator::{Comma, LeftParenthesis, RightParenthesis};
 use crate::combinator::{boxed, compose, either_or, sequence, unit};
@@ -298,6 +299,8 @@ pub enum TableFactor {
     },
     Name {
         name: ObjectName,
+        #[parser(function = |(_, e, _), o| compose(e, o))]
+        partition: Option<PartitionClause>,
         #[parser(function = |(_, e, _), o| boxed(compose(e, o)).or_not())]
         temporal: Option<Box<TemporalClause>>,
         #[parser(function = |(_, e, _), o| boxed(compose(e, o)).or_not())]

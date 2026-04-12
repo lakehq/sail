@@ -363,6 +363,7 @@ fn from_ast_query_table(name: ObjectName) -> SqlResult<spec::QueryPlan> {
             temporal: None,
             sample: None,
             options: Default::default(),
+            partition: Default::default(),
         })),
     }))
 }
@@ -441,6 +442,7 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
     match table {
         TableFactor::Name {
             name,
+            partition,
             temporal,
             sample,
             modifiers,
@@ -448,6 +450,10 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
         } => {
             let temporal = temporal.map(|t| from_ast_temporal(*t)).transpose()?;
             let sample = sample.map(|s| from_ast_table_sample(*s)).transpose()?;
+            let partition = partition
+                .map(crate::statement::from_ast_partition)
+                .transpose()?
+                .unwrap_or_default();
             let plan = spec::QueryPlan::new(spec::QueryNode::Read {
                 is_streaming: false,
                 read_type: spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
@@ -455,6 +461,7 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
                     temporal,
                     sample,
                     options: Default::default(),
+                    partition,
                 })),
             });
             let plan = query_plan_with_table_modifiers(plan, modifiers)?;

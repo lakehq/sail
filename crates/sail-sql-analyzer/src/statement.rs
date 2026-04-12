@@ -1715,7 +1715,7 @@ fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, St
         .collect::<SqlResult<Vec<_>>>()
 }
 
-fn from_ast_partition(
+pub(crate) fn from_ast_partition(
     partition: PartitionClause,
 ) -> SqlResult<Vec<(spec::Identifier, Option<spec::Expr>)>> {
     let PartitionClause {

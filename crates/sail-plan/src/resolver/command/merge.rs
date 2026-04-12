@@ -161,6 +161,7 @@ impl PlanResolver<'_> {
             temporal: None,
             sample: None,
             options: vec![],
+            partition: Default::default(),
         };
         let plan = spec::QueryPlan::new(spec::QueryNode::Read {
             read_type: spec::ReadType::NamedTable(Box::new(read)),
