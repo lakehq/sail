@@ -536,10 +536,10 @@ class PySparkArrowBatchUdf:
         # .to_pylist() with ArrowTableToRowsConversion converters
         # (e.g. map arrays → dicts instead of list-of-tuples).
         inputs = (
-            ([pyspark._NoValue] * num_rows,)
+            ([pyspark._NoValue] * num_rows,)  # noqa: SLF001
             if len(args) == 0
             else _arrow_columns_to_python(args, binary_as_bytes=self._binary_as_bytes)
-        )  # noqa: SLF001
+        )
         [result] = list(self._udf(None, (inputs,)))
         output, output_type, spark_return_type = result[0], result[1], result[2]
         if isinstance(output, pa.ChunkedArray):
