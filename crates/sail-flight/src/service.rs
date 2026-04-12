@@ -10,6 +10,7 @@ use arrow_flight::{
 };
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::prelude::SessionContext;
 use futures::{stream, Stream, StreamExt};
 use log::{debug, info};
 use prost::Message;
@@ -26,8 +27,8 @@ use sail_telemetry::telemetry::global_metrics;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::state::{QueryTicket, SailFlightSqlState};
-use crate::stream::{MetricContext, MetricsRecordingStream};
+use crate::metrics::{MetricsRecordingContext, MetricsRecordingStream, StatementType};
+use crate::state::{QueryHandle, SailFlightSqlState};
 
 pub struct SailFlightSqlService {
     session_manager: SessionManager,
@@ -41,7 +42,7 @@ impl SailFlightSqlService {
         let config = Arc::new(PlanConfig::default());
         let metrics = global_metrics().map(|m| m.registry);
         if metrics.is_some() {
-            info!("OTLP metrics enabled for Flight SQL service");
+            info!("OpenTelemetry metrics enabled for Flight SQL service");
         }
         SailFlightSqlService {
             session_manager,
@@ -54,7 +55,7 @@ impl SailFlightSqlService {
     const DEFAULT_SESSION_ID: &'static str = "flight-default";
     const DEFAULT_USER_ID: &'static str = "flight-user";
 
-    async fn get_session_context(&self) -> Result<datafusion::prelude::SessionContext, Status> {
+    async fn get_session_context(&self) -> Result<SessionContext, Status> {
         self.session_manager
             .get_or_create_session_context(
                 Self::DEFAULT_SESSION_ID.to_string(),
@@ -93,15 +94,16 @@ impl FlightSqlService for SailFlightSqlService {
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let sql = query.query.clone();
-        debug!("get_flight_info_statement: {sql}");
+        debug!("get_flight_info_statement: {}", &query.query);
 
-        let stmt = parse_one_statement(&sql)
+        let statement = parse_one_statement(&query.query)
             .map_err(|e| Status::invalid_argument(format!("parse error: {e}")))?;
-        let plan = from_ast_statement(stmt)
-            .map_err(|e| Status::internal(format!("plan conversion error: {e}")))?;
-        let is_command = matches!(plan, spec::Plan::Command(_));
-        let statement_type = if is_command { "command" } else { "query" };
+        let plan = from_ast_statement(statement)
+            .map_err(|e| Status::invalid_argument(format!("plan conversion error: {e}")))?;
+        let statement_type = match &plan {
+            spec::Plan::Query(_) => StatementType::Query,
+            spec::Plan::Command(_) => StatementType::Command,
+        };
 
         let ctx = self.get_session_context().await?;
         let (plan, _) = resolve_and_execute_plan(&ctx, self.config.clone(), plan)
@@ -111,41 +113,46 @@ impl FlightSqlService for SailFlightSqlService {
         let service = ctx
             .extension::<JobService>()
             .map_err(|e| Status::internal(format!("job service not found: {e}")))?;
-        let mut raw = service
+        let stream = service
             .runner()
             .execute(&ctx, plan)
             .await
             .map_err(|e| Status::internal(format!("execution error: {e}")))?;
 
-        let stream: SendableRecordBatchStream = if is_command {
-            let mut batches = Vec::new();
-            while let Some(result) = raw.next().await {
-                batches
-                    .push(result.map_err(|e| Status::internal(format!("execution error: {e}")))?);
-            }
-            Box::pin(RecordBatchStreamAdapter::new(
-                schema.clone(),
-                stream::iter(batches.into_iter().map(Ok)),
-            ))
-        } else {
-            raw
-        };
-
         let stream: SendableRecordBatchStream = if let Some(ref m) = self.metrics {
             Box::pin(MetricsRecordingStream::new(
                 stream,
                 m.clone(),
-                MetricContext { statement_type },
+                MetricsRecordingContext { statement_type },
             ))
         } else {
             stream
         };
 
-        let ticket = QueryTicket::new();
-        self.state.lock().await.insert(ticket.clone(), stream);
+        let stream: SendableRecordBatchStream = match statement_type {
+            StatementType::Query => stream,
+            StatementType::Command => {
+                // execute command eagerly and store the result stream in memory
+                let mut stream = stream;
+                let mut batches = Vec::new();
+                while let Some(result) = stream.next().await {
+                    batches.push(
+                        result.map_err(|e| Status::internal(format!("execution error: {e}")))?,
+                    );
+                }
+                Box::pin(RecordBatchStreamAdapter::new(
+                    schema.clone(),
+                    stream::iter(batches.into_iter().map(Ok)),
+                ))
+            }
+        };
+
+        let handle = QueryHandle::new();
+        self.state.lock().await.insert(handle.clone(), stream);
+        debug!("query execution started with handle {handle}");
 
         let ticket = TicketStatementQuery {
-            statement_handle: ticket.as_bytes().to_vec().into(),
+            statement_handle: handle.as_bytes().to_vec().into(),
         };
         let ticket = ticket.as_any().encode_to_vec();
 
@@ -172,15 +179,14 @@ impl FlightSqlService for SailFlightSqlService {
         ticket: TicketStatementQuery,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        let ticket = QueryTicket::try_from(ticket.statement_handle.as_ref())?;
-        debug!("do_get_statement: {ticket:?}");
+        let handle = QueryHandle::try_from(ticket.statement_handle.as_ref())?;
+        debug!("do_get_statement: {handle}");
 
-        let stream = self
-            .state
-            .lock()
-            .await
-            .take(&ticket)
-            .ok_or_else(|| Status::not_found("query ticket not found or already consumed"))?;
+        let stream = self.state.lock().await.take(&handle).ok_or_else(|| {
+            Status::not_found(format!(
+                "query handle not found or already consumed: {handle}"
+            ))
+        })?;
         let schema = stream.schema();
 
         let output = stream.map(|result| {

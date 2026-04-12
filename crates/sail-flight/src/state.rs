@@ -1,13 +1,14 @@
 use std::collections::HashMap;
+use std::fmt;
 
 use datafusion::execution::SendableRecordBatchStream;
 use tonic::Status;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct QueryTicket(String);
+pub struct QueryHandle(String);
 
-impl QueryTicket {
+impl QueryHandle {
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
     }
@@ -17,13 +18,19 @@ impl QueryTicket {
     }
 }
 
-impl Default for QueryTicket {
+impl fmt::Display for QueryHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Default for QueryHandle {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TryFrom<&[u8]> for QueryTicket {
+impl TryFrom<&[u8]> for QueryHandle {
     type Error = Status;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
@@ -34,7 +41,7 @@ impl TryFrom<&[u8]> for QueryTicket {
 }
 
 pub struct SailFlightSqlState {
-    streams: HashMap<QueryTicket, SendableRecordBatchStream>,
+    streams: HashMap<QueryHandle, SendableRecordBatchStream>,
 }
 
 impl SailFlightSqlState {
@@ -44,11 +51,11 @@ impl SailFlightSqlState {
         }
     }
 
-    pub fn insert(&mut self, ticket: QueryTicket, stream: SendableRecordBatchStream) {
+    pub fn insert(&mut self, ticket: QueryHandle, stream: SendableRecordBatchStream) {
         self.streams.insert(ticket, stream);
     }
 
-    pub fn take(&mut self, ticket: &QueryTicket) -> Option<SendableRecordBatchStream> {
+    pub fn take(&mut self, ticket: &QueryHandle) -> Option<SendableRecordBatchStream> {
         self.streams.remove(ticket)
     }
 }

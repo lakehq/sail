@@ -11,32 +11,69 @@ use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
 use futures::Stream;
 use sail_telemetry::metrics::{MetricAttribute, MetricRegistry};
 
-pub struct MetricContext {
-    pub statement_type: &'static str,
+#[derive(Debug, Clone, Copy)]
+pub enum StatementType {
+    Query,
+    Command,
+}
+
+impl StatementType {
+    pub fn name(&self) -> &'static str {
+        match self {
+            StatementType::Query => "query",
+            StatementType::Command => "command",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum StatementStatus {
+    Incomplete,
+    Success,
+    Error,
+}
+
+impl StatementStatus {
+    pub fn name(&self) -> &'static str {
+        match self {
+            StatementStatus::Incomplete => "incomplete",
+            StatementStatus::Success => "success",
+            StatementStatus::Error => "error",
+        }
+    }
+}
+
+pub struct MetricsRecordingContext {
+    pub statement_type: StatementType,
 }
 
 pub struct MetricsRecordingStream {
     inner: SendableRecordBatchStream,
     metrics: Arc<MetricRegistry>,
-    context: MetricContext,
+    context: MetricsRecordingContext,
     start: Instant,
     rows: u64,
-    status: &'static str,
+    status: StatementStatus,
 }
 
 impl MetricsRecordingStream {
     pub fn new(
         inner: SendableRecordBatchStream,
         metrics: Arc<MetricRegistry>,
-        context: MetricContext,
+        context: MetricsRecordingContext,
     ) -> Self {
         let type_attr = (
             MetricAttribute::FLIGHT_STATEMENT_TYPE,
-            Cow::Borrowed(context.statement_type),
+            Cow::Borrowed(context.statement_type.name()),
         );
         metrics
             .flight_statement_active_count
             .adder(1i64)
+            .with_attribute(type_attr.clone())
+            .emit();
+        metrics
+            .flight_statement_total_count
+            .adder(1u64)
             .with_attribute(type_attr)
             .emit();
         Self {
@@ -45,7 +82,7 @@ impl MetricsRecordingStream {
             context,
             start: Instant::now(),
             rows: 0,
-            status: "incomplete",
+            status: StatementStatus::Incomplete,
         }
     }
 }
@@ -54,11 +91,11 @@ impl Drop for MetricsRecordingStream {
     fn drop(&mut self) {
         let type_attr = (
             MetricAttribute::FLIGHT_STATEMENT_TYPE,
-            Cow::Borrowed(self.context.statement_type),
+            Cow::Borrowed(self.context.statement_type.name()),
         );
         let status_attr = (
             MetricAttribute::FLIGHT_STATEMENT_STATUS,
-            Cow::Borrowed(self.status),
+            Cow::Borrowed(self.status.name()),
         );
         let duration = self.start.elapsed().as_secs_f64();
         self.metrics
@@ -67,20 +104,16 @@ impl Drop for MetricsRecordingStream {
             .with_attribute(type_attr.clone())
             .emit();
         self.metrics
-            .flight_statement_total_count
-            .adder(1u64)
-            .with_attribute(type_attr.clone())
-            .emit();
-        self.metrics
             .flight_statement_duration
             .recorder(duration)
             .with_attribute(type_attr.clone())
-            .with_attribute(status_attr)
+            .with_attribute(status_attr.clone())
             .emit();
         self.metrics
             .flight_statement_row_count
             .recorder(self.rows)
             .with_attribute(type_attr)
+            .with_attribute(status_attr)
             .emit();
     }
 }
@@ -89,17 +122,14 @@ impl Stream for MetricsRecordingStream {
     type Item = Result<RecordBatch, DataFusionError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // SAFETY: `MetricsRecordingStream` is `Unpin` because all its fields are `Unpin`
-        // (`Pin<Box<T>>` is always `Unpin`), so using `mut self` and calling `as_mut()` on
-        // the inner `Pin<Box<...>>` is sound without requiring pin projection.
         match self.inner.as_mut().poll_next(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(None) => {
-                self.status = "success";
+                self.status = StatementStatus::Success;
                 Poll::Ready(None)
             }
             Poll::Ready(Some(Err(e))) => {
-                self.status = "error";
+                self.status = StatementStatus::Error;
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(Some(Ok(batch))) => {

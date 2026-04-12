@@ -1,8 +1,8 @@
 pub mod error;
+mod metrics;
 pub mod service;
 pub mod session;
 mod state;
-mod stream;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ where
     let service = SailFlightSqlService::new(session_manager);
     let flight_service = FlightServiceServer::new(service);
 
-    let builder = ServerBuilder::new("flight-sql", ServerBuilderOptions::default())
+    let builder = ServerBuilder::new("flight_sql", ServerBuilderOptions::default())
         .add_service(flight_service, None)
         .await;
 
