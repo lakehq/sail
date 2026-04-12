@@ -966,10 +966,15 @@ class PySparkArrowTableUdf:
         if sum(1 for _ in args2) == 0:
             return
         (batches1, batches2) = itertools.tee(self._iter_input_legacy(args1))
-        inputs = (x[self._passthrough_columns :] for x in batches2)
+        if pyspark.__version__.startswith(("3.", "4.0.")):
+            # PySpark 3.x/4.0 mapper receives sliced non-passthrough columns.
+            inputs = (x[self._passthrough_columns :] for x in batches2)
+        else:
+            # PySpark 4.1+ mapper receives full tuples and selects columns via args_kwargs_offsets.
+            inputs = batches2
         outputs = self._udf(None, inputs)
         last = None
-        for passthrough, (out, _) in itertools.zip_longest(self._iter_passthrough(batches1), outputs):
+        for passthrough, (out, *_) in itertools.zip_longest(self._iter_passthrough(batches1), outputs):
             if out is None or len(out) == 0:
                 continue
             df = pd.DataFrame(index=out.index)
