@@ -55,6 +55,12 @@ except ImportError:
             yield chunk
 
 
+try:
+    from pyspark.sql.conversion import LocalDataToArrowConversion as _LocalDataToArrowConversion
+except ImportError:
+    _LocalDataToArrowConversion = None
+
+
 class Converter:
     """
     A converter that converts between PySpark data and Arrow data.
@@ -384,6 +390,23 @@ def _pandas_to_arrow_array(data, data_type: pa.DataType, serializer: ArrowStream
     return serializer._create_array(data, data_type, arrow_cast=serializer._arrow_cast)  # noqa: SLF001
 
 
+def _python_values_to_arrow_array(data: list, arrow_type: pa.DataType, spark_type) -> pa.Array:
+    """Convert a Python list of values to an Arrow array, using
+    PySpark's LocalDataToArrowConversion for proper type coercion
+    (e.g. int -> Decimal). Requires PySpark 4.1+."""
+    if _LocalDataToArrowConversion is None:
+        msg = "_python_values_to_arrow_array requires PySpark 4.1+ (LocalDataToArrowConversion not found)"
+        raise ImportError(msg)
+    # `none_on_identity=True` returns None when no conversion is needed for the type,
+    # so we can skip the per-element loop and pass the list directly to `pa.array()`.
+    conv = _LocalDataToArrowConversion._create_converter(spark_type, none_on_identity=True)  # noqa: SLF001
+    converted = [conv(v) for v in data] if conv is not None else data
+    try:
+        return pa.array(converted, type=arrow_type)
+    except pa.lib.ArrowInvalid:
+        return pa.array(converted).cast(target_type=arrow_type)
+
+
 def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
     if len(data) == 0:
         return pa.array([], type=data_type)
@@ -442,26 +465,43 @@ class PySparkBatchUdf:
 class PySparkArrowBatchUdf:
     def __init__(self, udf: Callable[..., Any], config):
         self._udf = udf
-        self._serializer = ArrowStreamPandasUDFSerializer(
-            timezone=config.session_timezone,
-            safecheck=config.arrow_convert_safely,
-            assign_cols_by_name=config.assign_columns_by_name,
-            df_for_struct=False,
-            struct_in_pandas="row",
-            ndarray_as_list=True,
-            arrow_cast=True,
-        )
+        self._use_legacy = config.python_udf_pandas_conversion_enabled or pyspark.__version__.startswith(("3.", "4.0."))
+        if self._use_legacy:
+            self._serializer = ArrowStreamPandasUDFSerializer(
+                timezone=config.session_timezone,
+                safecheck=config.arrow_convert_safely,
+                assign_cols_by_name=config.assign_columns_by_name,
+                df_for_struct=False,
+                struct_in_pandas="row",
+                ndarray_as_list=True,
+                arrow_cast=True,
+            )
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
+        if self._use_legacy:
+            return self._call_legacy(args, num_rows)
+        return self._call_arrow(args, num_rows)
+
+    def _call_legacy(self, args: list[pa.Array], num_rows: int) -> pa.Array:
         if len(args) == 0:
             inputs = tuple(pd.Series([pyspark._NoValue]).repeat(num_rows) for _ in range(1))  # noqa: SLF001
         else:
             inputs = tuple(_arrow_column_to_pandas(a, self._serializer) for a in args)
-        # PySpark 4.1+ returns a 3-tuple (result, arrow_type, spark_return_type);
-        # older versions return a 2-tuple (result, arrow_type). Use indexing to handle both.
         [result] = list(self._udf(None, (inputs,)))
         output, output_type = result[0], result[1]
         return _pandas_to_arrow_array(output, output_type, self._serializer)
+
+    def _call_arrow(self, args: list[pa.Array], num_rows: int) -> pa.Array:
+        inputs = (pa.nulls(num_rows),) if len(args) == 0 else tuple(args)
+        [result] = list(self._udf(None, (inputs,)))
+        output, output_type, spark_return_type = result[0], result[1], result[2]
+        if isinstance(output, pa.ChunkedArray):
+            output = output.combine_chunks()
+        if not isinstance(output, pa.Array):
+            output = _python_values_to_arrow_array(output, output_type, spark_return_type)
+        if output.type != output_type:
+            output = output.cast(output_type)
+        return output
 
 
 class PySparkScalarPandasUdf:
