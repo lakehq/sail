@@ -13,6 +13,8 @@ pub struct PySparkUdfConfig {
     pub pandas_convert_to_arrow_array_safely: bool,
     #[pyo3(get)]
     pub arrow_max_records_per_batch: usize,
+    #[pyo3(get)]
+    pub python_udf_pandas_conversion_enabled: bool,
 }
 
 impl Default for PySparkUdfConfig {
@@ -23,6 +25,7 @@ impl Default for PySparkUdfConfig {
             pandas_grouped_map_assign_columns_by_name: true,
             pandas_convert_to_arrow_array_safely: false,
             arrow_max_records_per_batch: 10000,
+            python_udf_pandas_conversion_enabled: false,
         }
     }
 }
@@ -57,15 +60,9 @@ impl PySparkUdfConfig {
             "spark.sql.execution.arrow.maxRecordsPerBatch".to_string(),
             self.arrow_max_records_per_batch.to_string(),
         ));
-        // Enable legacy pandas conversion for Arrow-batched UDFs.
-        // PySpark 4.1+ introduced a new non-legacy path (`wrap_arrow_batch_udf_arrow`)
-        // that returns plain Python lists instead of pandas Series.
-        // Sail's UDF bridge (`PySparkArrowBatchUdf`) expects pandas Series,
-        // so we opt into the legacy path to maintain compatibility.
-        // This config is ignored by PySpark versions before 4.1.
         out.push((
             "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled".to_string(),
-            "true".to_string(),
+            self.python_udf_pandas_conversion_enabled.to_string(),
         ));
         out
     }
