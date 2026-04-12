@@ -1,14 +1,13 @@
-use arrow_pyarrow::ToPyArrow;
 use datafusion::arrow::datatypes::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
-use pyo3::types::{PyList, PyModule};
-use pyo3::{intern, Bound, IntoPyObject, PyAny, PyResult, Python};
+use pyo3::types::PyModule;
+use pyo3::{intern, Bound, IntoPyObject, PyAny, Python};
 use sail_common::spec;
 
 use crate::cereal::{
-    check_python_udf_version, get_pyspark_version, should_write_config, supports_kwargs,
-    write_kwarg, PySparkVersion,
+    build_input_types_json, check_python_udf_version, get_pyspark_version, should_write_config,
+    supports_kwargs, write_kwarg, PySparkVersion,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -44,9 +43,9 @@ impl PySparkUdfPayload {
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         arg_offsets: &[usize],
+        input_types: &[DataType],
         // Per-argument kwarg name: None for positional, Some(key) for keyword
         kwarg_names: &[Option<String>],
-        input_types: &[DataType],
         config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
         check_python_udf_version(python_version)?;
@@ -106,32 +105,4 @@ impl PySparkUdfPayload {
 
         Ok(data)
     }
-}
-
-/// Builds a JSON string representing a PySpark StructType schema from Arrow input types.
-/// This is used by PySpark 4.x's `read_udfs` to deserialize input type information
-/// for `SQL_ARROW_BATCHED_UDF`.
-fn build_input_types_json(input_types: &[DataType]) -> PyUdfResult<String> {
-    Python::attach(|py| -> PyResult<String> {
-        let types_module = PyModule::import(py, intern!(py, "pyspark.sql.types"))?;
-        let struct_type_cls = types_module.getattr(intern!(py, "StructType"))?;
-        let struct_field_cls = types_module.getattr(intern!(py, "StructField"))?;
-        let from_arrow_type = PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
-            .getattr(intern!(py, "from_arrow_type"))?;
-
-        let fields: Vec<_> = input_types
-            .iter()
-            .enumerate()
-            .map(|(i, dt)| -> PyResult<_> {
-                let arrow_type = dt.to_pyarrow(py)?;
-                let spark_type = from_arrow_type.call1((arrow_type,))?;
-                struct_field_cls.call1((format!("_{i}"), spark_type, true))
-            })
-            .collect::<PyResult<_>>()?;
-
-        let py_fields = PyList::new(py, &fields)?;
-        let schema = struct_type_cls.call1((py_fields,))?;
-        schema.getattr(intern!(py, "json"))?.call0()?.extract()
-    })
-    .map_err(PyUdfError::from)
 }

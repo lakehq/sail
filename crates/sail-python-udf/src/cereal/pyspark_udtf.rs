@@ -7,8 +7,8 @@ use pyo3::{intern, Bound, IntoPyObject, PyAny, PyResult, Python};
 use sail_common::spec;
 
 use crate::cereal::{
-    check_python_udf_version, get_pyspark_version, should_write_config, supports_kwargs,
-    write_kwarg,
+    build_input_types_json, check_python_udf_version, get_pyspark_version, should_write_config,
+    supports_kwargs, write_kwarg, PySparkVersion,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -44,6 +44,7 @@ impl PySparkUdtfPayload {
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         num_args: usize,
+        input_types: &[DataType],
         kwargs: &[Option<String>],
         return_type: &DataType,
         config: &PySparkUdfConfig,
@@ -63,6 +64,16 @@ impl PySparkUdtfPayload {
                 data.extend((value.len() as i32).to_be_bytes()); // length of the value
                 data.extend(value.as_bytes());
             }
+        }
+
+        // PySpark 4.1+ reads input types for ArrowTable UDTFs.
+        // PySpark 4.0.x does not read input types and would misparse the stream.
+        if matches!(pyspark_version, PySparkVersion::V4_1)
+            && matches!(eval_type, spec::PySparkUdfType::ArrowTable)
+        {
+            let schema_json = build_input_types_json(input_types)?;
+            data.extend((schema_json.len() as i32).to_be_bytes());
+            data.extend(schema_json.as_bytes());
         }
 
         let num_args: i32 = num_args

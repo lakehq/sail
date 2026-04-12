@@ -263,6 +263,9 @@ message PySparkUdfConfig {
   bool pandas_convert_to_arrow_array_safely = 4;
   uint64 arrow_max_records_per_batch = 5;
   bool python_udf_pandas_conversion_enabled = 6;
+  bool python_udtf_pandas_conversion_enabled = 7;
+  bool python_udf_pandas_int_to_decimal_coercion_enabled = 8;
+  bool binary_as_bytes = 9;
 }
 
 message EquivalenceProperties {
