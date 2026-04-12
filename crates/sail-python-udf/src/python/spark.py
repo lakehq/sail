@@ -904,22 +904,19 @@ class PySparkArrowTableUdf:
         return self._call_arrow(args)
 
     def _call_arrow(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
-        # The non-legacy PySpark mapper expects RecordBatches and handles
-        # Python list conversion internally (via ArrowTableToRowsConversion).
-        # It yields (pa.RecordBatch, arrow_return_type) tuples.
-        # We split off passthrough columns, feed the rest to the mapper,
-        # then prepend passthrough columns to the output batches.
-        args1, args2 = itertools.tee(args)
-        first = next(args2, None)
+        first = next(args, None)
         if first is None:
             return
-        args2 = itertools.chain([first], args2)
-        # Feed RecordBatches with only the non-passthrough columns to the mapper
-        eval_batches = (batch.select(range(self._passthrough_columns, batch.num_columns)) for batch in args2)
-        outputs = self._udf(None, eval_batches)
-        passthrough_batches = self._iter_input_legacy(args1)
+        args = itertools.chain([first], args)
+        # Tee: one branch for the mapper (full batches), one for passthrough extraction.
+        # The mapper expects full input batches — it handles Python conversion and column
+        # selection internally (via converters + args_kwargs_offsets).
+        batches_for_passthrough, batches_for_mapper = itertools.tee(args)
+        outputs = self._udf(None, batches_for_mapper)
+        # Extract passthrough values from raw arrow batches (no pandas)
+        columns = (tuple(batch.column(i) for i in range(batch.num_columns)) for batch in batches_for_passthrough)
         last = None
-        for passthrough, (out, _) in itertools.zip_longest(self._iter_passthrough(passthrough_batches), outputs):
+        for passthrough, (out, _) in itertools.zip_longest(self._iter_passthrough(columns), outputs):
             if out is None or out.num_rows == 0:
                 continue
             out_batch = out.combine_chunks().to_batches()[0] if isinstance(out, pa.Table) else out
@@ -931,7 +928,8 @@ class PySparkArrowTableUdf:
             for i, name in enumerate(self._input_names):
                 field = self._output_schema.field(self._output_schema.get_field_index(name))
                 if passthrough is not None:
-                    passthrough_arrays.append(pa.array([passthrough[i]] * num_rows, type=field.type))
+                    val = passthrough[i].as_py() if isinstance(passthrough[i], pa.Scalar) else passthrough[i]
+                    passthrough_arrays.append(pa.array([val] * num_rows, type=field.type))
                 else:
                     passthrough_arrays.append(pa.nulls(num_rows).cast(field.type))
                 passthrough_fields.append(field)
