@@ -434,9 +434,3 @@
   attributes:
     - flight.statement.type
     - flight.statement.status
-
-- name: flight.connection.total_count
-  description: The total number of Flight SQL client connections.
-  type: Counter
-  value_type: u64
-  attributes: []

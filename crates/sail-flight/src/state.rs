@@ -51,12 +51,12 @@ impl SailFlightSqlState {
         }
     }
 
-    pub fn insert(&mut self, ticket: QueryHandle, stream: SendableRecordBatchStream) {
-        self.streams.insert(ticket, stream);
+    pub fn add_stream(&mut self, handle: QueryHandle, stream: SendableRecordBatchStream) {
+        self.streams.insert(handle, stream);
     }
 
-    pub fn take(&mut self, ticket: &QueryHandle) -> Option<SendableRecordBatchStream> {
-        self.streams.remove(ticket)
+    pub fn remove_stream(&mut self, handle: &QueryHandle) -> Option<SendableRecordBatchStream> {
+        self.streams.remove(handle)
     }
 }
 

@@ -77,10 +77,8 @@ impl FlightSqlService for SailFlightSqlService {
         Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
         Status,
     > {
+        // Note: not all clients perform handshake with the server.
         debug!("handshake received from client");
-        if let Some(ref m) = self.metrics {
-            m.flight_connection_total_count.adder(1u64).emit();
-        }
         let response = HandshakeResponse {
             protocol_version: 0,
             payload: Default::default(),
@@ -148,7 +146,7 @@ impl FlightSqlService for SailFlightSqlService {
         };
 
         let handle = QueryHandle::new();
-        self.state.lock().await.insert(handle.clone(), stream);
+        self.state.lock().await.add_stream(handle.clone(), stream);
         debug!("query execution started with handle {handle}");
 
         let ticket = TicketStatementQuery {
@@ -182,11 +180,16 @@ impl FlightSqlService for SailFlightSqlService {
         let handle = QueryHandle::try_from(ticket.statement_handle.as_ref())?;
         debug!("do_get_statement: {handle}");
 
-        let stream = self.state.lock().await.take(&handle).ok_or_else(|| {
-            Status::not_found(format!(
-                "query handle not found or already consumed: {handle}"
-            ))
-        })?;
+        let stream = self
+            .state
+            .lock()
+            .await
+            .remove_stream(&handle)
+            .ok_or_else(|| {
+                Status::not_found(format!(
+                    "query handle not found or already consumed: {handle}"
+                ))
+            })?;
         let schema = stream.schema();
 
         let output = stream.map(|result| {
