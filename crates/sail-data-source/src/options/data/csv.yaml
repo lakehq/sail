@@ -622,7 +622,7 @@
 - key: char_to_escape_quote_escaping
   description: |
     Sets a single character used for escaping the escape for the quote character.
-    The default value is escape character when escape and quote characters are different, \\0 otherwise.
+    The default value is the escape character when escape and quote characters are different, \\0 otherwise.
   supported: false
   rust_type: String
   scopes:
