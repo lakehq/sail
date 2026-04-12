@@ -89,6 +89,9 @@ impl Stream for MetricsRecordingStream {
     type Item = Result<RecordBatch, DataFusionError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // SAFETY: `MetricsRecordingStream` is `Unpin` because all its fields are `Unpin`
+        // (`Pin<Box<T>>` is always `Unpin`), so using `mut self` and calling `as_mut()` on
+        // the inner `Pin<Box<...>>` is sound without requiring pin projection.
         match self.inner.as_mut().poll_next(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(None) => {
