@@ -553,7 +553,7 @@ class PySparkArrowBatchUdf:
                 safecheck=self._safecheck,
             )
         if output.type != output_type:
-            output = output.cast(output_type)
+            output = output.cast(output_type, safe=self._safecheck)
         return output
 
 
