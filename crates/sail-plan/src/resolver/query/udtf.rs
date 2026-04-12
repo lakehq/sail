@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, TableReference};
+use datafusion_common::TableReference;
 use datafusion_expr::{Expr, ExprSchemable, Extension, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_common_datafusion::udf::StreamUDF;
@@ -69,42 +68,7 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
         state.config_mut().arrow_allow_large_var_types = true;
-
-        let input_schema = plan.schema();
-        let input_types: Vec<DataType> = arguments
-            .iter()
-            .map(|arg| arg.expr.get_type(input_schema))
-            .collect::<datafusion_common::Result<Vec<DataType>, DataFusionError>>()?;
-
-        // If return_type is None, invoke the UDTF's `analyze` method to determine it.
-        let (return_type, analyze_result) = match function.return_type {
-            Some(rt) => (rt, None),
-            None => {
-                let result = PySparkUdtfPayload::analyze(
-                    &function.command,
-                    &input_types[..arguments.len()],
-                    kwargs,
-                )
-                .map_err(|e| PlanError::invalid(format!("failed to analyze Python UDTF: {e}")))?;
-                let UdtfAnalyzeResult {
-                    return_type,
-                    pickled_analyze_result,
-                } = result;
-                (return_type, Some(pickled_analyze_result))
-            }
-        };
-
-        let payload = PySparkUdtfPayload::build(
-            &function.python_version,
-            &function.command,
-            function.eval_type,
-            arguments.len(),
-            &input_types,
-            kwargs,
-            &return_type,
-            &self.config.pyspark_udf_config,
-            analyze_result.as_deref(),
-        )?;
+        let arguments_len = arguments.len();
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
             spec::PySparkUdfType::ArrowTable | spec::PySparkUdfType::ArrowUdtf => {
@@ -143,6 +107,33 @@ impl PlanResolver<'_> {
             .iter()
             .map(|e| e.get_type(plan.schema()))
             .collect::<datafusion_common::Result<Vec<_>>>()?;
+        let argument_input_types = &input_types[passthrough_columns..];
+        let (return_type, analyze_result) = match function.return_type {
+            Some(return_type) => (return_type, None),
+            None => {
+                let result =
+                    PySparkUdtfPayload::analyze(&function.command, argument_input_types, kwargs)
+                        .map_err(|e| {
+                            PlanError::invalid(format!("failed to analyze Python UDTF: {e}"))
+                        })?;
+                let UdtfAnalyzeResult {
+                    return_type,
+                    pickled_analyze_result,
+                } = result;
+                (return_type, Some(pickled_analyze_result))
+            }
+        };
+        let payload = PySparkUdtfPayload::build(
+            &function.python_version,
+            &function.command,
+            function.eval_type,
+            arguments_len,
+            &input_types,
+            kwargs,
+            &return_type,
+            &self.config.pyspark_udf_config,
+            analyze_result.as_deref(),
+        )?;
         let udtf = PySparkUDTF::try_new(
             kind,
             get_udf_name(name, &payload),
