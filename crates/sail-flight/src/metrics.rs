@@ -125,11 +125,15 @@ impl Stream for MetricsRecordingStream {
         match self.inner.as_mut().poll_next(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(None) => {
-                self.status = StatementStatus::Success;
+                if matches!(self.status, StatementStatus::Incomplete) {
+                    self.status = StatementStatus::Success;
+                }
                 Poll::Ready(None)
             }
             Poll::Ready(Some(Err(e))) => {
-                self.status = StatementStatus::Error;
+                if matches!(self.status, StatementStatus::Incomplete) {
+                    self.status = StatementStatus::Error;
+                }
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(Some(Ok(batch))) => {
