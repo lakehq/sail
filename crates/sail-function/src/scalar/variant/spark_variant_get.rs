@@ -285,6 +285,10 @@ impl SparkVariantGet {
             safe,
         }
     }
+
+    pub fn safe(&self) -> bool {
+        self.safe
+    }
 }
 
 impl ScalarUDFImpl for SparkVariantGet {

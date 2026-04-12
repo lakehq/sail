@@ -331,7 +331,7 @@ impl PlanResolver<'_> {
                 // and are automatically filtered from Spark client responses.
                 // Edges default to planar in GeoArrow, so we omit them for Geometry.
                 metadata.insert(
-                    spec::ARROW_EXTENSION_NAME_KEY.to_string(),
+                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
                 let mut ext = json!({});
@@ -339,7 +339,7 @@ impl PlanResolver<'_> {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
                 metadata.insert(
-                    spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
+                    spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                     ext.to_string(),
                 );
                 data_type
@@ -350,7 +350,7 @@ impl PlanResolver<'_> {
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
                 metadata.insert(
-                    spec::ARROW_EXTENSION_NAME_KEY.to_string(),
+                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
                 let mut ext = json!({"edges": "spherical"});
@@ -358,14 +358,14 @@ impl PlanResolver<'_> {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
                 metadata.insert(
-                    spec::ARROW_EXTENSION_METADATA_KEY.to_string(),
+                    spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                     ext.to_string(),
                 );
                 data_type
             }
             spec::DataType::Variant => {
                 metadata.insert(
-                    spec::ARROW_EXTENSION_NAME_KEY.to_string(),
+                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     spec::VARIANT_EXTENSION_NAME.to_string(),
                 );
                 data_type
