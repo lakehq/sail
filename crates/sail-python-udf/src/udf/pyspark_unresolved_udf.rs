@@ -75,7 +75,13 @@ impl ScalarUDFImpl for PySparkUnresolvedUDF {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.output_type.clone().unwrap_or(DataType::Null))
+        match &self.output_type {
+            Some(t) => Ok(t.clone()),
+            None => internal_err!(
+                "unresolved UDTF {} has no fixed return type (uses analyze method)",
+                self.name()
+            ),
+        }
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

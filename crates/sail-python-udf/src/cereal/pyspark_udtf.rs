@@ -13,7 +13,7 @@ use crate::cereal::{
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
 
-/// The result of invoking a UDTF's `analyze` static method.
+/// The result of invoking a UDTF's `analyze` method.
 pub struct UdtfAnalyzeResult {
     /// The resolved return type (a struct type).
     pub return_type: DataType,
@@ -47,10 +47,10 @@ impl PySparkUdtfPayload {
             .map_err(|e| PyUdfError::PythonError(e.into()))
     }
 
-    /// Invokes the Python UDTF's `analyze` static method to determine the return type.
+    /// Invokes the Python UDTF's `analyze` method to determine the return type.
     ///
     /// This is called when the UDTF was defined without a fixed return type
-    /// (i.e., it has an `analyze` static method that dynamically determines the schema).
+    /// (i.e., it has an `analyze` method that dynamically determines the schema).
     ///
     /// Returns the resolved return type (as an Arrow DataType) and the pickled AnalyzeResult.
     pub fn analyze(
