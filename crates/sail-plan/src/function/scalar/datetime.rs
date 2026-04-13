@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
@@ -12,6 +14,7 @@ use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
@@ -20,6 +23,7 @@ use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
+use sail_function::scalar::datetime::spark_trunc::SparkTrunc;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
@@ -39,47 +43,18 @@ fn years(arg: Expr) -> Expr {
     integer_part(arg, "YEAR")
 }
 
-fn trunc_part_conversion(part: Expr) -> Expr {
-    Expr::Case(expr::Case {
-        expr: None,
-        when_then_expr: vec![
-            (
-                Box::new(
-                    part.clone()
-                        .ilike(lit("mon"))
-                        .or(part.clone().ilike(lit("mm"))),
-                ),
-                Box::new(lit("month")),
-            ),
-            (
-                Box::new(
-                    part.clone()
-                        .ilike(lit("yy"))
-                        .or(part.clone().ilike(lit("yyyy"))),
-                ),
-                Box::new(lit("year")),
-            ),
-            (
-                Box::new(part.clone().ilike(lit("dd"))),
-                Box::new(lit("day")),
-            ),
-        ],
-        else_expr: Some(Box::new(part)),
+fn trunc(date: Expr, part: Expr) -> Expr {
+    Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkTrunc::new())),
+        args: vec![date, part],
     })
 }
 
-fn trunc(date: Expr, part: Expr) -> Expr {
-    cast(
-        expr_fn::date_trunc(trunc_part_conversion(part), date),
-        DataType::Date32,
-    )
-}
-
 fn date_trunc(part: Expr, timestamp: Expr) -> Expr {
-    cast(
-        expr_fn::date_trunc(trunc_part_conversion(part), timestamp),
-        DataType::Timestamp(TimeUnit::Microsecond, None),
-    )
+    Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkDateTrunc::new())),
+        args: vec![part, timestamp],
+    })
 }
 
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
