@@ -14,6 +14,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::listing::{ListingFormat, ListingTableFormat};
 
@@ -22,7 +23,7 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     urls: &[ListingTableUrl],
     options: &mut ListingOptions,
     extension_with_compression: &Option<String>,
-    options_vec: Vec<HashMap<String, String>>,
+    options_vec: Vec<OptionLayer>,
     listing_format: &ListingTableFormat<T>,
 ) -> Result<Arc<Schema>> {
     // The logic is similar to `ListingOptions::infer_schema()`

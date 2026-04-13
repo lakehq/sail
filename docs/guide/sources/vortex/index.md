@@ -17,10 +17,15 @@ with adaptive encoding and efficient compression.
 ## Installation
 
 You need to install the `pysail` package with the `vortex` extra to use the Vortex data source.
+The `vortex` extra installs the `vortex-data` Python library as a dependency.
 
 ```bash
 pip install pysail[vortex]
 ```
+
+::: warning
+The `vortex-data` Python library is not yet available on Windows.
+:::
 
 ::: info
 The Vortex data source requires PySpark 4.1+ for filter pushdown support.

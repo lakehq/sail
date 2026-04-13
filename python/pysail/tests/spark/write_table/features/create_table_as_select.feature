@@ -78,7 +78,7 @@ Feature: CREATE TABLE AS SELECT
       CREATE TABLE ctas_csv_table
       USING CSV
       LOCATION {{ location.sql }}
-      OPTIONS (header 'false', delimiter '|')
+      TBLPROPERTIES ('option.header' = 'false', 'option.delimiter' = '|')
       AS SELECT * FROM VALUES
         (1, 'Alice', 10.5),
         (2, 'Bob', 20.75),

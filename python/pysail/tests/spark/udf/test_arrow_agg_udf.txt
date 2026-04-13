@@ -1,0 +1,16 @@
+>>> import pyarrow as pa
+>>> import pyarrow.compute as pc
+>>> from pyspark.sql.functions import arrow_udf
+>>>
+>>> @arrow_udf("double")
+... def average(v: pa.Array) -> float:
+...     return pc.mean(v).as_py()
+...
+>>> df = spark.createDataFrame([(1, 1.0), (1, 2.0), (2, 3.0), (2, 5.0), (2, 10.0)], ["id", "v"])
+>>> df.groupby("id").agg(average("v")).sort("id").show()
++---+----------+
+| id|average(v)|
++---+----------+
+|  1|       1.5|
+|  2|       6.0|
++---+----------+

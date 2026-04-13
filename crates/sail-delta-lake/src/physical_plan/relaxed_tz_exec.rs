@@ -38,6 +38,10 @@ impl RelaxedTzCastExec {
         }
     }
 
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
     fn aligned_timestamp_columns(&self) -> Vec<String> {
         let input_schema = self.input.schema();
         self.schema

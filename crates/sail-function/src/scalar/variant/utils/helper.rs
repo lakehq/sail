@@ -3,15 +3,11 @@ use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, Field};
 use datafusion_common::{exec_err, ScalarValue};
 use parquet_variant_compute::{VariantArray, VariantType};
-use sail_common::spec::{ARROW_EXTENSION_NAME_KEY, VARIANT_EXTENSION_NAME};
+use sail_common::spec::VARIANT_EXTENSION_NAME;
 
 /// Returns `true` if the field has Variant extension metadata.
 pub fn is_variant_field(field: &Field) -> bool {
-    field
-        .metadata()
-        .get(ARROW_EXTENSION_NAME_KEY)
-        .map(|s| s == VARIANT_EXTENSION_NAME)
-        .unwrap_or(false)
+    field.extension_type_name() == Some(VARIANT_EXTENSION_NAME)
 }
 
 pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()> {

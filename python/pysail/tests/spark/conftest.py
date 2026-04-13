@@ -175,6 +175,26 @@ DOCTEST_MARKERS = [
         keywords=["test_python_read_arrow.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
     ),
+    DoctestMarker(
+        keywords=["test_arrow_scalar_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udf requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_agg_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udf requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_grouped_map_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="applyInArrow requires PySpark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_cogrouped_map_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="applyInArrow requires PySpark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_udtf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
+    ),
 ]
 
 
