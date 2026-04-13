@@ -1,13 +1,13 @@
 >>> import pyarrow as pa
 >>> import pyarrow.compute as pc
 >>> from pyspark.sql.functions import arrow_udtf, lit
-
+>>>
 >>> @arrow_udtf(returnType="v int")
-... class Sq:
+... class Square:
 ...     def eval(self, x: pa.Array):
 ...         yield pa.table({"v": pc.multiply(x, x)})
 ...
->>> Sq(lit(3)).show()
+>>> Square(lit(3)).show()
 +---+
 |  v|
 +---+
