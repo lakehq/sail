@@ -24,7 +24,7 @@ todo = "deny"
 
 [workspace.dependencies]
 thiserror = { version = "2.0.18" }
-tokio = { version = "1.51.0", features = ["full"] }
+tokio = { version = "1.51.1", features = ["full"] }
 tokio-stream = { version = "0.1.18", features = ["time", "io-util"] }
 pbjson = "0.9.0"
 pbjson-types = "0.9.0"
@@ -62,7 +62,7 @@ ryu = "1.0.23"
 either = "1.15.0"
 num-bigint = "0.4.6"
 mimalloc = { version = "0.1.48", default-features = false }
-rand = "0.10.0"
+rand = "0.10.1"
 rand_chacha = "0.10.0"
 rand_distr = "0.6.0"
 url = "2.5.8"
@@ -104,12 +104,12 @@ num = "0.4.3"
 hf-hub = { version = "0.5.0", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.12.27", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 percent-encoding = "2.3.2"
-rustls = "0.23.37"
+rustls = "0.23.38"
 dashmap = "6.1.0"
 itertools = "0.14.0"
 moka = { version = "0.12.14", features = ["sync", "future"] }
 bytes = "1.11.1"
-indexmap = "2.13.1"
+indexmap = "2.14.0"
 pin-project-lite = "0.2.17"
 ordered-float = { version = "5.3.0", features = ["serde"] }
 apache-avro = { version = "0.21.0" }
