@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -15,7 +14,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::{
-    get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
+    get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo, TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
@@ -32,7 +31,7 @@ pub trait SchemaInfer: Debug + Send + Sync + 'static {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &ListingOptions,
-        options: &[HashMap<String, String>],
+        options: &[OptionLayer],
     ) -> Result<Schema>;
 }
 
@@ -48,7 +47,7 @@ impl SchemaInfer for DefaultSchemaInfer {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &ListingOptions,
-        _options: &[HashMap<String, String>],
+        _options: &[OptionLayer],
     ) -> Result<Schema> {
         Ok(list_options
             .format
@@ -66,13 +65,13 @@ pub trait ListingFormat: Debug + Send + Sync + 'static {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
+        options: Vec<OptionLayer>,
         compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>>;
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
+        options: Vec<OptionLayer>,
     ) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
 
     /// Get the schema inferrer for this format
@@ -121,14 +120,8 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             options,
         } = info;
 
-        let opaque_options: Vec<std::collections::HashMap<String, String>> = options
-            .into_iter()
-            .map(|l| l.into_opaque_options())
-            .collect();
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
-        let file_format = self
-            .inner
-            .create_read_format(ctx, opaque_options.clone(), None)?;
+        let file_format = self.inner.create_read_format(ctx, options.clone(), None)?;
         let extension_with_compression =
             file_format.compression_type().and_then(|compression_type| {
                 match file_format.get_ext_with_compression(&compression_type) {
@@ -155,7 +148,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                     &urls,
                     &mut listing_options,
                     &extension_with_compression,
-                    opaque_options,
+                    options,
                     self,
                 )
                 .await?;
@@ -204,9 +197,17 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             partition_by,
             bucket_by,
             sort_order,
-            table_properties: _,
+            table_properties,
             options,
         } = info;
+        // Prepend table properties as an OptionLayer so that format-level options
+        // specified via TBLPROPERTIES (e.g. `option.delimiter`) are applied when writing,
+        // matching the behavior of the read path.
+        let options: Vec<OptionLayer> = std::iter::once(OptionLayer::TablePropertyList {
+            items: table_properties.into_iter().collect(),
+        })
+        .chain(options)
+        .collect();
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
         }
@@ -235,11 +236,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .iter()
             .map(|field| (field.column.clone(), DataType::Null))
             .collect::<Vec<_>>();
-        let listing_options_raw: Vec<std::collections::HashMap<String, String>> = options
-            .into_iter()
-            .map(|l| l.into_opaque_options())
-            .collect();
-        let (format, compression) = self.inner.create_write_format(ctx, listing_options_raw)?;
+        let (format, compression) = self.inner.create_write_format(ctx, options)?;
         let file_extension = if let Some(file_compression_type) = format.compression_type() {
             match format.get_ext_with_compression(&file_compression_type) {
                 Ok(ext) => ext,

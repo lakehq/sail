@@ -92,8 +92,11 @@ use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    RelaxedTzCastExec,
 };
 use sail_delta_lake::spec::DeltaOperation;
+use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
+use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -184,6 +187,7 @@ use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
+use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;
 use sail_function::scalar::variant::spark_try_parse_json::SparkTryParseJsonUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
@@ -981,6 +985,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                Ok(Arc::new(RelaxedTzCastExec::new(input, schema)))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1620,6 +1629,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: monotonic_id.column_name().to_string(),
                 schema,
             })
+        } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {
+            let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
+            let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
+            NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
@@ -1836,6 +1849,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(safe))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -1865,6 +1881,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "try_parse_json" => Ok(Arc::new(ScalarUDF::from(SparkTryParseJsonUdf::new()))),
             "variant_get" => Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(false)))),
             "try_variant_get" => Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(true)))),
+            "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
@@ -2072,6 +2089,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkJsonToVariantUdf>()
             || node_inner.is::<SparkTryParseJsonUdf>()
             || node_inner.is::<SparkVariantGet>()
+            || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
@@ -2207,6 +2225,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkVariantGet>() {
+            let safe = func.safe();
+            UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
@@ -2226,6 +2247,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedAggregateUdf { udaf_kind } = udaf;
         match udaf_kind {
             Some(UdafKind::Standard(gen::StandardUdaf {})) => match name {
+                "bitmap_construct_agg" => Ok(Arc::new(AggregateUDF::from(
+                    BitmapConstructAggFunction::new(),
+                ))),
+                "bitmap_or_agg" => Ok(Arc::new(AggregateUDF::from(BitmapOrAggFunction::new()))),
                 "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
                     HistogramNumericFunction::new(),
                 ))),
@@ -2324,7 +2349,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udaf_kind = if node.inner().as_any().is::<HistogramNumericFunction>()
+        let udaf_kind = if node.inner().as_any().is::<BitmapConstructAggFunction>()
+            || node.inner().as_any().is::<BitmapOrAggFunction>()
+            || node.inner().as_any().is::<HistogramNumericFunction>()
             || node.inner().as_any().is::<KurtosisFunction>()
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()
@@ -3116,6 +3143,11 @@ impl RemoteExecutionCodec {
                 .pandas_grouped_map_assign_columns_by_name,
             pandas_convert_to_arrow_array_safely: config.pandas_convert_to_arrow_array_safely,
             arrow_max_records_per_batch: config.arrow_max_records_per_batch as usize,
+            python_udf_pandas_conversion_enabled: config.python_udf_pandas_conversion_enabled,
+            python_udtf_pandas_conversion_enabled: config.python_udtf_pandas_conversion_enabled,
+            python_udf_pandas_int_to_decimal_coercion_enabled: config
+                .python_udf_pandas_int_to_decimal_coercion_enabled,
+            binary_as_bytes: config.binary_as_bytes,
         };
         Ok(config)
     }
@@ -3131,6 +3163,11 @@ impl RemoteExecutionCodec {
                 .pandas_grouped_map_assign_columns_by_name,
             pandas_convert_to_arrow_array_safely: config.pandas_convert_to_arrow_array_safely,
             arrow_max_records_per_batch: config.arrow_max_records_per_batch as u64,
+            python_udf_pandas_conversion_enabled: config.python_udf_pandas_conversion_enabled,
+            python_udtf_pandas_conversion_enabled: config.python_udtf_pandas_conversion_enabled,
+            python_udf_pandas_int_to_decimal_coercion_enabled: config
+                .python_udf_pandas_int_to_decimal_coercion_enabled,
+            binary_as_bytes: config.binary_as_bytes,
         };
         Ok(config)
     }

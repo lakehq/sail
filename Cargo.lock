@@ -6858,18 +6858,13 @@ dependencies = [
  "object_store",
  "once_cell",
  "percent-encoding",
- "prettyplease",
- "proc-macro2",
  "pyo3",
- "quote",
  "regex",
  "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
  "sail-sql-analyzer",
  "serde",
- "serde_yaml",
- "syn 2.0.117",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -6981,6 +6976,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tonic-health",
+ "uuid",
 ]
 
 [[package]]

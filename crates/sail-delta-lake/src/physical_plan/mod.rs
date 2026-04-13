@@ -33,6 +33,7 @@ mod expr_adapter;
 mod log_replay_exec;
 mod meta_adds;
 mod metadata_stats_exec;
+mod relaxed_tz_exec;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
 mod writer_exec;
@@ -51,6 +52,7 @@ pub mod planner;
 pub use planner::{
     plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
+pub use relaxed_tz_exec::RelaxedTzCastExec;
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
 pub use writer_exec::DeltaWriterExec;
