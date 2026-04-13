@@ -188,6 +188,10 @@ DOCTEST_MARKERS = [
         markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="applyInArrow requires PySpark 4+")],
     ),
     DoctestMarker(
+        keywords=["test_arrow_cogrouped_map_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="applyInArrow requires PySpark 4+")],
+    ),
+    DoctestMarker(
         keywords=["test_arrow_udtf.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
     ),
