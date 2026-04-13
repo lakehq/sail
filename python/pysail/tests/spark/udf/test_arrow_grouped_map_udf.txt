@@ -1,13 +1,13 @@
->>> import pyarrow as pa  # doctest: +SKIP
->>> import pyarrow.compute as pc  # doctest: +SKIP
+>>> import pyarrow as pa
+>>> import pyarrow.compute as pc
 
->>> def center(t):  # doctest: +SKIP
+>>> def center(t):
 ...     v = t.column("v")
 ...     norm = pc.subtract(v, pc.mean(v))
 ...     return t.set_column(1, "v", norm)
 ...
->>> df = spark.createDataFrame([(1, 1.0), (1, 2.0), (2, 3.0)], ["id", "v"])  # doctest: +SKIP
->>> df.groupby("id").applyInArrow(center, schema="id long, v double").sort("id", "v").show()  # doctest: +SKIP
+>>> df = spark.createDataFrame([(1, 1.0), (1, 2.0), (2, 3.0)], ["id", "v"])
+>>> df.groupby("id").applyInArrow(center, schema="id long, v double").sort("id", "v").show()
 +---+----+
 | id|   v|
 +---+----+
@@ -16,15 +16,15 @@
 |  2| 0.0|
 +---+----+
 
->>> def diff(l, r):  # doctest: +SKIP
+>>> def diff(l, r):
 ...     return pa.table({
-...         "id": l.column("id"),
+...         "id": l.column("id").slice(0, 1),
 ...         "d": [pc.subtract(pc.mean(l.column("v")), pc.mean(r.column("v"))).as_py()],
 ...     })
 ...
->>> df1 = spark.createDataFrame([(1, 1.0), (1, 2.0)], ["id", "v"])  # doctest: +SKIP
->>> df2 = spark.createDataFrame([(1, 5.0)], ["id", "v"])  # doctest: +SKIP
->>> df1.groupby("id").cogroup(df2.groupby("id")).applyInArrow(  # doctest: +SKIP
+>>> df1 = spark.createDataFrame([(1, 1.0), (1, 2.0)], ["id", "v"])
+>>> df2 = spark.createDataFrame([(1, 5.0)], ["id", "v"])
+>>> df1.groupby("id").cogroup(df2.groupby("id")).applyInArrow(
 ...     diff, schema="id long, d double"
 ... ).show()
 +---+----+

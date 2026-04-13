@@ -76,6 +76,14 @@ impl PySparkUdtfPayload {
             data.extend(schema_json.as_bytes());
         }
 
+        // PySpark 4.1+ reads table argument offsets for ArrowUdtf before the arg offsets.
+        // PySpark 4.0.x does not use the ArrowUdtf eval type.
+        if matches!(pyspark_version, PySparkVersion::V4_1)
+            && matches!(eval_type, spec::PySparkUdfType::ArrowUdtf)
+        {
+            data.extend(0i32.to_be_bytes()); // num_table_arg_offsets = 0
+        }
+
         let num_args: i32 = num_args
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;

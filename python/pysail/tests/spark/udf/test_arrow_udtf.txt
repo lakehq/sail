@@ -1,18 +1,15 @@
->>> import pyarrow as pa  # doctest: +SKIP
->>> from pyspark.sql.functions import arrow_udtf  # doctest: +SKIP
+>>> import pyarrow as pa
+>>> import pyarrow.compute as pc
+>>> from pyspark.sql.functions import arrow_udtf, lit
 
->>> @arrow_udtf(returnType="v int")  # doctest: +SKIP
+>>> @arrow_udtf(returnType="v int")
 ... class Sq:
-...     def eval(self, x: pa.Array) -> pa.Array:
-...         import pyarrow.compute as pc
+...     def eval(self, x: pa.Array):
 ...         yield pa.table({"v": pc.multiply(x, x)})
 ...
->>> df = spark.createDataFrame([(1,), (2,), (3,)], ["x"])  # doctest: +SKIP
->>> Sq(df.x).show()  # doctest: +SKIP
+>>> Sq(lit(3)).show()
 +---+
 |  v|
 +---+
-|  1|
-|  4|
 |  9|
 +---+
