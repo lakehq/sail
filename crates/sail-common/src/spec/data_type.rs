@@ -12,10 +12,10 @@ pub const ARROW_DECIMAL128_MAX_SCALE: i8 = arrow_schema::DECIMAL128_MAX_SCALE;
 pub const ARROW_DECIMAL256_MAX_PRECISION: u8 = arrow_schema::DECIMAL256_MAX_PRECISION;
 pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
 
-/// Arrow extension type metadata key.
-pub const ARROW_EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
-/// Arrow extension type metadata value key.
-pub const ARROW_EXTENSION_METADATA_KEY: &str = "ARROW:extension:metadata";
+/// Arrow extension type metadata key (`ARROW:extension:metadata`).
+pub use arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY;
+/// Arrow extension type name key (`ARROW:extension:name`).
+pub use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 /// Arrow extension type name for Variant.
 pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
 

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -6,10 +5,10 @@ use datafusion::catalog::Session;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
+use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::csv::options::{resolve_csv_read_options, resolve_csv_write_options};
 use crate::formats::listing::{ListingFormat, ListingTableFormat, SchemaInfer};
-use crate::options::{load_options, merge_options, CsvReadOptions};
 
 mod options;
 
@@ -86,7 +85,7 @@ impl SchemaInfer for CsvSchemaInfer {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &datafusion::datasource::listing::ListingOptions,
-        options: &[HashMap<String, String>],
+        options: &[OptionLayer],
     ) -> datafusion_common::Result<Schema> {
         let mut schema = list_options
             .format
@@ -94,11 +93,10 @@ impl SchemaInfer for CsvSchemaInfer {
             .await?
             .as_ref()
             .clone();
-        let merged_options = merge_options(options.to_vec());
-        if let Ok(csv_options) = load_options::<CsvReadOptions>(merged_options) {
-            if csv_options.infer_schema == Some(false) {
-                schema = convert_string_columns(schema);
-            }
+        let csv_options = resolve_csv_read_options(ctx, options.to_vec())
+            .map_err(datafusion_common::DataFusionError::from)?;
+        if !csv_options.infer_schema {
+            schema = convert_string_columns(schema);
         }
         // Rename default CSV columns (column_1 -> _c0, etc.)
         schema = rename_default_csv_columns(schema);
@@ -118,10 +116,13 @@ impl ListingFormat for CsvListingFormat {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
+        options: Vec<OptionLayer>,
         compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options = resolve_csv_read_options(ctx, options)?;
+        let mut options = resolve_csv_read_options(ctx, options)
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
+            .map_err(datafusion_common::DataFusionError::from)?;
         if let Some(compression) = compression {
             options.compression = compression;
         }
@@ -131,9 +132,12 @@ impl ListingFormat for CsvListingFormat {
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
+        options: Vec<OptionLayer>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        let options = resolve_csv_write_options(ctx, options)?;
+        let options = resolve_csv_write_options(ctx, options)
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options()
+            .map_err(datafusion_common::DataFusionError::from)?;
         Ok((Arc::new(CsvFormat::default().with_options(options)), None))
     }
 
@@ -144,8 +148,6 @@ impl ListingFormat for CsvListingFormat {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
     #[test]
@@ -176,18 +178,5 @@ mod tests {
         assert_eq!(renamed.fields()[0].name(), "_c0");
         assert_eq!(renamed.fields()[1].name(), "_c1");
         assert_eq!(renamed.fields()[2].name(), "_c2");
-    }
-
-    #[test]
-    #[expect(clippy::unwrap_used)]
-    fn test_csv_read_options_parsing() {
-        use crate::options::{load_options, CsvReadOptions};
-        // Test infer_schema option parsing
-        let options = HashMap::from([("infer_schema".to_string(), "false".to_string())]);
-        let csv_options = load_options::<CsvReadOptions>(options).unwrap();
-        assert_eq!(csv_options.infer_schema, Some(false));
-        let options = HashMap::from([("inferSchema".to_string(), "true".to_string())]);
-        let csv_options = load_options::<CsvReadOptions>(options).unwrap();
-        assert_eq!(csv_options.infer_schema, Some(true));
     }
 }

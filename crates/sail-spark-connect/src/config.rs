@@ -9,9 +9,12 @@ use crate::spark::config::{
     SPARK_CONFIG, SPARK_SQL_ANSI_ENABLED, SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
     SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
     SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
+    SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES,
+    SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED,
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
-    SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE,
-    SPARK_SQL_WAREHOUSE_DIR,
+    SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
+    SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED, SPARK_SQL_SESSION_TIME_ZONE,
+    SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE, SPARK_SQL_WAREHOUSE_DIR,
 };
 use crate::spark::connect;
 
@@ -273,6 +276,38 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
             } else {
                 value as usize
             };
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.python_udf_pandas_conversion_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.python_udtf_pandas_conversion_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.python_udf_pandas_int_to_decimal_coercion_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.binary_as_bytes = value;
         }
 
         Ok(output)

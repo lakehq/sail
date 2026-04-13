@@ -50,7 +50,7 @@ test = [
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
-    "vortex-data>=0.64,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
     "pyarrow>=19.0,<20",
     "adbc-driver-flightsql>=1.0,<2",
     "adbc-driver-manager>=1.0,<2",
@@ -63,7 +63,7 @@ jdbc = [
     "pyarrow>=10.0,<20",
 ]
 vortex = [
-    "vortex-data>=0.64,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
     "pyarrow>=10.0,<20",
 ]
 
@@ -117,7 +117,7 @@ dependencies = [
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
-    "vortex-data>=0.64,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
 ]
 path = ".venvs/default"
 
@@ -171,7 +171,7 @@ dependencies = [
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
-    "vortex-data>=0.64,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
 ]
 
 [[tool.hatch.envs.test.matrix]]

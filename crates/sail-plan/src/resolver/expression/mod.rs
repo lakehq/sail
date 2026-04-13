@@ -596,14 +596,10 @@ mod tests {
         let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
         let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
 
+        assert_metadata_value(&metadata_map, spec::EXTENSION_TYPE_NAME_KEY, "geoarrow.wkb");
         assert_metadata_value(
             &metadata_map,
-            spec::ARROW_EXTENSION_NAME_KEY,
-            "geoarrow.wkb",
-        );
-        assert_metadata_value(
-            &metadata_map,
-            spec::ARROW_EXTENSION_METADATA_KEY,
+            spec::EXTENSION_TYPE_METADATA_KEY,
             r#"{"crs":"SRID:0"}"#,
         );
 
@@ -640,14 +636,10 @@ mod tests {
         let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
         let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
 
+        assert_metadata_value(&metadata_map, spec::EXTENSION_TYPE_NAME_KEY, "geoarrow.wkb");
         assert_metadata_value(
             &metadata_map,
-            spec::ARROW_EXTENSION_NAME_KEY,
-            "geoarrow.wkb",
-        );
-        assert_metadata_value(
-            &metadata_map,
-            spec::ARROW_EXTENSION_METADATA_KEY,
+            spec::EXTENSION_TYPE_METADATA_KEY,
             r#"{"crs":"OGC:CRS84","edges":"spherical"}"#,
         );
 
