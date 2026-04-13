@@ -76,10 +76,10 @@ def test_dataframe_merge_into_insert_all_and_delete(spark, tmp_path):
 
 
 def test_merge_into_path_target_with_temp_view_source(spark, tmp_path):
-    r"""MERGE INTO using delta.`/path` syntax as target with a temp view as source.
+    """MERGE INTO using delta.`/path` syntax as target with a temp view as source.
 
     Regression test for https://github.com/lakehq/sail/issues/1671: the `get_merge_target_info`
-    function previously failed to resolve path-based targets like `delta.\`/path\`` because it
+    function previously failed to resolve path-based targets like `delta.`/path`` because it
     called `get_table_or_view()` which does not handle the `format.path` notation.
     """
     table_path = tmp_path / "delta_merge_path_target"

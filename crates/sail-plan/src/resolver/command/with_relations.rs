@@ -25,7 +25,7 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_with_relations_scope();
         let state = scope.state();
         // Enter a CTE scope so that DataFrame aliases registered below do not leak
-        // into the outer query scope.
+        // into the outer command scope.
         let mut scope = state.enter_cte_scope();
         let state = scope.state();
         for ref_plan in references {
