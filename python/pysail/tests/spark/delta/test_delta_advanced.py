@@ -7,6 +7,7 @@ import pytest
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 class TestDeltaAdvancedFeatures:
@@ -179,6 +180,7 @@ class TestDeltaAdvancedFeatures:
     def test_delta_feature_time_travel_uses_in_commit_timestamp_not_json_mtime(self, spark, tmp_path):
         delta_path = tmp_path / "delta_ict_table"
         delta_table_path = str(delta_path)
+        delta_table_path_literal = escape_sql_string_literal(delta_table_path)
         table_name = "delta_ict_time_travel_test"
 
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -186,7 +188,7 @@ class TestDeltaAdvancedFeatures:
             f"""
             CREATE TABLE {table_name}
             USING DELTA
-            LOCATION '{delta_table_path}'
+            LOCATION '{delta_table_path_literal}'
             TBLPROPERTIES (
               'delta.enableInCommitTimestamps' = 'true'
             )
@@ -213,6 +215,7 @@ class TestDeltaAdvancedFeatures:
     def test_delta_feature_time_travel_ignores_pre_enable_in_commit_timestamps(self, spark, tmp_path):
         delta_path = tmp_path / "delta_ict_enablement_table"
         delta_table_path = str(delta_path)
+        delta_table_path_literal = escape_sql_string_literal(delta_table_path)
         table_name = "delta_ict_enablement_time_travel_test"
 
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -220,7 +223,7 @@ class TestDeltaAdvancedFeatures:
             f"""
             CREATE TABLE {table_name}
             USING DELTA
-            LOCATION '{delta_table_path}'
+            LOCATION '{delta_table_path_literal}'
             AS SELECT 1 AS id, 'v0' AS value
             """
         )
