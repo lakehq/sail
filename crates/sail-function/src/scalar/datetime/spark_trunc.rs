@@ -28,14 +28,14 @@ impl SparkTrunc {
 
 /// Truncate a [`NaiveDate`] to the beginning of the period specified by `format`.
 ///
-/// Supported formats (case-insensitive):
+/// Supported granularities (case-insensitive):
 /// - `YEAR`, `YYYY`, `YY` → first day of the year
 /// - `QUARTER` → first day of the current quarter
 /// - `MONTH`, `MON`, `MM` → first day of the month
 /// - `WEEK` → Monday of the current ISO week
 /// - `DAY`, `DD` → no change (return the date as-is)
-pub(crate) fn trunc_naive_date(date: NaiveDate, format: &str) -> Result<NaiveDate> {
-    match format.trim().to_uppercase().as_str() {
+pub(crate) fn trunc_naive_date(date: NaiveDate, granularity: &str) -> Result<NaiveDate> {
+    match granularity.trim().to_uppercase().as_str() {
         "YEAR" | "YYYY" | "YY" => NaiveDate::from_ymd_opt(date.year(), 1, 1)
             .ok_or_else(|| exec_datafusion_err!("trunc: invalid year {}", date.year())),
         "QUARTER" => {
@@ -63,14 +63,14 @@ pub(crate) fn trunc_naive_date(date: NaiveDate, format: &str) -> Result<NaiveDat
             Ok(date - chrono::Duration::days(days_from_monday))
         }
         "DAY" | "DD" => Ok(date),
-        _ => exec_err!("trunc: unsupported format '{format}'"),
+        _ => exec_err!("trunc: unsupported granularity '{granularity}'"),
     }
 }
 
-fn trunc_date_days(days: i32, format: &str) -> Result<Option<i32>> {
+fn trunc_date_days(days: i32, granularity: &str) -> Result<Option<i32>> {
     let date = Date32Type::to_naive_date_opt(days)
         .ok_or_else(|| exec_datafusion_err!("trunc: unable to parse date from days {days}"))?;
-    let truncated = trunc_naive_date(date, format)?;
+    let truncated = trunc_naive_date(date, granularity)?;
     Ok(Some(Date32Type::from_naive_date(truncated)))
 }
 
@@ -93,15 +93,15 @@ impl ScalarUDFImpl for SparkTrunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [date_arg, format_arg] = args.as_slice() else {
+        let [date_arg, granularity_arg] = args.as_slice() else {
             return exec_err!(
                 "Spark `trunc` function requires 2 arguments, got {}",
                 args.len()
             );
         };
 
-        // Format must be a non-null scalar string.
-        let format = match format_arg {
+        // Granularity must be a non-null scalar string.
+        let granularity = match granularity_arg {
             ColumnarValue::Scalar(
                 ScalarValue::Utf8(Some(s))
                 | ScalarValue::LargeUtf8(Some(s))
@@ -122,7 +122,7 @@ impl ScalarUDFImpl for SparkTrunc {
             }
             _ => {
                 return exec_err!(
-                    "Spark `trunc` function: format must be a scalar string, got {format_arg:?}"
+                    "Spark `trunc` function: granularity must be a scalar string, got {granularity_arg:?}"
                 )
             }
         };
@@ -131,7 +131,8 @@ impl ScalarUDFImpl for SparkTrunc {
             ColumnarValue::Scalar(ScalarValue::Date32(days)) => {
                 if let Some(days) = days {
                     Ok(ColumnarValue::Scalar(ScalarValue::Date32(trunc_date_days(
-                        *days, &format,
+                        *days,
+                        &granularity,
                     )?)))
                 } else {
                     Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
@@ -143,7 +144,7 @@ impl ScalarUDFImpl for SparkTrunc {
                     .iter()
                     .map(|days| {
                         if let Some(days) = days {
-                            trunc_date_days(days, &format)
+                            trunc_date_days(days, &granularity)
                         } else {
                             Ok(None)
                         }

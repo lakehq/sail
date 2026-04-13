@@ -36,14 +36,14 @@ impl SparkDateTrunc {
 /// [`timestamp_us_to_datetime`] — which never multiplies by 1,000 and therefore
 /// avoids the nanosecond-overflow present in DataFusion's built-in `date_trunc`
 /// for dates outside the range 1677-09-21 … 2262-04-11.
-fn trunc_timestamp_micros(micros: i64, format: &str) -> Result<i64> {
+fn trunc_timestamp_micros(micros: i64, granularity: &str) -> Result<i64> {
     const MICROS_PER_MILLIS: i64 = 1_000;
     const MICROS_PER_SECOND: i64 = 1_000_000;
     const MICROS_PER_MINUTE: i64 = 60 * MICROS_PER_SECOND;
     const MICROS_PER_HOUR: i64 = 60 * MICROS_PER_MINUTE;
     const MICROS_PER_DAY: i64 = 24 * MICROS_PER_HOUR;
 
-    match format.trim().to_uppercase().as_str() {
+    match granularity.trim().to_uppercase().as_str() {
         "MICROSECOND" => Ok(micros),
         "MILLISECOND" => Ok(micros - micros.rem_euclid(MICROS_PER_MILLIS)),
         "SECOND" => Ok(micros - micros.rem_euclid(MICROS_PER_SECOND)),
@@ -55,7 +55,7 @@ fn trunc_timestamp_micros(micros: i64, format: &str) -> Result<i64> {
             let dt = timestamp_us_to_datetime(micros).ok_or_else(|| {
                 exec_datafusion_err!("date_trunc: unable to convert timestamp {micros} to datetime")
             })?;
-            let truncated_date = trunc_naive_date(dt.date(), format)?;
+            let truncated_date = trunc_naive_date(dt.date(), granularity)?;
             let truncated_micros = truncated_date
                 .and_hms_micro_opt(0, 0, 0, 0)
                 .ok_or_else(|| {
@@ -68,7 +68,7 @@ fn trunc_timestamp_micros(micros: i64, format: &str) -> Result<i64> {
                 .timestamp_micros();
             Ok(truncated_micros)
         }
-        _ => exec_err!("date_trunc: unsupported format '{format}'"),
+        _ => exec_err!("date_trunc: unsupported granularity '{granularity}'"),
     }
 }
 
@@ -98,15 +98,15 @@ impl ScalarUDFImpl for SparkDateTrunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [format_arg, ts_arg] = args.as_slice() else {
+        let [granularity_arg, ts_arg] = args.as_slice() else {
             return exec_err!(
                 "Spark `date_trunc` function requires 2 arguments, got {}",
                 args.len()
             );
         };
 
-        // Format must be a non-null scalar string.
-        let format = match format_arg {
+        // Granularity must be a non-null scalar string.
+        let granularity = match granularity_arg {
             ColumnarValue::Scalar(
                 ScalarValue::Utf8(Some(s))
                 | ScalarValue::LargeUtf8(Some(s))
@@ -136,7 +136,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
             }
             _ => {
                 return exec_err!(
-                "Spark `date_trunc` function: format must be a scalar string, got {format_arg:?}"
+                "Spark `date_trunc` function: granularity must be a scalar string, got {granularity_arg:?}"
             )
             }
         };
@@ -144,7 +144,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
         match ts_arg {
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(micros_opt, tz)) => {
                 let result = if let Some(micros) = micros_opt {
-                    Some(trunc_timestamp_micros(*micros, &format)?)
+                    Some(trunc_timestamp_micros(*micros, &granularity)?)
                 } else {
                     None
                 };
@@ -168,7 +168,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
                     .iter()
                     .map(|micros_opt| {
                         if let Some(micros) = micros_opt {
-                            trunc_timestamp_micros(micros, &format).map(Some)
+                            trunc_timestamp_micros(micros, &granularity).map(Some)
                         } else {
                             Ok(None)
                         }
