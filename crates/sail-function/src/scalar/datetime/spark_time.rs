@@ -106,10 +106,21 @@ impl SparkTime {
         )?)
     }
 
-    fn extract_scalar_format(value: &ColumnarValue) -> Option<String> {
+    /// Require the 2nd argument to be a constant string. Returning `None` here
+    /// would cause silent fallback to default parsing, ignoring the user's
+    /// format — instead we error explicitly.
+    fn require_scalar_format(value: &ColumnarValue) -> Result<String> {
         match value {
-            ColumnarValue::Scalar(scalar) => scalar.try_as_str().flatten().map(|s| s.to_string()),
-            _ => None,
+            ColumnarValue::Scalar(scalar) => scalar
+                .try_as_str()
+                .flatten()
+                .map(|s| s.to_string())
+                .ok_or_else(|| {
+                    exec_datafusion_err!("to_time format argument must be a non-null string scalar")
+                }),
+            ColumnarValue::Array(_) => Err(exec_datafusion_err!(
+                "to_time format argument must be a scalar, not an array"
+            )),
         }
     }
 }
@@ -140,7 +151,10 @@ impl ScalarUDFImpl for SparkTime {
         }
         let safe = self.safe;
         let value = args[0].clone();
-        let format = args.get(1).and_then(Self::extract_scalar_format);
+        let format = match args.get(1) {
+            Some(v) => Some(Self::require_scalar_format(v)?),
+            None => None,
+        };
 
         let array = match &value {
             ColumnarValue::Array(arr) => arr.clone(),
