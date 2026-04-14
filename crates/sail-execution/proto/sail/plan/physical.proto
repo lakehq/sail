@@ -85,6 +85,7 @@ message ExtendedScalarUdf {
     SparkFromCsvUdf spark_from_csv = 12;
     XpathTypedUdf xpath_typed = 13;
     SparkVariantGetUdf spark_variant_get = 14;
+    SparkParseJsonUdf spark_parse_json = 15;
   }
 }
 
@@ -168,6 +169,10 @@ message SparkDateUdf {
 }
 
 message SparkVariantGetUdf {
+  bool safe = 1;
+}
+
+message SparkParseJsonUdf {
   bool safe = 1;
 }
 

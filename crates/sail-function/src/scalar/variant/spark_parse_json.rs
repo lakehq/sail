@@ -17,33 +17,69 @@ use parquet_variant_json::JsonToVariant as JsonToVariantExt;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::variant::utils::helper::{try_field_as_string, try_parse_string_scalar};
 
-/// Returns a Variant from a JSON string
+/// Returns a Variant from a JSON string.
+///
+/// Drives both `parse_json` (strict, errors on invalid JSON) and
+/// `try_parse_json` (safe, returns NULL on invalid JSON; also tolerates
+/// trailing garbage by parsing the first valid JSON value).
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkJsonToVariantUdf {
+pub struct SparkParseJson {
     signature: Signature,
+    safe: bool,
 }
 
-impl SparkJsonToVariantUdf {
-    pub fn new() -> Self {
+impl SparkParseJson {
+    pub fn new(safe: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            safe,
         }
     }
-}
 
-impl Default for SparkJsonToVariantUdf {
-    fn default() -> Self {
-        Self::new()
+    pub fn safe(&self) -> bool {
+        self.safe
     }
 }
 
-impl ScalarUDFImpl for SparkJsonToVariantUdf {
+impl Default for SparkParseJson {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
+/// Try to parse a JSON string leniently. If `serde_json::from_str` fails
+/// (e.g. trailing garbage), use streaming parsing to read the first
+/// complete JSON value (matching Spark's `try_parse_json` behavior).
+fn try_parse_json_lenient(json_str: &str) -> Option<serde_json::Value> {
+    if let Ok(value) = serde_json::from_str(json_str) {
+        return Some(value);
+    }
+    let mut stream = serde_json::Deserializer::from_str(json_str).into_iter::<serde_json::Value>();
+    stream.next().and_then(|r| r.ok())
+}
+
+/// Try to append a JSON string to the builder leniently. Returns true if successful.
+fn try_append_json(builder: &mut VariantArrayBuilder, json_str: &str) -> bool {
+    match try_parse_json_lenient(json_str) {
+        Some(value) => {
+            let json_str = value.to_string();
+            builder.append_json(json_str.as_str()).is_ok()
+        }
+        None => false,
+    }
+}
+
+impl ScalarUDFImpl for SparkParseJson {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     fn name(&self) -> &str {
-        "parse_json"
+        if self.safe {
+            "try_parse_json"
+        } else {
+            "parse_json"
+        }
     }
 
     fn signature(&self) -> &Signature {
@@ -89,6 +125,7 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
             .first()
             .ok_or_else(|| exec_datafusion_err!("empty argument, expected 1 argument"))?;
 
+        let safe = self.safe;
         let out = match arg {
             ColumnarValue::Scalar(scalar_value) => {
                 let json_str = try_parse_string_scalar(scalar_value)?;
@@ -96,7 +133,15 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
                 let mut builder = VariantArrayBuilder::new(1);
 
                 match json_str {
-                    Some(json_str) => builder.append_json(json_str.as_str())?,
+                    Some(json_str) => {
+                        if safe {
+                            if !try_append_json(&mut builder, json_str.as_str()) {
+                                builder.append_null();
+                            }
+                        } else {
+                            builder.append_json(json_str.as_str())?;
+                        }
+                    }
                     // When input is NULL, return SQL NULL (not a Variant)
                     None => builder.append_null(),
                 }
@@ -106,7 +151,9 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
                 ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(struct_array)))
             }
             ColumnarValue::Array(arr) => match arr.data_type() {
-                DataType::Utf8View => ColumnarValue::Array(from_utf8view_arr(arr)?),
+                DataType::Utf8View => {
+                    ColumnarValue::Array(from_utf8view_arr(arr, safe)?)
+                }
                 DataType::Null => {
                     // All-NULL input: produce a Variant struct array of all NULLs
                     let mut builder = VariantArrayBuilder::new(arr.len());
@@ -119,7 +166,7 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
                 }
                 _ => {
                     return Err(unsupported_data_type_exec_err(
-                        "parse_json",
+                        self.name(),
                         "string",
                         arr.data_type(),
                     ));
@@ -133,7 +180,7 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 1 {
             return Err(invalid_arg_count_exec_err(
-                "parse_json",
+                self.name(),
                 (1, 1),
                 arg_types.len(),
             ));
@@ -145,7 +192,7 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
             DataType::Null => DataType::Null,
             other => {
                 return Err(unsupported_data_type_exec_err(
-                    "parse_json",
+                    self.name(),
                     "string",
                     other,
                 ));
@@ -156,35 +203,38 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
     }
 }
 
-macro_rules! define_from_string_array {
-    ($fn_name:ident, $array_type:ty) => {
-        pub(crate) fn $fn_name(arr: &ArrayRef) -> Result<ArrayRef> {
-            let typed_arr = arr.as_any().downcast_ref::<$array_type>().ok_or_else(|| {
-                exec_datafusion_err!(
-                    "Unable to downcast array of type {} to expected type {}",
-                    arr.data_type(),
-                    stringify!($array_type)
-                )
-            })?;
+pub(crate) fn from_utf8view_arr(arr: &ArrayRef, safe: bool) -> Result<ArrayRef> {
+    let typed_arr = arr
+        .as_any()
+        .downcast_ref::<StringViewArray>()
+        .ok_or_else(|| {
+            exec_datafusion_err!(
+                "Unable to downcast array of type {} to StringViewArray",
+                arr.data_type()
+            )
+        })?;
 
-            let mut builder = VariantArrayBuilder::new(typed_arr.len());
+    let mut builder = VariantArrayBuilder::new(typed_arr.len());
 
-            for v in typed_arr {
-                match v {
-                    Some(json_str) => builder.append_json(json_str)?,
-                    None => builder.append_null(),
+    for v in typed_arr {
+        match v {
+            Some(json_str) => {
+                if safe {
+                    if !try_append_json(&mut builder, json_str) {
+                        builder.append_null();
+                    }
+                } else {
+                    builder.append_json(json_str)?;
                 }
             }
-
-            let variant_array: StructArray = builder.build().into();
-            let variant_array = convert_binaryview_to_binary(variant_array)?;
-
-            Ok(Arc::new(variant_array) as ArrayRef)
+            None => builder.append_null(),
         }
-    };
-}
+    }
 
-define_from_string_array!(from_utf8view_arr, StringViewArray);
+    let variant_array: StructArray = builder.build().into();
+    let variant_array = convert_binaryview_to_binary(variant_array)?;
+    Ok(Arc::new(variant_array) as ArrayRef)
+}
 
 /// Converts a StructArray with BinaryView fields to Binary fields for PySpark compatibility
 pub(crate) fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<StructArray> {
@@ -223,7 +273,7 @@ mod tests {
     fn test_json_to_variant_udf_scalar_none() -> Result<()> {
         let json_input = ScalarValue::Utf8(None);
 
-        let udf = SparkJsonToVariantUdf::default();
+        let udf = SparkParseJson::default();
         let arg_field = Arc::new(Field::new("input", DataType::Utf8, true));
 
         let return_field = udf.return_field_from_args(ReturnFieldArgs {
@@ -255,7 +305,7 @@ mod tests {
     fn test_json_to_variant_udf_scalar_null() -> Result<()> {
         let json_input = ScalarValue::Utf8(Some("null".into()));
 
-        let udf = SparkJsonToVariantUdf::default();
+        let udf = SparkParseJson::default();
         let arg_field = Arc::new(Field::new("input", DataType::Utf8, true));
         let return_field = udf.return_field_from_args(ReturnFieldArgs {
             arg_fields: std::slice::from_ref(&arg_field),
@@ -287,7 +337,7 @@ mod tests {
         let json_input =
             ScalarValue::Utf8(Some(r#"{"key": 123, "data": [4, 5, "str"]}"#.to_string()));
 
-        let udf = SparkJsonToVariantUdf::default();
+        let udf = SparkParseJson::default();
 
         let (expected_m, expected_v) = {
             let mut variant_builder = VariantBuilder::new();
@@ -341,7 +391,7 @@ mod tests {
     fn test_json_to_variant_udf_scalar_primitive() -> Result<()> {
         let json_input = ScalarValue::Utf8(Some("123".to_string()));
 
-        let udf = SparkJsonToVariantUdf::default();
+        let udf = SparkParseJson::default();
         let arg_field = Arc::new(Field::new("input", DataType::Utf8, true));
         let return_field = udf.return_field_from_args(ReturnFieldArgs {
             arg_fields: std::slice::from_ref(&arg_field),

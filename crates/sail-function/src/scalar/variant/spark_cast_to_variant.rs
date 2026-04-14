@@ -11,7 +11,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_common::exec_err;
 use parquet_variant_compute::{cast_to_variant, VariantType};
 
-use super::spark_json_to_variant::convert_binaryview_to_binary;
+use super::spark_parse_json::convert_binaryview_to_binary;
 
 /// Implements `CAST(expr AS VARIANT)` for Spark-compatible variant conversion.
 ///
