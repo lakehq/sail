@@ -395,7 +395,7 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("database", database_name))
+                    Err(CatalogError::NotFound("Database", database_name))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get database: {service_err}"
@@ -459,7 +459,7 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_exists {
                         Ok(())
                     } else {
-                        Err(CatalogError::NotFound("database", database_name))
+                        Err(CatalogError::NotFound("Database", database_name))
                     }
                 } else {
                     Err(CatalogError::External(format!(

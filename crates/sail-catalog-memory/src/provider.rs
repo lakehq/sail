@@ -175,7 +175,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             ));
         }
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
-            CatalogError::NotFound("database", quote_namespace_if_needed(database))
+            CatalogError::NotFound("Database", quote_namespace_if_needed(database))
         })?;
         if let Some(status) = db.tables.get(table) {
             if if_not_exists {
@@ -251,7 +251,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             Ok(db.tables.values().cloned().collect())
         } else {
             Err(CatalogError::NotFound(
-                "database",
+                "Database",
                 quote_namespace_if_needed(database),
             ))
         }
@@ -280,7 +280,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             Ok(())
         } else {
             Err(CatalogError::NotFound(
-                "database",
+                "Database",
                 quote_namespace_if_needed(database),
             ))
         }
@@ -301,7 +301,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             properties,
         } = options;
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
-            CatalogError::NotFound("database", quote_namespace_if_needed(database))
+            CatalogError::NotFound("Database", quote_namespace_if_needed(database))
         })?;
         if let Some(status) = db.views.get(view) {
             if if_not_exists {
