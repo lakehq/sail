@@ -201,7 +201,9 @@ DOCTEST_MARKERS = [
     ),
     DoctestMarker(
         keywords=["pyspark.sql.functions.builtin.try_to_time"],
-        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="try_to_time / TIME type requires PySpark 4.1+")],
+        markers=[
+            pytest.mark.skipif(pyspark_version() < (4, 1), reason="try_to_time / TIME type requires PySpark 4.1+")
+        ],
     ),
     DoctestMarker(
         keywords=["pyspark.sql.functions.builtin.try_to_date"],
