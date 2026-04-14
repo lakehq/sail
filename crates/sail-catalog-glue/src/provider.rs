@@ -6,7 +6,7 @@ use aws_sdk_glue::types::{
     StorageDescriptor, TableInput, ViewDefinitionInput, ViewRepresentationInput,
 };
 use aws_sdk_glue::Client;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewColumnOptions,
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
@@ -368,7 +368,10 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_not_exists {
                         self.get_database(database).await
                     } else {
-                        Err(CatalogError::AlreadyExists("database", database_name))
+                        Err(CatalogError::AlreadyExists(
+                            CatalogObject::Database,
+                            database_name,
+                        ))
                     }
                 } else {
                     Err(CatalogError::External(format!(
@@ -395,7 +398,10 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("Database", database_name))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Database,
+                        database_name,
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get database: {service_err}"
@@ -459,7 +465,10 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_exists {
                         Ok(())
                     } else {
-                        Err(CatalogError::NotFound("Database", database_name))
+                        Err(CatalogError::NotFound(
+                            CatalogObject::Database,
+                            database_name,
+                        ))
                     }
                 } else {
                     Err(CatalogError::External(format!(
@@ -511,7 +520,10 @@ impl CatalogProvider for GlueCatalogProvider {
 
                 // Reject views - they should be accessed via get_view
                 if matches!(tbl.table_type(), Some(t) if t == "VIRTUAL_VIEW") {
-                    return Err(CatalogError::NotFound("table", table.to_string()));
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ));
                 }
 
                 self.table_to_status(database, tbl)
@@ -519,7 +531,10 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("table", table.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get table: {service_err}"
@@ -589,7 +604,10 @@ impl CatalogProvider for GlueCatalogProvider {
                 if service_err.is_entity_not_found_exception() && if_exists {
                     Ok(())
                 } else if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("table", table.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to drop table: {service_err}"
@@ -647,7 +665,10 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_not_exists {
                         self.get_view(database, view).await
                     } else {
-                        Err(CatalogError::AlreadyExists("view", view.to_string()))
+                        Err(CatalogError::AlreadyExists(
+                            CatalogObject::View,
+                            view.to_string(),
+                        ))
                     }
                 } else {
                     Err(CatalogError::External(format!(
@@ -677,7 +698,10 @@ impl CatalogProvider for GlueCatalogProvider {
 
                 let table_type = tbl.table_type().unwrap_or_default();
                 if table_type != "VIRTUAL_VIEW" {
-                    return Err(CatalogError::NotFound("view", view.to_string()));
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::View,
+                        view.to_string(),
+                    ));
                 }
 
                 self.view_to_status(database, tbl)
@@ -685,7 +709,10 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("view", view.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::View,
+                        view.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get view: {service_err}"
@@ -747,7 +774,10 @@ impl CatalogProvider for GlueCatalogProvider {
                 if service_err.is_entity_not_found_exception() && if_exists {
                     Ok(())
                 } else if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("view", view.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::View,
+                        view.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to drop view: {service_err}"

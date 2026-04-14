@@ -15,7 +15,7 @@ use std::str::FromStr;
 
 use arrow::datatypes::DataType;
 use reqwest::header::HeaderValue;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
@@ -425,7 +425,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("schema", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Schema, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get schema: {e}"))),
         }
@@ -693,7 +693,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("table", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Table, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get table: {e}"))),
         }
