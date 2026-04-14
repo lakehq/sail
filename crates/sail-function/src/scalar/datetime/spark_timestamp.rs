@@ -8,8 +8,9 @@ use datafusion::arrow::array::{Array, ArrayRef, PrimitiveArray};
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_functions::utils::make_scalar_function;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::parse_timestamp;
 
@@ -28,7 +29,7 @@ fn try_time_only_naive(value: &str) -> Option<NaiveDateTime> {
     None
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum TimestampParser {
     Ltz { default_timezone: String },
     Ntz,
@@ -154,48 +155,93 @@ impl SparkTimestamp {
         self.safe
     }
 
-    fn parse_strings<F>(
-        array: &ArrayRef,
-        mut parse: F,
-    ) -> Result<PrimitiveArray<TimestampMicrosecondType>>
-    where
-        F: FnMut(&str) -> Result<Option<i64>>,
-    {
+    fn string_array_iter(array: &ArrayRef) -> Result<Box<dyn Iterator<Item = Option<&str>> + '_>> {
         match array.data_type() {
-            DataType::Utf8 => as_string_array(array)?
-                .iter()
-                .map(|x| x.map(&mut parse).transpose().map(|o| o.flatten()))
-                .collect::<Result<_>>(),
-            DataType::LargeUtf8 => as_large_string_array(array)?
-                .iter()
-                .map(|x| x.map(&mut parse).transpose().map(|o| o.flatten()))
-                .collect::<Result<_>>(),
-            DataType::Utf8View => as_string_view_array(array)?
-                .iter()
-                .map(|x| x.map(&mut parse).transpose().map(|o| o.flatten()))
-                .collect::<Result<_>>(),
-            _ => exec_err!("expected string array for `timestamp`"),
+            DataType::Utf8 => Ok(Box::new(as_string_array(array)?.iter())),
+            DataType::LargeUtf8 => Ok(Box::new(as_large_string_array(array)?.iter())),
+            DataType::Utf8View => Ok(Box::new(as_string_view_array(array)?.iter())),
+            other => exec_err!("expected string array, got {other}"),
         }
     }
 
-    /// Require the 2nd argument to be a constant string. Returning `None` here
-    /// would cause silent fallback to default parsing, ignoring the user's
-    /// format — instead we error explicitly.
-    fn require_scalar_format(value: &ColumnarValue) -> Result<String> {
-        match value {
-            ColumnarValue::Scalar(scalar) => scalar
-                .try_as_str()
-                .flatten()
-                .map(|s| s.to_string())
-                .ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "to_timestamp format argument must be a non-null string scalar"
-                    )
-                }),
-            ColumnarValue::Array(_) => Err(exec_datafusion_err!(
-                "to_timestamp format argument must be a scalar, not an array"
-            )),
+    fn parse_value_array(
+        parser: &TimestampParser,
+        safe: bool,
+        value_arr: &ArrayRef,
+    ) -> Result<PrimitiveArray<TimestampMicrosecondType>> {
+        Self::string_array_iter(value_arr)?
+            .map(|v| match v {
+                Some(s) => parser.string_to_microseconds(s, safe),
+                None => Ok(None),
+            })
+            .collect::<Result<_>>()
+    }
+
+    fn parse_value_with_format_array(
+        parser: &TimestampParser,
+        safe: bool,
+        value_arr: &ArrayRef,
+        format_arr: &ArrayRef,
+    ) -> Result<PrimitiveArray<TimestampMicrosecondType>> {
+        if value_arr.len() != format_arr.len() {
+            return exec_err!(
+                "to_timestamp: value array length ({}) does not match format array length ({})",
+                value_arr.len(),
+                format_arr.len()
+            );
         }
+        let values = Self::string_array_iter(value_arr)?;
+        let formats = Self::string_array_iter(format_arr)?;
+        values
+            .zip(formats)
+            .map(|(v, f)| match (v, f) {
+                (Some(s), Some(fmt)) => parser.string_to_microseconds_with_format(s, fmt, safe),
+                _ => Ok(None),
+            })
+            .collect::<Result<_>>()
+    }
+
+    /// Inner per-batch kernel. After `make_scalar_function` broadcasting,
+    /// scalar inputs are already expanded to arrays so we never need to
+    /// special-case scalar vs array here.
+    fn kernel(
+        parser: &TimestampParser,
+        timezone: Option<Arc<str>>,
+        safe: bool,
+        args: &[ArrayRef],
+    ) -> Result<ArrayRef> {
+        let value_arr = &args[0];
+        let format_arr = args.get(1);
+        let is_string = matches!(
+            value_arr.data_type(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        );
+        let parsed: PrimitiveArray<TimestampMicrosecondType> = match (is_string, format_arr) {
+            (true, Some(fmt)) => {
+                if !matches!(
+                    fmt.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) {
+                    return exec_err!(
+                        "to_timestamp format argument must be a string, got {}",
+                        fmt.data_type()
+                    );
+                }
+                Self::parse_value_with_format_array(parser, safe, value_arr, fmt)?
+            }
+            (true, None) => Self::parse_value_array(parser, safe, value_arr)?,
+            (false, _) => {
+                return Ok(cast_with_options(
+                    value_arr,
+                    &DataType::Timestamp(TimeUnit::Microsecond, timezone),
+                    &CastOptions {
+                        safe,
+                        ..Default::default()
+                    },
+                )?);
+            }
+        };
+        Ok(Arc::new(parsed.with_timezone_opt(timezone)))
     }
 }
 
@@ -220,72 +266,18 @@ impl ScalarUDFImpl for SparkTimestamp {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs {
-            args, number_rows, ..
-        } = args;
-        if args.is_empty() || args.len() > 2 {
+        if args.args.is_empty() || args.args.len() > 2 {
             return exec_err!(
                 "spark_timestamp: expected 1 or 2 arguments, got {}",
-                args.len()
+                args.args.len()
             );
         }
         let safe = self.safe;
-        let value = args[0].clone();
-        let format = match args.get(1) {
-            Some(v) => Some(Self::require_scalar_format(v)?),
-            None => None,
-        };
-
-        let array = match &value {
-            ColumnarValue::Array(arr) => arr.clone(),
-            ColumnarValue::Scalar(scalar) => scalar.to_array()?,
-        };
-
-        let is_string = matches!(
-            array.data_type(),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-        );
-
-        let array: ArrayRef = match (is_string, format.as_deref()) {
-            (true, Some(fmt)) => {
-                let parsed = Self::parse_strings(&array, |s| {
-                    self.parser.string_to_microseconds_with_format(s, fmt, safe)
-                })?;
-                Arc::new(parsed.with_timezone_opt(self.timezone.clone()))
-            }
-            (true, None) => {
-                let parsed =
-                    Self::parse_strings(&array, |s| self.parser.string_to_microseconds(s, safe))?;
-                Arc::new(parsed.with_timezone_opt(self.timezone.clone()))
-            }
-            (false, _) => cast_with_options(
-                &array,
-                &DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone()),
-                &CastOptions {
-                    safe,
-                    ..Default::default()
-                },
-            )?,
-        };
-
-        match value {
-            ColumnarValue::Scalar(_) if number_rows <= 1 => {
-                let ts = array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<TimestampMicrosecondType>>();
-                let v = ts.and_then(|a| {
-                    if a.is_empty() || a.is_null(0) {
-                        None
-                    } else {
-                        Some(a.value(0))
-                    }
-                });
-                Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    v,
-                    self.timezone.clone(),
-                )))
-            }
-            _ => Ok(ColumnarValue::Array(array)),
-        }
+        let parser = self.parser.clone();
+        let timezone = self.timezone.clone();
+        make_scalar_function(
+            move |a: &[ArrayRef]| Self::kernel(&parser, timezone.clone(), safe, a),
+            vec![],
+        )(&args.args)
     }
 }
