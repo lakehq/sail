@@ -1879,8 +1879,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
             "parse_json" => Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
             "try_parse_json" => Ok(Arc::new(ScalarUDF::from(SparkTryParseJsonUdf::new()))),
-            "variant_get" => Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(false)))),
-            "try_variant_get" => Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(true)))),
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
@@ -2088,7 +2086,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkJsonToVariantUdf>()
             || node_inner.is::<SparkTryParseJsonUdf>()
-            || node_inner.is::<SparkVariantGet>()
             || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
