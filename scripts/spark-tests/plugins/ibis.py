@@ -134,9 +134,7 @@ def add_ibis_test_markers(items: list[pytest.Item]):
                 item.add_marker(pytest.mark.skip(reason=test.reason))
         for test in SAIL_PASSING_IBIS_TESTS:
             if all(any(k in kw for kw in item.keywords) for k in test.keywords):
-                item.own_markers = [
-                    m for m in item.own_markers if m.name not in ("xfail", "notimpl", "notyet")
-                ]
+                item.own_markers = [m for m in item.own_markers if m.name not in ("xfail", "notimpl", "notyet")]
 
 
 def _needs_ansi_disabled(item: pytest.Item) -> bool:
