@@ -114,6 +114,32 @@ Feature: try_to_timestamp
       | result |
       | NULL   |
 
+  Rule: Per-row format (column-expression format)
+
+    Scenario: Different format per row all parse
+      When query
+      """
+      SELECT try_to_timestamp(d, f) AS result FROM VALUES
+        ('2024-01-15 10:30:00', 'yyyy-MM-dd HH:mm:ss'),
+        ('15/01/2024 10:30:00', 'dd/MM/yyyy HH:mm:ss') AS t(d, f)
+      """
+      Then query result
+      | result              |
+      | 2024-01-15 10:30:00 |
+      | 2024-01-15 10:30:00 |
+
+    Scenario: Per-row format with NULL format propagates to NULL
+      When query
+      """
+      SELECT try_to_timestamp(d, f) AS result FROM VALUES
+        ('2024-01-15 10:30:00', 'yyyy-MM-dd HH:mm:ss'),
+        ('2024-01-16 11:00:00', CAST(NULL AS STRING)) AS t(d, f)
+      """
+      Then query result
+      | result              |
+      | 2024-01-15 10:30:00 |
+      | NULL                |
+
   Rule: Multi-row arrays handle per-row failures
 
     Scenario: Mixed valid and invalid in batch

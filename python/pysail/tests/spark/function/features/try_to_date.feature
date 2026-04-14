@@ -187,6 +187,48 @@ Feature: try_to_date
       | result |
       | NULL   |
 
+  Rule: Per-row format (column-expression format)
+
+    Scenario: Different format per row all parse
+      When query
+      """
+      SELECT try_to_date(d, f) AS result FROM VALUES
+        ('2024-01-15', 'yyyy-MM-dd'),
+        ('15/01/2024', 'dd/MM/yyyy'),
+        ('Jan 15 2024', 'MMM dd yyyy') AS t(d, f)
+      """
+      Then query result
+      | result     |
+      | 2024-01-15 |
+      | 2024-01-15 |
+      | 2024-01-15 |
+
+    Scenario: Per-row format with one invalid row returns NULL only there
+      When query
+      """
+      SELECT try_to_date(d, f) AS result FROM VALUES
+        ('2024-01-15', 'yyyy-MM-dd'),
+        ('garbage', 'yyyy-MM-dd'),
+        ('15/01/2024', 'dd/MM/yyyy') AS t(d, f)
+      """
+      Then query result
+      | result     |
+      | 2024-01-15 |
+      | NULL       |
+      | 2024-01-15 |
+
+    Scenario: NULL format propagates to NULL result for that row
+      When query
+      """
+      SELECT try_to_date(d, f) AS result FROM VALUES
+        ('2024-01-15', 'yyyy-MM-dd'),
+        ('2024-01-16', CAST(NULL AS STRING)) AS t(d, f)
+      """
+      Then query result
+      | result     |
+      | 2024-01-15 |
+      | NULL       |
+
   Rule: Multi-row arrays handle per-row failures
 
     Scenario: Mixed valid and invalid in batch

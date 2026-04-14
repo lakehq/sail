@@ -177,6 +177,32 @@ Feature: try_to_time
       | result |
       | NULL   |
 
+  Rule: Per-row format (column-expression format)
+
+    Scenario: Different format per row all parse
+      When query
+      """
+      SELECT try_to_time(t, f) AS result FROM VALUES
+        ('10:30:45', 'HH:mm:ss'),
+        ('10-30-45', 'HH-mm-ss') AS x(t, f)
+      """
+      Then query result
+      | result   |
+      | 10:30:45 |
+      | 10:30:45 |
+
+    Scenario: Per-row format with NULL format propagates to NULL
+      When query
+      """
+      SELECT try_to_time(t, f) AS result FROM VALUES
+        ('10:30:45', 'HH:mm:ss'),
+        ('10:30:45', CAST(NULL AS STRING)) AS x(t, f)
+      """
+      Then query result
+      | result   |
+      | 10:30:45 |
+      | NULL     |
+
   Rule: Multi-row arrays handle per-row failures
 
     Scenario: Mixed valid and invalid in batch

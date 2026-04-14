@@ -6,8 +6,9 @@ use datafusion::arrow::array::{Array, ArrayRef, Time64MicrosecondArray};
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_functions::utils::make_scalar_function;
 
 const DEFAULT_TIME_FORMATS: &[&str] = &[
     "%H:%M:%S%.f",
@@ -30,7 +31,8 @@ impl SparkTime {
     /// Handles `to_time` / `try_to_time` for all input types.
     /// Accepts 1 or 2 arguments:
     /// - `(expr)` — parses strings with default formats, or casts other types to Time64.
-    /// - `(expr, format)` — parses strings with the given chrono format.
+    /// - `(expr, format)` — parses strings with the given chrono format. The format
+    ///   may be a scalar string (broadcast) or a string column (per-row).
     ///
     /// When `safe` is true, returns NULL on parse/cast failure. When false, errors.
     pub fn new(safe: bool) -> Self {
@@ -65,7 +67,11 @@ impl SparkTime {
         }
     }
 
-    fn string_to_time_us_with_format(value: &str, format: &str, safe: bool) -> Result<Option<i64>> {
+    fn string_to_time_us_with_format(
+        value: &str,
+        format: &str,
+        safe: bool,
+    ) -> Result<Option<i64>> {
         match NaiveTime::parse_from_str(value, format) {
             Ok(t) => Ok(Some(Self::naive_time_to_us(t))),
             Err(_) if safe => Ok(None),
@@ -73,25 +79,46 @@ impl SparkTime {
         }
     }
 
-    fn parse_strings<F>(array: &ArrayRef, mut parse: F) -> Result<ArrayRef>
-    where
-        F: FnMut(&str) -> Result<Option<i64>>,
-    {
-        let out: Time64MicrosecondArray = match array.data_type() {
-            DataType::Utf8 => as_string_array(array)?
-                .iter()
-                .map(|x| x.map(&mut parse).transpose().map(|o| o.flatten()))
-                .collect::<Result<Time64MicrosecondArray>>()?,
-            DataType::LargeUtf8 => as_large_string_array(array)?
-                .iter()
-                .map(|x| x.map(&mut parse).transpose().map(|o| o.flatten()))
-                .collect::<Result<Time64MicrosecondArray>>()?,
-            DataType::Utf8View => as_string_view_array(array)?
-                .iter()
-                .map(|x| x.map(&mut parse).transpose().map(|o| o.flatten()))
-                .collect::<Result<Time64MicrosecondArray>>()?,
-            _ => return exec_err!("expected string array for `time`"),
-        };
+    fn string_array_iter(array: &ArrayRef) -> Result<Box<dyn Iterator<Item = Option<&str>> + '_>> {
+        match array.data_type() {
+            DataType::Utf8 => Ok(Box::new(as_string_array(array)?.iter())),
+            DataType::LargeUtf8 => Ok(Box::new(as_large_string_array(array)?.iter())),
+            DataType::Utf8View => Ok(Box::new(as_string_view_array(array)?.iter())),
+            other => exec_err!("expected string array, got {other}"),
+        }
+    }
+
+    fn parse_value_array(value_arr: &ArrayRef, safe: bool) -> Result<ArrayRef> {
+        let out: Time64MicrosecondArray = Self::string_array_iter(value_arr)?
+            .map(|v| match v {
+                Some(s) => Self::string_to_time_us_default(s, safe),
+                None => Ok(None),
+            })
+            .collect::<Result<_>>()?;
+        Ok(Arc::new(out) as ArrayRef)
+    }
+
+    fn parse_value_with_format_array(
+        value_arr: &ArrayRef,
+        format_arr: &ArrayRef,
+        safe: bool,
+    ) -> Result<ArrayRef> {
+        if value_arr.len() != format_arr.len() {
+            return exec_err!(
+                "to_time: value array length ({}) does not match format array length ({})",
+                value_arr.len(),
+                format_arr.len()
+            );
+        }
+        let values = Self::string_array_iter(value_arr)?;
+        let formats = Self::string_array_iter(format_arr)?;
+        let out: Time64MicrosecondArray = values
+            .zip(formats)
+            .map(|(v, f)| match (v, f) {
+                (Some(s), Some(fmt)) => Self::string_to_time_us_with_format(s, fmt, safe),
+                _ => Ok(None),
+            })
+            .collect::<Result<_>>()?;
         Ok(Arc::new(out) as ArrayRef)
     }
 
@@ -106,21 +133,28 @@ impl SparkTime {
         )?)
     }
 
-    /// Require the 2nd argument to be a constant string. Returning `None` here
-    /// would cause silent fallback to default parsing, ignoring the user's
-    /// format — instead we error explicitly.
-    fn require_scalar_format(value: &ColumnarValue) -> Result<String> {
-        match value {
-            ColumnarValue::Scalar(scalar) => scalar
-                .try_as_str()
-                .flatten()
-                .map(|s| s.to_string())
-                .ok_or_else(|| {
-                    exec_datafusion_err!("to_time format argument must be a non-null string scalar")
-                }),
-            ColumnarValue::Array(_) => Err(exec_datafusion_err!(
-                "to_time format argument must be a scalar, not an array"
-            )),
+    fn kernel(safe: bool, args: &[ArrayRef]) -> Result<ArrayRef> {
+        let value_arr = &args[0];
+        let format_arr = args.get(1);
+        let is_string = matches!(
+            value_arr.data_type(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        );
+        match (is_string, format_arr) {
+            (true, Some(fmt)) => {
+                if !matches!(
+                    fmt.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) {
+                    return exec_err!(
+                        "to_time format argument must be a string, got {}",
+                        fmt.data_type()
+                    );
+                }
+                Self::parse_value_with_format_array(value_arr, fmt, safe)
+            }
+            (true, None) => Self::parse_value_array(value_arr, safe),
+            (false, _) => Self::cast_nonstring_to_time(value_arr, safe),
         }
     }
 }
@@ -143,52 +177,13 @@ impl ScalarUDFImpl for SparkTime {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs {
-            args, number_rows, ..
-        } = args;
-        if args.is_empty() || args.len() > 2 {
-            return exec_err!("spark_time: expected 1 or 2 arguments, got {}", args.len());
+        if args.args.is_empty() || args.args.len() > 2 {
+            return exec_err!(
+                "spark_time: expected 1 or 2 arguments, got {}",
+                args.args.len()
+            );
         }
         let safe = self.safe;
-        let value = args[0].clone();
-        let format = match args.get(1) {
-            Some(v) => Some(Self::require_scalar_format(v)?),
-            None => None,
-        };
-
-        let array = match &value {
-            ColumnarValue::Array(arr) => arr.clone(),
-            ColumnarValue::Scalar(scalar) => scalar.to_array()?,
-        };
-
-        let is_string = matches!(
-            array.data_type(),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-        );
-
-        let result: ArrayRef = match (is_string, format.as_deref()) {
-            (true, Some(fmt)) => Self::parse_strings(&array, |s| {
-                Self::string_to_time_us_with_format(s, fmt, safe)
-            })?,
-            (true, None) => {
-                Self::parse_strings(&array, |s| Self::string_to_time_us_default(s, safe))?
-            }
-            (false, _) => Self::cast_nonstring_to_time(&array, safe)?,
-        };
-
-        match value {
-            ColumnarValue::Scalar(_) if number_rows <= 1 => {
-                let time_array = result.as_any().downcast_ref::<Time64MicrosecondArray>();
-                let v = time_array.and_then(|a| {
-                    if a.is_empty() || a.is_null(0) {
-                        None
-                    } else {
-                        Some(a.value(0))
-                    }
-                });
-                Ok(ColumnarValue::Scalar(ScalarValue::Time64Microsecond(v)))
-            }
-            _ => Ok(ColumnarValue::Array(result)),
-        }
+        make_scalar_function(move |a: &[ArrayRef]| Self::kernel(safe, a), vec![])(&args.args)
     }
 }
