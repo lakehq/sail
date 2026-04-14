@@ -67,11 +67,7 @@ impl SparkTime {
         }
     }
 
-    fn string_to_time_us_with_format(
-        value: &str,
-        format: &str,
-        safe: bool,
-    ) -> Result<Option<i64>> {
+    fn string_to_time_us_with_format(value: &str, format: &str, safe: bool) -> Result<Option<i64>> {
         match NaiveTime::parse_from_str(value, format) {
             Ok(t) => Ok(Some(Self::naive_time_to_us(t))),
             Err(_) if safe => Ok(None),
