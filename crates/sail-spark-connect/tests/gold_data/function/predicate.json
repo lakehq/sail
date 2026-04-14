@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\"), None), Literal(Utf8(\"/%SYSTEMDrive/%//Users%\"), None), Literal(Utf8(\"/\"), None)]"
+        "success": "ok"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\"), None), Literal(Utf8(\"/%SystemDrive/%//Users%\"), None), Literal(Utf8(\"/\"), None)]"
+        "success": "ok"
       }
     },
     {
