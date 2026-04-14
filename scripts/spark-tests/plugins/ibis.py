@@ -113,12 +113,30 @@ ANSI_DISABLED_IBIS_TESTS = [
     ),
 ]
 
+# Tests that Ibis marks as xfail/notimpl for PySpark but which pass against Sail.
+# Removing the marker converts XPASS -> PASSED for a clean signal in CI.
+SAIL_PASSING_IBIS_TESTS = [
+    TestMarker(
+        keywords=["test_big_timestamp", "pyspark"],
+        reason="Sail handles big timestamps via chrono-based SparkTimestamp",
+    ),
+    TestMarker(
+        keywords=["test_large_timestamp", "pyspark"],
+        reason="Sail handles large timestamps via chrono-based SparkTimestamp",
+    ),
+]
+
 
 def add_ibis_test_markers(items: list[pytest.Item]):
     for item in items:
         for test in SKIPPED_IBIS_TESTS:
             if all(k in item.keywords for k in test.keywords):
                 item.add_marker(pytest.mark.skip(reason=test.reason))
+        for test in SAIL_PASSING_IBIS_TESTS:
+            if all(any(k in kw for kw in item.keywords) for k in test.keywords):
+                item.own_markers = [
+                    m for m in item.own_markers if m.name not in ("xfail", "notimpl", "notyet")
+                ]
 
 
 def _needs_ansi_disabled(item: pytest.Item) -> bool:

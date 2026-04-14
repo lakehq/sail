@@ -1,27 +1,35 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use chrono::NaiveDate;
-use datafusion::arrow::array::{Array, ArrayRef, Date32Array};
+use chrono::{NaiveTime, Timelike};
+use datafusion::arrow::array::{Array, ArrayRef, Time64MicrosecondArray};
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
-use datafusion::arrow::datatypes::{DataType, Date32Type};
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use sail_sql_analyzer::parser::parse_date;
+
+const DEFAULT_TIME_FORMATS: &[&str] = &[
+    "%H:%M:%S%.f",
+    "%H:%M:%S",
+    "%H:%M",
+    "%H:%M:%S%.f %p",
+    "%H:%M:%S %p",
+    "%H:%M %p",
+];
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkDate {
+pub struct SparkTime {
     signature: Signature,
     safe: bool,
 }
 
-impl SparkDate {
-    /// Creates a SparkDate.
+impl SparkTime {
+    /// Creates a SparkTime.
     ///
-    /// Handles `to_date` / `try_to_date` / date casts for all input types.
+    /// Handles `to_time` / `try_to_time` for all input types.
     /// Accepts 1 or 2 arguments:
-    /// - `(expr)` — parses strings with default formats, or casts other types to Date32.
+    /// - `(expr)` — parses strings with default formats, or casts other types to Time64.
     /// - `(expr, format)` — parses strings with the given chrono format.
     ///
     /// When `safe` is true, returns NULL on parse/cast failure. When false, errors.
@@ -36,17 +44,30 @@ impl SparkDate {
         self.safe
     }
 
-    fn string_to_date32_default(value: &str, safe: bool) -> Result<Option<i32>> {
-        match parse_date(value).and_then(|date| Ok(Date32Type::from_naive_date(date.try_into()?))) {
-            Ok(v) => Ok(Some(v)),
-            Err(_) if safe => Ok(None),
-            Err(e) => Err(exec_datafusion_err!("{e}")),
+    fn naive_time_to_us(t: NaiveTime) -> i64 {
+        let seconds = t.num_seconds_from_midnight() as i64;
+        let nanos = t.nanosecond() as i64;
+        seconds * 1_000_000 + nanos / 1_000
+    }
+
+    fn string_to_time_us_default(value: &str, safe: bool) -> Result<Option<i64>> {
+        for fmt in DEFAULT_TIME_FORMATS {
+            if let Ok(t) = NaiveTime::parse_from_str(value, fmt) {
+                return Ok(Some(Self::naive_time_to_us(t)));
+            }
+        }
+        if safe {
+            Ok(None)
+        } else {
+            Err(exec_datafusion_err!(
+                "cannot parse '{value}' as time with default formats"
+            ))
         }
     }
 
-    fn string_to_date32_with_format(value: &str, format: &str, safe: bool) -> Result<Option<i32>> {
-        match NaiveDate::parse_from_str(value, format) {
-            Ok(d) => Ok(Some(Date32Type::from_naive_date(d))),
+    fn string_to_time_us_with_format(value: &str, format: &str, safe: bool) -> Result<Option<i64>> {
+        match NaiveTime::parse_from_str(value, format) {
+            Ok(t) => Ok(Some(Self::naive_time_to_us(t))),
             Err(_) if safe => Ok(None),
             Err(e) => Err(exec_datafusion_err!("{e}")),
         }
@@ -54,30 +75,30 @@ impl SparkDate {
 
     fn parse_strings<F>(array: &ArrayRef, mut parse: F) -> Result<ArrayRef>
     where
-        F: FnMut(&str) -> Result<Option<i32>>,
+        F: FnMut(&str) -> Result<Option<i64>>,
     {
-        let out: Date32Array = match array.data_type() {
+        let out: Time64MicrosecondArray = match array.data_type() {
             DataType::Utf8 => as_string_array(array)?
                 .iter()
                 .map(|x| x.map(&mut parse).transpose().map(|o| o.flatten()))
-                .collect::<Result<Date32Array>>()?,
+                .collect::<Result<Time64MicrosecondArray>>()?,
             DataType::LargeUtf8 => as_large_string_array(array)?
                 .iter()
                 .map(|x| x.map(&mut parse).transpose().map(|o| o.flatten()))
-                .collect::<Result<Date32Array>>()?,
+                .collect::<Result<Time64MicrosecondArray>>()?,
             DataType::Utf8View => as_string_view_array(array)?
                 .iter()
                 .map(|x| x.map(&mut parse).transpose().map(|o| o.flatten()))
-                .collect::<Result<Date32Array>>()?,
-            _ => return exec_err!("expected string array for `date`"),
+                .collect::<Result<Time64MicrosecondArray>>()?,
+            _ => return exec_err!("expected string array for `time`"),
         };
         Ok(Arc::new(out) as ArrayRef)
     }
 
-    fn cast_nonstring_to_date32(array: &ArrayRef, safe: bool) -> Result<ArrayRef> {
+    fn cast_nonstring_to_time(array: &ArrayRef, safe: bool) -> Result<ArrayRef> {
         Ok(cast_with_options(
             array,
-            &DataType::Date32,
+            &DataType::Time64(TimeUnit::Microsecond),
             &CastOptions {
                 safe,
                 ..Default::default()
@@ -93,13 +114,13 @@ impl SparkDate {
     }
 }
 
-impl ScalarUDFImpl for SparkDate {
+impl ScalarUDFImpl for SparkTime {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "spark_date"
+        "spark_time"
     }
 
     fn signature(&self) -> &Signature {
@@ -107,7 +128,7 @@ impl ScalarUDFImpl for SparkDate {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Date32)
+        Ok(DataType::Time64(TimeUnit::Microsecond))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -115,7 +136,7 @@ impl ScalarUDFImpl for SparkDate {
             args, number_rows, ..
         } = args;
         if args.is_empty() || args.len() > 2 {
-            return exec_err!("spark_date: expected 1 or 2 arguments, got {}", args.len());
+            return exec_err!("spark_time: expected 1 or 2 arguments, got {}", args.len());
         }
         let safe = self.safe;
         let value = args[0].clone();
@@ -132,26 +153,26 @@ impl ScalarUDFImpl for SparkDate {
         );
 
         let result: ArrayRef = match (is_string, format.as_deref()) {
-            (true, Some(fmt)) => {
-                Self::parse_strings(&array, |s| Self::string_to_date32_with_format(s, fmt, safe))?
-            }
+            (true, Some(fmt)) => Self::parse_strings(&array, |s| {
+                Self::string_to_time_us_with_format(s, fmt, safe)
+            })?,
             (true, None) => {
-                Self::parse_strings(&array, |s| Self::string_to_date32_default(s, safe))?
+                Self::parse_strings(&array, |s| Self::string_to_time_us_default(s, safe))?
             }
-            (false, _) => Self::cast_nonstring_to_date32(&array, safe)?,
+            (false, _) => Self::cast_nonstring_to_time(&array, safe)?,
         };
 
         match value {
             ColumnarValue::Scalar(_) if number_rows <= 1 => {
-                let date_array = result.as_any().downcast_ref::<Date32Array>();
-                let v = date_array.and_then(|a| {
+                let time_array = result.as_any().downcast_ref::<Time64MicrosecondArray>();
+                let v = time_array.and_then(|a| {
                     if a.is_empty() || a.is_null(0) {
                         None
                     } else {
                         Some(a.value(0))
                     }
                 });
-                Ok(ColumnarValue::Scalar(ScalarValue::Date32(v)))
+                Ok(ColumnarValue::Scalar(ScalarValue::Time64Microsecond(v)))
             }
             _ => Ok(ColumnarValue::Array(result)),
         }
