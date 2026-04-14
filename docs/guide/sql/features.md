@@ -13,7 +13,7 @@ Sail supports all the Spark SQL literal syntax. Please refer to the [Literals](.
 
 ## Data Types
 
-Sail supports all Spark SQL data types except the `VARIANT` type introduced in Spark 4.0. Support for the `VARIANT` type is tracked in the [GitHub issue](https://github.com/lakehq/sail/issues/511).
+Sail supports all Spark SQL data types.
 
 ## Expressions
 

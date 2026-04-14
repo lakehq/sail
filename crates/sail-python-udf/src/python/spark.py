@@ -443,6 +443,8 @@ def _python_values_to_arrow_array(
 
 
 def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
+    if not isinstance(data, list):
+        data = list(data)
     if len(data) == 0:
         return pa.array([], type=data_type)
 
