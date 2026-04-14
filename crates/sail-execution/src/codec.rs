@@ -56,7 +56,6 @@ use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
 use datafusion_spark::function::bitwise::bitwise_not::SparkBitwiseNot;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
-use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
@@ -121,6 +120,7 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_interval::SparkMakeInterval;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
@@ -1854,6 +1854,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkTime(gen::SparkTimeUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkTime::new(safe))));
             }
+            UdfKind::SparkMakeInterval(gen::SparkMakeIntervalUdf { safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new(safe))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -1958,9 +1961,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
-            }
-            "spark_make_interval" | "make_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new())))
             }
             "spark_make_ym_interval" | "make_ym_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
@@ -2087,7 +2087,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
-            || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
             || node_inner.is::<SparkTryMakeTimestampNtz>()
             || node_inner.is::<SparkMakeTime>()
@@ -2224,6 +2223,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTime>() {
             let safe = func.safe();
             UdfKind::SparkTime(gen::SparkTimeUdf { safe })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkMakeInterval>() {
+            let safe = func.safe();
+            UdfKind::SparkMakeInterval(gen::SparkMakeIntervalUdf { safe })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })

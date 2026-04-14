@@ -86,6 +86,7 @@ message ExtendedScalarUdf {
     XpathTypedUdf xpath_typed = 13;
     SparkVariantGetUdf spark_variant_get = 14;
     SparkTimeUdf spark_time = 15;
+    SparkMakeIntervalUdf spark_make_interval = 16;
   }
 }
 
@@ -173,6 +174,10 @@ message SparkVariantGetUdf {
 }
 
 message SparkTimeUdf {
+  bool safe = 1;
+}
+
+message SparkMakeIntervalUdf {
   bool safe = 1;
 }
 

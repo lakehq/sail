@@ -6,13 +6,13 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
-use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_interval::SparkMakeInterval;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
@@ -742,7 +742,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("make_date", F::ternary(make_date)),
         ("make_dt_interval", F::udf(SparkMakeDtInterval::new())),
-        ("make_interval", F::udf(SparkMakeInterval::new())),
+        ("make_interval", F::udf(SparkMakeInterval::new(false))),
         ("make_time", F::udf(SparkMakeTime::new())),
         ("make_timestamp", F::custom(make_timestamp)),
         ("make_timestamp_ltz", F::custom(make_timestamp_ltz)),
@@ -797,7 +797,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
         ("trunc", F::binary(trunc)),
-        ("try_make_interval", F::unknown("try_make_interval")),
+        ("try_make_interval", F::udf(SparkMakeInterval::new(true))),
         ("try_make_timestamp", F::custom(try_make_timestamp)),
         ("try_make_timestamp_ltz", F::custom(try_make_timestamp_ltz)),
         ("try_make_timestamp_ntz", F::custom(try_make_timestamp_ntz)),
