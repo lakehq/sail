@@ -32,6 +32,33 @@ Feature: to_date (strict variant)
       | result     |
       | 2024-01-15 |
 
+    Scenario: Cast from TIMESTAMP_NTZ preserves wall clock
+      When query
+      """
+      SELECT to_date(TIMESTAMP_NTZ '2025-11-02 23:30:45.123456') AS result
+      """
+      Then query result
+      | result     |
+      | 2025-11-02 |
+
+    Scenario: Cast from TIMESTAMP_LTZ in UTC session preserves wall clock
+      When query
+      """
+      SELECT to_date(TIMESTAMP_LTZ '2025-11-02 23:30:45.123456') AS result
+      """
+      Then query result
+      | result     |
+      | 2025-11-02 |
+
+    Scenario: TIMESTAMP_LTZ with offset converts to session timezone
+      When query
+      """
+      SELECT to_date(TIMESTAMP_LTZ '2025-11-02 23:30:45.123456 America/New_York') AS result
+      """
+      Then query result
+      | result     |
+      | 2025-11-03 |
+
   Rule: Invalid input throws
 
     Scenario: Garbage string raises error

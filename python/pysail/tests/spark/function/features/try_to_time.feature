@@ -177,6 +177,26 @@ Feature: try_to_time
       | result |
       | NULL   |
 
+  Rule: Non-finite floating-point string literals return NULL
+
+    Scenario: NaN string returns NULL
+      When query
+      """
+      SELECT try_to_time('NaN') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+    Scenario: Infinity string returns NULL
+      When query
+      """
+      SELECT try_to_time('Infinity') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
   Rule: Per-row format (column-expression format)
 
     Scenario: Different format per row all parse

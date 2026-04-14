@@ -229,6 +229,35 @@ Feature: try_to_date
       | 2024-01-15 |
       | NULL       |
 
+  Rule: Non-finite floating-point string literals return NULL
+
+    Scenario: NaN string returns NULL
+      When query
+      """
+      SELECT try_to_date('NaN') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+    Scenario: Infinity string returns NULL
+      When query
+      """
+      SELECT try_to_date('Infinity') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+    Scenario: Negative Infinity string returns NULL
+      When query
+      """
+      SELECT try_to_date('-Infinity') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
   Rule: Multi-row arrays handle per-row failures
 
     Scenario: Mixed valid and invalid in batch
