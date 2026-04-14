@@ -321,6 +321,7 @@ fn to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
 fn date_with_try(input: ScalarFunctionInput, safe: bool) -> PlanResult<Expr> {
     let udf = ScalarUDF::from(SparkDate::new(safe));
+    let fn_name = if safe { "try_to_date" } else { "to_date" };
     if input.arguments.len() == 1 {
         Ok(udf.call(input.arguments))
     } else if input.arguments.len() == 2 {
@@ -328,12 +329,15 @@ fn date_with_try(input: ScalarFunctionInput, safe: bool) -> PlanResult<Expr> {
         let format = to_chrono_fmt(format);
         Ok(udf.call(vec![expr, format]))
     } else {
-        Err(PlanError::invalid("date requires 1 or 2 arguments"))
+        Err(PlanError::invalid(format!(
+            "{fn_name} requires 1 or 2 arguments"
+        )))
     }
 }
 
 fn time_with_try(input: ScalarFunctionInput, safe: bool) -> PlanResult<Expr> {
     let udf = ScalarUDF::from(SparkTime::new(safe));
+    let fn_name = if safe { "try_to_time" } else { "to_time" };
     if input.arguments.len() == 1 {
         Ok(udf.call(input.arguments))
     } else if input.arguments.len() == 2 {
@@ -341,7 +345,9 @@ fn time_with_try(input: ScalarFunctionInput, safe: bool) -> PlanResult<Expr> {
         let format = to_chrono_fmt(format);
         Ok(udf.call(vec![expr, format]))
     } else {
-        Err(PlanError::invalid("time requires 1 or 2 arguments"))
+        Err(PlanError::invalid(format!(
+            "{fn_name} requires 1 or 2 arguments"
+        )))
     }
 }
 
