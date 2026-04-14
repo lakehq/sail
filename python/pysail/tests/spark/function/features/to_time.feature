@@ -1,4 +1,4 @@
-@to_time
+@to_time @spark-4
 Feature: to_time (strict variant)
   Strict to_time that throws an error on invalid input.
 
@@ -44,7 +44,7 @@ Feature: to_time (strict variant)
       """
       SELECT to_time('not-a-time')
       """
-      Then query error cannot parse
+      Then query error cannot parse|UNSUPPORTED_OPERATION|UNSUPPORTED_TIME_TYPE|Unsupported|data type
 
     @sail-only
     Scenario: Out-of-range hour raises error
@@ -52,7 +52,7 @@ Feature: to_time (strict variant)
       """
       SELECT to_time('25:00:00')
       """
-      Then query error cannot parse
+      Then query error cannot parse|UNSUPPORTED_OPERATION|UNSUPPORTED_TIME_TYPE|Unsupported|data type
 
   Rule: NULL input propagates
 

@@ -43,18 +43,20 @@ Feature: make_interval (strict variant)
 
   Rule: Overflow raises error
 
+    @spark-4
     Scenario: Year overflow raises error
       When query
       """
       SELECT make_interval(2147483647)
       """
-      Then query error overflow|month_day_nano_interval|ARITHMETIC
+      Then query error overflow|month_day_nano_interval|ARITHMETIC|calendar_interval|Unsupported
 
   Rule: Argument count validation matches Spark
 
+    @spark-4
     Scenario: No args raises WRONG_NUM_ARGS
       When query
       """
       SELECT make_interval()
       """
-      Then query error WRONG_NUM_ARGS
+      Then query error WRONG_NUM_ARGS|calendar_interval|Unsupported

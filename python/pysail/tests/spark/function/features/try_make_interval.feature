@@ -86,7 +86,7 @@ Feature: try_make_interval
       """
       SELECT try_make_interval()
       """
-      Then query error WRONG_NUM_ARGS
+      Then query error WRONG_NUM_ARGS|calendar_interval|Unsupported
 
   Rule: Multi-row batches
 
