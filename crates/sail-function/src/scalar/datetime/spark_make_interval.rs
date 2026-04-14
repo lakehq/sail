@@ -66,6 +66,15 @@ impl ScalarUDFImpl for SparkMakeInterval {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Spark requires at least 1 argument. The upstream UDF accepts 0 args
+        // (returns zero interval) via TypeSignature::Nullary, but that diverges
+        // from Spark; reject explicitly to align with the canonical error.
+        if args.args.is_empty() {
+            return datafusion_common::exec_err!(
+                "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `{}` requires [1, 2, 3, 4, 5, 6, 7] parameters but the actual number is 0.",
+                self.name()
+            );
+        }
         let number_rows = args.number_rows;
         match self.inner.invoke_with_args(args) {
             Ok(out) => Ok(out),
