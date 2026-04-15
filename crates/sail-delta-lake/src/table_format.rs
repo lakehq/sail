@@ -155,16 +155,14 @@ impl TableFormat for DeltaTableFormat {
         }
 
         match mode {
-            PhysicalSinkMode::ErrorIfExists
-                if table_exists => {
-                    return plan_err!("Delta table already exists at path: {table_url}");
-                }
-            PhysicalSinkMode::IgnoreIfExists
-                if table_exists => {
-                    return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                        input.schema(),
-                    )));
-                }
+            PhysicalSinkMode::ErrorIfExists if table_exists => {
+                return plan_err!("Delta table already exists at path: {table_url}");
+            }
+            PhysicalSinkMode::IgnoreIfExists if table_exists => {
+                return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                    input.schema(),
+                )));
+            }
             PhysicalSinkMode::OverwritePartitions => {
                 return not_impl_err!("unsupported sink mode for Delta: {mode:?}")
             }
