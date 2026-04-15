@@ -46,16 +46,91 @@ impl Default for SparkParseJson {
     }
 }
 
-/// Try to parse a JSON string leniently. If `serde_json::from_str` fails
-/// (e.g. trailing garbage), use streaming parsing to read the first
-/// complete JSON value (matching Spark's `parse_json` / `try_parse_json`
-/// behavior, which both accept trailing content after a valid prefix).
+/// A `serde_json::Value` wrapper that rejects objects with duplicate keys
+/// during deserialization. Spark's `parse_json` treats duplicate keys in
+/// any nested object as a parse failure (MALFORMED_RECORD_IN_PARSING).
+struct StrictValue(serde_json::Value);
+
+struct StrictValueVisitor;
+
+impl<'de> serde::de::Visitor<'de> for StrictValueVisitor {
+    type Value = StrictValue;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("any valid JSON value without duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, v: bool) -> std::result::Result<StrictValue, E> {
+        Ok(StrictValue(v.into()))
+    }
+    fn visit_i64<E>(self, v: i64) -> std::result::Result<StrictValue, E> {
+        Ok(StrictValue(v.into()))
+    }
+    fn visit_u64<E>(self, v: u64) -> std::result::Result<StrictValue, E> {
+        Ok(StrictValue(v.into()))
+    }
+    fn visit_f64<E>(self, v: f64) -> std::result::Result<StrictValue, E> {
+        Ok(StrictValue(v.into()))
+    }
+    fn visit_str<E>(self, v: &str) -> std::result::Result<StrictValue, E> {
+        Ok(StrictValue(v.to_owned().into()))
+    }
+    fn visit_string<E>(self, v: String) -> std::result::Result<StrictValue, E> {
+        Ok(StrictValue(v.into()))
+    }
+    fn visit_none<E>(self) -> std::result::Result<StrictValue, E> {
+        Ok(StrictValue(serde_json::Value::Null))
+    }
+    fn visit_unit<E>(self) -> std::result::Result<StrictValue, E> {
+        Ok(StrictValue(serde_json::Value::Null))
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(
+        self,
+        mut seq: A,
+    ) -> std::result::Result<StrictValue, A::Error> {
+        let mut vec = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(StrictValue(v)) = seq.next_element()? {
+            vec.push(v);
+        }
+        Ok(StrictValue(serde_json::Value::Array(vec)))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(
+        self,
+        mut map: A,
+    ) -> std::result::Result<StrictValue, A::Error> {
+        let mut obj = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            let StrictValue(v) = map.next_value()?;
+            if obj.contains_key(&key) {
+                return Err(serde::de::Error::custom(format!("duplicate key '{key}'")));
+            }
+            obj.insert(key, v);
+        }
+        Ok(StrictValue(serde_json::Value::Object(obj)))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for StrictValue {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        deserializer.deserialize_any(StrictValueVisitor)
+    }
+}
+
+/// Try to parse a JSON string leniently, rejecting objects with duplicate
+/// keys. If `serde_json::from_str` fails because of trailing garbage, use
+/// streaming parsing to read the first complete JSON value (matching
+/// Spark's `parse_json` / `try_parse_json`, which both accept trailing
+/// content after a valid prefix).
 fn try_parse_json_lenient(json_str: &str) -> Option<serde_json::Value> {
-    if let Ok(value) = serde_json::from_str(json_str) {
+    if let Ok(StrictValue(value)) = serde_json::from_str::<StrictValue>(json_str) {
         return Some(value);
     }
-    let mut stream = serde_json::Deserializer::from_str(json_str).into_iter::<serde_json::Value>();
-    stream.next().and_then(|r| r.ok())
+    let mut stream = serde_json::Deserializer::from_str(json_str).into_iter::<StrictValue>();
+    stream.next().and_then(|r| r.ok()).map(|sv| sv.0)
 }
 
 /// Try to append a JSON string to the builder leniently. Returns true if successful.

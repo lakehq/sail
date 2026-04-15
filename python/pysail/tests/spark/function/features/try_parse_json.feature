@@ -281,7 +281,6 @@ Feature: try_parse_json (safe version of parse_json)
 
   Rule: Edge cases (advanced)
 
-    @sail-bug
     Scenario: try_parse_json duplicate keys returns NULL (Spark rejects as malformed)
       When query
         """

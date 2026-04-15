@@ -117,7 +117,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
         """
       Then query error MALFORMED_RECORD_IN_PARSING
 
-    @sail-bug
     Scenario: parse_json duplicate keys errors (Spark rejects as malformed)
       When query
         """

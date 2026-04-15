@@ -7020,6 +7020,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-sql-analyzer",
+ "serde",
  "serde_json",
  "thiserror",
  "twox-hash",
