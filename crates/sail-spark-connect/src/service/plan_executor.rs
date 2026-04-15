@@ -255,7 +255,7 @@ pub(crate) async fn handle_execute_sql_command(
             Relation {
                 common: None,
                 rel_type: Some(relation::RelType::LocalRelation(LocalRelation {
-                    data: Some(to_arrow_batch(&data)?.data),
+                    data: Some(to_arrow_batch(data)?.data),
                     schema: None,
                 })),
             }
