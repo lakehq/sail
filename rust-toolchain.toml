@@ -1,0 +1,3 @@
+[toolchain]
+channel = "beta"
+components = ["rustfmt", "clippy"]

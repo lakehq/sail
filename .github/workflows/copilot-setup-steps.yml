@@ -30,7 +30,7 @@ jobs:
 
       - name: Install Rust toolchains
         run: |
-          rustup toolchain install stable --profile default --component llvm-tools-preview
+          rustup toolchain install beta --profile default --component llvm-tools-preview
           rustup toolchain install nightly --profile default
 
       - name: Install grcov

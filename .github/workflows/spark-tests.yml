@@ -39,8 +39,8 @@ jobs:
       - name: Install Rust toolchain and coverage tools
         run: |
           {
-            rustup toolchain install stable
-            rustup component add --toolchain stable llvm-tools-preview
+            rustup toolchain install beta
+            rustup component add --toolchain beta llvm-tools-preview
           } &
 
       - name: Install grcov

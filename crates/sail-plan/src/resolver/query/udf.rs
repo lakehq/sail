@@ -300,7 +300,7 @@ impl PlanResolver<'_> {
         let offsets: Vec<usize> = left
             .offsets
             .into_iter()
-            .chain(right.offsets.into_iter())
+            .chain(right.offsets)
             .collect();
 
         // prepare the output mapping UDF

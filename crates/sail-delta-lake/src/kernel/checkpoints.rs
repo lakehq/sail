@@ -541,8 +541,8 @@ impl<'a> CheckpointManager<'a> {
                 }
             }
         }
-        commit_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
-        checkpoint_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
+        commit_entries.sort_by_key(|(av, _)| *av);
+        checkpoint_entries.sort_by_key(|(av, _)| *av);
 
         let mut state = ReconciledCheckpointState::default();
         let start_commit_version = if let Some((cp_ver, cp_meta)) = checkpoint_entries.pop() {

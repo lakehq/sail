@@ -169,7 +169,7 @@ impl PlanResolver<'_> {
                         "group-by name count does not match expression count: {name:?} {exprs:?}",
                     )));
                 }
-                grouping_exprs.extend(exprs.iter().zip(name.into_iter()).map(|(expr, name)| {
+                grouping_exprs.extend(exprs.iter().zip(name).map(|(expr, name)| {
                     NamedExpr {
                         name: vec![name],
                         expr: expr.clone(),

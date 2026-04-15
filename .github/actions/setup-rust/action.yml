@@ -20,13 +20,13 @@ runs:
         # to get the latest protoc release.
         repo-token: ${{ github.token }}
 
-    # The Rust stable toolchain is likely installed already, but we need to check for updates.
-    - name: Install Rust toolchain (stable)
+    # The Rust beta toolchain is needed as the default toolchain for the project.
+    - name: Install Rust toolchain (beta)
       run: |
         if [[ "${{ inputs.install-testing-tools }}" == "true" ]]; then
-          rustup toolchain install stable --profile default --component llvm-tools-preview
+          rustup toolchain install beta --profile default --component llvm-tools-preview
         else
-          rustup toolchain install stable --profile default
+          rustup toolchain install beta --profile default
         fi
       shell: bash
 
