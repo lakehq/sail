@@ -3,8 +3,8 @@ use std::sync::Arc;
 use reqwest::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
@@ -515,6 +515,17 @@ impl CatalogProvider for OneLakeCatalogProvider {
     ) -> CatalogResult<()> {
         Err(CatalogError::NotSupported(
             "OneLake catalog does not support dropping tables via API".to_string(),
+        ))
+    }
+
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "alter table in OneLake catalog".to_string(),
         ))
     }
 

@@ -4,28 +4,72 @@
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"COMMENT\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 31) ==\nALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: duplicate COMMENT clause"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"DEFAULT\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 31) ==\nALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: duplicate DEFAULT clause"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"FIRST|AFTER\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 31) ==\nALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: duplicate POSITION clause"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"NOT NULL\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 31) ==\nALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: duplicate NOT NULL clause"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -926,7 +970,18 @@
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE REPLACE column a specifies descriptor \"COMMENT\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 1) ==\nALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: duplicate COMMENT clause"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null
+          }
+        }
       }
     },
     {

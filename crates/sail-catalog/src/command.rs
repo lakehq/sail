@@ -9,8 +9,9 @@ use crate::error::{CatalogError, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
+    AlterTableOptions, CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
+    DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
@@ -74,6 +75,10 @@ pub enum CatalogCommand {
     DropTable {
         table: Vec<String>,
         options: DropTableOptions,
+    },
+    AlterTable {
+        table: Vec<String>,
+        options: AlterTableOptions,
     },
     ListColumns {
         table: Vec<String>,
@@ -153,6 +158,7 @@ impl CatalogCommand {
             CatalogCommand::ListTables { .. } => "ListTables",
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
+            CatalogCommand::AlterTable { .. } => "AlterTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
@@ -208,6 +214,7 @@ impl CatalogCommand {
             | CatalogCommand::CreateView { .. }
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
+            | CatalogCommand::AlterTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
             | CatalogCommand::DropView { .. } => display.bools().schema()?,
@@ -344,6 +351,10 @@ impl CatalogCommand {
             }
             CatalogCommand::DropTable { table, options } => {
                 manager.drop_table(&table, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::AlterTable { table, options } => {
+                manager.alter_table(&table, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::ListColumns { table } => {

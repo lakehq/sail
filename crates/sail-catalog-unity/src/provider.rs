@@ -17,8 +17,8 @@ use arrow::datatypes::DataType;
 use reqwest::header::HeaderValue;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
@@ -769,6 +769,17 @@ impl CatalogProvider for UnityCatalogProvider {
             }
             Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
+    }
+
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "alter table in Unity catalog".to_string(),
+        ))
     }
 
     async fn create_view(

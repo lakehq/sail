@@ -15,9 +15,9 @@ use sail_sql_parser::ast::statement::{
     DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
     MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
     MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
-    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyValue, PropertyList, PropertyValue,
-    RowFormat, RowFormatDelimitedClause, SetClause, SortColumn, SortColumnList, Statement,
-    UpdateTableAlias, ViewColumn,
+    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyList, PropertyKeyValue,
+    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
+    SortColumnList, Statement, UpdateTableAlias, ViewColumn,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -1715,6 +1715,25 @@ fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, St
         .collect::<SqlResult<Vec<_>>>()
 }
 
+fn from_ast_property_key_list(properties: PropertyKeyList) -> SqlResult<Vec<String>> {
+    let PropertyKeyList {
+        left: _,
+        properties,
+        right: _,
+    } = properties;
+    properties
+        .into_items()
+        .map(|key| match key {
+            PropertyKey::Name(ObjectName(parts)) => Ok(parts
+                .into_items()
+                .map(|x| x.value)
+                .collect::<Vec<_>>()
+                .join(".")),
+            PropertyKey::Literal(x) => from_ast_string(x),
+        })
+        .collect::<SqlResult<Vec<_>>>()
+}
+
 fn from_ast_partition(
     partition: PartitionClause,
 ) -> SqlResult<Vec<(spec::Identifier, Option<spec::Expr>)>> {
@@ -1823,6 +1842,8 @@ impl TryFrom<Vec<ColumnAlterationOption>> for ColumnAlterationOptions {
     }
 }
 
+// TODO: implement the conversion properly for column-level ALTER TABLE operations
+#[expect(dead_code)]
 fn from_ast_column_alteration_list(items: ColumnAlterationList) -> SqlResult<()> {
     // TODO: implement the conversion properly
     let columns = match items {
@@ -1882,32 +1903,35 @@ fn from_ast_merge_assignment_list(
 fn from_ast_alter_table_operation(
     operation: AlterTableOperation,
 ) -> SqlResult<spec::AlterTableOperation> {
-    // TODO: implement the conversion properly
     match operation {
-        AlterTableOperation::RenameTable { .. } => {}
-        AlterTableOperation::RenamePartition { .. } => {}
-        AlterTableOperation::AddColumns { items, .. } => {
-            from_ast_column_alteration_list(items)?;
+        AlterTableOperation::SetTableProperties { properties, .. } => {
+            let properties = from_ast_property_list(properties)?;
+            Ok(spec::AlterTableOperation::SetTableProperties { properties })
         }
-        AlterTableOperation::DropColumns { .. } => {}
-        AlterTableOperation::RenameColumn { .. } => {}
-        AlterTableOperation::AlterColumn { .. } => {}
-        AlterTableOperation::ReplaceColumns { items, .. } => {
-            from_ast_column_alteration_list(items)?;
+        AlterTableOperation::UnsetTableProperties {
+            if_exists,
+            properties,
+            ..
+        } => {
+            let keys = from_ast_property_key_list(properties)?;
+            Ok(spec::AlterTableOperation::UnsetTableProperties {
+                keys,
+                if_exists: if_exists.is_some(),
+            })
         }
-        AlterTableOperation::AddPartitions { .. } => {}
-        AlterTableOperation::DropPartition { .. } => {}
-        AlterTableOperation::SetTableProperties { .. } => {
-            // TODO: reuse Delta metadata property canonicalization and apply via metadata-only commit.
-        }
-        AlterTableOperation::UnsetTableProperties { .. } => {
-            // TODO: reuse Delta metadata property canonicalization and apply via metadata-only commit.
-        }
-        AlterTableOperation::SetFileFormat { .. } => {}
-        AlterTableOperation::SetLocation { .. } => {}
-        AlterTableOperation::RecoverPartitions { .. } => {}
+        AlterTableOperation::RenameTable { .. }
+        | AlterTableOperation::RenamePartition { .. }
+        | AlterTableOperation::AddColumns { .. }
+        | AlterTableOperation::DropColumns { .. }
+        | AlterTableOperation::RenameColumn { .. }
+        | AlterTableOperation::AlterColumn { .. }
+        | AlterTableOperation::ReplaceColumns { .. }
+        | AlterTableOperation::AddPartitions { .. }
+        | AlterTableOperation::DropPartition { .. }
+        | AlterTableOperation::SetFileFormat { .. }
+        | AlterTableOperation::SetLocation { .. }
+        | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
     }
-    Ok(spec::AlterTableOperation::Unknown)
 }
 
 fn from_ast_alter_view_operation(
