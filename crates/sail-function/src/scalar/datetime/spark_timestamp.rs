@@ -8,7 +8,7 @@ use datafusion::arrow::array::{Array, ArrayRef, PrimitiveArray};
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{exec_datafusion_err, exec_err, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
@@ -144,7 +144,7 @@ impl SparkTimestamp {
         Ok(Self {
             timezone,
             parser,
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
             safe,
         })
     }
@@ -267,14 +267,50 @@ impl ScalarUDFImpl for SparkTimestamp {
         ))
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.is_empty() || args.args.len() > 2 {
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if !matches!(arg_types.len(), 1 | 2) {
             return Err(invalid_arg_count_exec_err(
                 self.name(),
                 (1, 2),
-                args.args.len(),
+                arg_types.len(),
             ));
         }
+        match &arg_types[0] {
+            DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::Date32
+            | DataType::Timestamp(_, _)
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Null => {}
+            other => {
+                return plan_err!(
+                    "{}: value argument must be string, date, timestamp, numeric or null, got {other}",
+                    self.name()
+                );
+            }
+        }
+        if let Some(format) = arg_types.get(1) {
+            match format {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+                other => {
+                    return plan_err!(
+                        "{}: format argument must be a string, got {other}",
+                        self.name()
+                    );
+                }
+            }
+        }
+        Ok(arg_types.to_vec())
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let safe = self.safe;
         let parser = self.parser.clone();
         let timezone = self.timezone.clone();
