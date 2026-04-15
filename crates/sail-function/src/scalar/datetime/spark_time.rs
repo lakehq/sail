@@ -7,10 +7,10 @@ use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{exec_datafusion_err, exec_err, Result};
-
-use crate::error::invalid_arg_count_exec_err;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
+
+use crate::error::invalid_arg_count_exec_err;
 
 const DEFAULT_TIME_FORMATS: &[&str] = &[
     "%H:%M:%S%.f",
