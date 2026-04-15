@@ -390,10 +390,10 @@ pub(crate) async fn list_log_files(
         files.remove(0)
     });
 
-    commit_candidates.sort_by(|(av, _), (bv, _)| av.cmp(bv));
+    commit_candidates.sort_by_key(|(av, _)| *av);
     checksum_candidates.sort_by(|(av, _), (bv, _)| bv.cmp(av));
     // Sort compaction candidates by start_version (ascending).
-    compaction_candidates.sort_by(|((a_start, _), _), ((b_start, _), _)| a_start.cmp(b_start));
+    compaction_candidates.sort_by_key(|((a_start, _), _)| *a_start);
 
     Ok((
         checksum_candidates,
@@ -483,7 +483,7 @@ fn resolve_compactions(
     commit_files.retain(|(v, _)| !is_covered(*v));
 
     // Sort selected compactions by start_version ascending for ordered replay.
-    selected_compactions.sort_by(|((a_start, _), _), ((b_start, _), _)| a_start.cmp(b_start));
+    selected_compactions.sort_by_key(|((a_start, _), _)| *a_start);
 
     (commit_files, selected_compactions)
 }

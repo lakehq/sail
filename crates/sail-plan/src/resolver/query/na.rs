@@ -53,7 +53,7 @@ impl PlanResolver<'_> {
                 ));
             }
             let columns: Vec<(String, Expr)> =
-                columns.into_iter().zip(values.into_iter()).collect();
+                columns.into_iter().zip(values).collect();
             Strategy::EachColumn { columns }
         };
 

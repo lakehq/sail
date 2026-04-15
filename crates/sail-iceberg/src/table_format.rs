@@ -109,16 +109,14 @@ impl TableFormat for IcebergTableFormat {
         let table_exists = exists_res.is_ok();
 
         match mode {
-            PhysicalSinkMode::ErrorIfExists => {
-                if table_exists {
+            PhysicalSinkMode::ErrorIfExists
+                if table_exists => {
                     return plan_err!("Iceberg table already exists at path: {table_url}");
                 }
-            }
-            PhysicalSinkMode::IgnoreIfExists => {
-                if table_exists {
+            PhysicalSinkMode::IgnoreIfExists
+                if table_exists => {
                     return Ok(Arc::new(EmptyExec::new(input.schema())));
                 }
-            }
             PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
                 return not_impl_err!("predicate or partition overwrite for Iceberg");
             }
@@ -146,9 +144,9 @@ impl TableFormat for IcebergTableFormat {
                             format_partition_exprs(&partition_by)
                         );
                     }
-                    PhysicalSinkMode::Overwrite => {
+                    PhysicalSinkMode::Overwrite
                         // For overwrite mode, check if schema overwrite is allowed
-                        if !iceberg_options.overwrite_schema {
+                        if !iceberg_options.overwrite_schema => {
                             return plan_err!(
                                 "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                                 Set overwriteSchema=true to change partitioning.",
@@ -156,7 +154,6 @@ impl TableFormat for IcebergTableFormat {
                                 format_partition_exprs(&partition_by)
                             );
                         }
-                    }
                     _ => {}
                 }
             }
