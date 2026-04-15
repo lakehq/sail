@@ -82,7 +82,7 @@ impl CatalogManager {
         let mut output = if self.state()?.is_global_temporary_view_database(database) {
             self.list_global_temporary_views(pattern).await?
         } else {
-            vec![]
+            self.list_views(database, pattern).await?
         };
         output.extend(self.list_temporary_views(pattern).await?);
         Ok(output)
