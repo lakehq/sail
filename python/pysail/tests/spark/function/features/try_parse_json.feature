@@ -278,3 +278,79 @@ Feature: try_parse_json (safe version of parse_json)
       Then query result
         | result |
         | true   |
+
+  Rule: Edge cases (advanced)
+
+    @sail-bug
+    Scenario: try_parse_json duplicate keys returns NULL (Spark rejects as malformed)
+      When query
+        """
+        SELECT try_parse_json('{"a":1,"a":2}') IS NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    @sail-bug
+    Scenario: try_parse_json scientific notation preserves decimal
+      When query
+        """
+        SELECT to_json(try_parse_json('1.5e3')) AS result
+        """
+      Then query result
+        | result |
+        | 1500.0 |
+
+    Scenario: try_parse_json negative scientific notation
+      When query
+        """
+        SELECT to_json(try_parse_json('1.5e-1')) AS result
+        """
+      Then query result
+        | result |
+        | 0.15   |
+
+    @sail-bug
+    Scenario: try_parse_json preserves large number beyond i64
+      When query
+        """
+        SELECT to_json(try_parse_json('99999999999999999999')) AS result
+        """
+      Then query result
+        | result                |
+        | 99999999999999999999  |
+
+    Scenario: try_parse_json raw control char returns NULL
+      When query
+        """
+        SELECT try_parse_json('"a\tb"') IS NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: try_parse_json unicode escape
+      When query
+        """
+        SELECT variant_get(try_parse_json('"\u00e9"'), '$', 'string') AS result
+        """
+      Then query result
+        | result |
+        | é      |
+
+    Scenario: try_parse_json heterogeneous nested structure
+      When query
+        """
+        SELECT to_json(try_parse_json('{"a":[1,"two",null,{"b":true}]}')) AS result
+        """
+      Then query result
+        | result                          |
+        | {"a":[1,"two",null,{"b":true}]} |
+
+    @sail-bug
+    Scenario: try_parse_json rejects non-string input with Spark code
+      When query
+        """
+        SELECT try_parse_json(42)
+        """
+      Then query error DATATYPE_MISMATCH

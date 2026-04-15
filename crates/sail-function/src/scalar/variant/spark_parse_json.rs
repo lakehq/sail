@@ -9,13 +9,12 @@ use datafusion::error::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
-use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::signature::Volatility;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::JsonToVariant as JsonToVariantExt;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::scalar::variant::utils::helper::{try_field_as_string, try_parse_string_scalar};
+use crate::functions_utils::make_scalar_function;
 
 /// Returns a Variant from a JSON string.
 ///
@@ -113,68 +112,12 @@ impl ScalarUDFImpl for SparkParseJson {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let arg_field = args
-            .arg_fields
-            .first()
-            .ok_or_else(|| exec_datafusion_err!("empty argument, expected 1 argument"))?;
-
-        try_field_as_string(arg_field.as_ref())?;
-
-        let arg = args
-            .args
-            .first()
-            .ok_or_else(|| exec_datafusion_err!("empty argument, expected 1 argument"))?;
-
         let safe = self.safe;
-        let out = match arg {
-            ColumnarValue::Scalar(scalar_value) => {
-                let json_str = try_parse_string_scalar(scalar_value)?;
-
-                let mut builder = VariantArrayBuilder::new(1);
-
-                match json_str {
-                    Some(json_str) => {
-                        if safe {
-                            if !try_append_json(&mut builder, json_str.as_str()) {
-                                builder.append_null();
-                            }
-                        } else {
-                            builder.append_json(json_str.as_str())?;
-                        }
-                    }
-                    // When input is NULL, return SQL NULL (not a Variant)
-                    None => builder.append_null(),
-                }
-
-                let struct_array: StructArray = builder.build().into();
-                let struct_array = convert_binaryview_to_binary(struct_array)?;
-                ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(struct_array)))
-            }
-            ColumnarValue::Array(arr) => match arr.data_type() {
-                DataType::Utf8View => {
-                    ColumnarValue::Array(from_utf8view_arr(arr, safe)?)
-                }
-                DataType::Null => {
-                    // All-NULL input: produce a Variant struct array of all NULLs
-                    let mut builder = VariantArrayBuilder::new(arr.len());
-                    for _ in 0..arr.len() {
-                        builder.append_null();
-                    }
-                    let struct_array: StructArray = builder.build().into();
-                    let struct_array = convert_binaryview_to_binary(struct_array)?;
-                    ColumnarValue::Array(Arc::new(struct_array) as ArrayRef)
-                }
-                _ => {
-                    return Err(unsupported_data_type_exec_err(
-                        self.name(),
-                        "string",
-                        arr.data_type(),
-                    ));
-                }
-            },
-        };
-
-        Ok(out)
+        let name = self.name().to_string();
+        make_scalar_function(
+            move |arrays: &[ArrayRef]| parse_json_kernel(arrays, safe, &name),
+            vec![],
+        )(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -200,6 +143,28 @@ impl ScalarUDFImpl for SparkParseJson {
         };
 
         Ok(vec![coerced_type])
+    }
+}
+
+fn parse_json_kernel(args: &[ArrayRef], safe: bool, name: &str) -> Result<ArrayRef> {
+    let arr = &args[0];
+    match arr.data_type() {
+        DataType::Utf8View => from_utf8view_arr(arr, safe),
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            let view = cast(arr, &DataType::Utf8View)
+                .map_err(|e| exec_datafusion_err!("cast to Utf8View failed: {e}"))?;
+            from_utf8view_arr(&view, safe)
+        }
+        DataType::Null => {
+            let mut builder = VariantArrayBuilder::new(arr.len());
+            for _ in 0..arr.len() {
+                builder.append_null();
+            }
+            let struct_array: StructArray = builder.build().into();
+            let struct_array = convert_binaryview_to_binary(struct_array)?;
+            Ok(Arc::new(struct_array) as ArrayRef)
+        }
+        other => Err(unsupported_data_type_exec_err(name, "string", other)),
     }
 }
 
@@ -263,7 +228,7 @@ pub(crate) fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<
 #[cfg(test)]
 mod tests {
     use datafusion::logical_expr::{ReturnFieldArgs, ScalarFunctionArgs};
-    use datafusion_common::exec_err;
+    use datafusion_common::{exec_err, ScalarValue};
     use parquet_variant::{Variant, VariantBuilder};
     use parquet_variant_compute::VariantArray;
 
