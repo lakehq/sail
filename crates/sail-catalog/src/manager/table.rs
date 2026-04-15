@@ -1,6 +1,6 @@
 use sail_common_datafusion::catalog::TableStatus;
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{CreateTableOptions, DropTableOptions};
 use crate::utils::match_pattern;
@@ -90,6 +90,13 @@ impl CatalogManager {
             Err(CatalogError::NotFound(_, _)) => {}
             Err(e) => return Err(e),
         }
-        self.get_view(reference).await
+        match self.get_view(reference).await {
+            Ok(x) => Ok(x),
+            Err(CatalogError::NotFound(_, name)) => Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                format!("[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {name}"),
+            )),
+            Err(e) => Err(e),
+        }
     }
 }
