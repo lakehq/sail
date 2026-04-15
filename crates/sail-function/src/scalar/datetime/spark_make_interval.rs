@@ -1,7 +1,6 @@
 use std::any::Any;
-use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, IntervalMonthDayNanoArray};
+use datafusion::arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval as UpstreamMakeInterval;
@@ -35,8 +34,10 @@ impl SparkMakeInterval {
         if number_rows <= 1 {
             ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None))
         } else {
-            let array: IntervalMonthDayNanoArray = (0..number_rows).map(|_| None).collect();
-            ColumnarValue::Array(Arc::new(array) as ArrayRef)
+            ColumnarValue::Array(datafusion::arrow::array::new_null_array(
+                &DataType::Interval(IntervalUnit::MonthDayNano),
+                number_rows,
+            ))
         }
     }
 }

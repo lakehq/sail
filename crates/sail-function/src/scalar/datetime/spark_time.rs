@@ -7,6 +7,8 @@ use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{exec_datafusion_err, exec_err, Result};
+
+use crate::error::invalid_arg_count_exec_err;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
@@ -174,10 +176,11 @@ impl ScalarUDFImpl for SparkTime {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.is_empty() || args.args.len() > 2 {
-            return exec_err!(
-                "spark_time: expected 1 or 2 arguments, got {}",
-                args.args.len()
-            );
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (1, 2),
+                args.args.len(),
+            ));
         }
         let safe = self.safe;
         make_scalar_function(move |a: &[ArrayRef]| Self::kernel(safe, a), vec![])(&args.args)
