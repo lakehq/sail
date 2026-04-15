@@ -25,9 +25,9 @@ env SAIL_UPDATE_GOLD_DATA=1 cargo nextest run
 - **Formatting**: `hatch fmt`
 - **Test**:
   1. Build the native extension and install the `pysail` package in editable mode for the `default` Hatch environment: `hatch run maturin develop`. Re-run this command if you modify Rust code. Python code changes are reflected immediately.
-  2. Run Python tests using `pytest` via Hatch: `hatch run pytest`. You can pass additional arguments to `pytest` if needed. For example, use the `-k` flag to filter tests by keywords. The keywords can match tests by function names or file names and allow predicates with `and`, `or`, and `not`. In this way you do not need to select tests by the full path.
+  2. Run tests using `pytest` via Hatch: `hatch run pytest`. You can pass additional arguments to `pytest` if needed. For example, use the `-k` flag to filter tests by keywords. The keywords can match tests by function names or file names and allow predicates with `and`, `or`, and `not`. In this way you do not need to select tests by the full path.
 
-You must ensure the relevant Python tests pass when making changes to Rust or Python code.
+You must run `pytest` to ensure the relevant tests pass when making changes to Rust or Python code.
 
 ### Documentation Development
 
@@ -52,7 +52,7 @@ You can skip API documentation generation if you are only working on files insid
 
 ### Codec
 
-When adding functions or physical execution plans, make sure to update `crates/sail-execution/src/codec.rs` so that the query plan can work in cluster mode.
+When adding SQL function implementations or physical execution plan nodes, make sure to update `crates/sail-execution/src/codec.rs` so that the query plan can work in cluster mode.
 
 ### Test Style
 
