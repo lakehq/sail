@@ -78,7 +78,7 @@ impl CatalogManager {
         database: &[T],
         pattern: Option<&str>,
     ) -> CatalogResult<Vec<TableStatus>> {
-        // See `list_tables_and_temporary_views()` for how the (global) temporary views are handled.
+        // See `list_tables_and_views()` for how the (global) temporary views are handled.
         let mut output = if self.state()?.is_global_temporary_view_database(database) {
             self.list_global_temporary_views(pattern).await?
         } else {
