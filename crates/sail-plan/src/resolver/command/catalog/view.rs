@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use datafusion_common::TableReference;
 use datafusion_expr::{LogicalPlan, SubqueryAlias};
 use sail_catalog::command::CatalogCommand;
@@ -14,7 +13,7 @@ use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -37,28 +36,30 @@ impl PlanResolver<'_> {
         // Resolve the query plan to register fields in state and extract column types.
         let resolved_input = self.resolve_query_plan(*input, state).await?;
         let schema = resolved_input.schema();
-        let field_names = Self::get_field_names(schema, state)?;
         let columns = if let Some(columns) = columns {
+            let field_count = schema.fields().len();
+            if columns.len() != field_count {
+                return Err(PlanError::AnalysisError(format!(
+                    "CREATE VIEW column list has {} columns, but the query produces {} columns",
+                    columns.len(),
+                    field_count
+                )));
+            }
             columns
                 .into_iter()
-                .enumerate()
-                .map(|(i, x)| {
+                .zip(schema.fields().iter())
+                .map(|(x, field)| {
                     let spec::ViewColumnDefinition { name, comment } = x;
-                    let (data_type, nullable) = if let Some(field) = schema.fields().get(i) {
-                        (field.data_type().clone(), field.is_nullable())
-                    } else {
-                        (DataType::Null, true)
-                    };
                     CreateViewColumnOptions {
                         name,
-                        data_type,
-                        nullable,
+                        data_type: field.data_type().clone(),
+                        nullable: field.is_nullable(),
                         comment,
                     }
                 })
                 .collect()
         } else {
-            field_names
+            Self::get_field_names(schema, state)?
                 .into_iter()
                 .zip(schema.fields().iter())
                 .map(|(name, field)| CreateViewColumnOptions {

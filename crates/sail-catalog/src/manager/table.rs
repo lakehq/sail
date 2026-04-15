@@ -38,7 +38,7 @@ impl CatalogManager {
             .collect())
     }
 
-    pub async fn list_tables_and_temporary_views<T: AsRef<str>>(
+    pub async fn list_tables_and_views<T: AsRef<str>>(
         &self,
         database: &[T],
         pattern: Option<&str>,
