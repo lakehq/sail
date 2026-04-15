@@ -23,7 +23,10 @@ use url::Url;
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
-use crate::spec::{canonicalize_and_validate_table_properties, route_table_property_key};
+use crate::spec::{
+    canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
+    DeltaOperation, Protocol, TableFeature,
+};
 use crate::table::open_table_with_object_store;
 use crate::{create_delta_provider, create_delta_source, DeltaTableError};
 
@@ -294,6 +297,109 @@ impl TableFormat for DeltaTableFormat {
                 not_impl_err!("UPDATE is not yet implemented for Delta Lake")
             }
         }
+    }
+
+    async fn alter_table_properties(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        changes: Vec<(String, Option<String>)>,
+    ) -> Result<()> {
+        use crate::kernel::transaction::CommitBuilder;
+
+        // Parse the table URL: handle both absolute filesystem paths and URLs
+        let url = if std::path::Path::new(path).is_absolute() {
+            Url::from_file_path(path).map_err(|_| {
+                DataFusionError::External(format!("invalid file path: {path}").into())
+            })?
+        } else {
+            Url::parse(path).map_err(|e| DataFusionError::External(Box::new(e)))?
+        };
+
+        // Get the object store from runtime_env
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Open existing delta table
+        let table = open_table_with_object_store(url, object_store, Default::default())
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .clone();
+
+        // Validate and canonicalize property keys being set
+        let set_pairs: Vec<(&str, &str)> = changes
+            .iter()
+            .filter_map(|(k, v)| v.as_deref().map(|val| (k.as_str(), val)))
+            .collect();
+        let validated_sets = canonicalize_and_validate_table_properties(set_pairs.iter().copied())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Build new metadata by applying changes to existing metadata
+        let mut new_metadata = snapshot.metadata().clone();
+        for (key, value) in validated_sets.iter() {
+            new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+        }
+        for (key, opt_val) in &changes {
+            if opt_val.is_none() {
+                new_metadata = new_metadata.remove_config_key(key);
+            }
+        }
+
+        let new_config = new_metadata.configuration().clone();
+
+        // Determine if an ICT protocol upgrade is needed
+        let existing_protocol = snapshot.protocol();
+        let enables_ict = new_config
+            .get("delta.enableInCommitTimestamps")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let needs_ict_upgrade =
+            enables_ict && !existing_protocol.has_writer_feature(&TableFeature::InCommitTimestamp);
+
+        let mut actions: Vec<CommitAction> = Vec::new();
+
+        if needs_ict_upgrade {
+            let new_min_writer = existing_protocol.min_writer_version().max(7);
+            let reader_features: Vec<TableFeature> =
+                existing_protocol.reader_features().unwrap_or(&[]).to_vec();
+            let mut writer_features: Vec<TableFeature> =
+                existing_protocol.writer_features().unwrap_or(&[]).to_vec();
+            if !writer_features.contains(&TableFeature::InCommitTimestamp) {
+                writer_features.push(TableFeature::InCommitTimestamp);
+            }
+            let upgraded = Protocol::new(
+                existing_protocol.min_reader_version(),
+                new_min_writer,
+                if reader_features.is_empty() {
+                    None
+                } else {
+                    Some(reader_features)
+                },
+                Some(writer_features),
+            );
+            actions.push(CommitAction::Protocol(upgraded));
+        }
+
+        actions.push(CommitAction::Metadata(new_metadata));
+
+        let operation = DeltaOperation::SetTableProperties {
+            properties: validated_sets,
+        };
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(Some(snapshot), table.log_store(), operation)
+            .await
+            .map(|_| ())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        Ok(())
     }
 }
 

@@ -1,6 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
+use sail_common_datafusion::datasource::TableFormatRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -354,7 +355,48 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::AlterTable { table, options } => {
-                manager.alter_table(&table, options).await?;
+                // Fetch the table status before altering to find the location and format
+                // so we can propagate property changes to the underlying storage (e.g. Delta log).
+                let table_location_and_format: Option<(String, String)> =
+                    manager.get_table_or_view(&table).await.ok().and_then(|ts| {
+                        if let sail_common_datafusion::catalog::TableKind::Table {
+                            location: Some(loc),
+                            format,
+                            ..
+                        } = ts.kind
+                        {
+                            Some((loc, format))
+                        } else {
+                            None
+                        }
+                    });
+
+                manager.alter_table(&table, options.clone()).await?;
+
+                // Propagate property changes to underlying storage format if applicable
+                if let Some((location, format)) = table_location_and_format {
+                    if let Ok(registry) = ctx.extension::<TableFormatRegistry>() {
+                        if let Ok(table_format) = registry.get(&format) {
+                            let runtime = ctx.runtime_env();
+                            let changes: Vec<(String, Option<String>)> = match &options {
+                                AlterTableOptions::SetTableProperties { properties } => properties
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), Some(v.clone())))
+                                    .collect(),
+                                AlterTableOptions::UnsetTableProperties { keys, .. } => {
+                                    keys.iter().map(|k| (k.clone(), None)).collect()
+                                }
+                            };
+                            if let Err(e) = table_format
+                                .alter_table_properties(runtime, &location, changes)
+                                .await
+                            {
+                                log::warn!("failed to persist ALTER TABLE properties to storage at {location}: {e}");
+                            }
+                        }
+                    }
+                }
+
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::ListColumns { table } => {

@@ -321,6 +321,24 @@ pub trait TableFormat: Send + Sync {
     fn merge_strategy(&self) -> MergeStrategy {
         MergeStrategy::Eager
     }
+
+    /// Alters table properties (SET/UNSET TBLPROPERTIES).
+    ///
+    /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
+    /// or `None` to unset/remove it. The implementation is responsible for committing these changes
+    /// to the underlying table storage (e.g., writing a new Delta log entry).
+    async fn alter_table_properties(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        changes: Vec<(String, Option<String>)>,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, changes);
+        not_impl_err!(
+            "Table properties alteration not supported for {} format",
+            self.name()
+        )
+    }
 }
 
 /// Thread-safe registry of available `TableFormat` implementations.

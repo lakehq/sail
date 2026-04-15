@@ -97,6 +97,10 @@ pub enum DeltaOperation {
         #[serde(skip_serializing_if = "Option::is_none")]
         datetime: Option<i64>,
     },
+    #[serde(rename_all = "camelCase")]
+    SetTableProperties {
+        properties: HashMap<String, String>,
+    },
 }
 
 impl DeltaOperation {
@@ -112,6 +116,7 @@ impl DeltaOperation {
             Self::Merge { .. } => "MERGE",
             Self::FileSystemCheck { .. } => "FSCK",
             Self::Restore { .. } => "RESTORE",
+            Self::SetTableProperties { .. } => "SET TBLPROPERTIES",
         }
     }
 
@@ -186,6 +191,9 @@ impl DeltaOperation {
             Self::Restore { version, datetime } => {
                 insert_opt(&mut parameters, "version", *version);
                 insert_opt(&mut parameters, "datetime", *datetime);
+            }
+            Self::SetTableProperties { properties } => {
+                insert_json(&mut parameters, "properties", properties)?;
             }
         }
 
