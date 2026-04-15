@@ -192,7 +192,10 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
-use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
+use sail_iceberg::physical_plan::{
+    IcebergCommitExec, IcebergDiscoveryExec, IcebergManifestScanExec, IcebergScanByDataFilesExec,
+    IcebergWriterExec,
+};
 use sail_iceberg::IcebergWriterExecOptions;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
@@ -1034,6 +1037,43 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
                 Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
             }
+            NodeKind::IcebergManifestScan(gen::IcebergManifestScanExecNode {
+                table_url,
+                snapshot_json,
+            }) => {
+                let snapshot: sail_iceberg::spec::Snapshot = serde_json::from_str(&snapshot_json)
+                    .map_err(|e| {
+                    plan_datafusion_err!("failed to decode Iceberg snapshot: {e}")
+                })?;
+                Ok(Arc::new(IcebergManifestScanExec::new(table_url, snapshot)))
+            }
+            NodeKind::IcebergDiscovery(gen::IcebergDiscoveryExecNode {
+                input,
+                table_url,
+                snapshot_id,
+                input_partition_scan,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(IcebergDiscoveryExec::new(
+                    input,
+                    table_url,
+                    snapshot_id,
+                    input_partition_scan,
+                )?))
+            }
+            NodeKind::IcebergScanByDataFiles(gen::IcebergScanByDataFilesExecNode {
+                input,
+                table_url,
+                output_schema,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let output_schema = Arc::new(self.try_decode_schema(&output_schema)?);
+                Ok(Arc::new(IcebergScanByDataFilesExec::new(
+                    input,
+                    table_url,
+                    output_schema,
+                )))
+            }
             NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
                 pickled_reader,
                 schema,
@@ -1656,6 +1696,32 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergCommit(gen::IcebergCommitExecNode {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
+            })
+        } else if let Some(manifest_scan) = node.as_any().downcast_ref::<IcebergManifestScanExec>()
+        {
+            let snapshot_json = serde_json::to_string(manifest_scan.snapshot())
+                .map_err(|e| plan_datafusion_err!("failed to encode Iceberg snapshot: {e}"))?;
+            NodeKind::IcebergManifestScan(gen::IcebergManifestScanExecNode {
+                table_url: manifest_scan.table_url().to_string(),
+                snapshot_json,
+            })
+        } else if let Some(discovery) = node.as_any().downcast_ref::<IcebergDiscoveryExec>() {
+            let input = self.try_encode_plan(discovery.input().clone())?;
+            NodeKind::IcebergDiscovery(gen::IcebergDiscoveryExecNode {
+                input,
+                table_url: discovery.table_url().to_string(),
+                snapshot_id: discovery.snapshot_id(),
+                input_partition_scan: discovery.input_partition_scan(),
+            })
+        } else if let Some(scan_by_files) =
+            node.as_any().downcast_ref::<IcebergScanByDataFilesExec>()
+        {
+            let input = self.try_encode_plan(scan_by_files.input().clone())?;
+            let output_schema = self.try_encode_schema(scan_by_files.output_schema().as_ref())?;
+            NodeKind::IcebergScanByDataFiles(gen::IcebergScanByDataFilesExecNode {
+                input,
+                table_url: scan_by_files.table_url().to_string(),
+                output_schema,
             })
         } else if let Some(python_exec) = node.as_any().downcast_ref::<PythonDataSourceExec>() {
             let schema = self.try_encode_schema(python_exec.schema().as_ref())?;

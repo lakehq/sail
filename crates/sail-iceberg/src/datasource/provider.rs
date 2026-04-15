@@ -44,6 +44,8 @@ use crate::datasource::type_converter::iceberg_schema_to_arrow;
 use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
 };
+use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
+use crate::physical_plan::manifest_scan_exec::IcebergManifestScanExec;
 use crate::spec::manifest::DataContentType;
 use crate::spec::transform::Transform;
 use crate::spec::types::values::Literal;
@@ -77,6 +79,8 @@ pub struct IcebergTableProvider {
     default_spec_id: i32,
     /// Arrow schema for DataFusion
     arrow_schema: Arc<ArrowSchema>,
+    /// Whether to use the metadata-as-data read path (lazy manifest scanning)
+    metadata_as_data_read: bool,
 }
 
 impl IcebergTableProvider {
@@ -114,7 +118,14 @@ impl IcebergTableProvider {
             partition_specs,
             default_spec_id,
             arrow_schema,
+            metadata_as_data_read: false,
         })
+    }
+
+    /// Set whether to use the metadata-as-data read path.
+    pub fn with_metadata_as_data_read(mut self, enabled: bool) -> Self {
+        self.metadata_as_data_read = enabled;
+        self
     }
 
     fn reorder_arrow_schema_for_identity_partitions(
@@ -561,6 +572,10 @@ impl TableProvider for IcebergTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
+        if self.metadata_as_data_read {
+            return self.scan_metadata_as_data(session, projection, filters, limit);
+        }
+
         let table_url = Url::parse(&self.table_uri)
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
         let base_store = get_object_store_from_session(session, &table_url)?;
@@ -832,5 +847,59 @@ impl IcebergTableProvider {
         } else {
             self.arrow_schema.clone()
         }
+    }
+
+    /// Metadata-as-data scan path: defers manifest scanning to the physical plan.
+    /// Instead of eagerly loading file metadata on the driver, an `IcebergManifestScanExec`
+    /// node produces file metadata that feeds through `IcebergDiscoveryExec` (tagging) and
+    /// into `IcebergScanByDataFilesExec` which dynamically opens Parquet files via a
+    /// streaming `try_unfold` loop.
+    ///
+    /// Physical plan pipeline:
+    /// ```text
+    /// IcebergManifestScanExec (lazy manifest reading → file metadata stream)
+    ///   ↓
+    /// IcebergDiscoveryExec (annotate stream with partition_scan flag)
+    ///   ↓
+    /// IcebergScanByDataFilesExec (consume file paths → dynamic Parquet scan)
+    ///   ↓
+    /// Data output (actual table rows)
+    /// ```
+    fn scan_metadata_as_data(
+        &self,
+        _session: &dyn Session,
+        _projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        log::trace!(
+            "Using metadata-as-data scan path for table: {}",
+            self.table_uri
+        );
+
+        // Step 1: Build the manifest scan node (lazy metadata producer).
+        let manifest_scan: Arc<dyn ExecutionPlan> = Arc::new(IcebergManifestScanExec::new(
+            self.table_uri.clone(),
+            self.snapshot.clone(),
+        ));
+
+        // Step 2: Annotate with discovery metadata (partition_scan flag).
+        let discovery: Arc<dyn ExecutionPlan> = Arc::new(IcebergDiscoveryExec::new(
+            manifest_scan,
+            self.table_uri.clone(),
+            self.snapshot.snapshot_id(),
+            false, // full data file scan, not partition-only
+        )?);
+
+        // Step 3: Build the scan-by-data-files node (streaming data consumer).
+        let scan_exec = Arc::new(
+            crate::physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec::new(
+                discovery,
+                self.table_uri.clone(),
+                self.arrow_schema.clone(),
+            ),
+        );
+
+        Ok(scan_exec)
     }
 }

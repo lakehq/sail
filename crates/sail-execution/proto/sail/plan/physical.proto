@@ -55,6 +55,9 @@ message ExtendedPhysicalPlanNode {
     CatalogCommandExecNode catalog_command = 40;
     BarrierExecNode barrier = 41;
     RelaxedTzCastExecNode relaxed_tz_cast = 42;
+    IcebergManifestScanExecNode iceberg_manifest_scan = 43;
+    IcebergDiscoveryExecNode iceberg_discovery = 44;
+    IcebergScanByDataFilesExecNode iceberg_scan_by_data_files = 45;
   }
 }
 
@@ -645,6 +648,25 @@ message IcebergWriterExecNode {
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+}
+
+message IcebergManifestScanExecNode {
+  string table_url = 1;
+  // Iceberg Snapshot serialized as JSON.
+  string snapshot_json = 2;
+}
+
+message IcebergDiscoveryExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  int64 snapshot_id = 3;
+  bool input_partition_scan = 4;
+}
+
+message IcebergScanByDataFilesExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  bytes output_schema = 3;
 }
 
 message DeltaLogReplayExecNode {
