@@ -76,10 +76,7 @@ fn trunc(date: Expr, part: Expr) -> Expr {
 }
 
 fn date_trunc(part: Expr, timestamp: Expr) -> Expr {
-    cast(
-        expr_fn::date_trunc(trunc_part_conversion(part), timestamp),
-        DataType::Timestamp(TimeUnit::Microsecond, None),
-    )
+    expr_fn::date_trunc(trunc_part_conversion(part), timestamp)
 }
 
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
