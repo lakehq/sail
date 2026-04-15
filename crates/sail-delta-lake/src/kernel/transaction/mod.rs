@@ -1487,7 +1487,7 @@ impl std::future::IntoFuture for PostCommit {
                 let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
                     .div_euclid(24 * 60 * 60 * 1000)
                     * (24 * 60 * 60 * 1000);
-                let num_cleaned_up = match cleanup_expired_delta_log_files(
+                match cleanup_expired_delta_log_files(
                     state.as_ref(),
                     this.log_store.as_ref(),
                     cutoff_timestamp,
@@ -1495,16 +1495,14 @@ impl std::future::IntoFuture for PostCommit {
                 )
                 .await
                 {
-                    Ok(n) => n,
+                    Ok(_) => {}
                     Err(e) => {
                         warn!(
                             "Failed to clean up expired log files for version {}: {e}",
                             this.version
                         );
-                        0
                     }
-                };
-                let _ = num_cleaned_up;
+                }
             }
 
             // Log compaction
