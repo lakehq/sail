@@ -347,7 +347,6 @@ Feature: try_parse_json (safe version of parse_json)
         | result                          |
         | {"a":[1,"two",null,{"b":true}]} |
 
-    @sail-bug
     Scenario: try_parse_json rejects non-string input with Spark code
       When query
         """

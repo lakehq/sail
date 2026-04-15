@@ -82,7 +82,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
 
   Rule: Invalid JSON raises MALFORMED_RECORD_IN_PARSING
 
-    @sail-bug
     Scenario: parse_json invalid text errors with Spark code
       When query
         """
@@ -90,7 +89,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
         """
       Then query error MALFORMED_RECORD_IN_PARSING
 
-    @sail-bug
     Scenario: parse_json empty string errors with Spark code
       When query
         """
@@ -98,7 +96,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
         """
       Then query error MALFORMED_RECORD_IN_PARSING
 
-    @sail-bug
     Scenario: parse_json unclosed brace errors with Spark code
       When query
         """
@@ -106,7 +103,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
         """
       Then query error MALFORMED_RECORD_IN_PARSING
 
-    @sail-bug
     Scenario: parse_json unclosed bracket errors with Spark code
       When query
         """
@@ -114,7 +110,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
         """
       Then query error MALFORMED_RECORD_IN_PARSING
 
-    @sail-bug
     Scenario: parse_json raw control char errors with Spark code
       When query
         """
@@ -132,7 +127,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
 
   Rule: Type handling
 
-    @sail-bug
     Scenario: parse_json rejects non-string input with Spark code
       When query
         """
@@ -180,7 +174,6 @@ Feature: parse_json (strict version; errors on invalid JSON)
         | result                |
         | 99999999999999999999  |
 
-    @sail-bug
     Scenario: parse_json accepts trailing garbage (Spark parses prefix)
       When query
         """

@@ -48,7 +48,8 @@ impl Default for SparkParseJson {
 
 /// Try to parse a JSON string leniently. If `serde_json::from_str` fails
 /// (e.g. trailing garbage), use streaming parsing to read the first
-/// complete JSON value (matching Spark's `try_parse_json` behavior).
+/// complete JSON value (matching Spark's `parse_json` / `try_parse_json`
+/// behavior, which both accept trailing content after a valid prefix).
 fn try_parse_json_lenient(json_str: &str) -> Option<serde_json::Value> {
     if let Ok(value) = serde_json::from_str(json_str) {
         return Some(value);
@@ -65,6 +66,25 @@ fn try_append_json(builder: &mut VariantArrayBuilder, json_str: &str) -> bool {
             builder.append_json(json_str.as_str()).is_ok()
         }
         None => false,
+    }
+}
+
+/// Wrap a JSON-parse failure with Spark's canonical error code so feature
+/// tests and user-facing errors match `[MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION]`.
+fn malformed_record_err(record: &str) -> datafusion_common::DataFusionError {
+    exec_datafusion_err!(
+        "[MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION] Malformed records are detected in record parsing: {record}."
+    )
+}
+
+/// Strict-path append: accept trailing garbage (first valid prefix), error
+/// with `MALFORMED_RECORD_IN_PARSING` on unparseable input.
+fn append_json_strict(builder: &mut VariantArrayBuilder, json_str: &str) -> Result<()> {
+    match try_parse_json_lenient(json_str) {
+        Some(value) => builder
+            .append_json(value.to_string().as_str())
+            .map_err(|_| malformed_record_err(json_str)),
+        None => Err(malformed_record_err(json_str)),
     }
 }
 
@@ -134,11 +154,11 @@ impl ScalarUDFImpl for SparkParseJson {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8View,
             DataType::Null => DataType::Null,
             other => {
-                return Err(unsupported_data_type_exec_err(
+                return datafusion_common::plan_err!(
+                    "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{}\" due to data type mismatch: The first parameter requires the \"STRING\" type, however the input has the type \"{}\".",
                     self.name(),
-                    "string",
-                    other,
-                ));
+                    other
+                );
             }
         };
 
@@ -189,7 +209,7 @@ pub(crate) fn from_utf8view_arr(arr: &ArrayRef, safe: bool) -> Result<ArrayRef> 
                         builder.append_null();
                     }
                 } else {
-                    builder.append_json(json_str)?;
+                    append_json_strict(&mut builder, json_str)?;
                 }
             }
             None => builder.append_null(),
