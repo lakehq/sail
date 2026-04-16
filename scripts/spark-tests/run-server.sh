@@ -10,9 +10,11 @@ fi
 
 work_dir="$(python -c 'import os, pyspark; print(os.path.dirname(pyspark.__file__))')"
 python_version="$(python -c 'import sys; print("%s.%s" % (sys.version_info.major, sys.version_info.minor))')"
+pyspark_version="$(python -c 'import pyspark; print(pyspark.__version__)')"
 
 echo "Python environment: ${VIRTUAL_ENV}"
 echo "Python version: ${python_version}"
+echo "PySpark version: ${pyspark_version}"
 echo "Sail working directory: ${work_dir}"
 
 export PYARROW_IGNORE_TIMEZONE="1"
@@ -22,6 +24,8 @@ export SAIL_EXECUTION__DEFAULT_PARALLELISM="4"
 export SAIL_CATALOG__DEFAULT_CATALOG='"spark_catalog"'
 export SAIL_CATALOG__DEFAULT_DATABASE='["default"]'
 export SAIL_CATALOG__LIST='[{name="spark_catalog", type="memory", initial_database=["default"], initial_database_comment="default database"}]'
+# Report the Spark version matching the PySpark client version.
+export SAIL_SPARK__SPARK_VERSION="${SAIL_SPARK__SPARK_VERSION:-${pyspark_version}}"
 
 if [ -z "${CI:-}" ]; then
   export PYO3_PYTHON="${VIRTUAL_ENV}/bin/python"

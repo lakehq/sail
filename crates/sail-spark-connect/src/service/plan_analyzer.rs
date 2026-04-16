@@ -31,7 +31,6 @@ use crate::spark::connect::analyze_plan_response::{
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
 use crate::spark::connect::StorageLevel;
-use crate::SPARK_VERSION;
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
@@ -118,11 +117,12 @@ pub(crate) async fn handle_analyze_input_files(
 }
 
 pub(crate) async fn handle_analyze_spark_version(
-    _ctx: &SessionContext,
+    ctx: &SessionContext,
     _request: SparkVersionRequest,
 ) -> SparkResult<SparkVersionResponse> {
+    let spark = ctx.extension::<SparkSession>()?;
     Ok(SparkVersionResponse {
-        version: SPARK_VERSION.to_string(),
+        version: spark.spark_version().to_string(),
     })
 }
 

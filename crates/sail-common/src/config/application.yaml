@@ -710,6 +710,12 @@
     Whether to enable cost-based join reorder in the query optimizer.
   experimental: true
 
+- key: spark.spark_version
+  type: string
+  default: "4.1.1"
+  description: |
+    The Spark version reported by the server to Spark Connect clients.
+
 - key: spark.session_timeout_secs
   type: number
   default: "900"
