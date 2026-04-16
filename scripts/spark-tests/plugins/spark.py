@@ -89,6 +89,23 @@ def normalize_pandas_data_frame(df):
     return df.sort_values(by=columns, ignore_index=True)
 
 
+def normalize_datetime_dtypes(df):
+    """Normalize timezone-naive datetime column dtypes to microsecond precision.
+
+    With pyarrow >= 13.0, Arrow timestamp[us, tz=UTC] is converted to datetime64[us]
+    in pandas instead of the previous datetime64[ns]. PySpark 3.5.x does not handle
+    this pyarrow version change (PySpark 4.x fixes it with coerce_temporal_nanoseconds=True).
+    This function normalizes both DataFrames to the same precision before comparison.
+    """
+    import numpy as np
+
+    df = df.copy()
+    for col in df.columns:
+        if isinstance(df[col].dtype, np.dtype) and df[col].dtype.kind == "M":
+            df[col] = df[col].astype("datetime64[us]")
+    return df
+
+
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pyspark_pandas_test_utils():
     from pyspark.testing.pandasutils import PandasOnSparkTestUtils
@@ -122,6 +139,8 @@ def patch_pandas_test_utils():
     def assert_frame_equal(left, right, **kwargs):
         left = normalize_pandas_data_frame(left)
         right = normalize_pandas_data_frame(right)
+        left = normalize_datetime_dtypes(left)
+        right = normalize_datetime_dtypes(right)
         _assert_frame_equal(left, right, **kwargs)
 
     modules = [
