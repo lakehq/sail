@@ -28,7 +28,7 @@ pub struct PlanConfig {
     pub default_warehouse_directory: String,
     pub session_user_id: String,
     pub ansi_mode: bool,
-    /// Whether implicit cross joins (cartesian products) are allowed.
+    /// Whether to allow cartesian products (cross joins) without explicit `CROSS JOIN` syntax.
     pub cross_join_enabled: bool,
 }
 
