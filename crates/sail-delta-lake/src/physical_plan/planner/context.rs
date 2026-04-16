@@ -21,13 +21,13 @@ use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
-use crate::kernel::DeltaTableConfig as KernelDeltaTableConfig;
+use crate::kernel::DeltaSnapshotConfig;
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store_and_table_config, DeltaTable};
 
 /// Configuration shared by all Delta planners.
 #[derive(Clone)]
-pub struct DeltaTableConfig {
+pub struct DeltaPlannerConfig {
     pub table_url: Url,
     pub options: DeltaWriteOptions,
     pub metadata_configuration: HashMap<String, String>,
@@ -36,7 +36,7 @@ pub struct DeltaTableConfig {
     pub table_exists: bool,
 }
 
-impl DeltaTableConfig {
+impl DeltaPlannerConfig {
     pub fn new(
         table_url: Url,
         options: DeltaWriteOptions,
@@ -59,14 +59,14 @@ impl DeltaTableConfig {
 /// Shared planner context containing table/session state.
 pub struct PlannerContext<'a> {
     session: &'a dyn Session,
-    config: DeltaTableConfig,
+    config: DeltaPlannerConfig,
     // Planner-local memoization cache used to avoid repeated `_delta_log` listings when
     // one planning request builds multiple log-replay branches (e.g. overwrite-if old/new).
     log_segment_files_cache: Arc<Mutex<HashMap<i64, LogSegmentFiles>>>,
 }
 
 impl<'a> PlannerContext<'a> {
-    pub fn new(session: &'a dyn Session, config: DeltaTableConfig) -> Self {
+    pub fn new(session: &'a dyn Session, config: DeltaPlannerConfig) -> Self {
         Self {
             session,
             config,
@@ -78,7 +78,7 @@ impl<'a> PlannerContext<'a> {
         self.session
     }
 
-    pub fn config(&self) -> &DeltaTableConfig {
+    pub fn config(&self) -> &DeltaPlannerConfig {
         &self.config
     }
 
@@ -106,7 +106,7 @@ impl<'a> PlannerContext<'a> {
         self.config.table_exists
     }
 
-    pub fn into_config(self) -> DeltaTableConfig {
+    pub fn into_config(self) -> DeltaPlannerConfig {
         self.config
     }
 
@@ -149,7 +149,7 @@ impl<'a> PlannerContext<'a> {
         let object_store = self.object_store()?;
         // Planning-time code only needs the log segment / metadata; avoid eagerly materializing
         // the full active file list on the driver.
-        let table_config = KernelDeltaTableConfig {
+        let table_config = DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
         };

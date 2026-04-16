@@ -31,4 +31,5 @@ pub use logical::DeltaTableSource;
 pub use table::{create_delta_provider, create_delta_source};
 pub use table_format::DeltaTableFormat;
 
+pub use crate::kernel::DeltaSnapshotConfig;
 pub use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
