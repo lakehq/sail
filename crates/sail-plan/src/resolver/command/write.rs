@@ -554,13 +554,12 @@ impl PlanResolver<'_> {
                             // the table was created externally and the expression was stored
                             // as a JSON-encoded string (i.e. the SQL wrapped in extra quotes), so we
                             // first try to JSON-decode the value and fall back to the raw string.
-                            let generated_always_as =
-                                f.metadata()
-                                    .get(DELTA_GENERATION_EXPRESSION_METADATA_KEY)
-                                    .map(|v| {
-                                        serde_json::from_str::<String>(v)
-                                            .unwrap_or_else(|_| v.clone())
-                                    });
+                            let generated_always_as = f
+                                .metadata()
+                                .get(DELTA_GENERATION_EXPRESSION_METADATA_KEY)
+                                .map(|v| {
+                                    serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone())
+                                });
                             TableColumnStatus {
                                 name: f.name().clone(),
                                 data_type: f.data_type().clone(),
@@ -647,9 +646,7 @@ impl PlanResolver<'_> {
                         // skipping any generated columns that may appear in the list.
                         columns
                             .iter()
-                            .filter_map(|c| {
-                                name_to_fid.get(&c.as_ref().to_lowercase()).copied()
-                            })
+                            .filter_map(|c| name_to_fid.get(&c.as_ref().to_lowercase()).copied())
                             .collect()
                     }
                     _ => field_ids.iter().collect(),
