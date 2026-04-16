@@ -62,6 +62,10 @@ impl PlanResolver<'_> {
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
 
+        // Capture the user-facing field names before further resolution pollutes the state.
+        let resolved_target_field_names = Self::get_field_names(target_schema, state)?;
+        let resolved_source_field_names = Self::get_field_names(source_schema, state)?;
+
         // Register synthetic plan ids for both sides. These are only used to disambiguate
         // unqualified attributes when the Connect proto omits `plan_id`.
         for field in target_schema.fields() {
@@ -107,6 +111,8 @@ impl PlanResolver<'_> {
             with_schema_evolution,
             resolved_target_schema: target_schema.clone(),
             resolved_source_schema: source_schema.clone(),
+            resolved_target_field_names,
+            resolved_source_field_names,
             on_condition: ExprWithSource::new(on_condition, on_condition_source),
             matched_clauses,
             not_matched_by_source_clauses: not_matched_by_source,

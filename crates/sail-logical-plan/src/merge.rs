@@ -130,6 +130,11 @@ pub struct MergeIntoOptions {
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
     pub resolved_source_schema: DFSchemaRef,
+    /// User-facing field names for target and source, resolved from opaque IDs
+    /// at plan resolution time. Used by `expand_merge` to map opaque IDs back
+    /// to real column names without the fragile `recover_field_names` heuristic.
+    pub resolved_target_field_names: Vec<String>,
+    pub resolved_source_field_names: Vec<String>,
     pub on_condition: ExprWithSource,
     pub matched_clauses: Vec<MergeMatchedClause>,
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
@@ -582,26 +587,33 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
             .collect::<Vec<_>>()
     );
 
-    // Rename target/source to the resolved logical column names carried in `input_schema`
-    // because upstream scans may surface placeholder names like "#0".
-    let desired_target_names =
+    // Use the real field names captured at resolution time to map opaque IDs
+    // back to user-facing column names. Fall back to the `recover_field_names`
+    // heuristic only when the resolver did not provide names.
+    let desired_target_names = if !options.resolved_target_field_names.is_empty() {
+        options.resolved_target_field_names.clone()
+    } else {
         recover_field_names(&target_plan, path_column).unwrap_or_else(|| {
-            node.options()
+            options
                 .resolved_target_schema
                 .fields()
                 .iter()
                 .map(|f| f.name().clone())
                 .collect()
-        });
-    let desired_source_names =
+        })
+    };
+    let desired_source_names = if !options.resolved_source_field_names.is_empty() {
+        options.resolved_source_field_names.clone()
+    } else {
         recover_field_names(&source_plan, path_column).unwrap_or_else(|| {
-            node.options()
+            options
                 .resolved_source_schema
                 .fields()
                 .iter()
                 .map(|f| f.name().clone())
                 .collect()
-        });
+        })
+    };
     trace!("resolved target names: {:?}", &desired_target_names);
     trace!("resolved source names: {:?}", &desired_source_names);
 
@@ -1055,14 +1067,27 @@ fn build_insert_only_projection(
     // with clause order determining first-match semantics.
     let mut projections = Vec::new();
 
-    // Build lookup for source expressions by index, consistent with existing InsertAll behavior.
-    let source_exprs = source_schema
+    // Build lookup for source expressions by name. Source columns are prefixed
+    // with `__sail_src_`, so target field "id" maps to source column "__sail_src_id".
+    let source_exprs_by_name: HashMap<String, Expr> = source_schema
         .fields()
         .iter()
-        .map(|f| Expr::Column(Column::from_name(f.name().clone())))
-        .collect::<Vec<_>>();
+        .map(|f| {
+            (
+                f.name().clone(),
+                Expr::Column(Column::from_name(f.name().clone())),
+            )
+        })
+        .collect();
+    let source_expr_for_target = |target_name: &str| -> Expr {
+        let prefixed = format!("__sail_src_{target_name}");
+        source_exprs_by_name
+            .get(&prefixed)
+            .cloned()
+            .unwrap_or_else(|| lit(ScalarValue::Null))
+    };
 
-    for (idx, field) in target_schema.fields().iter().enumerate() {
+    for field in target_schema.fields().iter() {
         if field.name() == path_column || field.name() == TARGET_ROW_ID_COLUMN {
             continue;
         }
@@ -1076,10 +1101,7 @@ fn build_insert_only_projection(
                 .map(|x| x.expr.clone())
                 .unwrap_or_else(|| lit(true));
             let value = match &clause.action {
-                MergeNotMatchedByTargetAction::InsertAll => source_exprs
-                    .get(idx)
-                    .cloned()
-                    .unwrap_or_else(|| lit(ScalarValue::Null)),
+                MergeNotMatchedByTargetAction::InsertAll => source_expr_for_target(&name),
                 MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
                     // If column not specified in this clause, it becomes NULL for this clause
                     // (and must NOT fall through to later clauses).
@@ -1301,10 +1323,27 @@ fn build_merge_projection(
         target_exprs.push(Expr::Column(Column::from_name(field.name().clone())));
     }
 
-    let mut source_exprs = Vec::new();
-    for field in source_schema.fields() {
-        source_exprs.push(Expr::Column(Column::from_name(field.name().clone())));
-    }
+    let source_exprs_by_name: HashMap<String, Expr> = source_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            (
+                f.name().clone(),
+                Expr::Column(Column::from_name(f.name().clone())),
+            )
+        })
+        .collect();
+
+    // Find the source expression that corresponds to a target field by name.
+    // Source columns are prefixed with `__sail_src_`, so target field "id"
+    // maps to source column "__sail_src_id".
+    let source_expr_for_target = |target_name: &str| -> Expr {
+        let prefixed = format!("__sail_src_{target_name}");
+        source_exprs_by_name
+            .get(&prefixed)
+            .cloned()
+            .unwrap_or_else(|| lit(ScalarValue::Null))
+    };
 
     for clause in &options.matched_clauses {
         let mut pred = col(TARGET_PRESENT_COLUMN)
@@ -1316,11 +1355,8 @@ fn build_merge_projection(
         match &clause.action {
             MergeMatchedAction::Delete => {}
             MergeMatchedAction::UpdateAll => {
-                for (idx, field) in target_schema.fields().iter().enumerate() {
-                    let value = source_exprs
-                        .get(idx)
-                        .cloned()
-                        .unwrap_or_else(|| lit(ScalarValue::Null));
+                for field in target_schema.fields().iter() {
+                    let value = source_expr_for_target(field.name());
                     if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
                         entry.1.push((pred.clone(), value));
                     }
@@ -1369,11 +1405,8 @@ fn build_merge_projection(
 
         match &clause.action {
             MergeNotMatchedByTargetAction::InsertAll => {
-                for (idx, field) in target_schema.fields().iter().enumerate() {
-                    let value = source_exprs
-                        .get(idx)
-                        .cloned()
-                        .unwrap_or_else(|| lit(ScalarValue::Null));
+                for field in target_schema.fields().iter() {
+                    let value = source_expr_for_target(field.name());
                     if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
                         entry.1.push((pred.clone(), value));
                     }
@@ -1613,12 +1646,15 @@ where
 
 /// Try to recover meaningful field names from a logical plan by walking its inputs
 /// until we find a schema whose fields are not all placeholder names like "#0".
+/// The recovered schema must have the same number of fields as the top-level plan
+/// to ensure a 1:1 mapping between opaque IDs and real names.
 fn recover_field_names(plan: &LogicalPlan, path_column: &str) -> Option<Vec<String>> {
+    let expected_len = plan.schema().fields().len();
     let mut queue = VecDeque::new();
     queue.push_back(plan);
     while let Some(p) = queue.pop_front() {
         let schema = p.schema();
-        if !all_placeholder_schema(schema, path_column) {
+        if !all_placeholder_schema(schema, path_column) && schema.fields().len() == expected_len {
             return Some(schema.fields().iter().map(|f| f.name().clone()).collect());
         }
         queue.extend(p.inputs());
