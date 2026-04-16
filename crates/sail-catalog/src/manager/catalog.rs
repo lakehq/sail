@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::utils::match_pattern;
 
@@ -15,7 +15,10 @@ impl CatalogManager {
         let catalog = catalog.into();
         let mut state = self.state()?;
         if !state.catalogs.contains_key(&catalog) {
-            return Err(CatalogError::NotFound("catalog", catalog.to_string()));
+            return Err(CatalogError::NotFound(
+                CatalogObject::Catalog,
+                catalog.to_string(),
+            ));
         }
         state.default_catalog = catalog;
         Ok(())

@@ -15,21 +15,19 @@ use std::sync::Arc;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
+use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
-use super::utils::{build_log_replay_pipeline_with_options, LogReplayFilter, LogReplayOptions};
-use crate::datasource::PredicateProperties;
+use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
+use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
-    DeltaWriterExec,
+    DeltaDiscoveryExec, DeltaPhysicalExprAdapterFactory, DeltaScanByAddsExec,
+    DeltaWriterExecOptions,
 };
 
 pub async fn build_delete_plan(
@@ -50,38 +48,33 @@ pub async fn build_delete_plan(
         .clone()
         .to_dfschema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let condition_expr = condition.expr.clone();
     let physical_condition = ctx
         .session()
-        .create_physical_expr(condition.expr, &table_df_schema)?;
+        .create_physical_expr(condition_expr.clone(), &table_df_schema)?;
 
     // Partition-only predicates can delete entire files without scanning data. In that case,
     // build a visible metadata pipeline over a log-derived meta table.
-    let mut expr_props = PredicateProperties::new(partition_columns.clone());
-    expr_props
-        .analyze_predicate(&physical_condition)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-    // Build a visible metadata pipeline over the Delta log.
-    let mut log_replay_options = LogReplayOptions::default();
-    if expr_props.partition_only {
-        log_replay_options.log_filter = Some(LogReplayFilter {
-            predicate: physical_condition.clone(),
-            table_schema: table_schema.clone(),
-        });
-    }
+    let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: !partition_only,
+        ..Default::default()
+    };
 
     let meta_scan: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
+    let meta_scan: Arc<dyn ExecutionPlan> =
+        build_metadata_filter(ctx.session(), meta_scan, snapshot_state, condition_expr)?;
 
     // Always wrap with DeltaDiscoveryExec so EXPLAIN shows the metadata pipeline.
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
-        Some(physical_condition.clone()),
-        Some(table_schema.clone()),
+        None,
+        None,
         version,
         partition_columns.clone(),
-        expr_props.partition_only,
+        partition_only,
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.
@@ -108,38 +101,31 @@ pub async fn build_delete_plan(
 
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,
     // and DeltaScanByAddsExec may reorder/augment the schema compared to the original table schema.
-    let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
-    let adapter = adapter_factory.create(table_schema.clone(), scan_exec.schema());
+    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+    let adapter = adapter_factory
+        .create(table_schema.clone(), scan_exec.schema())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let adapted_condition = adapter
         .rewrite(physical_condition.clone())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let negated_condition = Arc::new(NotExpr::new(adapted_condition));
-    let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+    let filter_exec: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
 
-    let operation_override = Some(DeltaOperation::Delete {
+    let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,
     });
-    let writer_exec = Arc::new(DeltaWriterExec::new(
+
+    assemble_commit_plan(
         filter_exec,
+        Some(find_files_exec),
         ctx.table_url().clone(),
-        ctx.options().clone(),
-        partition_columns.clone(),
-        PhysicalSinkMode::Append,
-        ctx.table_exists(),
-        table_schema.clone(),
-        operation_override,
-    )?);
-
-    let remove_exec = Arc::new(DeltaRemoveActionsExec::new(find_files_exec)?);
-    let union_exec = UnionExec::try_new(vec![writer_exec, remove_exec])?;
-
-    Ok(Arc::new(DeltaCommitExec::new(
-        Arc::new(CoalescePartitionsExec::new(union_exec)),
-        ctx.table_url().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone()),
+        ctx.metadata_configuration().clone(),
         partition_columns,
         ctx.table_exists(),
         table_schema,
-        PhysicalSinkMode::Append,
-    )))
+        operation,
+    )
 }

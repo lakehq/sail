@@ -1,0 +1,731 @@
+# References:
+#   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#data-source-option
+#   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L207-L214
+#   - [3] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L744-L750
+
+# TODO: Spark global: https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#configuration
+# TODO: DataFusion `column_specific_options` and `key_value_metadata`
+
+- key: enable_page_index
+  description: |
+    (Reading) Whether to enable page index when reading Parquet files.
+    If the value is `true`, the Parquet reader reads the page index if present.
+    This can reduce I/O and the number of rows decoded.
+    Defaults to the Sail configuration option `parquet.enable_page_index`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - enable_page_index
+        - enablePageIndex
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.enable_page_index
+        - option.enablePageIndex
+      parser: crate::options::parsers::parse_bool
+
+- key: pruning
+  description: |
+    (Reading) Whether to prune row groups when reading Parquet files.
+    If the value is `true`, the Parquet reader attempts to skip entire row groups based
+    on the predicate in the query and the metadata (minimum and maximum values) stored in
+    the Parquet file.
+    Defaults to the Sail configuration option `parquet.pruning`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - pruning
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.pruning
+      parser: crate::options::parsers::parse_bool
+
+- key: skip_metadata
+  description: |
+    (Reading) Whether to skip the metadata when reading Parquet files.
+    If the value is `true`, the Parquet reader skip the optional embedded metadata that may be in
+    the file schema. This can help avoid schema conflicts when querying
+    multiple Parquet files with schemas containing compatible types but different metadata.
+    Defaults to the Sail configuration option `parquet.skip_metadata`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - skip_metadata
+        - skipMetadata
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.skip_metadata
+        - option.skipMetadata
+      parser: crate::options::parsers::parse_bool
+
+- key: metadata_size_hint
+  description: |
+    (Reading) If specified, the reader will try to fetch the last `size_hint` bytes of the parquet file optimistically.
+    If not specified, two reads are required:
+      - One read to fetch the 8-byte parquet footer
+      - Another to fetch the metadata length encoded in the footer
+
+    If the metadata is larger than the hint, two reads will still be performed.
+    Setting this can reduce one I/O operation per parquet file.
+    Defaults to the Sail configuration option `parquet.metadata_size_hint`.
+  supported: true
+  rust_type: "Option<usize>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - metadata_size_hint
+        - metadataSizeHint
+      parser: crate::options::parsers::parse_optional_non_zero_usize
+    - type: table_property
+      keys:
+        - option.metadata_size_hint
+        - option.metadataSizeHint
+      parser: crate::options::parsers::parse_optional_non_zero_usize
+
+- key: pushdown_filters
+  description: |
+    (Reading) Whether to push down filter expressions when reading Parquet files.
+    If the value is `true`, the Parquet reader applies filter expressions in decoding operations to
+    reduce the number of rows decoded. This optimization is sometimes called "late materialization".
+    Defaults to the Sail configuration option `parquet.pushdown_filters`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - pushdown_filters
+        - pushdownFilters
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.pushdown_filters
+        - option.pushdownFilters
+      parser: crate::options::parsers::parse_bool
+
+- key: reorder_filters
+  description: |
+    (Reading) Whether to reorder filter expressions when reading Parquet files.
+    If the value is `true`, the Parquet reader reorders filter expressions heuristically in decoding operations to
+    minimize the cost of evaluation. If the value is `false`, the filters are applied in the same order as written in the query.
+    Defaults to the Sail configuration option `parquet.reorder_filters`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - reorder_filters
+        - reorderFilters
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.reorder_filters
+        - option.reorderFilters
+      parser: crate::options::parsers::parse_bool
+
+- key: schema_force_view_types
+  description: |
+    (Reading) Whether to force view types for binary and string columns when reading Parquet files.
+    If the value is `true`, the Parquet reader will read columns of the `Utf8` or `Utf8Large` types as the `Utf8View` type,
+    and the `Binary` or `BinaryLarge` types as the `BinaryView` type.
+    Defaults to the Sail configuration option `parquet.schema_force_view_types`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - schema_force_view_types
+        - schemaForceViewTypes
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.schema_force_view_types
+        - option.schemaForceViewTypes
+      parser: crate::options::parsers::parse_bool
+
+- key: binary_as_string
+  description: |
+    (Reading) Whether to read binary columns as string columns when reading Parquet files.
+    If the value is `true`, the Parquet reader will read columns of
+    the `Binary` or `LargeBinary` as the `Utf8` type, and the `BinaryView` type as the `Utf8View` type.
+    This is helpful when reading Parquet files generated by some legacy writers, which do not correctly set
+    the UTF-8 flag for strings, causing string columns to be loaded as binary columns by default.
+    Defaults to the Sail configuration option `parquet.binary_as_string`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - binary_as_string
+        - binaryAsString
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.binary_as_string
+        - option.binaryAsString
+      parser: crate::options::parsers::parse_bool
+
+- key: coerce_int96
+  description: |
+    (Reading) Controls how the parquet reader interprets columns with physical type int96.
+    By default, int96 columns are treated as microsecond ("us") resolution timestamps.
+    This setting is useful for reading data from systems like Apache Spark, which encode microsecond
+    timestamps in int96, enabling a wider date range to be written than with 64-bit timestamps at
+    nanosecond resolution.
+    Possible options are:
+      - `ns`: interpret as nanoseconds,
+      - `us`: interpret as microseconds,
+      - `ms`: interpret as milliseconds,
+      - `s`: interpret as seconds.
+    Set to empty to use the session configuration.
+  default:
+    value: "us"
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - coerce_int96
+        - coerceInt96
+      parser: crate::options::parsers::parse_optional_string
+    - type: table_property
+      keys:
+        - option.coerce_int96
+        - option.coerceInt96
+      parser: crate::options::parsers::parse_optional_string
+
+- key: bloom_filter_on_read
+  description: |
+    (Reading) Whether to use available bloom filters when reading Parquet files.
+    Defaults to the Sail configuration option `parquet.bloom_filter_on_read`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - bloom_filter_on_read
+        - bloomFilterOnRead
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.bloom_filter_on_read
+        - option.bloomFilterOnRead
+      parser: crate::options::parsers::parse_bool
+
+- key: merge_schema
+  description: |
+    (Reading) Sets whether we should merge schemas collected from all Parquet part-files.
+    Defaults to the Sail configuration option `parquet.merge_schema` (to be implemented).
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - merge_schema
+        - mergeSchema
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.merge_schema
+        - option.mergeSchema
+      parser: crate::options::parsers::parse_string
+
+- key: int96_rebase_mode
+  description: |
+    (Reading) The int96RebaseMode option allows to specify the rebasing mode for INT96 timestamps
+    from the Julian to Proleptic Gregorian calendar.
+    Currently supported modes are:
+      - `EXCEPTION`: Fails in reads of ancient INT96 timestamps that are ambiguous between the two calendars.
+      - `CORRECTED`: Loads INT96 timestamps without rebasing.
+      - `LEGACY`: Performs rebasing of ancient timestamps from the Julian to Proleptic Gregorian calendar.
+    Defaults to the Sail configuration option `parquet.int96_rebase_mode_in_read` (to be implemented).
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - int96_rebase_mode
+        - int96RebaseMode
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.int96_rebase_mode
+        - option.int96RebaseMode
+      parser: crate::options::parsers::parse_string
+
+- key: datetime_rebase_mode
+  description: |
+    (Reading) The datetime_rebase_mode option allows to specify the rebasing mode for the values of the
+    `DATE`, `TIMESTAMP_MILLIS`, `TIMESTAMP_MICROS` logical types from the Julian to Proleptic Gregorian calendar.
+    Currently supported modes are:
+      - `EXCEPTION`: Fails in reads of ancient dates/timestamps that are ambiguous between the two calendars.
+      - `CORRECTED`: Loads dates/timestamps without rebasing.
+      - `LEGACY`: Performs rebasing of ancient dates/timestamps from the Julian to Proleptic Gregorian calendar.
+    Defaults to the Sail configuration option `parquet.datetime_rebase_mode_in_read` (to be implemented).
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - datetime_rebase_mode
+        - datetimeRebaseMode
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.datetime_rebase_mode
+        - option.datetimeRebaseMode
+      parser: crate::options::parsers::parse_string
+
+- key: max_predicate_cache_size
+  description: |
+    (Reading) The maximum predicate cache size, in bytes. When `pushdown_filters` is enabled, sets the maximum memory
+    used to cache the results of predicate evaluation between filter evaluation and output generation.
+    Decreasing this value will reduce memory usage, but may increase IO and CPU usage.
+    Setting this value to `0` means no caching.
+    Defaults to the Sail configuration option `parquet.max_predicate_cache_size`.
+  supported: true
+  rust_type: "Option<usize>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - max_predicate_cache_size
+        - maxPredicateCacheSize
+      parser: crate::options::parsers::parse_optional_usize
+    - type: table_property
+      keys:
+        - option.max_predicate_cache_size
+        - option.maxPredicateCacheSize
+      parser: crate::options::parsers::parse_optional_usize
+
+- key: data_page_size_limit
+  description: |
+    (Writing) The best-effort maximum size of a data page in bytes.
+    Defaults to the Sail configuration option `parquet.data_page_size_limit`.
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - data_page_size_limit
+        - dataPageSizeLimit
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.data_page_size_limit
+        - option.dataPageSizeLimit
+      parser: crate::options::parsers::parse_usize
+
+- key: write_batch_size
+  description: |
+    (Writing) The Parquet writer batch size in bytes.
+    Defaults to the Sail configuration option `parquet.write_batch_size`.
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - write_batch_size
+        - writeBatchSize
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.write_batch_size
+        - option.writeBatchSize
+      parser: crate::options::parsers::parse_usize
+
+- key: writer_version
+  description: |
+    (Writing) The Parquet writer version. Valid values are `1.0` and `2.0`.
+    Defaults to the Sail configuration option `parquet.writer_version`.
+  supported: true
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - writer_version
+        - writerVersion
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.writer_version
+        - option.writerVersion
+      parser: crate::options::parsers::parse_string
+
+- key: skip_arrow_metadata
+  description: |
+    (Writing) Whether to skip encoding the embedded arrow metadata when writing Parquet files.
+    Defaults to the Sail configuration option `parquet.skip_arrow_metadata`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - skip_arrow_metadata
+        - skipArrowMetadata
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.skip_arrow_metadata
+        - option.skipArrowMetadata
+      parser: crate::options::parsers::parse_bool
+
+- key: compression
+  description: |
+    (Writing) The default Parquet compression codec.
+    Valid values are `uncompressed`, `snappy`, `gzip(level)`,
+    `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`,
+    where `level` is an integer defining the compression level.
+    These values are not case-sensitive.
+    Defaults to the Sail configuration option `parquet.compression`.
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - compression
+        - codec
+      parser: crate::options::parsers::parse_optional_string
+    - type: table_property
+      keys:
+        - option.compression
+        - option.codec
+      parser: crate::options::parsers::parse_optional_string
+
+- key: dictionary_enabled
+  description: |
+    (Writing) Whether to enable dictionary encoding for the Parquet writer.
+    Defaults to the Sail configuration option `parquet.dictionary_enabled`.
+  supported: true
+  rust_type: "Option<bool>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - dictionary_enabled
+        - dictionaryEnabled
+      parser: crate::options::parsers::parse_optional_bool
+    - type: table_property
+      keys:
+        - option.dictionary_enabled
+        - option.dictionaryEnabled
+      parser: crate::options::parsers::parse_optional_bool
+
+- key: dictionary_page_size_limit
+  description: |
+    (Writing) The best-effort maximum dictionary page size in bytes for the Parquet writer.
+    Defaults to the Sail configuration option `parquet.dictionary_page_size_limit`.
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - dictionary_page_size_limit
+        - dictionaryPageSizeLimit
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.dictionary_page_size_limit
+        - option.dictionaryPageSizeLimit
+      parser: crate::options::parsers::parse_usize
+
+- key: statistics_enabled
+  description: |
+    (Writing) Whether statistics are enabled for any column for the Parquet writer.
+    Valid values are `none`, `chunk`, and `page`.
+    These values are not case-sensitive.
+    Defaults to the Sail configuration option `parquet.statistics_enabled`.
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - statistics_enabled
+        - statisticsEnabled
+      parser: crate::options::parsers::parse_optional_string
+    - type: table_property
+      keys:
+        - option.statistics_enabled
+        - option.statisticsEnabled
+      parser: crate::options::parsers::parse_optional_string
+
+- key: max_row_group_size
+  description: |
+    (Writing) The target maximum number of rows in each row group for the Parquet writer.
+    Larger row groups require more memory to write, but
+    can get better compression and be faster to read.
+    Defaults to the Sail configuration option `parquet.max_row_group_size`.
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - max_row_group_size
+        - maxRowGroupSize
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.max_row_group_size
+        - option.maxRowGroupSize
+      parser: crate::options::parsers::parse_usize
+
+- key: column_index_truncate_length
+  description: |
+    (Writing) The column index truncate length. Setting to 0 disables truncation.
+    Defaults to the Sail configuration option `parquet.column_index_truncate_length`.
+  supported: true
+  rust_type: "Option<usize>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - column_index_truncate_length
+        - columnIndexTruncateLength
+      parser: crate::options::parsers::parse_optional_non_zero_usize
+    - type: table_property
+      keys:
+        - option.column_index_truncate_length
+        - option.columnIndexTruncateLength
+      parser: crate::options::parsers::parse_optional_non_zero_usize
+
+- key: statistics_truncate_length
+  description: |
+    (Writing) The statistics truncate length. Setting to 0 disables truncation.
+    Defaults to the Sail configuration option `parquet.statistics_truncate_length`.
+  supported: true
+  rust_type: "Option<usize>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - statistics_truncate_length
+        - statisticsTruncateLength
+      parser: crate::options::parsers::parse_optional_non_zero_usize
+    - type: table_property
+      keys:
+        - option.statistics_truncate_length
+        - option.statisticsTruncateLength
+      parser: crate::options::parsers::parse_optional_non_zero_usize
+
+- key: data_page_row_count_limit
+  description: |
+    (Writing) The best-effort maximum number of rows in data page.
+    Defaults to the Sail configuration option `parquet.data_page_row_count_limit`.
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - data_page_row_count_limit
+        - dataPageRowCountLimit
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.data_page_row_count_limit
+        - option.dataPageRowCountLimit
+      parser: crate::options::parsers::parse_usize
+
+- key: encoding
+  description: |
+    (Writing) The default encoding for any column.
+    Valid values are `plain`, `plain_dictionary`, `rle`,
+    `bit_packed` (deprecated), `delta_binary_packed`, `delta_length_byte_array`,
+    `delta_byte_array`, `rle_dictionary`, and `byte_stream_split`.
+    These values are not case sensitive.
+    An empty value can also be used, which allows the Parquet writer to choose
+    the encoding for each column to achieve good performance.
+    Defaults to the Sail configuration option `parquet.encoding`.
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - encoding
+      parser: crate::options::parsers::parse_optional_string
+    - type: table_property
+      keys:
+        - option.encoding
+      parser: crate::options::parsers::parse_optional_string
+
+- key: bloom_filter_on_write
+  description: |
+    (Writing) Whether to write bloom filters for all columns.
+    Defaults to the Sail configuration option `parquet.bloom_filter_on_write`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - bloom_filter_on_write
+        - bloomFilterOnWrite
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.bloom_filter_on_write
+        - option.bloomFilterOnWrite
+      parser: crate::options::parsers::parse_bool
+
+- key: bloom_filter_fpp
+  description: |
+    (Writing) The false positive probability for bloom filters.
+    Defaults to the Sail configuration option `parquet.bloom_filter_fpp`.
+  supported: true
+  rust_type: "Option<f64>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - bloom_filter_fpp
+        - bloomFilterFpp
+      parser: crate::options::parsers::parse_optional_f64
+    - type: table_property
+      keys:
+        - option.bloom_filter_fpp
+        - option.bloomFilterFpp
+      parser: crate::options::parsers::parse_optional_f64
+
+- key: bloom_filter_ndv
+  description: |
+    (Writing) The number of distinct values for bloom filters.
+    Defaults to the Sail configuration option `parquet.bloom_filter_ndv`.
+  supported: true
+  rust_type: "Option<u64>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - bloom_filter_ndv
+        - bloomFilterNdv
+      parser: crate::options::parsers::parse_optional_u64
+    - type: table_property
+      keys:
+        - option.bloom_filter_ndv
+        - option.bloomFilterNdv
+      parser: crate::options::parsers::parse_optional_u64
+
+- key: allow_single_file_parallelism
+  description: |
+    (Writing) Whether to parallelize writing for each single Parquet file.
+    If the value is `true`, each column in each row group in each file are serialized in parallel.
+    Defaults to the Sail configuration option `parquet.allow_single_file_parallelism`.
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - allow_single_file_parallelism
+        - allowSingleFileParallelism
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_single_file_parallelism
+        - option.allowSingleFileParallelism
+      parser: crate::options::parsers::parse_bool
+
+- key: maximum_parallel_row_group_writers
+  description: |
+    (Writing) The maximum number of row group writers to use for the Parquet writer.
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+    Defaults to the Sail configuration option `parquet.maximum_parallel_row_group_writers`.
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - maximum_parallel_row_group_writers
+        - maximumParallelRowGroupWriters
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.maximum_parallel_row_group_writers
+        - option.maximumParallelRowGroupWriters
+      parser: crate::options::parsers::parse_usize
+
+- key: maximum_buffered_record_batches_per_stream
+  description: |
+    (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+    Defaults to the Sail configuration option `parquet.maximum_buffered_record_batches_per_stream`.
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - maximum_buffered_record_batches_per_stream
+        - maximumBufferedRecordBatchesPerStream
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.maximum_buffered_record_batches_per_stream
+        - option.maximumBufferedRecordBatchesPerStream
+      parser: crate::options::parsers::parse_usize

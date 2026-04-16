@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
 use aws_sdk_glue::Client;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace, PartitionTransform,
 };
@@ -74,7 +74,10 @@ pub(crate) async fn create_hive_table(
                 if if_not_exists {
                     provider.get_table(database, table).await
                 } else {
-                    Err(CatalogError::AlreadyExists("table", table.to_string()))
+                    Err(CatalogError::AlreadyExists(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
                 }
             } else {
                 Err(CatalogError::External(format!(

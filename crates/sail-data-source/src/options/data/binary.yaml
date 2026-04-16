@@ -1,0 +1,21 @@
+- key: path_glob_filter
+  description: |
+    A glob pattern to only include files with file names matching the pattern.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - path_glob_filter
+        - pathGlobFilter
+      parser: crate::options::parsers::parse_optional_string
+    - type: table_property
+      keys:
+        - option.path_glob_filter
+        - option.pathGlobFilter
+      parser: crate::options::parsers::parse_optional_string

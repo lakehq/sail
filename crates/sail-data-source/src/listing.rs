@@ -5,6 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
+use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::execution::cache::TableScopedPath;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, plan_err, DataFusionError, GetExt, Result};
@@ -12,7 +13,8 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::listing::{ListingFormat, ListingTableFormat};
 
@@ -21,7 +23,7 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     urls: &[ListingTableUrl],
     options: &mut ListingOptions,
     extension_with_compression: &Option<String>,
-    options_vec: Vec<HashMap<String, String>>,
+    options_vec: Vec<OptionLayer>,
     listing_format: &ListingTableFormat<T>,
 ) -> Result<Arc<Schema>> {
     // The logic is similar to `ListingOptions::infer_schema()`
@@ -203,11 +205,11 @@ pub async fn list_all_files<'a>(
                 };
                 if let Some(res) = cache.get(&key) {
                     debug!("Hit list all files cache");
-                    futures::stream::iter(res.as_ref().clone().into_iter().map(Ok)).boxed()
+                    futures::stream::iter(res.files.as_ref().clone().into_iter().map(Ok)).boxed()
                 } else {
                     let list_res = store.list(Some(url.prefix()));
                     let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
-                    cache.put(&key, Arc::new(vec.clone()));
+                    cache.put(&key, CachedFileList::new(vec.clone()));
                     futures::stream::iter(vec.into_iter().map(Ok)).boxed()
                 }
             }

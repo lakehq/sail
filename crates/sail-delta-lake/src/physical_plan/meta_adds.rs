@@ -8,6 +8,7 @@ use datafusion_common::{DataFusionError, Result};
 use percent_encoding::percent_decode_str;
 
 use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
+use crate::spec::fields::FIELD_NAME_STATS_PARSED;
 use crate::spec::Add;
 
 const COL_SIZE_BYTES: &str = "size_bytes";
@@ -15,11 +16,12 @@ const COL_MODIFICATION_TIME: &str = "modification_time";
 const COL_STATS_JSON: &str = "stats_json";
 const COL_PARTITION_SCAN: &str = "partition_scan";
 
-const RESERVED_META_COLUMNS: [&str; 7] = [
+const RESERVED_META_COLUMNS: [&str; 8] = [
     PATH_COLUMN,
     COL_SIZE_BYTES,
     COL_MODIFICATION_TIME,
     COL_STATS_JSON,
+    FIELD_NAME_STATS_PARSED,
     COL_PARTITION_SCAN,
     COMMIT_VERSION_COLUMN,
     COMMIT_TIMESTAMP_COLUMN,

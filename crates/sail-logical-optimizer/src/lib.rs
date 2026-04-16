@@ -13,6 +13,9 @@ use datafusion::optimizer::eliminate_join::EliminateJoin;
 use datafusion::optimizer::eliminate_limit::EliminateLimit;
 use datafusion::optimizer::eliminate_outer_join::EliminateOuterJoin;
 use datafusion::optimizer::extract_equijoin_predicate::ExtractEquijoinPredicate;
+use datafusion::optimizer::extract_leaf_expressions::{
+    ExtractLeafExpressions, PushDownLeafProjections,
+};
 use datafusion::optimizer::filter_null_join_keys::FilterNullJoinKeys;
 use datafusion::optimizer::optimize_projections::OptimizeProjections;
 use datafusion::optimizer::optimize_unions::OptimizeUnions;
@@ -20,10 +23,14 @@ use datafusion::optimizer::propagate_empty_relation::PropagateEmptyRelation;
 use datafusion::optimizer::push_down_filter::PushDownFilter;
 use datafusion::optimizer::push_down_limit::PushDownLimit;
 use datafusion::optimizer::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
+use datafusion::optimizer::rewrite_set_comparison::RewriteSetComparison;
 use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::simplify_expressions::SimplifyExpressions;
 use datafusion::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use datafusion::optimizer::{AnalyzerRule, OptimizerRule};
+
+mod lateral_join;
+pub use lateral_join::DecorrelateLateralProjection;
 
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     vec![
@@ -33,7 +40,14 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
 }
 
 pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
+    // `DecorrelateLateralProjection` is prepended so it runs before DataFusion's
+    // `DecorrelateLateralJoin`. It handles the simple case where OuterRef only
+    // appears in Projection expressions (e.g. `LATERAL (SELECT t1.a + 1)`),
+    // rewriting it into a CrossJoin + Projection. The remaining complex cases
+    // (OuterRef in Filter/Aggregate) are left for DataFusion's rule.
     vec![
+        Arc::new(DecorrelateLateralProjection::new()),
+        Arc::new(RewriteSetComparison::new()),
         Arc::new(OptimizeUnions::new()),
         Arc::new(SimplifyExpressions::new()),
         Arc::new(ReplaceDistinctWithAggregate::new()),
@@ -58,6 +72,8 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
         // that might benefit from the following rules
         Arc::new(EliminateGroupByConstant::new()),
         Arc::new(CommonSubexprEliminate::new()),
+        Arc::new(ExtractLeafExpressions::new()),
+        Arc::new(PushDownLeafProjections::new()),
         Arc::new(OptimizeProjections::new()),
     ]
 }

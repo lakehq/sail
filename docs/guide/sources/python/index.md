@@ -18,11 +18,11 @@ Currently, Sail supports Python data sources for batch reading and writing.
 
 ### Batch Reader
 
-<<< @/../python/pysail/tests/spark/test_python_datasource_read.txt{python-console}
+<<< @/../python/pysail/tests/spark/datasource/test_python_read.txt{python-console}
 
 ### Batch Arrow Reader
 
-<<< @/../python/pysail/tests/spark/test_python_datasource_read_arrow.txt{python-console}
+<<< @/../python/pysail/tests/spark/datasource/test_python_read_arrow.txt{python-console}
 
 ### More Examples
 
