@@ -214,9 +214,9 @@ fn analyze_is_local(plan: sc::Plan) -> SparkResult<bool> {
     match op.required("plan op")? {
         plan::OpType::Command(_) => Ok(true),
         plan::OpType::Root(relation) => {
-            let spec_plan: spec::Plan = relation.try_into()?;
+            let plan: spec::Plan = relation.try_into()?;
             Ok(matches!(
-                spec_plan,
+                plan,
                 spec::Plan::Command(_)
                     | spec::Plan::Query(spec::QueryPlan {
                         node: spec::QueryNode::LocalRelation { .. }
@@ -236,8 +236,8 @@ fn analyze_is_streaming(plan: sc::Plan) -> SparkResult<bool> {
     match op.required("plan op")? {
         plan::OpType::Command(_) => Ok(false),
         plan::OpType::Root(relation) => {
-            let spec_plan: spec::Plan = relation.try_into()?;
-            match spec_plan {
+            let plan: spec::Plan = relation.try_into()?;
+            match plan {
                 spec::Plan::Command(_) => Ok(false),
                 spec::Plan::Query(query) => Ok(is_streaming_query_plan(&query)),
             }
