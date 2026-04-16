@@ -6,8 +6,8 @@ use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
-    SPARK_CONFIG, SPARK_SQL_ANSI_ENABLED, SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
-    SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
+    SPARK_CONFIG, SPARK_SQL_ANSI_ENABLED, SPARK_SQL_CROSS_JOIN_ENABLED,
+    SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH, SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
     SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
     SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES,
     SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED,
@@ -229,6 +229,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.ansi_mode = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_CROSS_JOIN_ENABLED)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.cross_join_enabled = value;
         }
 
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
