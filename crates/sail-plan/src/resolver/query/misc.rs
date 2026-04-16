@@ -119,10 +119,10 @@ impl PlanResolver<'_> {
         };
         let (schema, batches) = if let Some(schema) = schema {
             let target_schema = Arc::new(self.resolve_schema(schema, state)?);
-            let batches = batches
+            let batches: Vec<datafusion::arrow::array::RecordBatch> = batches
                 .into_iter()
-                .map(|b| Ok(cast_record_batch_preserving_names(b, target_schema.clone())?))
-                .collect::<PlanResult<_>>()?;
+                .map(|b| cast_record_batch_preserving_names(b, target_schema.clone()))
+                .collect::<datafusion_common::Result<_>>()?;
             let schema = if let Some(first) = batches.first() {
                 first.schema()
             } else {
