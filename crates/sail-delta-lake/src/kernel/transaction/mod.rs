@@ -1061,15 +1061,35 @@ impl PostCommit {
     async fn build_incremental_checksum(&self) -> Option<VersionChecksum> {
         let actions = &self.data.actions;
 
-        // Resolve effective protocol and metadata from the commit.
-        let actions_as_actions: Vec<Action> = actions.iter().cloned().map(Action::from).collect();
+        // Resolve effective protocol and metadata from the commit actions directly.
         let base_protocol = self.table_data.as_ref().map(|s| s.protocol());
         let base_metadata = self.table_data.as_ref().map(|s| s.metadata());
-        let (protocol, metadata) = resolve_effective_protocol_and_metadata(
-            base_protocol,
-            base_metadata,
-            &actions_as_actions,
-        )?;
+        let protocol = actions
+            .iter()
+            .rev()
+            .find_map(|a| match a {
+                CommitAction::Protocol(p) => Some(p.clone()),
+                _ => None,
+            })
+            .or_else(|| base_protocol.cloned());
+        let metadata = actions
+            .iter()
+            .rev()
+            .find_map(|a| match a {
+                CommitAction::Metadata(m) => Some(m.clone()),
+                _ => None,
+            })
+            .or_else(|| base_metadata.cloned());
+        let (protocol, metadata) = match (protocol, metadata) {
+            (Some(p), Some(m)) => (p, m),
+            _ => {
+                debug!(
+                    "Skipping incremental CRC for version {}: protocol or metadata not available",
+                    self.version
+                );
+                return None;
+            }
+        };
 
         // Skip CRC if protocol has unsupported features.
         if protocol
@@ -1279,28 +1299,67 @@ impl PostCommit {
     /// Full-snapshot fallback for CRC computation.
     ///
     /// Called when the incremental chain is broken (prev CRC missing or corrupt, or a
-    /// Remove action has no size). Loads a fresh full snapshot at the committed version —
-    /// more expensive than the incremental path, but only triggered in recovery scenarios.
+    /// Remove action has no size). When a pre-commit snapshot (`table_data`) is available
+    /// it is updated by one version (reads only the new commit file).
     async fn build_full_checksum_fallback(&self) -> Option<VersionChecksum> {
         debug!(
             "CRC full-snapshot fallback: loading full snapshot for version {}",
             self.version
         );
-        let snapshot = match DeltaSnapshot::try_new(
-            self.log_store.as_ref(),
-            DeltaSnapshotConfig::default(), // require_files: true
-            Some(self.version),
-            None,
-        )
-        .await
+        // Try to reuse the pre-commit snapshot.
+        let snapshot = if let Some(prev) = self
+            .table_data
+            .as_ref()
+            .filter(|s| s.load_config().require_files)
         {
-            Ok(s) => s,
-            Err(err) => {
-                debug!(
-                    "CRC full-snapshot fallback: failed to load snapshot for version {}: {err}",
-                    self.version
-                );
-                return None;
+            let mut snapshot = Arc::clone(prev);
+            match Arc::make_mut(&mut snapshot)
+                .update(self.log_store.as_ref(), Some(self.version as u64))
+                .await
+            {
+                Ok(()) => snapshot,
+                Err(e) => {
+                    debug!(
+                        "CRC full-snapshot fallback: failed to advance pre-commit snapshot to v{}: {e}; \
+                         falling back to fresh replay",
+                        self.version
+                    );
+                    match DeltaSnapshot::try_new(
+                        self.log_store.as_ref(),
+                        DeltaSnapshotConfig::default(),
+                        Some(self.version),
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(s) => Arc::new(s),
+                        Err(err) => {
+                            debug!(
+                                "CRC full-snapshot fallback: fresh replay also failed for version {}: {err}",
+                                self.version
+                            );
+                            return None;
+                        }
+                    }
+                }
+            }
+        } else {
+            match DeltaSnapshot::try_new(
+                self.log_store.as_ref(),
+                DeltaSnapshotConfig::default(), // require_files: true
+                Some(self.version),
+                None,
+            )
+            .await
+            {
+                Ok(s) => Arc::new(s),
+                Err(err) => {
+                    debug!(
+                        "CRC full-snapshot fallback: failed to load snapshot for version {}: {err}",
+                        self.version
+                    );
+                    return None;
+                }
             }
         };
         match snapshot.build_version_checksum(
@@ -1416,8 +1475,12 @@ fn should_create_checkpoint(version: i64, checkpoint_interval: i64) -> bool {
 
 /// A commit that successfully completed
 pub struct FinalizedCommit {
-    /// The new table state after a commit
-    pub snapshot: Arc<DeltaSnapshot>,
+    /// The new table state after a commit, if available.
+    ///
+    /// `None` when the post-commit state could not be loaded (e.g. transient I/O
+    /// error after the commit entry was durably written). The commit itself
+    /// succeeded regardless.
+    pub snapshot: Option<Arc<DeltaSnapshot>>,
 
     /// Version of the finalized commit
     pub version: i64,
@@ -1428,7 +1491,7 @@ pub struct FinalizedCommit {
 impl FinalizedCommit {
     /// The new table state after a commit
     #[expect(dead_code)]
-    pub fn snapshot(&self) -> Arc<DeltaSnapshot> {
+    pub fn snapshot(&self) -> Option<Arc<DeltaSnapshot>> {
         self.snapshot.clone()
     }
     /// Version of the finalized commit
@@ -1452,33 +1515,44 @@ impl std::future::IntoFuture for PostCommit {
             this.write_version_checksum_incremental(post_commit_operation_id)
                 .await;
 
-            let state: Arc<DeltaSnapshot> = Arc::new(
-                DeltaSnapshot::try_new(
-                    this.log_store.as_ref(),
-                    DeltaSnapshotConfig {
-                        require_files: false,
-                        ..Default::default()
-                    },
-                    Some(this.version),
-                    None,
-                )
-                .await?,
-            );
-
-            let cleanup_logs_setting = if let Some(cleanup_logs) = this.cleanup_expired_logs {
-                cleanup_logs
-            } else {
-                state.table_properties().enable_expired_log_cleanup()
+            let state: Option<Arc<DeltaSnapshot>> = match DeltaSnapshot::try_new(
+                this.log_store.as_ref(),
+                DeltaSnapshotConfig {
+                    require_files: false,
+                    ..Default::default()
+                },
+                Some(this.version),
+                None,
+            )
+            .await
+            {
+                Ok(s) => Some(Arc::new(s)),
+                Err(e) => {
+                    warn!(
+                            "Post-commit: failed to load state for version {} (post-commit activities skipped): {e}",
+                            this.version
+                        );
+                    None
+                }
             };
+
+            let cleanup_logs_setting = this.cleanup_expired_logs.unwrap_or_else(|| {
+                state
+                    .as_ref()
+                    .map(|s| s.table_properties().enable_expired_log_cleanup())
+                    .unwrap_or(false) // conservative: skip cleanup if state unavailable
+            });
             let will_create_checkpoint = this.create_checkpoint
-                && should_create_checkpoint(
-                    this.version,
-                    state.table_properties().checkpoint_interval().get() as i64,
-                );
+                && state.as_ref().is_some_and(|s| {
+                    should_create_checkpoint(
+                        this.version,
+                        s.table_properties().checkpoint_interval().get() as i64,
+                    )
+                });
 
             let compaction_info = state
-                .table_properties()
-                .log_compaction_interval()
+                .as_ref()
+                .and_then(|s| s.table_properties().log_compaction_interval())
                 .filter(|&interval| should_create_compaction(this.version, interval));
 
             // --- Post-commit heavy work (checkpoint, cleanup, compaction) ---
@@ -1529,30 +1603,28 @@ impl std::future::IntoFuture for PostCommit {
             // Log cleanup
             let mut num_log_files_cleaned_up: u64 = 0;
             if cleanup_logs_setting && checkpoint_created {
-                let retention_millis = i64::try_from(
-                    state
-                        .table_properties()
-                        .log_retention_duration()
-                        .as_millis(),
-                )
-                .unwrap_or(i64::MAX);
-                let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
-                    .div_euclid(24 * 60 * 60 * 1000)
-                    * (24 * 60 * 60 * 1000);
-                match cleanup_expired_delta_log_files(
-                    state.as_ref(),
-                    this.log_store.as_ref(),
-                    cutoff_timestamp,
-                    Some(post_commit_operation_id),
-                )
-                .await
-                {
-                    Ok(n) => num_log_files_cleaned_up = n as u64,
-                    Err(e) => {
-                        warn!(
-                            "Failed to clean up expired log files for version {}: {e}",
-                            this.version
-                        );
+                if let Some(s) = state.as_ref() {
+                    let retention_millis =
+                        i64::try_from(s.table_properties().log_retention_duration().as_millis())
+                            .unwrap_or(i64::MAX);
+                    let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
+                        .div_euclid(24 * 60 * 60 * 1000)
+                        * (24 * 60 * 60 * 1000);
+                    match cleanup_expired_delta_log_files(
+                        s.as_ref(),
+                        this.log_store.as_ref(),
+                        cutoff_timestamp,
+                        Some(post_commit_operation_id),
+                    )
+                    .await
+                    {
+                        Ok(n) => num_log_files_cleaned_up = n as u64,
+                        Err(e) => {
+                            warn!(
+                                "Failed to clean up expired log files for version {}: {e}",
+                                this.version
+                            );
+                        }
                     }
                 }
             }
@@ -1562,9 +1634,13 @@ impl std::future::IntoFuture for PostCommit {
                 let start_version = this.version + 1 - compaction_interval as i64;
                 let retention_millis = i64::try_from(
                     state
-                        .table_properties()
-                        .deleted_file_retention_duration()
-                        .as_millis(),
+                        .as_ref()
+                        .map(|s| {
+                            s.table_properties()
+                                .deleted_file_retention_duration()
+                                .as_millis()
+                        })
+                        .unwrap_or_default(),
                 )
                 .unwrap_or(i64::MAX);
                 let min_file_retention_ts = Utc::now().timestamp_millis() - retention_millis;
@@ -1727,7 +1803,7 @@ mod tests {
         let appended = CommitBuilder::default()
             .with_actions(vec![])
             .build(
-                Some(created.snapshot.clone()),
+                created.snapshot.clone(),
                 log_store.clone(),
                 DeltaOperation::Write {
                     mode: SaveMode::Append,
@@ -1778,9 +1854,14 @@ mod tests {
                 },
             )
             .await?;
-        let previous_timestamp = created.snapshot.version_timestamp(0).ok_or_else(|| {
-            DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
-        })?;
+        let previous_timestamp = created
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .version_timestamp(0)
+            .ok_or_else(|| {
+                DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
+            })?;
 
         let upgrade_protocol = protocol_for_create(false, false, true, &HashMap::new())?;
         let upgrade_metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
@@ -1802,7 +1883,7 @@ mod tests {
 
         let finalized_actions = finalize_attempt_actions(
             &base_actions,
-            Some(&created.snapshot),
+            created.snapshot.as_ref(),
             1,
             Some(previous_timestamp),
             previous_timestamp.saturating_sub(10),
@@ -1904,16 +1985,13 @@ mod tests {
 
         let updated_schema =
             StructType::try_new([StructField::not_null("ts", DataType::TIMESTAMP_NTZ)])?;
-        let updated_metadata = created
-            .snapshot
-            .metadata()
-            .clone()
-            .with_schema(&updated_schema)?;
+        let snap = created.snapshot.as_ref().unwrap();
+        let updated_metadata = snap.metadata().clone().with_schema(&updated_schema)?;
 
         let result = CommitBuilder::default()
             .with_actions(vec![CommitAction::Metadata(updated_metadata)])
             .build(
-                Some(created.snapshot.clone()),
+                created.snapshot.clone(),
                 log_store,
                 DeltaOperation::Write {
                     mode: SaveMode::Append,
@@ -1970,7 +2048,7 @@ mod tests {
                 removed: false,
             })])
             .build(
-                Some(created.snapshot.clone()),
+                created.snapshot.clone(),
                 log_store,
                 DeltaOperation::Write {
                     mode: SaveMode::Append,
