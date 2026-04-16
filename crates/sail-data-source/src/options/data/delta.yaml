@@ -349,6 +349,23 @@
 
 ### Write-Only Options ###
 
+- key: generation_expressions
+  description: |
+    JSON-encoded map of column name to generation expression for Delta Lake generated columns.
+    This is set internally and not intended to be specified by users directly.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - __generation_expressions
+      parser: crate::options::parsers::parse_optional_string
+
 - key: replace_where
   description: |
     Condition for overwriting a specific subset of data.

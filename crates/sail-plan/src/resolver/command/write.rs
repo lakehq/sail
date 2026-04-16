@@ -287,7 +287,9 @@ impl PlanResolver<'_> {
                         ));
                     }
                     info.validate_file_write_options(&file_write_options)?;
-                    input = Self::rewrite_write_input(input, column_match, info)?;
+                    input = self
+                        .rewrite_write_input(input, column_match, info, state)
+                        .await?;
                     if file_write_options.partition_by.is_empty()
                         || !info.format.eq_ignore_ascii_case("iceberg")
                     {
@@ -305,6 +307,22 @@ impl PlanResolver<'_> {
                     file_write_options.format = info.format.clone();
                     file_write_options.options.insert(0, info.options.clone());
                     file_write_options.table_properties = info.properties.clone();
+                    // Pass generation expressions to the writer via options.
+                    let gen_exprs: std::collections::HashMap<&str, &str> = info
+                        .columns
+                        .iter()
+                        .filter_map(|c| {
+                            c.generated_always_as
+                                .as_deref()
+                                .map(|expr| (c.name.as_str(), expr))
+                        })
+                        .collect();
+                    if !gen_exprs.is_empty() {
+                        let json = serde_json::to_string(&gen_exprs).unwrap_or_default();
+                        file_write_options
+                            .options
+                            .push(vec![("__generation_expressions".to_string(), json)]);
+                    }
                 } else {
                     // Create or replace the table
                     file_write_options.table_properties = table_properties.clone();
@@ -553,21 +571,118 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn rewrite_write_input(
+    async fn rewrite_write_input(
+        &self,
         input: LogicalPlan,
         column_match: WriteColumnMatch,
         info: &TableInfo,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        // TODO: handle table column default values and generated columns
-
         let table_schema = Schema::new(info.columns.iter().map(|x| x.field()).collect::<Vec<_>>());
-        if input.schema().fields().len() != table_schema.fields().len() {
-            return Err(PlanError::invalid(format!(
-                "input schema for INSERT has {} fields, but table schema has {} fields",
-                input.schema().fields().len(),
-                table_schema.fields().len()
-            )));
-        }
+
+        // Check if the input is missing generated columns.
+        // If so, we need to compute them from the generation expressions.
+        let generated_columns: Vec<(usize, &TableColumnStatus)> = info
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.generated_always_as.is_some())
+            .collect();
+
+        let input_field_count = input.schema().fields().len();
+        let table_field_count = table_schema.fields().len();
+        let non_generated_count = table_field_count - generated_columns.len();
+
+        // If the input has the same number of fields as non-generated columns,
+        // we add the generated columns to the input.
+        let (input, column_match) =
+            if input_field_count == non_generated_count && !generated_columns.is_empty() {
+                // Determine which table columns are non-generated.
+                let non_generated_names: Vec<String> = info
+                    .columns
+                    .iter()
+                    .filter(|c| c.generated_always_as.is_none())
+                    .map(|c| c.name.clone())
+                    .collect();
+
+                // Register fields for the non-generated columns in the state,
+                // so that resolve_expression can look them up.
+                let field_ids: Vec<String> = non_generated_names
+                    .iter()
+                    .map(|name| state.register_field_name(name.clone()))
+                    .collect();
+
+                // Build intermediate plan aliasing input columns to the registered field IDs.
+                let alias_expr: Vec<Expr> = input
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .zip(field_ids.iter())
+                    .map(|(column, field_id)| col(column).alias(field_id.clone()))
+                    .collect();
+                let intermediate = LogicalPlanBuilder::new(input)
+                    .project(alias_expr)?
+                    .build()?;
+                let schema = intermediate.schema().clone();
+
+                // Resolve generated column expressions against the intermediate schema.
+                let mut gen_exprs: Vec<(String, Expr)> = Vec::new();
+                for (_, gen_col) in &generated_columns {
+                    let gen_expr_str = gen_col.generated_always_as.as_deref().ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "expected generation expression for column `{}`",
+                            gen_col.name
+                        ))
+                    })?;
+                    let ast_expr = sail_sql_analyzer::parser::parse_expression(gen_expr_str)
+                        .map_err(|e| {
+                            PlanError::invalid(format!(
+                                "failed to parse generation expression `{gen_expr_str}`: {e}"
+                            ))
+                        })?;
+                    let spec_expr = sail_sql_analyzer::expression::from_ast_expression(ast_expr)
+                        .map_err(|e| {
+                            PlanError::invalid(format!(
+                                "failed to analyze generation expression `{gen_expr_str}`: {e}"
+                            ))
+                        })?;
+                    let resolved = self.resolve_expression(spec_expr, &schema, state).await?;
+                    gen_exprs.push((gen_col.name.clone(), resolved));
+                }
+
+                // Build final projection in table column order: non-generated cols are referenced
+                // by field ID from intermediate, generated cols use their resolved expressions.
+                // We also register field IDs for generated columns.
+                let mut non_gen_idx = 0;
+                let final_expr: Vec<Expr> = info
+                    .columns
+                    .iter()
+                    .map(|c| {
+                        if let Some((_, resolved)) = gen_exprs.iter().find(|(n, _)| n == &c.name) {
+                            let out_id = state.register_field_name(&c.name);
+                            resolved.clone().alias(out_id)
+                        } else {
+                            let field_id = &field_ids[non_gen_idx];
+                            non_gen_idx += 1;
+                            let out_id = state.register_field_name(&c.name);
+                            col(Column::from_name(field_id)).alias(out_id)
+                        }
+                    })
+                    .collect();
+                let plan = LogicalPlanBuilder::new(intermediate)
+                    .project(final_expr)?
+                    .build()?;
+
+                (plan, WriteColumnMatch::ByPosition)
+            } else if input_field_count != table_field_count {
+                return Err(PlanError::invalid(format!(
+                    "input schema for INSERT has {} fields, but table schema has {} fields",
+                    input_field_count, table_field_count
+                )));
+            } else {
+                (input, column_match)
+            };
+
         let plan = match column_match {
             WriteColumnMatch::ByPosition => {
                 let expr = input
@@ -625,7 +740,8 @@ impl PlanResolver<'_> {
                     .map(|(column, name)| col(column).alias(name))
                     .collect::<Vec<_>>();
                 let plan = LogicalPlanBuilder::new(input).project(expr)?.build()?;
-                Self::rewrite_write_input(plan, WriteColumnMatch::ByName, info)?
+                Box::pin(self.rewrite_write_input(plan, WriteColumnMatch::ByName, info, state))
+                    .await?
             }
         };
         Ok(plan)

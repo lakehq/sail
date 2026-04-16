@@ -57,9 +57,11 @@ use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
+    schema_has_generated_columns,
 };
 use crate::spec::{
-    contains_timestampntz_arrow, Action, ColumnMappingMode, StructType, TableProperties,
+    contains_timestampntz_arrow, Action, ColumnMappingMode, ColumnMetadataKey, MetadataValue,
+    StructType, TableProperties,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
@@ -461,6 +463,23 @@ impl DeltaWriterExec {
                 let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
                 let kernel_schema = StructType::try_from(final_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                // Inject generation expressions into the schema field metadata.
+                let kernel_schema = if options.generation_expressions.is_empty() {
+                    kernel_schema
+                } else {
+                    let fields = kernel_schema.into_fields().map(|mut field| {
+                        if let Some(expr) = options.generation_expressions.get(&field.name) {
+                            field.metadata.insert(
+                                ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
+                                MetadataValue::String(expr.clone()),
+                            );
+                        }
+                        field
+                    });
+                    StructType::new_unchecked(fields)
+                };
+
                 let mut configuration = metadata_configuration.clone();
                 let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
                     let annotated_schema = annotate_for_column_mapping(&kernel_schema);
@@ -482,6 +501,7 @@ impl DeltaWriterExec {
                     !matches!(effective_mode, ColumnMappingMode::None),
                     has_timestamp_ntz,
                     TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
+                    schema_has_generated_columns(&metadata_schema),
                     &configuration,
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;

@@ -10,6 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+
 use sail_data_source::options::gen::DeltaWriteOptions;
 use serde::{Deserialize, Serialize};
 
@@ -23,16 +25,25 @@ pub struct DeltaWriterExecOptions {
     pub merge_schema: bool,
     pub overwrite_schema: bool,
     pub replace_where: Option<String>,
+    /// Map of column name to generation expression for Delta generated columns.
+    #[serde(default)]
+    pub generation_expressions: HashMap<String, String>,
 }
 
 impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
     fn from(options: DeltaWriteOptions) -> Self {
+        let generation_expressions = options
+            .generation_expressions
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<HashMap<String, String>>(s).ok())
+            .unwrap_or_default();
         Self {
             target_file_size: options.target_file_size,
             write_batch_size: options.write_batch_size,
             merge_schema: options.merge_schema,
             overwrite_schema: options.overwrite_schema,
             replace_where: options.replace_where,
+            generation_expressions,
         }
     }
 }

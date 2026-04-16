@@ -217,7 +217,19 @@ pub struct TableColumnStatus {
 
 impl TableColumnStatus {
     pub fn field(&self) -> Field {
-        Field::new(self.name.clone(), self.data_type.clone(), self.nullable)
+        let mut metadata = std::collections::HashMap::new();
+        if let Some(expr) = &self.generated_always_as {
+            metadata.insert("delta.generationExpression".to_string(), expr.clone());
+        }
+        if let Some(comment) = &self.comment {
+            metadata.insert("comment".to_string(), comment.clone());
+        }
+        let field = Field::new(self.name.clone(), self.data_type.clone(), self.nullable);
+        if metadata.is_empty() {
+            field
+        } else {
+            field.with_metadata(metadata)
+        }
     }
 }
 
