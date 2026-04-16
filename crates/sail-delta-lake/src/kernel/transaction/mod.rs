@@ -1054,8 +1054,10 @@ impl PostCommit {
     /// Build a version checksum incrementally from the previous version's CRC and the
     /// current commit's actions, without requiring a full file list.
     ///
-    /// Returns `None` when the CRC should be skipped (unsupported features, deletion
-    /// vectors in the commit, or missing previous CRC for non-initial versions).
+    /// Returns `None` when the CRC should be skipped (unsupported features or deletion
+    /// vectors in the commit). Falls back to [`Self::build_full_checksum_fallback`] when
+    /// the previous CRC is missing, corrupt, or when a [`CommitAction::Remove`] action
+    /// has no `size` field (which would otherwise produce an inaccurate `table_size_bytes`).
     async fn build_incremental_checksum(&self) -> Option<VersionChecksum> {
         let actions = &self.data.actions;
 
@@ -1124,8 +1126,20 @@ impl PostCommit {
                 }
                 CommitAction::Remove(remove) => {
                     delta_num_files = delta_num_files.checked_sub(1)?;
-                    if let Some(size) = remove.size {
-                        delta_size_bytes = delta_size_bytes.checked_sub(size)?;
+                    match remove.size {
+                        Some(size) => {
+                            delta_size_bytes = delta_size_bytes.checked_sub(size)?;
+                        }
+                        None => {
+                            // Remove.size is optional per the Delta protocol; without it we
+                            // cannot compute an accurate incremental table_size_bytes.
+                            debug!(
+                                "Incremental CRC: Remove action missing size at version {}; \
+                                 falling back to full-snapshot CRC computation",
+                                self.version
+                            );
+                            return self.build_full_checksum_fallback().await;
+                        }
                     }
                 }
                 _ => {}
@@ -1264,11 +1278,9 @@ impl PostCommit {
 
     /// Full-snapshot fallback for CRC computation.
     ///
-    /// Called when the incremental chain is broken (prev CRC missing or corrupt).
-    /// Loads a fresh full snapshot at the committed version — more expensive than the
-    /// incremental path, but only triggered in the recovery scenario.
-    /// `table_data` cannot be reused here because it was loaded with
-    /// `require_files: false` and therefore has an empty `adds` list.
+    /// Called when the incremental chain is broken (prev CRC missing or corrupt, or a
+    /// Remove action has no size). Loads a fresh full snapshot at the committed version —
+    /// more expensive than the incremental path, but only triggered in recovery scenarios.
     async fn build_full_checksum_fallback(&self) -> Option<VersionChecksum> {
         debug!(
             "CRC full-snapshot fallback: loading full snapshot for version {}",
@@ -1485,7 +1497,8 @@ impl std::future::IntoFuture for PostCommit {
             // These run inline so that callers observe completed artifacts (e.g.
             // checkpoint files) when the commit future resolves.
 
-            // before hook
+            // before hook — best-effort: the commit entry has already been durably written
+            // to the log, so a hook failure here does not roll back the transaction.
             if let Some(handler) = &this.custom_execute_handler {
                 if let Err(e) = handler
                     .before_post_commit_hook(
@@ -1502,7 +1515,9 @@ impl std::future::IntoFuture for PostCommit {
                 }
             }
 
-            // Checkpoint
+            // Checkpoint — best-effort: checkpoint creation is a performance optimization
+            // (the log can always be replayed from scratch). A failure is logged but does
+            // not cause the commit to be reported as failed.
             let mut checkpoint_created = false;
             if will_create_checkpoint {
                 info!("Creating checkpoint for version {}", this.version);
