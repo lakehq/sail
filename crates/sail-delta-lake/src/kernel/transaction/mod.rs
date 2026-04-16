@@ -1452,30 +1452,18 @@ impl std::future::IntoFuture for PostCommit {
             this.write_version_checksum_incremental(post_commit_operation_id)
                 .await;
 
-            // Build a snapshot for table properties and for FinalizedCommit.
-            // For existing tables, reuse the header-only snapshot from the planning phase.
-            // For new tables (version 0), load a full snapshot since the table is tiny and
-            // callers may need commit timestamps.
-            let state: Arc<DeltaSnapshot> = if let Some(snapshot) = &this.table_data {
-                let mut snapshot = Arc::clone(snapshot);
-                if this.version != snapshot.version() {
-                    Arc::make_mut(&mut snapshot)
-                        .update(this.log_store.as_ref(), Some(this.version as u64))
-                        .await?;
-                }
-                snapshot
-            } else {
-                // Table creation — a full snapshot is acceptable since version 0 is tiny.
-                Arc::new(
-                    DeltaSnapshot::try_new(
-                        this.log_store.as_ref(),
-                        Default::default(),
-                        Some(this.version),
-                        None,
-                    )
-                    .await?,
+            let state: Arc<DeltaSnapshot> = Arc::new(
+                DeltaSnapshot::try_new(
+                    this.log_store.as_ref(),
+                    DeltaSnapshotConfig {
+                        require_files: false,
+                        ..Default::default()
+                    },
+                    Some(this.version),
+                    None,
                 )
-            };
+                .await?,
+            );
 
             let cleanup_logs_setting = if let Some(cleanup_logs) = this.cleanup_expired_logs {
                 cleanup_logs

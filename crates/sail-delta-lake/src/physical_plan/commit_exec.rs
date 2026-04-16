@@ -209,9 +209,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
             // For existing tables, open concurrently with a full snapshot while
-            // input data (Parquet writes from workers) is being drained. A full snapshot
-            // (require_files: true) is required so that conflict-checker's read_files()
-            // has the complete adds list for deleted-file overlap checks on retries.
+            // input data (Parquet writes from workers) is being drained.
             let table_join = if table_exists {
                 let open_url = table_url.clone();
                 let open_store = Arc::clone(&object_store);
