@@ -38,7 +38,6 @@ impl ServerSessionMutator for SparkSessionMutator {
             info.session_id.clone(),
             info.user_id.clone(),
             SparkSessionOptions {
-                spark_version: self.config.spark.spark_version.clone(),
                 execution_heartbeat_interval: Duration::from_secs(
                     self.config.spark.execution_heartbeat_interval_secs,
                 ),

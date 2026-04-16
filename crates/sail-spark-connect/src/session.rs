@@ -20,7 +20,6 @@ use crate::streaming::{
 
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
-    pub spark_version: String,
     pub execution_heartbeat_interval: Duration,
 }
 
@@ -79,10 +78,6 @@ impl SparkSession {
 
     pub(crate) fn options(&self) -> &SparkSessionOptions {
         &self.options
-    }
-
-    pub(crate) fn spark_version(&self) -> &str {
-        &self.options.spark_version
     }
 
     pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
