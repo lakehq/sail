@@ -37,7 +37,7 @@ use crate::kernel::checkpoints::{
     create_checkpoint_for, create_log_compaction_for, should_create_compaction,
 };
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::kernel::DeltaOperation;
+use crate::kernel::{DeltaOperation, DeltaSnapshotConfig};
 use crate::spec::{
     checksum_path, temp_commit_path, Action, CommitAction, DeltaError, DeltaResult, Metadata,
     TableFeature, Transaction, VersionChecksum,
@@ -1182,23 +1182,28 @@ impl PostCommit {
                 Ok(bytes) => bytes,
                 Err(err) => {
                     debug!(
-                        "Incremental CRC: failed to read prev CRC bytes at version {prev_version}: {err}"
+                        "Incremental CRC: failed to read prev CRC bytes at version {prev_version}: {err}; \
+                         falling back to full-snapshot CRC computation"
                     );
-                    return None;
+                    return self.build_full_checksum_fallback().await;
                 }
             },
             Err(err) => {
-                debug!("Incremental CRC: prev CRC not available at version {prev_version}: {err}");
-                return None;
+                debug!(
+                    "Incremental CRC: prev CRC not available at version {prev_version}: {err}; \
+                     falling back to full-snapshot CRC computation"
+                );
+                return self.build_full_checksum_fallback().await;
             }
         };
         let prev_checksum: VersionChecksum = match serde_json::from_slice(&prev_crc_bytes) {
             Ok(c) => c,
             Err(err) => {
                 debug!(
-                    "Incremental CRC: failed to deserialize prev CRC at version {prev_version}: {err}"
+                    "Incremental CRC: failed to deserialize prev CRC at version {prev_version}: {err}; \
+                     falling back to full-snapshot CRC computation"
                 );
-                return None;
+                return self.build_full_checksum_fallback().await;
             }
         };
 
@@ -1255,6 +1260,57 @@ impl PostCommit {
             file_size_histogram: None,
             all_files: None,
         })
+    }
+
+    /// Full-snapshot fallback for CRC computation.
+    ///
+    /// Called when the incremental chain is broken (prev CRC missing or corrupt).
+    /// Loads a fresh full snapshot at the committed version — more expensive than the
+    /// incremental path, but only triggered in the recovery scenario.
+    /// `table_data` cannot be reused here because it was loaded with
+    /// `require_files: false` and therefore has an empty `adds` list.
+    async fn build_full_checksum_fallback(&self) -> Option<VersionChecksum> {
+        debug!(
+            "CRC full-snapshot fallback: loading full snapshot for version {}",
+            self.version
+        );
+        let snapshot = match DeltaSnapshot::try_new(
+            self.log_store.as_ref(),
+            DeltaSnapshotConfig::default(), // require_files: true
+            Some(self.version),
+            None,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(err) => {
+                debug!(
+                    "CRC full-snapshot fallback: failed to load snapshot for version {}: {err}",
+                    self.version
+                );
+                return None;
+            }
+        };
+        match snapshot.build_version_checksum(
+            self.data.version_checksum_txn_id(),
+            self.data.version_checksum_in_commit_timestamp(),
+        ) {
+            Ok(Some(checksum)) => {
+                debug!(
+                    "CRC full-snapshot fallback: succeeded for version {}",
+                    self.version
+                );
+                Some(checksum)
+            }
+            Ok(None) => None,
+            Err(err) => {
+                debug!(
+                    "CRC full-snapshot fallback: build_version_checksum failed for version {}: {err}",
+                    self.version
+                );
+                None
+            }
+        }
     }
 
     async fn write_version_checksum_incremental(&self, operation_id: Uuid) {

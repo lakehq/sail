@@ -273,3 +273,50 @@ Feature: Delta Lake Version Checksum
       Then delta log JSON file 00000000000000000001.crc in delta_log contains
         | path     | value |
         | numFiles | 1     |
+
+  @sail-only
+  Rule: Broken CRC chain is healed via full-snapshot fallback on next commit
+
+    Background:
+      Given variable location for temporary directory delta_crc_fallback
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_crc_fallback_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_crc_fallback_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_crc_fallback_test VALUES (1, 'one'), (2, 'two')
+        """
+
+    Scenario: CRC is regenerated via full-snapshot fallback when prev CRC is missing
+      Given file 00000000000000000000.crc in delta_log is deleted
+      Given statement
+        """
+        INSERT INTO delta_crc_fallback_test VALUES (3, 'three')
+        """
+      When query
+        """
+        SELECT COUNT(*) AS cnt FROM delta_crc_fallback_test
+        """
+      Then query result
+        | cnt |
+        | 3   |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000000.json
+        📄 00000000000000000001.crc
+        📄 00000000000000000001.json
+        """
+      Then delta log JSON file 00000000000000000001.crc in delta_log contains
+        | path     | value |
+        | numFiles | 2     |
