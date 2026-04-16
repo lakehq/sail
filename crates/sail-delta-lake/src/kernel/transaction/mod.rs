@@ -1423,15 +1423,7 @@ impl std::future::IntoFuture for PostCommit {
             let compaction_info = state
                 .table_properties()
                 .log_compaction_interval()
-                .filter(|_| {
-                    should_create_compaction(
-                        this.version,
-                        state
-                            .table_properties()
-                            .log_compaction_interval()
-                            .unwrap_or(0),
-                    )
-                });
+                .filter(|&interval| should_create_compaction(this.version, interval));
 
             // --- Post-commit heavy work (checkpoint, cleanup, compaction) ---
             // These run inline so that callers observe completed artifacts (e.g.
@@ -1476,6 +1468,7 @@ impl std::future::IntoFuture for PostCommit {
             }
 
             // Log cleanup
+            let mut num_log_files_cleaned_up: u64 = 0;
             if cleanup_logs_setting && checkpoint_created {
                 let retention_millis = i64::try_from(
                     state
@@ -1495,7 +1488,7 @@ impl std::future::IntoFuture for PostCommit {
                 )
                 .await
                 {
-                    Ok(_) => {}
+                    Ok(n) => num_log_files_cleaned_up = n as u64,
                     Err(e) => {
                         warn!(
                             "Failed to clean up expired log files for version {}: {e}",
@@ -1554,7 +1547,7 @@ impl std::future::IntoFuture for PostCommit {
                 metrics: Metrics {
                     num_retries: this.metrics.num_retries,
                     new_checkpoint_created: checkpoint_created,
-                    num_log_files_cleaned_up: 0,
+                    num_log_files_cleaned_up,
                 },
             })
         })
