@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{Column, JoinType, NullEquality};
 use datafusion_expr::{build_join_schema, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_functions::expr_fn::coalesce;
@@ -13,23 +13,16 @@ use crate::resolver::PlanResolver;
 
 /// Returns `true` if the expression contains a Python scalar UDF anywhere in its tree.
 fn expr_contains_python_udf(expr: &Expr) -> bool {
-    let mut found = false;
-    let _ = expr.apply(|e| {
-        if let Expr::ScalarFunction(sf) = e {
-            if sf
-                .func
-                .inner()
-                .as_any()
-                .downcast_ref::<PySparkUDF>()
-                .is_some()
-            {
-                found = true;
-                return Ok(TreeNodeRecursion::Stop);
-            }
-        }
-        Ok(TreeNodeRecursion::Continue)
-    });
-    found
+    expr.exists(|e| match e {
+        Expr::ScalarFunction(sf) => Ok(sf
+            .func
+            .inner()
+            .as_any()
+            .downcast_ref::<PySparkUDF>()
+            .is_some()),
+        _ => Ok(false),
+    })
+    .unwrap_or(false)
 }
 
 /// Returns a string representation of the join type suitable for error messages.
