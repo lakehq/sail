@@ -1511,10 +1511,6 @@ impl std::future::IntoFuture for PostCommit {
         Box::pin(async move {
             let post_commit_operation_id = Uuid::new_v4();
 
-            // --- Lightweight, inline work (CRC + table property read) ---
-            this.write_version_checksum_incremental(post_commit_operation_id)
-                .await;
-
             let state: Option<Arc<DeltaSnapshot>> = match DeltaSnapshot::try_new(
                 this.log_store.as_ref(),
                 DeltaSnapshotConfig {
@@ -1554,6 +1550,9 @@ impl std::future::IntoFuture for PostCommit {
                 .as_ref()
                 .and_then(|s| s.table_properties().log_compaction_interval())
                 .filter(|&interval| should_create_compaction(this.version, interval));
+
+            this.write_version_checksum_incremental(post_commit_operation_id)
+                .await;
 
             // --- Post-commit heavy work (checkpoint, cleanup, compaction) ---
             // These run inline so that callers observe completed artifacts (e.g.
