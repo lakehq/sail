@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, Decimal128Array};
+use datafusion::arrow::array::{AsArray, Decimal128Array};
 use datafusion::arrow::datatypes::{DataType, Decimal128Type};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -16,7 +16,7 @@ use crate::error::invalid_arg_count_exec_err;
 ///   - `result_precision = int_dig + result_scale`
 pub fn decimal128_div_result_type(p1: u8, s1: i8, p2: u8, s2: i8) -> (u8, i8) {
     const MAX_PRECISION: i32 = 38;
-    let int_dig = ((p1 as i32 - s1 as i32 + s2 as i32).min(32)).max(0);
+    let int_dig = (p1 as i32 - s1 as i32 + s2 as i32).clamp(0, 32);
     let result_scale_raw = 6i32.max(s1 as i32 + p2 as i32 + 1);
     let result_scale = result_scale_raw.min(MAX_PRECISION - int_dig);
     let result_precision = (int_dig + result_scale).min(MAX_PRECISION);
@@ -40,7 +40,9 @@ fn div_round_half_up(numerator: i128, divisor: i128) -> Option<i128> {
     if positive {
         i128::try_from(abs_result).ok()
     } else {
-        i128::try_from(abs_result).ok().and_then(|v| v.checked_neg())
+        i128::try_from(abs_result)
+            .ok()
+            .and_then(|v| v.checked_neg())
     }
 }
 
@@ -98,15 +100,20 @@ impl ScalarUDFImpl for SparkDecimalDiv {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
             args,
-            return_type,
+            return_field,
             number_rows,
             ..
         } = args;
         if args.len() != 2 {
-            return Err(invalid_arg_count_exec_err("spark_decimal_div", (2, 2), args.len()));
+            return Err(invalid_arg_count_exec_err(
+                "spark_decimal_div",
+                (2, 2),
+                args.len(),
+            ));
         }
 
-        let (result_precision, result_scale) = match &return_type {
+        let return_type = return_field.data_type();
+        let (result_precision, result_scale) = match return_type {
             DataType::Decimal128(p, s) => (*p, *s),
             _ => {
                 return exec_err!(
@@ -118,11 +125,10 @@ impl ScalarUDFImpl for SparkDecimalDiv {
 
         let (dividend_arg, divisor_arg) = (&args[0], &args[1]);
 
-        // Extract precision/scale from the actual argument types for computing mul_pow
-        let (p1, s1, p2, s2) = match (dividend_arg.data_type(), divisor_arg.data_type()) {
-            (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-                (*p1, *s1, *p2, *s2)
-            }
+        // Extract precision/scale from the actual argument types for computing mul_pow.
+        // ColumnarValue::data_type() returns DataType by value, so p1/s1/p2/s2 are plain values.
+        let (s1, s2) = match (dividend_arg.data_type(), divisor_arg.data_type()) {
+            (DataType::Decimal128(_p1, s1), DataType::Decimal128(_p2, s2)) => (s1, s2),
             _ => {
                 return exec_err!(
                     "spark_decimal_div: expected Decimal128 arguments, got {:?} and {:?}",
@@ -167,7 +173,7 @@ impl ScalarUDFImpl for SparkDecimalDiv {
 
         let result_array = Decimal128Array::from(result_values)
             .with_precision_and_scale(result_precision, result_scale)
-            .map_err(|e| datafusion_common::DataFusionError::ArrowError(e, None))?;
+            .map_err(|e| datafusion_common::DataFusionError::ArrowError(Box::new(e), None))?;
 
         Ok(ColumnarValue::Array(Arc::new(result_array)))
     }
@@ -230,8 +236,8 @@ mod tests {
         assert_eq!(div_round_half_up(6, 2), Some(3));
         // 5 / 3 = 1.667 → rounds to 2
         assert_eq!(div_round_half_up(5, 3), Some(2));
-        // -7 / 2 = -3.5 → rounds to -3 (ROUND_HALF_UP = toward +infinity)
-        assert_eq!(div_round_half_up(-7, 2), Some(-3));
+        // -7 / 2 = -3.5 → rounds to -4 (ROUND_HALF_UP rounds away from zero)
+        assert_eq!(div_round_half_up(-7, 2), Some(-4));
         // Division by zero
         assert_eq!(div_round_half_up(5, 0), None);
         // 3500000000000 / 3 = 1166666666666.67 → rounds to 1166666666667

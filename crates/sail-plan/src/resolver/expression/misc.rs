@@ -358,9 +358,8 @@ impl PlanResolver<'_> {
                 .resolve_named_expression(value_expression, schema, state)
                 .await?;
             let value_display_name = value_name.into_iter().next().unwrap_or_default();
-            let output_name = format!(
-                "update_fields({struct_display_name}, WithField({value_display_name}))"
-            );
+            let output_name =
+                format!("update_fields({struct_display_name}, WithField({value_display_name}))");
             let new_expr =
                 ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr]);
             (new_expr, output_name)
