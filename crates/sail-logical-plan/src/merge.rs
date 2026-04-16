@@ -140,6 +140,11 @@ pub struct MergeIntoOptions {
     pub residual_predicates: Vec<Expr>,
     /// Predicates from ON that only touch target columns (useful for early pruning)
     pub target_only_predicates: Vec<Expr>,
+    /// Generation expressions for generated columns in the target table.
+    /// Each entry is `(column_name, resolved_expr)` where `resolved_expr` initially
+    /// references target schema field IDs and is rewritten to actual column names
+    /// by `expand_merge` before being applied as a post-processing projection.
+    pub generated_column_exprs: Vec<(String, Expr)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -772,6 +777,11 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     rewrite_clauses(&mut options.matched_clauses, &rewrite)?;
     rewrite_not_matched_by_source(&mut options.not_matched_by_source_clauses, &rewrite)?;
     rewrite_not_matched_by_target(&mut options.not_matched_by_target_clauses, &rewrite)?;
+    options.generated_column_exprs = options
+        .generated_column_exprs
+        .iter()
+        .map(|(name, expr)| Ok((name.clone(), rewrite(expr.clone())?)))
+        .collect::<Result<Vec<_>>>()?;
     trace!(
         "expand_merge options after rewrite - join_key_pairs: {:?}, matched_clauses: {:?}, not_matched_by_source_clauses: {:?}, not_matched_by_target_clauses: {:?}, on_condition: {:?}",
         &options.join_key_pairs,
@@ -816,6 +826,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         let projected = LogicalPlanBuilder::from(filtered)
             .project(projection_exprs)?
             .build()?;
+        let projected = apply_generation_projection(projected, &options.generated_column_exprs)?;
 
         let touched_plan = LogicalPlanBuilder::empty(false).build()?;
         let command_schema = Arc::new(DFSchema::empty());
@@ -936,6 +947,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     let projected = LogicalPlanBuilder::from(filtered)
         .project(projection_exprs.clone())?
         .build()?;
+    let projected = apply_generation_projection(projected, &options.generated_column_exprs)?;
 
     let (rewrite_matched, rewrite_not_matched_by_source) =
         build_rewrite_predicates(&options, &matched_pred, &not_matched_by_source_pred);
@@ -1043,6 +1055,42 @@ fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
         })
         .collect::<Vec<_>>();
     combine_disjunction(&preds).unwrap_or_else(|| lit(false))
+}
+
+/// Apply generation expressions as a post-processing projection on the MERGE write plan.
+///
+/// For each generated column, replace its current value (which may be incorrect if the user
+/// provided an explicit value, or may be NULL for INSERT without specifying the generated column)
+/// with the result of the generation expression. Non-generated columns and internal MERGE columns
+/// are passed through unchanged.
+///
+/// `generated_column_exprs` must already have their column references rewritten to actual names
+/// (i.e., after `rewrite_merge_columns` has been applied in `expand_merge`).
+fn apply_generation_projection(
+    plan: LogicalPlan,
+    generated_column_exprs: &[(String, Expr)],
+) -> Result<LogicalPlan> {
+    if generated_column_exprs.is_empty() {
+        return Ok(plan);
+    }
+    let gen_map: HashMap<&str, &Expr> = generated_column_exprs
+        .iter()
+        .map(|(name, expr)| (name.as_str(), expr))
+        .collect();
+    let post_exprs: Vec<Expr> = plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| {
+            let name = f.name();
+            if let Some(gen_expr) = gen_map.get(name.as_str()) {
+                (*gen_expr).clone().alias(name.clone())
+            } else {
+                col(name.clone())
+            }
+        })
+        .collect();
+    LogicalPlanBuilder::from(plan).project(post_exprs)?.build()
 }
 
 fn build_insert_only_projection(

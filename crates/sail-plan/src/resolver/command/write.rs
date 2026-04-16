@@ -613,27 +613,35 @@ impl PlanResolver<'_> {
 
         // If the input has the same number of fields as non-generated columns,
         // we add the generated columns to the input.
-        let (input, column_match) =
-            if input_field_count == non_generated_count && !generated_columns.is_empty() {
-                // Determine which table columns are non-generated.
-                let non_generated_names: Vec<String> = info
-                    .columns
-                    .iter()
-                    .filter(|c| c.generated_always_as.is_none())
-                    .map(|c| c.name.clone())
-                    .collect();
+        // Also handle the case where the user provides ALL columns including generated ones —
+        // in that case we must overwrite the user-supplied generated column values with the
+        // expressions mandated by the table schema.
+        let (input, column_match) = if !generated_columns.is_empty()
+            && (input_field_count == non_generated_count || input_field_count == table_field_count)
+        {
+            // Determine which table columns are non-generated.
+            let non_generated_names: Vec<String> = info
+                .columns
+                .iter()
+                .filter(|c| c.generated_always_as.is_none())
+                .map(|c| c.name.clone())
+                .collect();
 
-                // Register fields for the non-generated columns in the state,
-                // so that resolve_expression can look them up.
-                let field_ids: Vec<String> = non_generated_names
-                    .iter()
-                    .map(|name| state.register_field_name(name.clone()))
-                    .collect();
+            // Register fields for the non-generated columns in the state,
+            // so that resolve_expression can look them up.
+            let field_ids: Vec<String> = non_generated_names
+                .iter()
+                .map(|name| state.register_field_name(name.clone()))
+                .collect();
 
-                // Build intermediate plan aliasing input columns to the registered field IDs.
-                // For ByColumns, the user may specify columns in a different order than the table
-                // schema.  Map each input position to the field_id of the user-specified column
-                // so that generation expressions resolve the correct values.
+            // Build intermediate plan aliasing non-generated input columns to their field IDs.
+            //
+            // Two cases:
+            //   non_generated_count — input has exactly the non-generated columns; zip them
+            //     1-to-1 with the field IDs (respecting ByColumns ordering).
+            //   table_field_count   — input includes generated columns too; extract only the
+            //     non-generated positions and alias those to field IDs.
+            let alias_expr: Vec<Expr> = if input_field_count == non_generated_count {
                 let alias_field_ids: Vec<&String> = match &column_match {
                     WriteColumnMatch::ByColumns { columns } => {
                         // Build a case-insensitive map: non-generated name → field_id
@@ -651,75 +659,230 @@ impl PlanResolver<'_> {
                     }
                     _ => field_ids.iter().collect(),
                 };
-                let alias_expr: Vec<Expr> = input
+                input
                     .schema()
                     .columns()
                     .into_iter()
                     .zip(alias_field_ids.iter())
                     .map(|(column, field_id)| col(column).alias(field_id.as_str()))
-                    .collect();
-                let intermediate = LogicalPlanBuilder::new(input)
-                    .project(alias_expr)?
-                    .build()?;
-                let schema = intermediate.schema().clone();
+                    .collect()
+            } else {
+                // All columns provided (including generated ones). Extract only the
+                // non-generated input columns and alias them to the field IDs.
+                let input_cols = input.schema().columns();
+                match &column_match {
+                    WriteColumnMatch::ByColumns { columns } => {
+                        let name_to_fid: HashMap<String, &String> = non_generated_names
+                            .iter()
+                            .zip(field_ids.iter())
+                            .map(|(n, fid)| (n.to_lowercase(), fid))
+                            .collect();
+                        // Keep only the non-generated (col_name, input_col) pairs.
+                        columns
+                            .iter()
+                            .zip(input_cols.iter())
+                            .filter_map(|(col_name, input_col)| {
+                                name_to_fid
+                                    .get(&col_name.as_ref().to_lowercase())
+                                    .map(|fid| col(input_col.clone()).alias(fid.as_str()))
+                            })
+                            .collect()
+                    }
+                    _ => {
+                        // ByPosition: table column i ↔ input column i.
+                        // Skip positions belonging to generated columns.
+                        info.columns
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, c)| c.generated_always_as.is_none())
+                            .zip(field_ids.iter())
+                            .map(|((table_pos, _), field_id)| {
+                                col(input_cols[table_pos].clone()).alias(field_id.as_str())
+                            })
+                            .collect()
+                    }
+                }
+            };
+            let intermediate = LogicalPlanBuilder::new(input)
+                .project(alias_expr)?
+                .build()?;
+            let schema = intermediate.schema().clone();
 
-                // Resolve generated column expressions against the intermediate schema.
-                let mut gen_exprs: Vec<(String, Expr)> = Vec::new();
-                for (_, gen_col) in &generated_columns {
-                    let gen_expr_str = gen_col.generated_always_as.as_deref().ok_or_else(|| {
-                        PlanError::internal(format!(
-                            "expected generation expression for column `{}`",
-                            gen_col.name
+            // Resolve generated column expressions against the intermediate schema.
+            let mut gen_exprs: Vec<(String, Expr)> = Vec::new();
+            for (_, gen_col) in &generated_columns {
+                let gen_expr_str = gen_col.generated_always_as.as_deref().ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "expected generation expression for column `{}`",
+                        gen_col.name
+                    ))
+                })?;
+                let ast_expr =
+                    sail_sql_analyzer::parser::parse_expression(gen_expr_str).map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to parse generation expression `{gen_expr_str}`: {e}"
                         ))
                     })?;
-                    let ast_expr = sail_sql_analyzer::parser::parse_expression(gen_expr_str)
-                        .map_err(|e| {
-                            PlanError::invalid(format!(
-                                "failed to parse generation expression `{gen_expr_str}`: {e}"
-                            ))
-                        })?;
-                    let spec_expr = sail_sql_analyzer::expression::from_ast_expression(ast_expr)
-                        .map_err(|e| {
-                            PlanError::invalid(format!(
-                                "failed to analyze generation expression `{gen_expr_str}`: {e}"
-                            ))
-                        })?;
-                    let resolved = self.resolve_expression(spec_expr, &schema, state).await?;
-                    gen_exprs.push((gen_col.name.clone(), resolved));
-                }
+                let spec_expr = sail_sql_analyzer::expression::from_ast_expression(ast_expr)
+                    .map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to analyze generation expression `{gen_expr_str}`: {e}"
+                        ))
+                    })?;
+                let resolved = self.resolve_expression(spec_expr, &schema, state).await?;
+                gen_exprs.push((gen_col.name.clone(), resolved));
+            }
 
-                // Build final projection in table column order: non-generated cols are referenced
-                // by field ID from intermediate, generated cols use their resolved expressions.
-                // We also register field IDs for generated columns.
-                let mut non_gen_idx = 0;
-                let final_expr: Vec<Expr> = info
-                    .columns
+            // Build final projection in table column order: non-generated cols are referenced
+            // by field ID from intermediate, generated cols use their resolved expressions.
+            // We also register field IDs for generated columns.
+            let mut non_gen_idx = 0;
+            let final_expr: Vec<Expr> = info
+                .columns
+                .iter()
+                .map(|c| {
+                    if let Some((_, resolved)) = gen_exprs.iter().find(|(n, _)| n == &c.name) {
+                        let out_id = state.register_field_name(&c.name);
+                        resolved.clone().alias(out_id)
+                    } else {
+                        let field_id = &field_ids[non_gen_idx];
+                        non_gen_idx += 1;
+                        let out_id = state.register_field_name(&c.name);
+                        col(Column::from_name(field_id)).alias(out_id)
+                    }
+                })
+                .collect();
+            let plan = LogicalPlanBuilder::new(intermediate)
+                .project(final_expr)?
+                .build()?;
+
+            (plan, WriteColumnMatch::ByPosition)
+        } else if input_field_count != table_field_count {
+            return Err(PlanError::invalid(format!(
+                "input schema for INSERT has {} fields, but table schema has {} fields",
+                input_field_count, table_field_count
+            )));
+        } else if !generated_columns.is_empty() {
+            // The user provided all columns including generated ones.
+            // Per the Delta protocol, writers MUST enforce that any data writing to the table
+            // satisfies `(value <=> generation_expression) IS TRUE`.
+            // We always overwrite user-provided generated column values with the computed
+            // expressions to satisfy this requirement.
+
+            // Determine which table columns are non-generated.
+            let non_generated_names: Vec<String> = info
+                .columns
+                .iter()
+                .filter(|c| c.generated_always_as.is_none())
+                .map(|c| c.name.clone())
+                .collect();
+
+            // Register fields for the non-generated columns so that resolve_expression
+            // can look them up by human-readable name.
+            let field_ids: Vec<String> = non_generated_names
+                .iter()
+                .map(|name| state.register_field_name(name.clone()))
+                .collect();
+
+            // Build a case-insensitive map: non-generated column name → field_id.
+            let name_to_fid: HashMap<String, &String> = non_generated_names
+                .iter()
+                .zip(field_ids.iter())
+                .map(|(n, fid)| (n.to_lowercase(), fid))
+                .collect();
+
+            // Build intermediate plan with ONLY non-generated columns, aliased to field_ids.
+            // For ByPosition: pair input columns with table columns by position; skip generated.
+            // For ByName:     match by name; skip generated columns.
+            // For ByColumns:  user's explicit column list may include generated cols; skip them.
+            let alias_expr: Vec<Expr> = match &column_match {
+                WriteColumnMatch::ByColumns { columns } => columns
                     .iter()
-                    .map(|c| {
-                        if let Some((_, resolved)) = gen_exprs.iter().find(|(n, _)| n == &c.name) {
-                            let out_id = state.register_field_name(&c.name);
-                            resolved.clone().alias(out_id)
-                        } else {
-                            let field_id = &field_ids[non_gen_idx];
-                            non_gen_idx += 1;
-                            let out_id = state.register_field_name(&c.name);
-                            col(Column::from_name(field_id)).alias(out_id)
-                        }
+                    .zip(input.schema().columns().into_iter())
+                    .filter_map(|(col_name, input_col)| {
+                        let fid = name_to_fid.get(&col_name.as_ref().to_lowercase())?;
+                        Some(col(input_col).alias(fid.as_str()))
                     })
-                    .collect();
-                let plan = LogicalPlanBuilder::new(intermediate)
-                    .project(final_expr)?
-                    .build()?;
-
-                (plan, WriteColumnMatch::ByPosition)
-            } else if input_field_count != table_field_count {
-                return Err(PlanError::invalid(format!(
-                    "input schema for INSERT has {} fields, but table schema has {} fields",
-                    input_field_count, table_field_count
-                )));
-            } else {
-                (input, column_match)
+                    .collect(),
+                WriteColumnMatch::ByName => input
+                    .schema()
+                    .fields()
+                    .iter()
+                    .filter_map(|f| {
+                        let fid = name_to_fid.get(&f.name().to_lowercase())?;
+                        Some(col(Column::from_name(f.name())).alias(fid.as_str()))
+                    })
+                    .collect(),
+                _ => {
+                    // ByPosition: pair by position; filter to non-generated.
+                    input
+                        .schema()
+                        .columns()
+                        .into_iter()
+                        .zip(info.columns.iter())
+                        .filter_map(|(input_col, table_col)| {
+                            let fid = name_to_fid.get(&table_col.name.to_lowercase())?;
+                            Some(col(input_col).alias(fid.as_str()))
+                        })
+                        .collect()
+                }
             };
+
+            let intermediate = LogicalPlanBuilder::new(input)
+                .project(alias_expr)?
+                .build()?;
+            let schema = intermediate.schema().clone();
+
+            // Resolve generated column expressions against the intermediate schema.
+            let mut gen_exprs: Vec<(String, Expr)> = Vec::new();
+            for (_, gen_col) in &generated_columns {
+                let gen_expr_str = gen_col.generated_always_as.as_deref().ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "expected generation expression for column `{}`",
+                        gen_col.name
+                    ))
+                })?;
+                let ast_expr =
+                    sail_sql_analyzer::parser::parse_expression(gen_expr_str).map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to parse generation expression `{gen_expr_str}`: {e}"
+                        ))
+                    })?;
+                let spec_expr = sail_sql_analyzer::expression::from_ast_expression(ast_expr)
+                    .map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to analyze generation expression `{gen_expr_str}`: {e}"
+                        ))
+                    })?;
+                let resolved = self.resolve_expression(spec_expr, &schema, state).await?;
+                gen_exprs.push((gen_col.name.clone(), resolved));
+            }
+
+            // Build final projection in table column order.
+            let mut non_gen_idx = 0;
+            let final_expr: Vec<Expr> = info
+                .columns
+                .iter()
+                .map(|c| {
+                    if let Some((_, resolved)) = gen_exprs.iter().find(|(n, _)| n == &c.name) {
+                        let out_id = state.register_field_name(&c.name);
+                        resolved.clone().alias(out_id)
+                    } else {
+                        let field_id = &field_ids[non_gen_idx];
+                        non_gen_idx += 1;
+                        let out_id = state.register_field_name(&c.name);
+                        col(Column::from_name(field_id)).alias(out_id)
+                    }
+                })
+                .collect();
+            let plan = LogicalPlanBuilder::new(intermediate)
+                .project(final_expr)?
+                .build()?;
+
+            (plan, WriteColumnMatch::ByPosition)
+        } else {
+            (input, column_match)
+        };
 
         let plan = match column_match {
             WriteColumnMatch::ByPosition => {
