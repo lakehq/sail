@@ -11,7 +11,7 @@ use crate::error::invalid_arg_count_exec_err;
 /// Computes Spark-compatible precision and scale for `DECIMAL(p1, s1) / DECIMAL(p2, s2)`.
 ///
 /// Spark uses the "allowPrecisionLoss" mode by default (Spark 3.5+):
-///   - `int_dig = min(p1 - s1 + s2, 32)`
+///   - `int_dig = (p1 - s1 + s2).clamp(0, 32)`
 ///   - `result_scale = min(max(6, s1 + p2 + 1), 38 - int_dig)`
 ///   - `result_precision = int_dig + result_scale`
 pub fn decimal128_div_result_type(p1: u8, s1: i8, p2: u8, s2: i8) -> (u8, i8) {
@@ -142,11 +142,16 @@ impl ScalarUDFImpl for SparkDecimalDiv {
         // We multiply the dividend by 10^mul_pow before dividing by the divisor.
         let mul_pow = result_scale as i32 - s1 as i32 + s2 as i32;
 
-        let multiplier: Option<i128> = if mul_pow >= 0 {
+        let multiplier: i128 = if mul_pow >= 0 {
             10i128.checked_pow(mul_pow as u32)
         } else {
             10i128.checked_pow((-mul_pow) as u32)
-        };
+        }
+        .ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(format!(
+                "spark_decimal_div: multiplier overflow for mul_pow={mul_pow}"
+            ))
+        })?;
 
         // Convert arguments to arrays for element-wise computation
         let dividend_arr = to_decimal128_array(dividend_arg, number_rows)?;
@@ -159,11 +164,9 @@ impl ScalarUDFImpl for SparkDecimalDiv {
                 (Some(d_val), Some(s_val)) => {
                     // Scale the dividend: numerator = d_val * 10^mul_pow (or d_val / 10^(-mul_pow))
                     let numerator = if mul_pow >= 0 {
-                        let m = multiplier?;
-                        d_val.checked_mul(m)?
+                        d_val.checked_mul(multiplier)?
                     } else {
-                        let m = multiplier?;
-                        d_val / m
+                        d_val / multiplier
                     };
                     div_round_half_up(numerator, s_val)
                 }

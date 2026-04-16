@@ -357,7 +357,14 @@ impl PlanResolver<'_> {
             } = self
                 .resolve_named_expression(value_expression, schema, state)
                 .await?;
-            let value_display_name = value_name.into_iter().next().unwrap_or_default();
+            let value_display_name = if value_name.len() == 1 {
+                value_name.one()?
+            } else {
+                let names = format!("({})", value_name.join(", "));
+                return Err(PlanError::invalid(format!(
+                    "one name expected for value expression, got: {names}"
+                )));
+            };
             let output_name =
                 format!("update_fields({struct_display_name}, WithField({value_display_name}))");
             let new_expr =
