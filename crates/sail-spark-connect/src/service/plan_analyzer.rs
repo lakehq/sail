@@ -31,7 +31,6 @@ use crate::spark::connect::analyze_plan_response::{
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
 use crate::spark::connect::StorageLevel;
-use crate::SPARK_VERSION;
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
@@ -121,9 +120,21 @@ pub(crate) async fn handle_analyze_spark_version(
     _ctx: &SessionContext,
     _request: SparkVersionRequest,
 ) -> SparkResult<SparkVersionResponse> {
-    Ok(SparkVersionResponse {
-        version: SPARK_VERSION.to_string(),
+    let version = get_pyspark_version()?;
+    Ok(SparkVersionResponse { version })
+}
+
+fn get_pyspark_version() -> SparkResult<String> {
+    use pyo3::prelude::PyAnyMethods;
+    use pyo3::types::PyModule;
+    use pyo3::Python;
+
+    Python::attach(|py| {
+        let module = PyModule::import(py, "pyspark")?;
+        let version: String = module.getattr("__version__")?.extract()?;
+        Ok(version)
     })
+    .map_err(|e: pyo3::PyErr| SparkError::invalid(format!("failed to get PySpark version: {e}")))
 }
 
 pub(crate) async fn handle_analyze_ddl_parse(

@@ -155,17 +155,13 @@ impl TableFormat for DeltaTableFormat {
         }
 
         match mode {
-            PhysicalSinkMode::ErrorIfExists => {
-                if table_exists {
-                    return plan_err!("Delta table already exists at path: {table_url}");
-                }
+            PhysicalSinkMode::ErrorIfExists if table_exists => {
+                return plan_err!("Delta table already exists at path: {table_url}");
             }
-            PhysicalSinkMode::IgnoreIfExists => {
-                if table_exists {
-                    return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                        input.schema(),
-                    )));
-                }
+            PhysicalSinkMode::IgnoreIfExists if table_exists => {
+                return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                    input.schema(),
+                )));
             }
             PhysicalSinkMode::OverwritePartitions => {
                 return not_impl_err!("unsupported sink mode for Delta: {mode:?}")
@@ -204,9 +200,9 @@ impl TableFormat for DeltaTableFormat {
                             partition_by
                         );
                     }
-                    PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwriteIf { .. } => {
+                    PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwriteIf { .. }
                         // For overwrite mode, check if schema overwrite is allowed
-                        if !delta_options.overwrite_schema {
+                        if !delta_options.overwrite_schema => {
                             return plan_err!(
                                 "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                                 Set overwriteSchema=true to change partitioning.",
@@ -214,7 +210,6 @@ impl TableFormat for DeltaTableFormat {
                                 partition_by
                             );
                         }
-                    }
                     _ => {}
                 }
             }

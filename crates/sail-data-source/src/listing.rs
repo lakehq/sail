@@ -99,7 +99,7 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     }
     let schema = Schema::try_merge(schemas)?;
 
-    // FIXME: DataFusion 43.0.0 suddenly doesn't support Utf8View
+    // TODO: Spark doesn't support Utf8View
     let new_fields: Vec<Field> = schema
         .fields()
         .iter()
