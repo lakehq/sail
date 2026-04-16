@@ -282,7 +282,7 @@ fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
         | spec::QueryNode::WithParameters { input, .. }
         | spec::QueryNode::TableAlias { input, .. }
         | spec::QueryNode::TableSample { input, .. } => is_streaming_query_plan(input),
-        // single optional input
+        // single optional input - None input means no source, which is not streaming
         spec::QueryNode::Project { input, .. } | spec::QueryNode::LateralView { input, .. } => {
             input.as_ref().is_some_and(|i| is_streaming_query_plan(i))
         }
@@ -312,7 +312,8 @@ fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
                     .is_some_and(|i| is_streaming_query_plan(i))
         }
         spec::QueryNode::WithCtes { input, ctes, .. } => {
-            is_streaming_query_plan(input) || ctes.iter().any(|(_, p)| is_streaming_query_plan(p))
+            is_streaming_query_plan(input)
+                || ctes.iter().any(|(_name, p)| is_streaming_query_plan(p))
         }
         spec::QueryNode::WithRelations { root, references } => {
             is_streaming_query_plan(root) || references.iter().any(is_streaming_query_plan)
