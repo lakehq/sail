@@ -7,13 +7,10 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
 }
 
 pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
+    let rules = sail_logical_optimizer::default_optimizer_rules();
     let mut custom = sail_plan_lakehouse::lakehouse_optimizer_rules();
-    // `push_down_leaf_projections` breaks generator functions (explode/inline)
-    // on nested list-of-struct inputs, so we keep it out of the session pipeline.
-    // It is still present in `sail_logical_optimizer::default_optimizer_rules()`
-    // to preserve parity with DataFusion's default rule set.
     custom.extend(
-        sail_logical_optimizer::default_optimizer_rules()
+        rules
             .into_iter()
             .filter(|r| r.name() != "push_down_leaf_projections"),
     );
