@@ -14,7 +14,9 @@ use crate::resolver::PlanResolver;
 
 /// Returns true if the expression is a literal with a non-null value.
 /// This is used to infer non-nullable columns in VALUES clauses, matching
-/// Spark's behavior where literal (non-function) expressions are non-nullable.
+/// Spark's behavior where scalar literal values (e.g. integer `1`, boolean `true`)
+/// are non-nullable, while function call expressions (e.g. `TIMESTAMP('...')`)
+/// remain nullable.
 fn is_non_null_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(sv, _) if !sv.is_null())
 }
