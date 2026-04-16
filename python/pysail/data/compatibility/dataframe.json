@@ -23,8 +23,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "checkpoint",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/476"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -253,8 +252,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "localCheckpoint",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/482"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",

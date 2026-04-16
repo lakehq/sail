@@ -227,8 +227,8 @@ impl PlanResolver<'_> {
             QueryNode::CachedLocalRelation { .. } => {
                 return Err(PlanError::todo("cached local relation"));
             }
-            QueryNode::CachedRemoteRelation { .. } => {
-                return Err(PlanError::todo("cached remote relation"));
+            QueryNode::CachedRemoteRelation { relation_id } => {
+                self.resolve_cached_remote_relation(&relation_id)?
             }
             QueryNode::CommonInlineUserDefinedTableFunction(udtf) => {
                 self.resolve_query_common_inline_udtf(udtf, state).await?

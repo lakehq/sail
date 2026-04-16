@@ -7,6 +7,8 @@ use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
+use sail_common_datafusion::cached_relation::CachedRelationManager;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_logical_plan::range::RangeNode;
 
@@ -175,5 +177,15 @@ impl PlanResolver<'_> {
         _state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         Err(PlanError::todo("with watermark"))
+    }
+
+    pub(super) fn resolve_cached_remote_relation(
+        &self,
+        relation_id: &str,
+    ) -> PlanResult<LogicalPlan> {
+        let cache = self.ctx.extension::<CachedRelationManager>()?;
+        cache.get_relation(relation_id)?.ok_or_else(|| {
+            PlanError::invalid(format!("cached remote relation not found: {relation_id}"))
+        })
     }
 }

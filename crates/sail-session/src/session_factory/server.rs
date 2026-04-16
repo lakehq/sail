@@ -12,6 +12,7 @@ use datafusion_expr::registry::FunctionRegistry;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::cached_relation::CachedRelationManager;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_delta_lake::session_extension::DeltaTableCache;
@@ -118,7 +119,8 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
-            .with_extension(Arc::new(DeltaTableCache::default()));
+            .with_extension(Arc::new(DeltaTableCache::default()))
+            .with_extension(Arc::new(CachedRelationManager::new()));
         self.apply_execution_config(&mut config);
         self.apply_execution_parquet_config(&mut config);
         let config = self.mutator.mutate_config(config, info)?;

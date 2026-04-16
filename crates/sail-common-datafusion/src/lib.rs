@@ -1,4 +1,5 @@
 pub mod array;
+pub mod cached_relation;
 pub mod catalog;
 pub mod datasource;
 pub mod display;

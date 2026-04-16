@@ -9,9 +9,12 @@ use fastrace::Span;
 use futures::stream;
 use log::{debug, warn};
 use sail_common::spec;
+use sail_common_datafusion::cached_relation::CachedRelationManager;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
+use sail_plan::resolver::plan::NamedPlan;
+use sail_plan::resolver::PlanResolver;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -26,10 +29,11 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
-    MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
+    relation, CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
+    CommonInlineUserDefinedDataSource, CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
+    GetResourcesCommand, LocalRelation, MergeIntoTableCommand, Relation,
+    RemoveCachedRemoteRelationCommand, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
@@ -515,16 +519,54 @@ pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
 
 pub(crate) async fn handle_execute_checkpoint_command(
     ctx: &SessionContext,
-    _checkpoint: CheckpointCommand,
+    checkpoint: CheckpointCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    // TODO: Implement
-    warn!("Checkpoint operation is not yet supported and is a no-op");
     let spark = ctx.extension::<SparkSession>()?;
-    let result = CheckpointCommandResult { relation: None };
+    let cache = ctx.extension::<CachedRelationManager>()?;
+
+    let relation = checkpoint.relation.required("checkpoint relation")?;
+    let plan: spec::Plan = relation.try_into()?;
+
+    // Resolve the plan to get a LogicalPlan
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let NamedPlan { plan, fields: _ } = resolver.resolve_named_plan(plan).await?;
+
+    // Generate a unique relation_id and store the plan
+    let relation_id = uuid::Uuid::new_v4().to_string();
+    cache.add_relation(relation_id.clone(), plan)?;
+
+    let result = CheckpointCommandResult {
+        relation: Some(CachedRemoteRelation {
+            relation_id: relation_id.clone(),
+        }),
+    };
     let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
         Box::new(result),
     ))];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
+    ))
+}
+
+pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
+    ctx: &SessionContext,
+    cmd: RemoveCachedRemoteRelationCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let spark = ctx.extension::<SparkSession>()?;
+    let cache = ctx.extension::<CachedRelationManager>()?;
+
+    if let Some(relation) = cmd.relation {
+        cache.remove_relation(&relation.relation_id)?;
+    }
+
+    let mut output = vec![];
     if metadata.reattachable {
         output.push(ExecutorOutput::complete());
     }
