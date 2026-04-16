@@ -261,7 +261,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_variant_object"
+        "success": "ok"
       }
     },
     {
@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_variant_object"
+        "success": "ok"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_variant_object"
+        "success": "ok"
       }
     },
     {
@@ -327,7 +327,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_variant_object"
+        "success": "ok"
       }
     },
     {

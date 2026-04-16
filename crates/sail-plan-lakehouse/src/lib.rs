@@ -8,7 +8,8 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, plan_err, DFSchemaRef, DataFusionError, Result, ToDFSchema};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use sail_data_source::resolve_listing_urls;
-use sail_delta_lake::table::open_table_with_object_store;
+use sail_delta_lake::table::open_table_with_object_store_and_table_config;
+use sail_delta_lake::DeltaSnapshotConfig;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
@@ -36,9 +37,19 @@ async fn delta_table_schema(session_state: &SessionState, path: &str) -> Result<
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let table = open_table_with_object_store(table_url, object_store, Default::default())
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    // Only the schema (protocol + metadata) is needed; skip loading file-level actions.
+    let table_config = DeltaSnapshotConfig {
+        require_files: false,
+        ..Default::default()
+    };
+    let table = open_table_with_object_store_and_table_config(
+        table_url,
+        object_store,
+        Default::default(),
+        table_config,
+    )
+    .await
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let arrow_schema = table
         .snapshot()

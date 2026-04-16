@@ -5,6 +5,63 @@ next: false
 
 # Changelog
 
+## 0.6.0
+
+_April 14, 2026_
+
+- Added support for the Arrow Flight SQL server ([#1226](https://github.com/lakehq/sail/pull/1226), [#1632](https://github.com/lakehq/sail/pull/1632), and [#1644](https://github.com/lakehq/sail/pull/1644)).
+- Added support for the `VARIANT` data type ([#1142](https://github.com/lakehq/sail/pull/1142)).
+- Added support for lateral joins in SQL queries ([#1565](https://github.com/lakehq/sail/pull/1565)).
+- Added support for Arrow-native PySpark UDFs and keyword arguments for PySpark UDFs and UDTFs ([#1519](https://github.com/lakehq/sail/pull/1519), [#1648](https://github.com/lakehq/sail/pull/1648), and [#1660](https://github.com/lakehq/sail/pull/1660)).
+- Added the `vortex` Python data source ([#1363](https://github.com/lakehq/sail/pull/1363)).
+- Added SQL time travel support for Delta Lake and Iceberg via SQL syntax ([#1543](https://github.com/lakehq/sail/pull/1543)).
+- Improved Delta Lake integration ([#1541](https://github.com/lakehq/sail/pull/1541), [#1557](https://github.com/lakehq/sail/pull/1557), [#1577](https://github.com/lakehq/sail/pull/1577), [#1590](https://github.com/lakehq/sail/pull/1590), [#1597](https://github.com/lakehq/sail/pull/1597), and [#1629](https://github.com/lakehq/sail/pull/1629)).
+- Improved the internals of data source options ([#1596](https://github.com/lakehq/sail/pull/1596), [#1598](https://github.com/lakehq/sail/pull/1598), [#1623](https://github.com/lakehq/sail/pull/1623), and [#1633](https://github.com/lakehq/sail/pull/1633)).
+- Improved the internals of file writers ([#1552](https://github.com/lakehq/sail/pull/1552) and [#1556](https://github.com/lakehq/sail/pull/1556)).
+- Added support for persistent views in the catalog ([#1583](https://github.com/lakehq/sail/pull/1583)).
+- Added support for the following SQL functions ([#1142](https://github.com/lakehq/sail/pull/1142), [#1540](https://github.com/lakehq/sail/pull/1540), [#1570](https://github.com/lakehq/sail/pull/1570), [#1572](https://github.com/lakehq/sail/pull/1572), [#1587](https://github.com/lakehq/sail/pull/1587), [#1592](https://github.com/lakehq/sail/pull/1592), [#1620](https://github.com/lakehq/sail/pull/1620), [#1634](https://github.com/lakehq/sail/pull/1634), and [#1637](https://github.com/lakehq/sail/pull/1637)):
+  - `is_variant_null`
+  - `parse_json`
+  - `try_variant_get`
+  - `schema_of_json`
+  - `schema_of_variant`
+  - `regexp_extract_all`
+  - `sentences`
+  - `variant_get`
+  - `variant_to_json`
+  - `xpath`
+  - `xpath_boolean`
+  - `xpath_double`
+  - `xpath_float`
+  - `xpath_int`
+  - `xpath_long`
+  - `xpath_number`
+  - `xpath_short`
+  - `xpath_string`
+  - `bitmap_construct_agg`
+  - `bitmap_or_agg`
+- Improved the following SQL functions ([#1524](https://github.com/lakehq/sail/pull/1524), [#1585](https://github.com/lakehq/sail/pull/1585), [#1603](https://github.com/lakehq/sail/pull/1603), [#1605](https://github.com/lakehq/sail/pull/1605), and [#1606](https://github.com/lakehq/sail/pull/1606)):
+  - `array_compact`
+  - `position`
+  - `substring`
+  - `substr`
+  - `to_json`
+- Added support for the `OR REPLACE` clause in the `CREATE TABLE ... AS SELECT ...` statement ([#1619](https://github.com/lakehq/sail/pull/1619)).
+- Improved SQL statements for table introspection ([#1612](https://github.com/lakehq/sail/pull/1612)).
+- Fixed an issue with JVM Spark Connect client compatibility ([#1549](https://github.com/lakehq/sail/pull/1549)).
+- Fixed an issue with `PARTITIONED BY` handling for the `CREATE TABLE` statement ([#1589](https://github.com/lakehq/sail/pull/1589)).
+- Fixed an issue with column qualifier loss after `withColumn()` on an aliased DataFrame ([#1614](https://github.com/lakehq/sail/pull/1614)).
+- Fixed an issue with the `inferSchema` option in the CSV data source reader ([#1571](https://github.com/lakehq/sail/pull/1571)).
+- Improved catalog error messages ([#1665](https://github.com/lakehq/sail/pull/1665) and [#1667](https://github.com/lakehq/sail/pull/1667)).
+
+### Breaking Changes
+
+The `runtime.enable_secondary` configuration option was removed ([#1575](https://github.com/lakehq/sail/pull/1575) and [#1627](https://github.com/lakehq/sail/pull/1627)). We now always use separate Tokio runtimes for compute and IO operations.
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@tamirkifle](https://github.com/tamirkifle), [@wudihero2](https://github.com/wudihero2), [@kentkr](https://github.com/kentkr) (_first-time contributor_), and [@rafafrdz](https://github.com/rafafrdz) for your contributions!
+
 ## 0.5.3
 
 _March 21, 2026_

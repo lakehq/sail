@@ -332,7 +332,7 @@ impl Literal {
                     return Err("Keys and values length mismatch".to_string());
                 }
                 let mut out = Vec::with_capacity(keys.len());
-                for (k, v) in keys.into_iter().zip(vals.into_iter()) {
+                for (k, v) in keys.into_iter().zip(vals) {
                     let key = Literal::try_from_json(k, &map_ty.key_field.field_type)
                         .and_then(|opt| opt.ok_or_else(|| "Map key cannot be null".to_string()))?;
                     let val = Literal::try_from_json(v, &map_ty.value_field.field_type)?;

@@ -28,6 +28,8 @@ pub struct PlanConfig {
     pub default_warehouse_directory: String,
     pub session_user_id: String,
     pub ansi_mode: bool,
+    /// Whether to allow cartesian products (cross joins) without explicit `CROSS JOIN` syntax.
+    pub cross_join_enabled: bool,
 }
 
 impl PlanConfig {
@@ -50,6 +52,7 @@ impl Default for PlanConfig {
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
             ansi_mode: false,
+            cross_join_enabled: true,
         }
     }
 }

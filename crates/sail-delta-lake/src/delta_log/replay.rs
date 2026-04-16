@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use datafusion::common::runtime::SpawnedTask;
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -25,7 +26,7 @@ async fn read_checkpoint_header_from_parquet(
     meta: ObjectMeta,
 ) -> DeltaResult<ReconciledHeaderState> {
     let bytes = root_store.get(&meta.location).await?.bytes().await?;
-    tokio::task::spawn_blocking(move || {
+    SpawnedTask::spawn_blocking(move || {
         let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
             .map_err(DeltaTableError::generic_err)?;
 

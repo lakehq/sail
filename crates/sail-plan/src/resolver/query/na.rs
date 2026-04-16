@@ -52,8 +52,7 @@ impl PlanResolver<'_> {
                     "fill na number of values does not match number of columns",
                 ));
             }
-            let columns: Vec<(String, Expr)> =
-                columns.into_iter().zip(values.into_iter()).collect();
+            let columns: Vec<(String, Expr)> = columns.into_iter().zip(values).collect();
             Strategy::EachColumn { columns }
         };
 

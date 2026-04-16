@@ -1255,7 +1255,7 @@ mod tests {
             Statistics::new_unknown(&schema_b),
         ));
 
-        let join_set = JoinSet::from_iter([0usize, 1usize].into_iter())?;
+        let join_set = JoinSet::from_iter([0usize, 1usize])?;
         let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("R0.C0", 0)),
             Operator::Eq,
@@ -1335,7 +1335,7 @@ mod tests {
             Statistics::new_unknown(&schema_b),
         ));
 
-        let join_set = JoinSet::from_iter([0usize, 1usize].into_iter())?;
+        let join_set = JoinSet::from_iter([0usize, 1usize])?;
         let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("R0.C0", 0)),
             Operator::Eq,
@@ -1412,7 +1412,7 @@ mod tests {
             Statistics::new_unknown(&schema_b),
         ));
 
-        let join_set = JoinSet::from_iter([0usize, 1usize].into_iter())?;
+        let join_set = JoinSet::from_iter([0usize, 1usize])?;
         let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("R0.C0", 0)),
             Operator::Eq,

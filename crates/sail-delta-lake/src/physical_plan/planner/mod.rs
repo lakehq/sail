@@ -29,7 +29,7 @@ mod op_merge;
 mod op_update;
 mod op_write;
 
-pub use context::{DeltaTableConfig, PlannerContext};
+pub use context::{DeltaPlannerConfig, PlannerContext};
 pub use op_delete::build_delete_plan as plan_delete;
 pub use op_merge::build_merge_plan as plan_merge;
 pub use op_update::build_update_plan as plan_update;

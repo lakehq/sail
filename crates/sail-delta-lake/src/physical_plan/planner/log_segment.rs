@@ -72,7 +72,7 @@ pub async fn resolve_log_segment_files(
             .iter()
             .filter_map(|f| parse_compacted_json_versions(f).map(|r| (r, f.clone())))
             .collect();
-        parsed.sort_by(|a, b| b.0 .1.cmp(&a.0 .1)); // sort by end_version descending
+        parsed.sort_by_key(|b| std::cmp::Reverse(b.0 .1)); // sort by end_version descending
         let mut selected: Vec<((i64, i64), String)> = Vec::new();
         let mut covered_up_to: Option<i64> = None;
         for entry in parsed {
