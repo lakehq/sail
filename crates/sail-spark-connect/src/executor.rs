@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::future::FutureExt;
@@ -318,8 +319,6 @@ pub(crate) async fn read_stream(
 }
 
 pub(crate) fn to_arrow_batch(batch: RecordBatch) -> SparkResult<ArrowBatch> {
-    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-
     // Normalize Arrow view types (Utf8View, BinaryView) to their non-view
     // equivalents (Utf8, Binary) because PySpark does not support view types.
     let schema = batch.schema();
