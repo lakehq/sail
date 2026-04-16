@@ -72,13 +72,10 @@ fn cast_array_preserving_names(
         (DataType::Struct(src_children), DataType::Struct(tgt_children))
             if src_children.len() == tgt_children.len() =>
         {
-            let struct_array =
-                column
-                    .as_any()
-                    .downcast_ref::<StructArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal("expected StructArray".to_string())
-                    })?;
+            let struct_array = column
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| DataFusionError::Internal("expected StructArray".to_string()))?;
             let (new_fields, new_arrays): (Vec<FieldRef>, Vec<ArrayRef>) = src_children
                 .iter()
                 .zip(tgt_children.iter())
@@ -91,8 +88,7 @@ fn cast_array_preserving_names(
                         tgt_child.data_type(),
                     )?;
                     let new_type = new_child.data_type().clone();
-                    let new_field =
-                        Arc::new(src_child.as_ref().clone().with_data_type(new_type));
+                    let new_field = Arc::new(src_child.as_ref().clone().with_data_type(new_type));
                     Ok((new_field, new_child))
                 })
                 .collect::<Result<Vec<_>>>()?
