@@ -839,7 +839,25 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         });
     }
 
-    // Default MERGE expansion path (full outer join + presence columns + touched files).
+    build_default_merge_expansion(
+        options,
+        target_plan,
+        source_plan,
+        should_check_cardinality,
+        path_column,
+    )
+}
+
+/// Default MERGE expansion: full outer join + presence columns + touched files.
+fn build_default_merge_expansion(
+    options: MergeIntoOptions,
+    target_plan: LogicalPlan,
+    source_plan: LogicalPlan,
+    should_check_cardinality: bool,
+    path_column: &str,
+) -> Result<MergeExpansion> {
+    let target_schema = target_plan.schema();
+    let source_schema = source_plan.schema();
 
     let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
         .project(append_presence_projection(
