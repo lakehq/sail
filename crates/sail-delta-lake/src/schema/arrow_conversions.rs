@@ -210,11 +210,9 @@ impl TryFrom<&ArrowDataType> for DataType {
             }
             ArrowDataType::Date32 | ArrowDataType::Date64 => Ok(DataType::DATE),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => Ok(DataType::TIMESTAMP_NTZ),
-            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
-                if tz.eq_ignore_ascii_case("utc") =>
-            {
-                Ok(DataType::TIMESTAMP)
-            }
+            // Any timezone-aware timestamp maps to Delta TIMESTAMP regardless of the timezone
+            // label — the session/display timezone does not affect the logical type.
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(_)) => Ok(DataType::TIMESTAMP),
             ArrowDataType::Struct(fields) => DataType::try_struct_type_from_results(
                 fields
                     .iter()
