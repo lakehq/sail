@@ -530,7 +530,7 @@ pub(crate) async fn handle_execute_checkpoint_command(
 
     // Resolve the plan to get a LogicalPlan
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
-    let NamedPlan { plan, fields: _ } = resolver.resolve_named_plan(plan).await?;
+    let NamedPlan { plan, .. } = resolver.resolve_named_plan(plan).await?;
 
     // Generate a unique relation_id and store the plan
     let relation_id = uuid::Uuid::new_v4().to_string();
