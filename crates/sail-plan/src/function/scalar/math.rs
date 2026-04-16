@@ -18,6 +18,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
+use sail_function::scalar::math::spark_decimal_div::SparkDecimalDiv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
@@ -259,6 +260,18 @@ fn make_safe_divisor(
     }
 }
 
+/// Coerces an integer data type to the corresponding `Decimal128` type.
+/// Mirrors DataFusion's `coerce_numeric_type_to_decimal128` logic.
+fn coerce_integer_to_decimal128(t: &DataType) -> DataType {
+    match t {
+        DataType::Int8 | DataType::UInt8 => DataType::Decimal128(3, 0),
+        DataType::Int16 | DataType::UInt16 => DataType::Decimal128(5, 0),
+        DataType::Int32 | DataType::UInt32 => DataType::Decimal128(10, 0),
+        DataType::Int64 | DataType::UInt64 => DataType::Decimal128(20, 0),
+        _ => DataType::Decimal128(10, 0),
+    }
+}
+
 /// Arguments:
 ///   - dividend: A numeric or INTERVAL expression.
 ///   - divisor: A numeric expression.
@@ -305,8 +318,32 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
-        // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
-        //  See `test_divide` in python/pysail/tests/spark/test_math.py
+        // Use Spark-compatible decimal division for Decimal128 operands.
+        (Ok(DataType::Decimal128(_, _)), Ok(DataType::Decimal128(_, _))) => {
+            let decimal_div = Arc::new(ScalarUDF::from(SparkDecimalDiv::new()));
+            Expr::ScalarFunction(expr::ScalarFunction {
+                func: decimal_div,
+                args: vec![dividend, divisor],
+            })
+        }
+        (Ok(DataType::Decimal128(_, _)), Ok(divisor_t)) if divisor_t.is_integer() => {
+            // Coerce the integer divisor to Decimal128 before using SparkDecimalDiv.
+            let coerced_divisor_type = coerce_integer_to_decimal128(divisor_t);
+            let decimal_div = Arc::new(ScalarUDF::from(SparkDecimalDiv::new()));
+            Expr::ScalarFunction(expr::ScalarFunction {
+                func: decimal_div,
+                args: vec![dividend, cast(divisor, coerced_divisor_type)],
+            })
+        }
+        (Ok(dividend_t), Ok(DataType::Decimal128(_, _))) if dividend_t.is_integer() => {
+            // Coerce the integer dividend to Decimal128 before using SparkDecimalDiv.
+            let coerced_dividend_type = coerce_integer_to_decimal128(dividend_t);
+            let decimal_div = Arc::new(ScalarUDF::from(SparkDecimalDiv::new()));
+            Expr::ScalarFunction(expr::ScalarFunction {
+                func: decimal_div,
+                args: vec![cast(dividend, coerced_dividend_type), divisor],
+            })
+        }
         (Ok(DataType::Decimal128(_, _)), Ok(_))
         | (Ok(_), Ok(DataType::Decimal128(_, _)))
         | (Ok(DataType::Decimal256(_, _)), Ok(_))

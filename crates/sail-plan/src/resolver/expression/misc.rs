@@ -333,27 +333,43 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let field_name: Vec<String> = field_name.into();
-        let NamedExpr { name, expr, .. } = self
+        let NamedExpr {
+            name: struct_name,
+            expr,
+            ..
+        } = self
             .resolve_named_expression(struct_expression, schema, state)
             .await?;
-        let name = if name.len() == 1 {
-            name.one()?
+        let struct_display_name = if struct_name.len() == 1 {
+            struct_name.one()?
         } else {
-            let names = format!("({})", name.join(", "));
+            let names = format!("({})", struct_name.join(", "));
             return Err(PlanError::invalid(format!(
                 "one name expected for expression, got: {names}"
             )));
         };
 
-        let new_expr = if let Some(value_expression) = value_expression {
-            let value_expr = self
-                .resolve_expression(value_expression, schema, state)
+        let (new_expr, output_name) = if let Some(value_expression) = value_expression {
+            let NamedExpr {
+                name: value_name,
+                expr: value_expr,
+                ..
+            } = self
+                .resolve_named_expression(value_expression, schema, state)
                 .await?;
-            ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr])
+            let value_display_name = value_name.into_iter().next().unwrap_or_default();
+            let output_name = format!(
+                "update_fields({struct_display_name}, WithField({value_display_name}))"
+            );
+            let new_expr =
+                ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr]);
+            (new_expr, output_name)
         } else {
-            ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr])
+            let output_name = format!("update_fields({struct_display_name}, DropField())");
+            let new_expr = ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr]);
+            (new_expr, output_name)
         };
-        Ok(NamedExpr::new(vec![name], new_expr))
+        Ok(NamedExpr::new(vec![output_name], new_expr))
     }
 
     /// Rewrites the resolved expression to refer to columns in an external schema.
