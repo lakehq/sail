@@ -84,6 +84,16 @@ index cc95bfface0..7625a7cce85 100644
          empty_df.write.saveAsTable(cls.tbl_name_empty)
  
      @classmethod
+@@ -1398,7 +1402,7 @@ class SparkConnectBasicTests(SparkConnectSQLTestCase):
+             self.connect.sql("SELECT 2 AS X LIMIT 1").createOrReplaceGlobalTempView("view_1")
+-            self.assertTrue(self.spark.catalog.tableExists("global_temp.view_1"))
++            self.assertTrue(self.connect.catalog.tableExists("global_temp.view_1"))
+ 
+             # Test when creating a view which is already exists but
+-            self.assertTrue(self.spark.catalog.tableExists("global_temp.view_1"))
++            self.assertTrue(self.connect.catalog.tableExists("global_temp.view_1"))
+             with self.assertRaises(AnalysisException):
+                 self.connect.sql("SELECT 1 AS X LIMIT 0").createGlobalTempView("view_1")
 diff --git a/python/pyspark/sql/tests/connect/test_connect_plan.py b/python/pyspark/sql/tests/connect/test_connect_plan.py
 index 88ef37511a6..448a027e9e9 100644
 --- a/python/pyspark/sql/tests/connect/test_connect_plan.py
