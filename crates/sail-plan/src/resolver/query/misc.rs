@@ -6,7 +6,9 @@ use datafusion_common::{DFSchema, DFSchemaRef, ParamValues};
 use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
 use log::warn;
 use sail_common::spec;
-use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
+use sail_common_datafusion::array::record_batch::{
+    cast_record_batch_preserving_names, read_record_batches,
+};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_logical_plan::range::RangeNode;
 
@@ -116,11 +118,16 @@ impl PlanResolver<'_> {
             vec![]
         };
         let (schema, batches) = if let Some(schema) = schema {
-            let schema = Arc::new(self.resolve_schema(schema, state)?);
+            let target_schema = Arc::new(self.resolve_schema(schema, state)?);
             let batches = batches
                 .into_iter()
-                .map(|b| Ok(cast_record_batch(b, schema.clone())?))
+                .map(|b| Ok(cast_record_batch_preserving_names(b, target_schema.clone())?))
                 .collect::<PlanResult<_>>()?;
+            let schema = if let Some(first) = batches.first() {
+                first.schema()
+            } else {
+                target_schema
+            };
             (schema, batches)
         } else if let [batch, ..] = batches.as_slice() {
             (batch.schema(), batches)
