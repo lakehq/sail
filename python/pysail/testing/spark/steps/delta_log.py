@@ -418,11 +418,11 @@ def delta_log_json_file_contains(
 
     assert datatable is not None, "expected a datatable: | path | value |"
     header, *rows = datatable
-    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PT018
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
         "expected datatable with columns: | path | value |"
     )
     for row in rows:
-        if not row or len(row) < 2:
+        if not row or len(row) < 2:  # noqa: PLR2004
             continue
         path, raw_value = row[0], row[1]
         actual = _get_by_path(obj, path)
