@@ -43,6 +43,16 @@ impl PlanResolver<'_> {
                 if join_data_type.is_some() {
                     return Err(PlanError::invalid("cross join with join data type"));
                 }
+                if join_type.is_some() && !self.config.cross_join_enabled {
+                    return Err(PlanError::AnalysisError(
+                        "Detected implicit cartesian product for INNER join between logical plans. \
+                        Join condition is missing or trivial. \
+                        Either: use the CROSS JOIN syntax to allow cartesian products between these relations, \
+                        or: enable implicit cartesian products by setting the configuration variable \
+                        spark.sql.crossJoin.enabled=true"
+                            .to_string(),
+                    ));
+                }
                 Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
             }
             (Some(join_type), Some(spec::JoinCriteria::On(condition))) => {

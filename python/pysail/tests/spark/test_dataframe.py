@@ -110,3 +110,20 @@ def test_dataframe_with_column_alias(spark):
             }
         ).astype({"id": "int32", "col1": "int32", "col3": "int32"}),
     )
+
+
+def test_join_without_on(spark):
+    from pyspark.errors import AnalysisException
+
+    df1 = spark.range(1).toDF("a")
+    df2 = spark.range(1).toDF("b")
+
+    spark.conf.set("spark.sql.crossJoin.enabled", "false")
+    with pytest.raises(AnalysisException):
+        df1.join(df2, how="inner").collect()
+
+    spark.conf.set("spark.sql.crossJoin.enabled", "true")
+    actual = df1.join(df2, how="inner").collect()
+    from pyspark.sql import Row
+
+    assert actual == [Row(a=0, b=0)]
