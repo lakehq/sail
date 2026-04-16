@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{Column, JoinType, NullEquality};
 use datafusion_expr::{build_join_schema, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_functions::expr_fn::coalesce;
@@ -11,18 +10,19 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
-/// Returns `true` if the expression contains a Python scalar UDF anywhere in its tree.
-fn expr_contains_python_udf(expr: &Expr) -> bool {
-    expr.exists(|e| match e {
-        Expr::ScalarFunction(sf) => Ok(sf
+/// Returns `true` if the expression is itself a top-level Python scalar UDF call.
+/// This matches Spark's `ExtractPythonUDFFromJoinCondition` rule, which only extracts
+/// conjuncts that ARE Python UDF calls, not ones that merely contain a UDF in a sub-expression.
+fn expr_is_python_udf(expr: &Expr) -> bool {
+    match expr {
+        Expr::ScalarFunction(sf) => sf
             .func
             .inner()
             .as_any()
             .downcast_ref::<PySparkUDF>()
-            .is_some()),
-        _ => Ok(false),
-    })
-    .unwrap_or(false)
+            .is_some(),
+        _ => false,
+    }
 }
 
 /// Returns a string representation of the join type suitable for error messages.
@@ -125,7 +125,7 @@ impl PlanResolver<'_> {
                 // Spark's ExtractPythonUDFFromJoinCondition analysis rule.
                 let conjuncts = split_conjuncts(condition.clone());
                 let (udf_conjuncts, other_conjuncts): (Vec<_>, Vec<_>) =
-                    conjuncts.into_iter().partition(expr_contains_python_udf);
+                    conjuncts.into_iter().partition(expr_is_python_udf);
                 if !udf_conjuncts.is_empty() {
                     match join_type {
                         JoinType::Inner => {
