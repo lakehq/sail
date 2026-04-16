@@ -318,7 +318,11 @@ impl PlanResolver<'_> {
                         })
                         .collect();
                     if !gen_exprs.is_empty() {
-                        let json = serde_json::to_string(&gen_exprs).unwrap_or_default();
+                        let json = serde_json::to_string(&gen_exprs).map_err(|e| {
+                            PlanError::internal(format!(
+                                "failed to serialize generation expressions: {e}"
+                            ))
+                        })?;
                         file_write_options
                             .options
                             .push(vec![("__generation_expressions".to_string(), json)]);

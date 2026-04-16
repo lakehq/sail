@@ -22,8 +22,12 @@ struct RelationMetadata {
 }
 
 /// Extract a [`spec::TableColumnDefinition`] from a field, preserving metadata
-/// like `delta.generationExpression` and `comment`.
+/// like generation expressions and comments.
 fn table_column_definition_from_field(field: &Arc<spec::Field>) -> spec::TableColumnDefinition {
+    use sail_common_datafusion::catalog::{
+        DELTA_GENERATION_EXPRESSION_METADATA_KEY, SPARK_GENERATION_EXPRESSION_METADATA_KEY,
+    };
+
     let mut comment = None;
     let mut generated_always_as = None;
     for (key, value) in &field.metadata {
@@ -31,7 +35,7 @@ fn table_column_definition_from_field(field: &Arc<spec::Field>) -> spec::TableCo
             "comment" => {
                 comment = Some(value.clone());
             }
-            "delta.generationExpression" => {
+            DELTA_GENERATION_EXPRESSION_METADATA_KEY | SPARK_GENERATION_EXPRESSION_METADATA_KEY => {
                 generated_always_as = Some(value.clone());
             }
             _ => {}

@@ -9,6 +9,9 @@ use crate::catalog::{
 };
 use crate::session::plan::PlanFormatter;
 
+pub const DELTA_GENERATION_EXPRESSION_METADATA_KEY: &str = "delta.generationExpression";
+pub const SPARK_GENERATION_EXPRESSION_METADATA_KEY: &str = "GENERATION_EXPRESSION";
+
 #[derive(Debug, Clone)]
 pub struct DatabaseStatus {
     pub catalog: String,
@@ -219,7 +222,10 @@ impl TableColumnStatus {
     pub fn field(&self) -> Field {
         let mut metadata = std::collections::HashMap::new();
         if let Some(expr) = &self.generated_always_as {
-            metadata.insert("delta.generationExpression".to_string(), expr.clone());
+            metadata.insert(
+                DELTA_GENERATION_EXPRESSION_METADATA_KEY.to_string(),
+                expr.clone(),
+            );
         }
         if let Some(comment) = &self.comment {
             metadata.insert("comment".to_string(), comment.clone());
