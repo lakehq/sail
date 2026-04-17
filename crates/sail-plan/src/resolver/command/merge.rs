@@ -5,7 +5,8 @@ use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryAlias};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableKind, DELTA_GENERATION_EXPRESSION_METADATA_KEY};
+use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
@@ -108,10 +109,7 @@ impl PlanResolver<'_> {
         let generated_column_exprs: Vec<(String, Expr)> = {
             let mut out = Vec::new();
             for field in target_schema.fields() {
-                let Some(expr_str) = field
-                    .metadata()
-                    .get(DELTA_GENERATION_EXPRESSION_METADATA_KEY)
-                    .map(|v| serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone()))
+                let Some(expr_str) = ColumnFeatures::from_field(field).generation_expression()
                 else {
                     continue;
                 };

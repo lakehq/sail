@@ -17,8 +17,8 @@ use sail_catalog::provider::{
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
-    DELTA_GENERATION_EXPRESSION_METADATA_KEY,
 };
+use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
 use sail_common_datafusion::datasource::{
     find_option, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
 };
@@ -534,16 +534,12 @@ impl PlanResolver<'_> {
                         .fields()
                         .iter()
                         .map(|f| {
-                            // Read the Delta generation expression from Arrow field metadata if
-                            // the table was created externally and the expression was stored
-                            // as a JSON-encoded string (i.e. the SQL wrapped in extra quotes), so we
-                            // first try to JSON-decode the value and fall back to the raw string.
-                            let generated_always_as = f
-                                .metadata()
-                                .get(DELTA_GENERATION_EXPRESSION_METADATA_KEY)
-                                .map(|v| {
-                                    serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone())
-                                });
+                            // Read the Delta generation expression from Arrow field metadata.
+                            // `ColumnFeatures` transparently JSON-unwraps the value if the
+                            // table was created externally and the expression was stored as
+                            // a JSON-encoded string.
+                            let generated_always_as =
+                                ColumnFeatures::from_field(f).generation_expression();
                             TableColumnStatus {
                                 name: f.name().clone(),
                                 data_type: f.data_type().clone(),
@@ -946,12 +942,11 @@ impl PlanResolver<'_> {
 
     /// Build arrow field metadata carrying the Delta generation expression.
     fn make_gen_field_metadata(gen_expr: &str) -> FieldMetadata {
-        let mut map = HashMap::new();
-        map.insert(
-            DELTA_GENERATION_EXPRESSION_METADATA_KEY.to_string(),
-            gen_expr.to_string(),
-        );
-        FieldMetadata::from(map)
+        FieldMetadata::from(
+            ColumnFeaturesBuilder::new()
+                .with_generation_expression(gen_expr)
+                .build(),
+        )
     }
 
     pub(super) fn resolve_partition_by_expression(

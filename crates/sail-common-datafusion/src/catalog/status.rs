@@ -7,9 +7,13 @@ use datafusion_expr::LogicalPlan;
 use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
+use crate::column_features::ColumnFeaturesBuilder;
 use crate::session::plan::PlanFormatter;
 
-pub const DELTA_GENERATION_EXPRESSION_METADATA_KEY: &str = "delta.generationExpression";
+/// Metadata key used by Spark Connect's column protocol for generation
+/// expressions. This is an input/output boundary value translated to the
+/// engine's canonical [`crate::column_features::ColumnFeatureKey`] at the
+/// protocol layer.
 pub const SPARK_GENERATION_EXPRESSION_METADATA_KEY: &str = "GENERATION_EXPRESSION";
 
 #[derive(Debug, Clone)]
@@ -222,10 +226,8 @@ impl TableColumnStatus {
     pub fn field(&self) -> Field {
         let mut metadata = std::collections::HashMap::new();
         if let Some(expr) = &self.generated_always_as {
-            metadata.insert(
-                DELTA_GENERATION_EXPRESSION_METADATA_KEY.to_string(),
-                expr.clone(),
-            );
+            let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
+            metadata.extend(builder.build());
         }
         if let Some(comment) = &self.comment {
             metadata.insert("comment".to_string(), comment.clone());

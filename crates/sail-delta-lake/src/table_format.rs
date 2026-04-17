@@ -7,7 +7,7 @@ use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Resu
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::catalog::DELTA_GENERATION_EXPRESSION_METADATA_KEY;
+use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
     MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo,
     SourceInfo, TableFormat, TableFormatRegistry,
@@ -330,10 +330,9 @@ fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<
         .fields()
         .iter()
         .filter_map(|field| {
-            field
-                .metadata()
-                .get(DELTA_GENERATION_EXPRESSION_METADATA_KEY)
-                .map(|expr| (field.name().clone(), expr.clone()))
+            ColumnFeatures::from_map(field.metadata())
+                .generation_expression()
+                .map(|expr| (field.name().clone(), expr))
         })
         .collect()
 }
