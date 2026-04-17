@@ -14,18 +14,20 @@ use crate::functions_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ParseUrl {
+    safe: bool,
     signature: Signature,
 }
 
 impl Default for ParseUrl {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl ParseUrl {
-    pub fn new() -> Self {
+    pub fn new(safe: bool) -> Self {
         Self {
+            safe,
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
@@ -138,7 +140,11 @@ impl ScalarUDFImpl for ParseUrl {
     }
 
     fn name(&self) -> &str {
-        "parse_url"
+        if self.safe {
+            "try_parse_url"
+        } else {
+            "parse_url"
+        }
     }
 
     fn signature(&self) -> &Signature {
@@ -211,7 +217,11 @@ impl ScalarUDFImpl for ParseUrl {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(spark_parse_url, vec![])(&args)
+        if self.safe {
+            make_scalar_function(spark_try_parse_url, vec![])(&args)
+        } else {
+            make_scalar_function(spark_parse_url, vec![])(&args)
+        }
     }
 }
 
@@ -222,27 +232,18 @@ fn is_string_type(dt: &DataType) -> bool {
     )
 }
 
-/// Core implementation of URL parsing function.
-///
-/// # Arguments
-///
-/// * `args` - A slice of ArrayRef containing the input arrays:
-///   - `args[0]` - URL array: The URLs to parse
-///   - `args[1]` - Part array: The URL components to extract (HOST, PATH, QUERY, etc.)
-///   - `args[2]` - Key array (optional): For QUERY part, the specific parameter names to extract
-///
-/// # Return Value
-///
-/// Returns `Result<ArrayRef>` containing:
-/// - A string array with extracted URL components
-/// - `None` values where extraction failed or component doesn't exist
-/// - The output array type (StringArray or LargeStringArray) is determined by input types
-///
 fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
     spark_handled_parse_url(args, |x| x)
 }
 
-pub fn spark_handled_parse_url(
+fn spark_try_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
+    spark_handled_parse_url(args, |x| match x {
+        Err(_) => Ok(None),
+        result => result,
+    })
+}
+
+fn spark_handled_parse_url(
     args: &[ArrayRef],
     handler_err: impl Fn(Result<Option<String>>) -> Result<Option<String>>,
 ) -> Result<ArrayRef> {
