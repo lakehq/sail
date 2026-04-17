@@ -2,7 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    ArrayRef, AsArray, Decimal128Array, Float64Array, Int64Array, StringArray,
+    Array, ArrayRef, AsArray, Decimal128Array, Float64Array, Int64Array, StringArray,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::as_float64_array;
@@ -117,11 +117,9 @@ impl ScalarUDFImpl for SparkToChar {
                         ColumnarValue::Scalar(_) => {
                             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
                         }
-                        ColumnarValue::Array(arr) => {
-                            let nulls: StringArray =
-                                (0..arr.len()).map(|_| Option::<&str>::None).collect();
-                            Ok(ColumnarValue::Array(Arc::new(nulls)))
-                        }
+                        ColumnarValue::Array(arr) => Ok(ColumnarValue::Array(
+                            datafusion::arrow::array::new_null_array(&DataType::Utf8, arr.len()),
+                        )),
                     };
                 }
                 None => {
@@ -174,15 +172,20 @@ impl ScalarUDFImpl for SparkToChar {
                         }
                     }
                     ColumnarValue::Array(arr) => {
-                        let result: StringArray = (0..arr.len())
-                            .map(|i| {
-                                if arr.is_null(i) {
-                                    None
-                                } else {
-                                    Some(overflow.as_str())
-                                }
-                            })
-                            .collect();
+                        let nulls = arr.logical_nulls();
+                        let result: StringArray =
+                            std::iter::repeat_n(Some(overflow.as_str()), arr.len()).collect();
+                        let result = match nulls {
+                            Some(n) => {
+                                let data = result
+                                    .to_data()
+                                    .into_builder()
+                                    .null_bit_buffer(Some(n.into_inner().into_inner()))
+                                    .build()?;
+                                StringArray::from(data)
+                            }
+                            None => result,
+                        };
                         Ok(ColumnarValue::Array(Arc::new(result)))
                     }
                 };
@@ -204,15 +207,20 @@ impl ScalarUDFImpl for SparkToChar {
                     // For Decimal128(_, 0), read i128 directly to preserve full precision.
                     // For other integer types, cast to i64 (no precision loss for Int8..Int64).
                     if matches!(arr.data_type(), DataType::Decimal128(_, 0)) {
-                        let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().ok_or_else(|| {
-                            datafusion_common::DataFusionError::Internal(format!(
-                                "to_char: expected Decimal128Array, got {:?}",
-                                arr.data_type()
-                            ))
-                        })?;
+                        let dec_arr =
+                            arr.as_any()
+                                .downcast_ref::<Decimal128Array>()
+                                .ok_or_else(|| {
+                                    datafusion_common::DataFusionError::Internal(format!(
+                                        "to_char: expected Decimal128Array, got {:?}",
+                                        arr.data_type()
+                                    ))
+                                })?;
                         let result: StringArray = dec_arr
                             .iter()
-                            .map(|opt: Option<i128>| opt.map(|v| format_spark_integer(v, &spec, &components)))
+                            .map(|opt: Option<i128>| {
+                                opt.map(|v| format_spark_integer(v, &spec, &components))
+                            })
                             .collect();
                         return Ok(ColumnarValue::Array(Arc::new(result)));
                     }
