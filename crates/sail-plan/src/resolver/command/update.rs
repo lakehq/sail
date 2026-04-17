@@ -55,27 +55,25 @@ impl PlanResolver<'_> {
         let mut resolved_assignments: Vec<(String, ExprWithSource)> = Vec::new();
 
         for (target, value) in assignments {
-            let mut parts: Vec<String> = target.into();
-            let column_name = match parts.len() {
-                1 => parts.pop().unwrap(),
-                2 => {
-                    let column = parts.pop().unwrap();
-                    let qualifier = parts.pop().unwrap();
+            let parts: Vec<String> = target.into();
+            let column_name = match parts.as_slice() {
+                [column] => column.clone(),
+                [qualifier, column] => {
                     let matches_alias = alias_str
                         .as_deref()
-                        .map(|a| a.eq_ignore_ascii_case(&qualifier))
+                        .map(|a| a.eq_ignore_ascii_case(qualifier))
                         .unwrap_or(false);
                     let matches_table = table
                         .parts()
                         .last()
-                        .map(|id| id.as_ref().eq_ignore_ascii_case(&qualifier))
+                        .map(|id| id.as_ref().eq_ignore_ascii_case(qualifier))
                         .unwrap_or(false);
                     if !matches_alias && !matches_table {
                         return Err(PlanError::invalid(format!(
                             "UPDATE assignment qualifier `{qualifier}` does not match target table"
                         )));
                     }
-                    column
+                    column.clone()
                 }
                 _ => {
                     return Err(PlanError::invalid(
@@ -109,7 +107,8 @@ impl PlanResolver<'_> {
                 &original_arrow_schema,
                 true,
             )?;
-            resolved_assignments.push((canonical, ExprWithSource::new(rewritten_value, source_text)));
+            resolved_assignments
+                .push((canonical, ExprWithSource::new(rewritten_value, source_text)));
         }
 
         let file_update_options = FileUpdateOptions {

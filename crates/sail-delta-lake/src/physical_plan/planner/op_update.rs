@@ -159,8 +159,7 @@ pub async fn build_update_plan(
     for field in table_schema.fields() {
         let name = field.name().clone();
         let scan_index = scan_schema.index_of(&name)?;
-        let original_col: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new(&name, scan_index));
+        let original_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new(&name, scan_index));
 
         let expr: Arc<dyn PhysicalExpr> = match assignment_exprs.get(&name.to_ascii_lowercase()) {
             Some(rhs) => match &adapted_condition {
