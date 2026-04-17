@@ -20,6 +20,30 @@ def _is_spark_testing():
 
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
+def spark_cached_remote_relation_patch():
+    from pyspark.sql.connect import plan
+
+    _del = getattr(plan.CachedRemoteRelation, "__del__", None)
+
+    if _del is None:
+        yield
+        return
+
+    def _noop_del(self) -> None:  # noqa: ARG001
+        # Spark Connect client can hang when a CachedRemoteRelation finalizer issues
+        # a blocking gRPC cleanup call during GC while another gRPC request is started
+        # by another thread.
+        return None
+
+    plan.CachedRemoteRelation.__del__ = _noop_del
+
+    try:
+        yield
+    finally:
+        plan.CachedRemoteRelation.__del__ = _del
+
+
+@pytest.fixture(scope="session", autouse=_is_spark_testing())
 def spark_working_dir(tmp_path_factory):
     import pyspark
 
@@ -71,8 +95,10 @@ def spark_doctest_session(doctest_namespace, request):
 
         spark = SparkSession.builder.appName("doctest").remote("local").getOrCreate()
         doctest_namespace["spark"] = spark
-        yield
-        spark.stop()
+        try:
+            yield
+        finally:
+            spark.stop()
     else:
         yield
 
