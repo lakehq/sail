@@ -67,7 +67,9 @@ impl SparkSchemaOfJson {
                     exec_err!("schema_of_json: invalid arg types: {:?}", arg_types)
                 }
             }
-            [DataType::Null] => Ok(()),
+            [DataType::Null] => exec_err!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_NULL] The json must not be null."
+            ),
             _ => exec_err!("schema_of_json: invalid arg types: {:?}", arg_types),
         }
     }
@@ -136,13 +138,22 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
                     ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s) => {
                         s.as_deref()
                     }
-                    ScalarValue::Null => None,
+                    ScalarValue::Null => {
+                        return exec_err!(
+                            "[DATATYPE_MISMATCH.UNEXPECTED_NULL] The json must not be null."
+                        );
+                    }
                     _ => return exec_err!("schema_of_json first argument must be a string"),
                 };
 
-                let schema = json_str
-                    .map(infer_json_schema)
-                    .unwrap_or_else(|| DDL_STRING.to_string());
+                let json_str = json_str.ok_or_else(|| {
+                    datafusion_common::DataFusionError::Execution(
+                        "[DATATYPE_MISMATCH.UNEXPECTED_NULL] The json must not be null."
+                            .to_string(),
+                    )
+                })?;
+
+                let schema = infer_json_schema(json_str)?;
 
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(schema))))
             }
@@ -167,13 +178,18 @@ fn null_as_string(t: String) -> String {
 }
 
 /// Infer the Spark SQL DDL schema from a JSON string.
-fn infer_json_schema(json: &str) -> String {
+fn infer_json_schema(json: &str) -> Result<String> {
+    if json.is_empty() {
+        return Ok(DDL_STRING.to_string());
+    }
     let mut jiter = Jiter::new(json.as_bytes());
     let result = match jiter.peek() {
         Ok(peek) => infer_type_from_peek(&mut jiter, peek),
-        Err(_) => DDL_STRING.to_string(),
+        Err(e) => {
+            return exec_err!("Failed to parse JSON: {e}");
+        }
     };
-    null_as_string(result)
+    Ok(null_as_string(result))
 }
 
 fn infer_type_from_peek(jiter: &mut Jiter, peek: Peek) -> String {
@@ -212,6 +228,14 @@ fn infer_number_type(jiter: &mut Jiter) -> String {
     if num_str.contains('.') || num_str.contains('e') || num_str.contains('E') {
         DDL_DOUBLE.to_string()
     } else {
+        // Check if integer fits in BIGINT range; if not, use DECIMAL(N,0)
+        let digits = num_str.trim_start_matches('-');
+        if digits.len() > 18 {
+            // More than 18 digits might overflow BIGINT
+            if num_str.parse::<i64>().is_err() {
+                return format!("DECIMAL({},0)", digits.len());
+            }
+        }
         DDL_BIGINT.to_string()
     }
 }
@@ -281,7 +305,7 @@ fn merge_struct_types(a: &str, b: &str) -> String {
     merged.sort_by(|(a, _), (b, _)| a.cmp(b));
     let fields_str: Vec<String> = merged
         .into_iter()
-        .map(|(name, typ)| format!("{name}: {typ}"))
+        .map(|(name, typ)| format!("{}: {typ}", escape_field_name(&name)))
         .collect();
     format!("STRUCT<{}>", fields_str.join(", "))
 }
@@ -407,6 +431,19 @@ impl SparkSchemaOfJsonOptions {
     }
 }
 
+/// Escape a field name with backticks if it contains special characters.
+/// Spark backtick-escapes names with dots, spaces, and other non-alphanumeric chars.
+fn escape_field_name(name: &str) -> String {
+    let needs_escape = name
+        .chars()
+        .any(|c| !c.is_alphanumeric() && c != '_');
+    if needs_escape {
+        format!("`{name}`")
+    } else {
+        name.to_string()
+    }
+}
+
 fn infer_struct_type(jiter: &mut Jiter) -> String {
     let Ok(first_key) = jiter.known_object() else {
         return "STRUCT<>".to_string();
@@ -425,7 +462,8 @@ fn infer_struct_type(jiter: &mut Jiter) -> String {
             Err(_) => DDL_STRING.to_string(),
         };
 
-        fields.push(format!("{field_name}: {field_type}"));
+        let escaped_name = escape_field_name(&field_name);
+        fields.push(format!("{escaped_name}: {field_type}"));
 
         match jiter.next_key() {
             Ok(Some(key)) => current_key = key,

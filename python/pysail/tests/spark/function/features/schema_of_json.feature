@@ -28,8 +28,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: NULL handling
 
-    @sail-bug
-    # Sail doesn't reject NULL input - should error like Spark
     Scenario: NULL input errors
       When query
         """
@@ -37,8 +35,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         """
       Then query error .*
 
-    @sail-bug
-    # Sail doesn't reject typed NULL input - should error like Spark
     Scenario: typed NULL input errors
       When query
         """
@@ -506,8 +502,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: Numeric boundary types
 
-    @sail-bug
-    # Sail infers BIGINT instead of DECIMAL(20,0) for integers > BIGINT_MAX
     Scenario: very large integer becomes DECIMAL
       When query
         """
@@ -526,8 +520,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | result            |
         | STRUCT<v: BIGINT> |
 
-    @sail-bug
-    # Sail infers BIGINT instead of DECIMAL(19,0) for BIGINT_MAX+1
     Scenario: BIGINT overflow becomes DECIMAL
       When query
         """
@@ -597,8 +589,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: Special key names
 
-    @sail-bug
-    # Sail doesn't backtick-escape keys with dots
     Scenario: dot in key name
       When query
         """
@@ -608,8 +598,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | result               |
         | STRUCT<`a.b`: BIGINT> |
 
-    @sail-bug
-    # Sail doesn't backtick-escape keys with spaces
     Scenario: space in key name
       When query
         """
