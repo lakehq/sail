@@ -10,6 +10,19 @@ use crate::catalog::{
 use crate::session::plan::PlanFormatter;
 
 #[derive(Debug, Clone)]
+pub struct FunctionStatus {
+    pub catalog: Option<String>,
+    /// The namespace (database) containing the function.
+    /// A value of `None` indicates that the function is not bound to a specific namespace
+    /// (for example, a session-registered temporary function or a built-in function).
+    pub namespace: Option<Vec<String>>,
+    pub name: String,
+    pub description: Option<String>,
+    pub class_name: String,
+    pub is_temporary: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct DatabaseStatus {
     pub catalog: String,
     pub database: Vec<String>,

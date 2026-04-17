@@ -4,7 +4,7 @@ use datafusion::common::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::array::serde::ArrowSerializer;
-use crate::catalog::{DatabaseStatus, TableColumnStatus, TableStatus};
+use crate::catalog::{DatabaseStatus, FunctionStatus, TableColumnStatus, TableStatus};
 
 /// A trait for displaying catalog objects in a structured format.
 /// This is useful for defining output schemas and producing outputs
@@ -24,7 +24,7 @@ pub trait CatalogObjectDisplay {
 
     fn table_column(status: TableColumnStatus) -> Self::TableColumn;
 
-    fn function(name: String) -> Self::Function;
+    fn function(status: FunctionStatus) -> Self::Function;
 }
 
 /// A trait for providing output display for catalog command.
@@ -40,7 +40,7 @@ pub trait CatalogDisplay: Send + Sync {
     fn tables(&self) -> Box<dyn OutputDisplay<TableStatus>>;
     fn databases(&self) -> Box<dyn OutputDisplay<DatabaseStatus>>;
     fn table_columns(&self) -> Box<dyn OutputDisplay<TableColumnStatus>>;
-    fn functions(&self) -> Box<dyn OutputDisplay<String>>;
+    fn functions(&self) -> Box<dyn OutputDisplay<FunctionStatus>>;
 }
 
 pub trait OutputDisplay<T> {
@@ -126,8 +126,8 @@ where
         Box::new(<MappedOutputDisplay<TableColumnStatus, D::TableColumn, _>>::new(D::table_column))
     }
 
-    fn functions(&self) -> Box<dyn OutputDisplay<String>> {
-        Box::new(<MappedOutputDisplay<String, D::Function, _>>::new(
+    fn functions(&self) -> Box<dyn OutputDisplay<FunctionStatus>> {
+        Box::new(<MappedOutputDisplay<FunctionStatus, D::Function, _>>::new(
             D::function,
         ))
     }

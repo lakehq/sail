@@ -5,9 +5,9 @@ mod runtime;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_datafusion::catalog::{DatabaseStatus, FunctionStatus, TableStatus};
 
-use crate::error::CatalogResult;
+use crate::error::{CatalogError, CatalogResult};
 
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
@@ -88,4 +88,28 @@ pub trait CatalogProvider: Send + Sync {
         view: &str,
         options: DropViewOptions,
     ) -> CatalogResult<()>;
+
+    /// Gets the status of a persistent function in the catalog.
+    ///
+    /// The default implementation returns a [`CatalogError::NotSupported`] error. Catalog
+    /// providers that support persistent functions should override this method.
+    async fn get_function(
+        &self,
+        _database: &Namespace,
+        _function: &str,
+    ) -> CatalogResult<FunctionStatus> {
+        Err(CatalogError::NotSupported(
+            "get function in this catalog".to_string(),
+        ))
+    }
+
+    /// Lists all persistent functions in a database in the catalog.
+    ///
+    /// The default implementation returns a [`CatalogError::NotSupported`] error. Catalog
+    /// providers that support persistent functions should override this method.
+    async fn list_functions(&self, _database: &Namespace) -> CatalogResult<Vec<FunctionStatus>> {
+        Err(CatalogError::NotSupported(
+            "list functions in this catalog".to_string(),
+        ))
+    }
 }

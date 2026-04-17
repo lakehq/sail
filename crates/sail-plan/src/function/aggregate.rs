@@ -35,7 +35,7 @@ use crate::function::common::{
 use crate::function::transform_count_star_wildcard_expr;
 
 lazy_static! {
-    static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
+    pub(crate) static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
         HashMap::from_iter(list_built_in_aggregate_functions());
 }
 

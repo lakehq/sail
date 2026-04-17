@@ -21,6 +21,7 @@ pub mod error;
 pub mod explain;
 pub mod formatter;
 pub mod function;
+pub mod function_registry;
 pub mod resolver;
 mod streaming;
 
