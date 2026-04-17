@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{downcast_array, Array, MapArray, StringArray, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use jiter::{Jiter, Peek};
 
-use crate::error::invalid_arg_count_exec_err;
+use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
 /// Spark DDL type name constants for JSON schema inference.
 const DDL_BIGINT: &str = "BIGINT";
@@ -39,11 +39,10 @@ impl SparkSchemaOfJson {
 
     fn validate_args_are_literal(cols: &[ColumnarValue]) -> Result<()> {
         if let Some(ColumnarValue::Array(_)) = cols.first() {
-            return exec_err!(
-                "[DATATYPE_MISMATCH.NON_FOLDABLE_INPUT] Cannot resolve \"schema_of_json()\" \
-                 due to data type mismatch: the input `json` should be a foldable \"STRING\" \
-                 expression; however, got a column reference."
-            );
+            return Err(generic_exec_err(
+                "schema_of_json",
+                "the input `json` should be a foldable string expression, got a column reference",
+            ));
         }
         Ok(())
     }
@@ -56,21 +55,33 @@ impl SparkSchemaOfJson {
                     let key = &fields[0];
                     let value = &fields[1];
                     if !key.data_type().is_string() || !value.data_type().is_string() {
-                        return exec_err!(
-                            "schema_of_json options map keys/values must both be string type, got key: {}, value: {}",
-                            key.data_type(),
-                            value.data_type()
-                        );
+                        return Err(generic_exec_err(
+                            "schema_of_json",
+                            &format!(
+                                "options map keys/values must both be string type, got key: {}, value: {}",
+                                key.data_type(),
+                                value.data_type()
+                            ),
+                        ));
                     }
                     Ok(())
                 } else {
-                    exec_err!("schema_of_json: invalid arg types: {:?}", arg_types)
+                    Err(unsupported_data_types_exec_err(
+                        "schema_of_json",
+                        "STRING and MAP<STRING, STRING>",
+                        arg_types,
+                    ))
                 }
             }
-            [DataType::Null] => exec_err!(
-                "[DATATYPE_MISMATCH.UNEXPECTED_NULL] The json must not be null."
-            ),
-            _ => exec_err!("schema_of_json: invalid arg types: {:?}", arg_types),
+            [DataType::Null] => Err(generic_exec_err(
+                "schema_of_json",
+                "the json must not be null",
+            )),
+            _ => Err(unsupported_data_types_exec_err(
+                "schema_of_json",
+                "STRING",
+                arg_types,
+            )),
         }
     }
 }
@@ -139,31 +150,31 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
                         s.as_deref()
                     }
                     ScalarValue::Null => {
-                        return exec_err!(
-                            "[DATATYPE_MISMATCH.UNEXPECTED_NULL] The json must not be null."
-                        );
+                        return Err(generic_exec_err(
+                            "schema_of_json",
+                            "the json must not be null",
+                        ));
                     }
-                    _ => return exec_err!("schema_of_json first argument must be a string"),
+                    _ => {
+                        return Err(generic_exec_err(
+                            "schema_of_json",
+                            "first argument must be a string",
+                        ))
+                    }
                 };
 
                 let json_str = json_str.ok_or_else(|| {
-                    datafusion_common::DataFusionError::Execution(
-                        "[DATATYPE_MISMATCH.UNEXPECTED_NULL] The json must not be null."
-                            .to_string(),
-                    )
+                    generic_exec_err("schema_of_json", "the json must not be null")
                 })?;
 
                 let schema = infer_json_schema(json_str)?;
 
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(schema))))
             }
-            ColumnarValue::Array(_) => {
-                exec_err!(
-                    "[DATATYPE_MISMATCH.NON_FOLDABLE_INPUT] Cannot resolve \"schema_of_json()\" \
-                     due to data type mismatch: the input `json` should be a foldable \"STRING\" \
-                     expression; however, got a column reference."
-                )
-            }
+            ColumnarValue::Array(_) => Err(generic_exec_err(
+                "schema_of_json",
+                "the input `json` should be a foldable string expression, got a column reference",
+            )),
         }
     }
 }
@@ -186,7 +197,10 @@ fn infer_json_schema(json: &str) -> Result<String> {
     let result = match jiter.peek() {
         Ok(peek) => infer_type_from_peek(&mut jiter, peek),
         Err(e) => {
-            return exec_err!("Failed to parse JSON: {e}");
+            return Err(generic_exec_err(
+                "schema_of_json",
+                &format!("failed to parse JSON: {e}"),
+            ));
         }
     };
     Ok(null_as_string(result))
@@ -359,7 +373,10 @@ impl ModeOptions {
             "PERMISSIVE" => Ok(ModeOptions::Permissive),
             "FAILFAST" => Ok(ModeOptions::FailFast),
             "DROPMALFORMED" => Ok(ModeOptions::DropMalformed),
-            other => exec_err!("Invalid mode option: {other}"),
+            other => Err(generic_exec_err(
+                "schema_of_json",
+                &format!("invalid mode option: {other}"),
+            )),
         }
     }
 }
@@ -379,14 +396,16 @@ impl SparkSchemaOfJsonOptions {
             match key {
                 "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
                 "allowNumericLeadingZeros" => {
-                    return exec_err!(
-                        "schema_of_json currently doesn't support option allowNumericLeadingZeros"
-                    );
+                    return Err(generic_exec_err(
+                        "schema_of_json",
+                        "option allowNumericLeadingZeros is not supported",
+                    ));
                 }
                 other => {
-                    return exec_err!(
-                        "Found unsupported option type when parsing options: {other}"
-                    );
+                    return Err(generic_exec_err(
+                        "schema_of_json",
+                        &format!("unsupported option: {other}"),
+                    ));
                 }
             }
         }
@@ -403,18 +422,19 @@ impl SparkSchemaOfJsonOptions {
                     let values = downcast_array::<StringArray>(inner_struct.column(1));
                     (keys, values)
                 } else {
-                    return exec_err!(
-                        "Expected options to be type map<string, string> but found key type {:?} and value type {:?}",
-                        key_type,
-                        value_type
-                    );
+                    return Err(generic_exec_err(
+                        "schema_of_json",
+                        &format!(
+                            "options map must be map<string, string>, got key: {key_type:?}, value: {value_type:?}"
+                        ),
+                    ));
                 }
             }
             other => {
-                return exec_err!(
-                    "options should be a map with an inner struct but instead got {:?}",
-                    other
-                );
+                return Err(generic_exec_err(
+                    "schema_of_json",
+                    &format!("options must be a map with struct entries, got {other:?}"),
+                ));
             }
         };
         Ok((keys, values))
@@ -426,7 +446,10 @@ impl SparkSchemaOfJsonOptions {
     ) -> Result<(&'a str, &'a str)> {
         match (key, value) {
             (Some(k), Some(v)) => Ok((k, v)),
-            _ => exec_err!("Unexpected options key value pair: {:?}: {:?}", key, value),
+            _ => Err(generic_exec_err(
+                "schema_of_json",
+                &format!("unexpected options key/value pair: {key:?}: {value:?}"),
+            )),
         }
     }
 }
@@ -434,9 +457,7 @@ impl SparkSchemaOfJsonOptions {
 /// Escape a field name with backticks if it contains special characters.
 /// Spark backtick-escapes names with dots, spaces, and other non-alphanumeric chars.
 fn escape_field_name(name: &str) -> String {
-    let needs_escape = name
-        .chars()
-        .any(|c| !c.is_alphanumeric() && c != '_');
+    let needs_escape = name.chars().any(|c| !c.is_alphanumeric() && c != '_');
     if needs_escape {
         format!("`{name}`")
     } else {
