@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{NaiveDate, NaiveDateTime};
-use datafusion::arrow::array::{ArrayRef, MapArray, StringArray};
+use datafusion::arrow::array::{Array, ArrayRef, MapArray, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_expr::function::Hint;
@@ -61,25 +61,24 @@ impl SparkSchemaOfCsv {
     fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
         match arg_types {
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
-            [
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-                DataType::Map(map_field, _),
-            ] => match map_field.data_type() {
-                DataType::Struct(fields) => {
-                    let key = fields[0].clone();
-                    let value = fields[1].clone();
-                    if !key.data_type().is_string() || !value.data_type().is_string() {
-                        return Err(DataFusionError::Plan(format!(
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
+                match map_field.data_type() {
+                    DataType::Struct(fields) => {
+                        let key = fields[0].clone();
+                        let value = fields[1].clone();
+                        if !key.data_type().is_string() || !value.data_type().is_string() {
+                            return Err(DataFusionError::Plan(format!(
                             "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
                             Self::SCHEMA_OF_CSV_NAME,
                             key.data_type(),
                             value.data_type(),
                         )));
+                        }
+                        Ok(())
                     }
-                    Ok(())
+                    _ => unreachable!(),
                 }
-                _ => unreachable!(),
-            },
+            }
             _ => plan_err!(
                 "For function `{}` found invalid arg types: {:?}",
                 Self::SCHEMA_OF_CSV_NAME,
@@ -193,7 +192,9 @@ impl SparkSchemaOfCsvOptions {
                         .replace("ss", "%S");
                 }
                 other => {
-                    return plan_err!("Found unsupported option type when parsing options: {other}");
+                    return plan_err!(
+                        "Found unsupported option type when parsing options: {other}"
+                    );
                 }
             }
         }
