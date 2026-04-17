@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion_common::{Column, JoinType, NullEquality};
+use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{build_join_schema, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_functions::expr_fn::coalesce;
 use sail_common::spec;
@@ -41,20 +42,12 @@ fn join_type_name(join_type: JoinType) -> &'static str {
     }
 }
 
-/// Splits an expression into its top-level AND conjuncts.
-fn split_conjuncts(expr: Expr) -> Vec<Expr> {
-    match expr {
-        Expr::BinaryExpr(datafusion_expr::expr::BinaryExpr {
-            left,
-            op: datafusion_expr::Operator::And,
-            right,
-        }) => {
-            let mut parts = split_conjuncts(*left);
-            parts.extend(split_conjuncts(*right));
-            parts
-        }
-        other => vec![other],
-    }
+fn implicit_cartesian_product_message() -> &'static str {
+    "Detected implicit cartesian product for INNER join between logical plans. \
+    Join condition is missing or trivial. \
+    Either: use the CROSS JOIN syntax to allow cartesian products between \
+    these relations, or: enable implicit cartesian products by setting the \
+    configuration variable spark.sql.crossJoin.enabled=true;"
 }
 
 impl PlanResolver<'_> {
@@ -95,12 +88,7 @@ impl PlanResolver<'_> {
                 // we need to check whether implicit cartesian products are allowed.
                 if join_type.is_some() && !self.config.cross_join_enabled {
                     return Err(PlanError::AnalysisError(
-                        "Detected implicit cartesian product for INNER join between logical plans. \
-                        Join condition is missing or trivial. \
-                        Either: use the CROSS JOIN syntax to allow cartesian products between \
-                        these relations, or: enable implicit cartesian products by setting the \
-                        configuration variable spark.sql.crossJoin.enabled=true;"
-                            .to_string(),
+                        implicit_cartesian_product_message().to_string(),
                     ));
                 }
                 Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
@@ -123,7 +111,7 @@ impl PlanResolver<'_> {
 
                 // Validate Python UDF usage in the join condition, matching
                 // Spark's ExtractPythonUDFFromJoinCondition analysis rule.
-                let conjuncts = split_conjuncts(condition.clone());
+                let conjuncts = split_conjunction(&condition);
                 let (udf_conjuncts, other_conjuncts): (Vec<_>, Vec<_>) =
                     conjuncts.into_iter().partition(expr_is_python_udf);
                 if !udf_conjuncts.is_empty() {
@@ -133,10 +121,7 @@ impl PlanResolver<'_> {
                             // a cross join when there are no remaining equi-join conditions.
                             if other_conjuncts.is_empty() && !self.config.cross_join_enabled {
                                 return Err(PlanError::AnalysisError(
-                                    "Detected implicit cartesian product for INNER join between \
-                                     logical plans. Please use the CROSS JOIN syntax to allow \
-                                     cartesian products between these plans."
-                                        .to_string(),
+                                    implicit_cartesian_product_message().to_string(),
                                 ));
                             }
                         }
