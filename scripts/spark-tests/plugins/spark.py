@@ -293,6 +293,16 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_parity_job_cancellation.py"],
         reason="Slow test not working yet",
     ),
+    # The following tests rely on direct JVM access (RDD API, Java gateway),
+    # which is not supported by Sail.
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.rdd"],
+        reason="JVM-dependent test",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.java_method"],
+        reason="JVM-dependent test",
+    ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
     # of Spark Structured Streaming.

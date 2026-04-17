@@ -14,7 +14,7 @@ pub(super) fn list_built_in_variant_functions() -> Vec<(&'static str, ScalarFunc
         ("is_variant_null", F::udf(SparkIsVariantNullUdf::new())),
         ("parse_json", F::udf(SparkJsonToVariantUdf::new())),
         ("schema_of_variant", F::udf(SparkSchemaOfVariantUdf::new())),
-        ("schema_of_variant_agg", F::unknown("schema_of_variant_agg")),
+        // schema_of_variant_agg is registered as an aggregate function
         ("to_variant_object", F::udf(SparkToVariantObjectUdf::new())),
         ("try_parse_json", F::unknown("try_parse_json")),
         ("try_variant_get", F::udf(SparkVariantGet::new(true))),
