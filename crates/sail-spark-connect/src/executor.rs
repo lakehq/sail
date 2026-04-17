@@ -333,12 +333,14 @@ pub(crate) fn to_arrow_batch(batch: RecordBatch) -> SparkResult<ArrowBatch> {
             .fields()
             .iter()
             .map(|f| match f.data_type() {
-                ArrowDataType::Utf8View => {
-                    Arc::new(Field::new(f.name(), ArrowDataType::Utf8, f.is_nullable()))
-                }
-                ArrowDataType::BinaryView => {
-                    Arc::new(Field::new(f.name(), ArrowDataType::Binary, f.is_nullable()))
-                }
+                ArrowDataType::Utf8View => Arc::new(
+                    Field::new(f.name(), ArrowDataType::Utf8, f.is_nullable())
+                        .with_metadata(f.metadata().clone()),
+                ),
+                ArrowDataType::BinaryView => Arc::new(
+                    Field::new(f.name(), ArrowDataType::Binary, f.is_nullable())
+                        .with_metadata(f.metadata().clone()),
+                ),
                 _ => f.clone(),
             })
             .collect();

@@ -48,10 +48,13 @@ impl CatalogManager {
         let mut output = if self.state()?.is_global_temporary_view_database(database) {
             self.list_global_temporary_views(pattern).await?
         } else {
-            let mut tables = self.list_tables(database, pattern).await?;
             // Persistent views are stored separately from tables, but Spark's
             // SHOW TABLE EXTENDED includes both tables and views.
-            tables.extend(self.list_views(database, pattern).await?);
+            let (mut tables, views) = tokio::try_join!(
+                self.list_tables(database, pattern),
+                self.list_views(database, pattern),
+            )?;
+            tables.extend(views);
             tables
         };
         // Spark (local) temporary views are session-scoped and are not associated with a catalog.
