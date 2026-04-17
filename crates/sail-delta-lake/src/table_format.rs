@@ -22,7 +22,7 @@ use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
 use crate::physical_plan::planner::{
-    plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext,
+    plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext,
 };
 use crate::spec::{canonicalize_and_validate_table_properties, route_table_property_key};
 use crate::table::open_table_with_object_store_and_table_config;
@@ -296,7 +296,18 @@ impl TableFormat for DeltaTableFormat {
                 plan_merge(&merge_ctx, info).await
             }
             RowLevelCommand::Update => {
-                not_impl_err!("UPDATE is not yet implemented for Delta Lake")
+                let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+                let update_config = DeltaPlannerConfig::new(
+                    table_url,
+                    delta_options,
+                    HashMap::new(),
+                    info.target.partition_by.clone(),
+                    None,
+                    true,
+                );
+                let update_ctx = PlannerContext::new(ctx, update_config);
+                plan_update(&update_ctx, info).await
             }
         }
     }

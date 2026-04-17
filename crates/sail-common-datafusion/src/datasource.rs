@@ -255,6 +255,8 @@ pub struct RowLevelWriteInfo {
     pub target: RowLevelTargetInfo,
     /// Condition for DELETE/UPDATE. `None` for MERGE.
     pub condition: Option<ExprWithSource>,
+    /// Assignments for UPDATE (column name, value with source text). `None` for other commands.
+    pub assignments: Option<Vec<(String, ExprWithSource)>>,
     /// Pre-expanded physical plan for writing (MERGE, future UPDATE).
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths (MERGE targeted rewrite).

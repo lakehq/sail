@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::Result;
 use sail_common_datafusion::datasource::{
     MergePredicateInfo, OperationOverride, OptionLayer, RowLevelCommand, RowLevelTargetInfo,
     RowLevelWriteInfo, TableFormatRegistry,
@@ -45,6 +45,7 @@ pub async fn create_row_level_write_physical_plan(
                 command: RowLevelCommand::Delete,
                 target,
                 condition: node.condition().cloned(),
+                assignments: None,
                 expanded_input: None,
                 touched_file_plan: None,
                 with_schema_evolution: false,
@@ -84,6 +85,7 @@ pub async fn create_row_level_write_physical_plan(
                 command: RowLevelCommand::Merge,
                 target,
                 condition: None,
+                assignments: None,
                 expanded_input: Some(physical_write),
                 touched_file_plan: if is_insert_only {
                     None
@@ -97,7 +99,18 @@ pub async fn create_row_level_write_physical_plan(
             table_format.create_row_level_writer(ctx, info).await
         }
         RowLevelCommand::Update => {
-            internal_err!("UPDATE is not yet implemented")
+            let info = RowLevelWriteInfo {
+                command: RowLevelCommand::Update,
+                target,
+                condition: node.condition().cloned(),
+                assignments: node.assignments().map(|a| a.to_vec()),
+                expanded_input: None,
+                touched_file_plan: None,
+                with_schema_evolution: false,
+                operation_override: None,
+                merge_strategy,
+            };
+            table_format.create_row_level_writer(ctx, info).await
         }
     }
 }

@@ -24,6 +24,7 @@ use sail_common_datafusion::streaming::event::schema::{
 use sail_delta_lake::logical::RewriteDeltaTableSource;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
+use sail_logical_plan::file_update::FileUpdateNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
@@ -41,6 +42,7 @@ use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
+use sail_physical_plan::file_update::create_file_update_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -225,6 +227,55 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 _ => internal_err!("Expected a table for DELETE"),
             }?;
             create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
+                .await?
+        } else if let Some(node) = node.as_any().downcast_ref::<FileUpdateNode>() {
+            if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
+                return internal_err!("FileUpdateNode should have no inputs");
+            }
+            let catalog_manager = session_state
+                .config()
+                .get_extension::<CatalogManager>()
+                .ok_or_else(|| internal_datafusion_err!("CatalogManager extension not found"))?;
+            let table_status = catalog_manager
+                .get_table_or_view(&node.options().table_name)
+                .await
+                .map_err(|e| internal_datafusion_err!("Failed to get table: {e}"))?;
+
+            let schema = match &table_status.kind {
+                TableKind::Table {
+                    columns,
+                    format,
+                    location,
+                    ..
+                } if columns.is_empty() && format.eq_ignore_ascii_case("DELTA") => {
+                    let Some(location) = location.as_ref() else {
+                        return internal_err!("Table for update has no location");
+                    };
+                    let source_info = SourceInfo {
+                        paths: vec![location.clone()],
+                        schema: None,
+                        constraints: Default::default(),
+                        partition_by: vec![],
+                        bucket_by: None,
+                        sort_order: vec![],
+                        options: vec![],
+                    };
+                    let registry = session_state.extension::<TableFormatRegistry>()?;
+                    let source = registry
+                        .get(format)?
+                        .create_source(session_state, source_info)
+                        .await?;
+                    Ok(source.schema().to_dfschema_ref()?)
+                }
+                TableKind::Table { columns, .. } => {
+                    let schema = datafusion::arrow::datatypes::Schema::new(
+                        columns.iter().map(|c| c.field()).collect::<Vec<_>>(),
+                    );
+                    Ok(schema.to_dfschema_ref()?)
+                }
+                _ => internal_err!("Expected a table for UPDATE"),
+            }?;
+            create_file_update_physical_plan(session_state, planner, schema, node.options().clone())
                 .await?
         } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
             let _ = (

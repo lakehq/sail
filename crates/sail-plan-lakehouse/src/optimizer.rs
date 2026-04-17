@@ -13,6 +13,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_delta_lake::DeltaTableSource;
 use sail_logical_plan::file_delete::FileDeleteNode;
+use sail_logical_plan::file_update::FileUpdateNode;
 use sail_logical_plan::merge::{expand_merge, MergeIntoNode, RowLevelWriteNode};
 
 /// Optimizer rule that expands row-level operations (DELETE, UPDATE, MERGE)
@@ -48,6 +49,14 @@ impl OptimizerRule for ExpandRowLevelOp {
                         return Ok(Transformed::no(plan));
                     }
                     return expand_delete_node(node);
+                }
+
+                // UPDATE → RowLevelWriteNode (delegates physical plan to format)
+                if let Some(node) = ext.node.as_any().downcast_ref::<FileUpdateNode>() {
+                    if !is_lakehouse_format(node.options().format.as_str()) {
+                        return Ok(Transformed::no(plan));
+                    }
+                    return expand_update_node(node);
                 }
             }
             Ok(Transformed::no(plan))
@@ -139,6 +148,33 @@ fn expand_delete_node(node: &FileDeleteNode) -> Result<Transformed<LogicalPlan>>
         )),
         Arc::new(DFSchema::empty()),
         opts.condition.clone(),
+        opts.format.clone(),
+        opts.path.clone(),
+        opts.table_name.clone(),
+        opts.options.clone(),
+    );
+
+    Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+        node: Arc::new(write_node),
+    })))
+}
+
+/// Convert `FileUpdateNode` → `RowLevelWriteNode(Update)`.
+///
+/// UPDATE's physical plan is built by the format's `create_row_level_writer`
+/// (e.g., Delta's `build_update_plan`), so we simply wrap the parameters.
+fn expand_update_node(node: &FileUpdateNode) -> Result<Transformed<LogicalPlan>> {
+    let opts = node.options();
+    let write_node = RowLevelWriteNode::new_update(
+        Arc::new(LogicalPlan::EmptyRelation(
+            datafusion_expr::logical_plan::EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(DFSchema::empty()),
+            },
+        )),
+        Arc::new(DFSchema::empty()),
+        opts.condition.clone(),
+        opts.assignments.clone(),
         opts.format.clone(),
         opts.path.clone(),
         opts.table_name.clone(),

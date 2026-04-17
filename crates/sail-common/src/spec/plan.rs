@@ -462,7 +462,7 @@ pub enum CommandNode {
         table: ObjectName,
         table_alias: Option<Identifier>,
         assignments: Vec<(ObjectName, Expr)>,
-        condition: Option<Expr>,
+        condition: Option<ExprWithSource>,
     },
     Delete {
         table: ObjectName,

@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
-use datafusion_common::{DFSchemaRef, ToDFSchema};
+use datafusion_common::ToDFSchema;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableKind, TableStatus};
-use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
@@ -34,7 +32,9 @@ impl PlanResolver<'_> {
             .get_table_or_view(table.parts())
             .await
             .map_err(PlanError::from)?;
-        let (location, format, table_schema) = self.get_schema_for_delete(&table_status).await?;
+        let (location, format, table_schema) = self
+            .get_row_level_target_schema(&table_status, "DELETE")
+            .await?;
 
         let field_ids = state.register_fields(table_schema.fields());
 
@@ -71,53 +71,5 @@ impl PlanResolver<'_> {
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(FileDeleteNode::new(file_delete_options)),
         }))
-    }
-
-    async fn get_schema_for_delete(
-        &self,
-        table_status: &TableStatus,
-    ) -> PlanResult<(String, String, DFSchemaRef)> {
-        let (location, format, columns) = match &table_status.kind {
-            TableKind::Table {
-                location,
-                format,
-                columns,
-                ..
-            } => (location.clone(), format.clone(), columns.clone()),
-            _ => {
-                return Err(PlanError::unsupported(
-                    "DELETE is only supported on tables, not views",
-                ));
-            }
-        };
-
-        let location =
-            location.ok_or_else(|| PlanError::unsupported("DELETE on tables without location"))?;
-
-        let schema = if columns.is_empty() && format.eq_ignore_ascii_case("DELTA") {
-            // Schema is not in catalog, try to infer from data source
-            let source_info = SourceInfo {
-                paths: vec![location.clone()],
-                schema: None,
-                constraints: Default::default(),
-                partition_by: vec![],
-                bucket_by: None,
-                sort_order: vec![],
-                options: vec![],
-            };
-            let registry = self.ctx.extension::<TableFormatRegistry>()?;
-            let table_format = registry.get(&format)?;
-            let source = table_format
-                .create_source(&self.ctx.state(), source_info)
-                .await?;
-            source.schema().to_dfschema_ref()?
-        } else {
-            let schema = datafusion::arrow::datatypes::Schema::new(
-                columns.iter().map(|c| c.field()).collect::<Vec<_>>(),
-            );
-            schema.to_dfschema_ref()?
-        };
-
-        Ok((location, format, schema))
     }
 }

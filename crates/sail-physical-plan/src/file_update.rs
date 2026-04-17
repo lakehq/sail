@@ -8,26 +8,27 @@ use sail_common_datafusion::datasource::{
     OptionLayer, RowLevelCommand, RowLevelTargetInfo, RowLevelWriteInfo, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_logical_plan::file_delete::FileDeleteOptions;
+use sail_logical_plan::file_update::FileUpdateOptions;
 
-/// Fallback physical planner for non-lakehouse DELETE (e.g. session planner).
-/// Lakehouse DELETEs are handled via `RowLevelWriteNode` → `create_row_level_write_physical_plan`.
-pub async fn create_file_delete_physical_plan(
+/// Fallback physical planner for non-lakehouse UPDATE (e.g. session planner).
+/// Lakehouse UPDATEs are handled via `RowLevelWriteNode` → `create_row_level_write_physical_plan`.
+pub async fn create_file_update_physical_plan(
     ctx: &SessionState,
     _planner: &dyn PhysicalPlanner,
     _schema: datafusion::common::DFSchemaRef,
-    options: FileDeleteOptions,
+    options: FileUpdateOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let FileDeleteOptions {
+    let FileUpdateOptions {
         table_name,
         path,
         format,
+        assignments,
         condition,
         options,
     } = options;
 
     let info = RowLevelWriteInfo {
-        command: RowLevelCommand::Delete,
+        command: RowLevelCommand::Update,
         target: RowLevelTargetInfo {
             table_name,
             path,
@@ -38,7 +39,7 @@ pub async fn create_file_delete_physical_plan(
                 .collect(),
         },
         condition,
-        assignments: None,
+        assignments: Some(assignments),
         expanded_input: None,
         touched_file_plan: None,
         with_schema_evolution: false,
