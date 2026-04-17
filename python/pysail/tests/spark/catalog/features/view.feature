@@ -45,7 +45,7 @@ Feature: Persistent views
   Scenario: DESCRIBE lists columns of persistent views
     When query
       """
-      DESCRIBE customer_view
+      DESCRIBE TABLE customer_view
       """
     Then query result ordered
       | col_name | data_type | comment |
