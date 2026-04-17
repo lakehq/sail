@@ -497,7 +497,7 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::RefreshByPath { path: _ } => {
-                // Sail does not maintain a path-keyed dataframe cache, so there
+                // Sail does not maintain a path-keyed DataFrame cache, so there
                 // is nothing to invalidate. The call is accepted for API
                 // compatibility with PySpark.
                 display.bools().to_record_batch(vec![true])?
