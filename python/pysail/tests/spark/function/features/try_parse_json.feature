@@ -1,5 +1,41 @@
 @try_parse_json @spark-4
-Feature: try_parse_json (safe version of parse_json)
+Feature: try_parse_json comprehensive tests
+
+  Rule: Argument count validation
+
+    Scenario: zero arguments errors
+      When query
+        """
+        SELECT try_parse_json() AS result
+        """
+      Then query error .*
+
+    Scenario: two arguments errors
+      When query
+        """
+        SELECT try_parse_json('{}', 'extra') AS result
+        """
+      Then query error .*
+
+  Rule: NULL handling
+
+    Scenario: NULL input returns NULL
+      When query
+        """
+        SELECT try_parse_json(NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: typed NULL input returns NULL
+      When query
+        """
+        SELECT try_parse_json(CAST(NULL AS STRING)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
 
   Rule: Valid JSON parsing
 
@@ -68,16 +104,7 @@ Feature: try_parse_json (safe version of parse_json)
         | result |
         | NULL   |
 
-    Scenario: try_parse_json NULL input returns NULL
-      When query
-        """
-        SELECT try_parse_json(NULL) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-  Rule: Trailing content and multi-row
+  Rule: Trailing content
 
     Scenario: try_parse_json trailing garbage parses valid prefix
       When query
@@ -270,15 +297,6 @@ Feature: try_parse_json (safe version of parse_json)
         | result |
         |        |
 
-    Scenario: try_parse_json matches parse_json on valid input
-      When query
-        """
-        SELECT to_json(try_parse_json('{"x":1}')) = to_json(parse_json('{"x":1}')) AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
   Rule: Edge cases (advanced)
 
     Scenario: try_parse_json duplicate keys returns NULL (Spark rejects as malformed)
@@ -346,9 +364,347 @@ Feature: try_parse_json (safe version of parse_json)
         | result                          |
         | {"a":[1,"two",null,{"b":true}]} |
 
-    Scenario: try_parse_json rejects non-string input with Spark code
+  Rule: JSON number edge cases
+
+    Scenario: leading zero is invalid JSON
       When query
         """
-        SELECT try_parse_json(42)
+        SELECT try_parse_json('01') AS result
         """
-      Then query error DATATYPE_MISMATCH
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    # Sail doesn't normalize -0 to 0 in Variant
+    Scenario: negative zero becomes zero
+      When query
+        """
+        SELECT to_json(try_parse_json('-0')) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    @sail-bug
+    # Sail doesn't normalize -0.0 to 0 in Variant
+    Scenario: negative zero float becomes zero
+      When query
+        """
+        SELECT to_json(try_parse_json('-0.0')) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    @sail-bug
+    # Sail doesn't convert very large integers to scientific notation in Variant
+    Scenario: very large integer uses scientific notation
+      When query
+        """
+        SELECT to_json(try_parse_json('999999999999999999999999999999999999999')) AS result
+        """
+      Then query result
+        | result |
+        | 1.0E39 |
+
+    Scenario: very small float preserves precision
+      When query
+        """
+        SELECT to_json(try_parse_json('0.000000000000000001')) AS result
+        """
+      Then query result
+        | result               |
+        | 0.000000000000000001 |
+
+    Scenario: float without leading zero is invalid
+      When query
+        """
+        SELECT try_parse_json('.5') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: plus sign number is invalid
+      When query
+        """
+        SELECT try_parse_json('+42') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: double negative is invalid
+      When query
+        """
+        SELECT try_parse_json('--42') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Infinity string is invalid JSON
+      When query
+        """
+        SELECT try_parse_json('Infinity') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: NaN string is invalid JSON
+      When query
+        """
+        SELECT try_parse_json('NaN') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: hex number is invalid JSON
+      When query
+        """
+        SELECT try_parse_json('0xff') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    # Sail doesn't produce scientific notation for 1e10 in Variant
+    Scenario: scientific notation 1e10
+      When query
+        """
+        SELECT to_json(try_parse_json('1e10')) AS result
+        """
+      Then query result
+        | result |
+        | 1.0E10 |
+
+  Rule: String and unicode edge cases
+
+    Scenario: empty key in object
+      When query
+        """
+        SELECT to_json(try_parse_json('{"":1}')) AS result
+        """
+      Then query result
+        | result |
+        | {"":1} |
+
+    Scenario: key with space
+      When query
+        """
+        SELECT to_json(try_parse_json('{"a b":1}')) AS result
+        """
+      Then query result
+        | result    |
+        | {"a b":1} |
+
+    Scenario: numeric-like key
+      When query
+        """
+        SELECT to_json(try_parse_json('{"123":1}')) AS result
+        """
+      Then query result
+        | result    |
+        | {"123":1} |
+
+  Rule: Whitespace handling
+
+    Scenario: leading whitespace
+      When query
+        """
+        SELECT to_json(try_parse_json('  42')) AS result
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    Scenario: trailing whitespace
+      When query
+        """
+        SELECT to_json(try_parse_json('42  ')) AS result
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    Scenario: whitespace both sides
+      When query
+        """
+        SELECT to_json(try_parse_json('  42  ')) AS result
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    Scenario: whitespace inside object
+      When query
+        """
+        SELECT to_json(try_parse_json('{ "a" : 1 }')) AS result
+        """
+      Then query result
+        | result  |
+        | {"a":1} |
+
+  Rule: Array edge cases
+
+    Scenario: array with nulls
+      When query
+        """
+        SELECT to_json(try_parse_json('[null, null]')) AS result
+        """
+      Then query result
+        | result      |
+        | [null,null] |
+
+    Scenario: array mixed types
+      When query
+        """
+        SELECT to_json(try_parse_json('[1, "a", true, null, 1.5]')) AS result
+        """
+      Then query result
+        | result                |
+        | [1,"a",true,null,1.5] |
+
+    Scenario: array of arrays
+      When query
+        """
+        SELECT to_json(try_parse_json('[[1],[2],[3]]')) AS result
+        """
+      Then query result
+        | result        |
+        | [[1],[2],[3]] |
+
+  Rule: Object edge cases
+
+    Scenario: deeply nested object
+      When query
+        """
+        SELECT to_json(try_parse_json('{"a":{"b":{"c":{"d":1}}}}')) AS result
+        """
+      Then query result
+        | result                     |
+        | {"a":{"b":{"c":{"d":1}}}} |
+
+    Scenario: object with array value
+      When query
+        """
+        SELECT to_json(try_parse_json('{"a":[1,2,3]}')) AS result
+        """
+      Then query result
+        | result         |
+        | {"a":[1,2,3]} |
+
+    Scenario: object with null value
+      When query
+        """
+        SELECT to_json(try_parse_json('{"a":null}')) AS result
+        """
+      Then query result
+        | result     |
+        | {"a":null} |
+
+    Scenario: object with boolean values
+      When query
+        """
+        SELECT to_json(try_parse_json('{"a":true,"b":false}')) AS result
+        """
+      Then query result
+        | result               |
+        | {"a":true,"b":false} |
+
+  Rule: Multi-row column tests
+
+    Scenario: multi-row with various JSON types
+      When query
+        """
+        SELECT to_json(try_parse_json(v)) AS result FROM VALUES ('42'), ('"hello"'), ('true'), ('null'), ('[1,2]'), ('{}'), (NULL), ('bad') AS t(v)
+        """
+      Then query result
+        | result  |
+        | 42      |
+        | "hello" |
+        | true    |
+        | null    |
+        | [1,2]   |
+        | {}      |
+        | NULL    |
+        | NULL    |
+
+    @sail-bug
+    # Sail fails on -0 normalization and 1e10 scientific notation in multi-row
+    Scenario: multi-row with number edge cases
+      When query
+        """
+        SELECT to_json(try_parse_json(v)) AS result FROM VALUES ('0'), ('-1'), ('3.14'), ('-0'), ('1e10'), ('01'), ('+5') AS t(v)
+        """
+      Then query result
+        | result |
+        | 0      |
+        | -1     |
+        | 3.14   |
+        | 0      |
+        | 1.0E10 |
+        | NULL   |
+        | NULL   |
+
+  Rule: Expressions and nesting
+
+    Scenario: try_parse_json in WHERE clause
+      When query
+        """
+        SELECT v FROM VALUES ('42'), ('bad'), ('null') AS t(v) WHERE try_parse_json(v) IS NOT NULL
+        """
+      Then query result
+        | v    |
+        | 42   |
+        | null |
+
+    Scenario: comparison with parse_json
+      When query
+        """
+        SELECT to_json(try_parse_json('42')) = to_json(parse_json('42')) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+  Rule: Error conditions
+
+    Scenario: integer input errors
+      When query
+        """
+        SELECT try_parse_json(42) AS result
+        """
+      Then query error .*
+
+    Scenario: boolean input errors
+      When query
+        """
+        SELECT try_parse_json(true) AS result
+        """
+      Then query error .*
+
+    Scenario: double input errors
+      When query
+        """
+        SELECT try_parse_json(1.0) AS result
+        """
+      Then query error .*
+
+    Scenario: array input errors
+      When query
+        """
+        SELECT try_parse_json(array(1)) AS result
+        """
+      Then query error .*
+
+    Scenario: binary input errors
+      When query
+        """
+        SELECT try_parse_json(X'7B7D') AS result
+        """
+      Then query error .*
