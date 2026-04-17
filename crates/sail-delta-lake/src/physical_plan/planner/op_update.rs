@@ -54,10 +54,9 @@ pub async fn build_update_plan(
         .to_dfschema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let condition = info.condition;
     let assignments = info.assignments.unwrap_or_default();
 
-    let physical_condition = match &condition {
+    let physical_condition = match &info.condition {
         Some(cond) => Some(
             ctx.session()
                 .create_physical_expr(cond.expr.clone(), &table_df_schema)?,
@@ -69,7 +68,7 @@ pub async fn build_update_plan(
         ctx,
         snapshot_state,
         version,
-        condition.as_ref(),
+        info.condition.as_ref(),
         &partition_columns,
     )
     .await?;
@@ -102,7 +101,7 @@ pub async fn build_update_plan(
     )?;
 
     let operation = Some(DeltaOperation::Update {
-        predicate: condition.and_then(|c| c.source),
+        predicate: info.condition.and_then(|c| c.source),
     });
 
     assemble_commit_plan(
