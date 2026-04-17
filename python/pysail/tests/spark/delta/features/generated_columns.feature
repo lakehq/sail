@@ -481,6 +481,92 @@ Feature: Delta Lake Generated Columns
         | 1  | 2024-01-01 00:00:00 | 2024-01-01 |
         | 2  | 2024-09-01 00:00:00 | 2024-09-01 |
 
+    @sail-only
+    Scenario: MERGE insert with explicit correct generated column value succeeds
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge_src (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE
+        )
+        USING DELTA
+        LOCATION {{ location2.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge (id, event_time)
+        VALUES (1, TIMESTAMP '2024-01-01 00:00:00')
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge_src VALUES (2, TIMESTAMP '2024-09-01 00:00:00', DATE '2024-09-01')
+        """
+      Given statement
+        """
+        MERGE INTO delta_gen_col_merge AS t
+        USING delta_gen_col_merge_src AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, event_time, event_date) VALUES (s.id, s.event_time, s.event_date)
+        """
+      When query
+        """
+        SELECT id, event_time, event_date FROM delta_gen_col_merge ORDER BY id
+        """
+      Then query result ordered
+        | id | event_time          | event_date |
+        | 1  | 2024-01-01 00:00:00 | 2024-01-01 |
+        | 2  | 2024-09-01 00:00:00 | 2024-09-01 |
+
+    @sail-only
+    Scenario: MERGE insert with incorrect explicit generated column value fails
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge_src (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE
+        )
+        USING DELTA
+        LOCATION {{ location2.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge (id, event_time)
+        VALUES (1, TIMESTAMP '2024-01-01 00:00:00')
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge_src VALUES (2, TIMESTAMP '2024-09-01 00:00:00', DATE '2099-01-01')
+        """
+      Given statement with error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+        """
+        MERGE INTO delta_gen_col_merge AS t
+        USING delta_gen_col_merge_src AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, event_time, event_date) VALUES (s.id, s.event_time, s.event_date)
+        """
+
   Rule: Generation expression is recovered from delta log metadata when catalog has no column definitions
 
     Background:

@@ -7091,6 +7091,7 @@ dependencies = [
  "log",
  "sail-common",
  "sail-common-datafusion",
+ "sail-function",
 ]
 
 [[package]]

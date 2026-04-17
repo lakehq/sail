@@ -15,12 +15,14 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    col, lit, Expr, Join, JoinConstraint, JoinType, LogicalPlan, UserDefinedLogicalNodeCore,
+    col, lit, when, BinaryExpr, Expr, Join, JoinConstraint, JoinType, LogicalPlan, Operator,
+    ScalarUDF, UserDefinedLogicalNodeCore,
 };
 use educe::Educe;
 use log::trace;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::monotonic_id::MonotonicIdNode;
 
@@ -1059,10 +1061,15 @@ fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
 
 /// Apply generation expressions as a post-processing projection on the MERGE write plan.
 ///
-/// For each generated column, replace its current value (which may be incorrect if the user
-/// provided an explicit value, or may be NULL for INSERT without specifying the generated column)
-/// with the result of the generation expression. Non-generated columns and internal MERGE columns
-/// are passed through unchanged.
+/// For each generated column:
+/// - For INSERT rows (NOT MATCHED BY TARGET): enforce the Delta protocol constraint that a
+///   user-provided non-NULL value must match the generation expression. Explicitly provided
+///   values that do not match raise `DELTA_GENERATED_COLUMNS_VALUE_MISMATCH`. NULL values
+///   (column not specified in the INSERT clause) are silently replaced by the gen expression.
+/// - For UPDATE rows (MATCHED): silently recompute the generated column from the expression,
+///   since the previous target value is stale and not a user-provided constraint.
+///
+/// Non-generated columns and internal MERGE columns are passed through unchanged.
 ///
 /// `generated_column_exprs` must already have their column references rewritten to actual names
 /// (i.e., after `rewrite_merge_columns` has been applied in `expand_merge`).
@@ -1077,19 +1084,57 @@ fn apply_generation_projection(
         .iter()
         .map(|(name, expr)| (name.as_str(), expr))
         .collect();
-    let post_exprs: Vec<Expr> = plan
-        .schema()
+    let schema = plan.schema().clone();
+    let has_op_col = schema.has_column_with_unqualified_name(OPERATION_COLUMN);
+    let insert_op_val = lit(RowLevelOperationType::Insert.as_i32());
+    let post_exprs: Vec<Expr> = schema
         .fields()
         .iter()
         .map(|f| {
             let name = f.name();
             if let Some(gen_expr) = gen_map.get(name.as_str()) {
-                (*gen_expr).clone().alias(name.clone())
+                let gen_expr = (*gen_expr).clone();
+                let current_value = col(name.clone());
+                // For INSERT rows, enforce Delta protocol: if the user explicitly provided a
+                // non-NULL value for the generated column that doesn't match the expression,
+                // raise an error instead of silently overwriting.
+                //
+                // For UPDATE rows, the generated column's current value is stale (from the
+                // existing target row) — always silently recompute from the expression.
+                //
+                // We distinguish INSERT from UPDATE via the operation column when available.
+                let mismatch_check =
+                    current_value
+                        .clone()
+                        .is_null()
+                        .or(Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(current_value),
+                            Operator::IsNotDistinctFrom,
+                            Box::new(gen_expr.clone()),
+                        )));
+                let err_msg = format!(
+                    "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] \
+                     CHECK constraint for generated column `{name}` violated: \
+                     user-provided value does not match the generation expression."
+                );
+                let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
+                let enforced = when(mismatch_check, gen_expr.clone())
+                    .otherwise(raise)
+                    .map(|e| e.alias(name.clone()))?;
+                if has_op_col {
+                    // Only enforce for INSERT operations; UPDATE always recomputes silently.
+                    when(col(OPERATION_COLUMN).eq(insert_op_val.clone()), enforced)
+                        .otherwise(gen_expr.clone())
+                        .map(|e| e.alias(name.clone()))
+                } else {
+                    // Insert-only path (fast-append): always enforce.
+                    Ok(enforced)
+                }
             } else {
-                col(name.clone())
+                Ok(col(name.clone()))
             }
         })
-        .collect();
+        .collect::<Result<Vec<Expr>>>()?;
     LogicalPlanBuilder::from(plan).project(post_exprs)?.build()
 }
 
