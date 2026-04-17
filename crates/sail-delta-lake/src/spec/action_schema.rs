@@ -71,6 +71,21 @@ pub fn protocol_struct_type() -> StructType {
     ])
 }
 
+pub fn domain_metadata_struct_type() -> StructType {
+    StructType::new_unchecked([
+        StructField::not_null("domain", DataType::STRING),
+        StructField::not_null("configuration", DataType::STRING),
+        StructField::not_null("removed", DataType::BOOLEAN),
+    ])
+}
+
+pub fn checkpoint_metadata_struct_type() -> StructType {
+    StructType::new_unchecked([
+        StructField::not_null("version", DataType::LONG),
+        StructField::nullable("tags", string_map_type(true)),
+    ])
+}
+
 pub fn metadata_struct_type() -> StructType {
     StructType::new_unchecked([
         StructField::not_null("id", DataType::STRING),
@@ -92,9 +107,21 @@ pub fn transaction_struct_type() -> StructType {
     ])
 }
 
+pub fn sidecar_struct_type() -> StructType {
+    StructType::new_unchecked([
+        StructField::not_null("path", DataType::STRING),
+        StructField::not_null("sizeInBytes", DataType::LONG),
+        StructField::not_null("modificationTime", DataType::LONG),
+        StructField::nullable("tags", string_map_type(true)),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{add_struct_type, metadata_struct_type, remove_struct_type};
+    use super::{
+        add_struct_type, checkpoint_metadata_struct_type, metadata_struct_type, remove_struct_type,
+        sidecar_struct_type,
+    };
 
     #[test]
     fn add_schema_keeps_extended_fields() {
@@ -120,5 +147,21 @@ mod tests {
         let metadata = metadata_struct_type();
         assert!(metadata.field("configuration").is_some());
         assert!(metadata.field("schemaString").is_some());
+    }
+
+    #[test]
+    fn sidecar_schema_keeps_required_protocol_fields() {
+        let sidecar = sidecar_struct_type();
+        assert!(sidecar.field("path").is_some());
+        assert!(sidecar.field("sizeInBytes").is_some());
+        assert!(sidecar.field("modificationTime").is_some());
+        assert!(sidecar.field("tags").is_some());
+    }
+
+    #[test]
+    fn checkpoint_metadata_schema_matches_protocol_fields() {
+        let checkpoint_metadata = checkpoint_metadata_struct_type();
+        assert!(checkpoint_metadata.field("version").is_some());
+        assert!(checkpoint_metadata.field("tags").is_some());
     }
 }

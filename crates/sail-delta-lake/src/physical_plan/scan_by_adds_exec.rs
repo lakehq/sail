@@ -134,6 +134,9 @@ impl ScanByAddsStreamState {
         };
 
         let snapshot_state = cached.snapshot.clone();
+        snapshot_state
+            .ensure_data_read_supported()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
         let session_state = SessionStateBuilder::new()
             .with_runtime_env(self.context.runtime_env().clone())
@@ -323,7 +326,7 @@ pub struct DeltaScanByAddsExec {
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     statistics: Statistics,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaScanByAddsExec {
@@ -421,13 +424,13 @@ impl DeltaScanByAddsExec {
         &self.statistics
     }
 
-    fn compute_properties(schema: SchemaRef, partition_count: usize) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef, partition_count: usize) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(partition_count.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 }
 
@@ -441,7 +444,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -577,7 +580,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
     }
 }
 
-fn map_statistics_to_schema(
+pub(crate) fn map_statistics_to_schema(
     statistics: &Statistics,
     source_schema: &SchemaRef,
     target_schema: &SchemaRef,

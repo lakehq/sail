@@ -13,7 +13,6 @@
 pub mod datasource;
 pub mod io;
 pub mod operations;
-pub mod options;
 pub mod physical_plan;
 pub mod schema_evolution;
 pub mod spec;
@@ -30,7 +29,7 @@ pub use operations::write::base_writer::*;
 pub use operations::write::file_writer::*;
 pub use operations::write::{IcebergWriter, WriteOutcome};
 pub use operations::Transaction;
-pub use options::*;
+pub use physical_plan::IcebergWriterExecOptions;
 pub use schema_evolution::*;
 pub use spec::*;
 pub use table_format::*;

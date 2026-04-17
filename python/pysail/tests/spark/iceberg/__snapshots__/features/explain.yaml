@@ -36,7 +36,7 @@ data:
           ProjectionExec: expr=[id@0 as #0, name@1 as #1]
             FilterExec: id@0 > 0
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_join_left/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, name], file_type=parquet, predicate=id@0 > 0, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
+                DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_join_left/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, name], file_type=parquet, predicate=id@0 > 0 AND DynamicFilter [ empty ], pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
 ---
 name: "test_explain_for_order_by_on_partitioned_table"
 data:

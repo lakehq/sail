@@ -25,7 +25,7 @@ pub struct ShowStringExec {
     limit: usize,
     format: ShowStringFormat,
     schema: SchemaRef,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl ShowStringExec {
@@ -36,12 +36,12 @@ impl ShowStringExec {
         format: ShowStringFormat,
         schema: SchemaRef,
     ) -> Self {
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::RoundRobinBatch(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Self {
             input,
             names,
@@ -88,7 +88,7 @@ impl ExecutionPlan for ShowStringExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

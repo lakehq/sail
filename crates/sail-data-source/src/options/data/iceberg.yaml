@@ -1,0 +1,93 @@
+### Read-Only Options ###
+
+- key: use_ref
+  description: |
+    Select a snapshot reference (tag or branch) to time-travel when reading.
+    If unset, the current snapshot is used.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - use_ref
+        - ref
+        - branch
+        - tag
+        - iceberg.ref
+      parser: crate::options::parsers::parse_optional_string
+
+- key: snapshot_id
+  description: |
+    Select a specific snapshot id to time-travel when reading.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_i64
+  supported: true
+  rust_type: "Option<i64>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - snapshot_id
+        - snapshot-id
+        - snapshotId
+      parser: crate::options::parsers::parse_optional_i64
+
+- key: timestamp_as_of
+  description: |
+    Select snapshot as of the given timestamp. Accepts RFC3339 or 'yyyy-MM-dd HH:mm:ss.SSS'.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - timestamp_as_of
+        - timestampAsOf
+      parser: crate::options::parsers::parse_optional_string
+
+### Write-Only Options ###
+
+- key: overwrite_schema
+  description: |
+    If `true`, allows overwriting the schema of the table when using overwrite mode.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - overwrite_schema
+        - overwriteSchema
+      parser: crate::options::parsers::parse_bool
+
+- key: merge_schema
+  description: |
+    If `true`, allows automatic schema merging during an append or overwrite operation.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - merge_schema
+        - mergeSchema
+      parser: crate::options::parsers::parse_bool

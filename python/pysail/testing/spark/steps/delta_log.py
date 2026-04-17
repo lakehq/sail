@@ -93,6 +93,8 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
 
     if "timestamp" in normalized:
         normalized["timestamp"] = "<timestamp>"
+    if "inCommitTimestamp" in normalized:
+        normalized["inCommitTimestamp"] = "<in_commit_timestamp>"
 
     cv = normalized.get("clientVersion")
     if isinstance(cv, str) and cv.startswith("sail-delta-lake."):
@@ -268,6 +270,8 @@ def _normalize_delta_log_json_file_for_snapshot(filename: str, obj: object) -> o
         return obj
     if filename.endswith(".crc"):
         normalized = dict(obj)
+        if "inCommitTimestampOpt" in normalized:
+            normalized["inCommitTimestampOpt"] = "<in_commit_timestamp>"
         metadata = normalized.get("metadata")
         if isinstance(metadata, dict):
             normalized["metadata"] = _normalize_delta_metadata_for_snapshot(metadata)
@@ -316,6 +320,16 @@ def _parse_version_list(raw: str) -> list[int]:
             continue
         versions.append(int(version_text))
     return versions
+
+
+def _parse_i64_list(raw: str) -> list[int]:
+    values = []
+    for raw_part in raw.split(","):
+        value_text = raw_part.strip()
+        if not value_text:
+            continue
+        values.append(int(value_text))
+    return values
 
 
 @then(
@@ -381,6 +395,41 @@ def delta_log_json_file_matches_snapshot(
     assert obj == snapshot
 
 
+@then(parsers.parse("delta log JSON file {filename} in {location_var} contains"))
+def delta_log_json_file_contains(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    datatable,
+) -> None:
+    """Assert that specific fields in a delta log JSON file match expected values.
+
+    The datatable must have two columns: ``path`` and ``value``.
+    ``path`` is a JSONPath expression (without leading ``$``).
+    ``value`` is a JSON-encoded expected value.
+    """
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    obj = _read_delta_log_json_file(Path(location.path), filename)
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+        "expected datatable with columns: | path | value |"
+    )
+    for row in rows:
+        if not row or len(row) < 2:  # noqa: PLR2004
+            continue
+        path, raw_value = row[0], row[1]
+        actual = _get_by_path(obj, path)
+        expected = _parse_expected_value(raw_value)
+        assert actual == expected, f"field {path!r}: expected {expected!r}, got {actual!r}"
+
+
 @given(
     parsers.parse("delta log JSON files for versions {versions} in {location_var} are backdated by {seconds:d} seconds")
 )
@@ -402,3 +451,75 @@ def delta_log_json_files_are_backdated(
         log_file = log_dir / f"{version:020}.json"
         assert log_file.exists(), f"Delta log JSON file does not exist: {log_file}"
         os.utime(log_file, (target_timestamp, target_timestamp))
+
+
+@given(
+    parsers.parse(
+        "delta log JSON file timestamps for versions {versions} in {location_var} are {timestamps} seconds since epoch"
+    )
+)
+def delta_log_json_file_timestamps_are_set(
+    versions: str,
+    location_var: str,
+    timestamps: str,
+    variables: dict,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    parsed_versions = _parse_version_list(versions)
+    parsed_timestamps = _parse_i64_list(timestamps)
+    assert parsed_versions, "expected at least one Delta log version to rewrite"
+    assert len(parsed_versions) == len(parsed_timestamps), "expected the same number of versions and timestamps"
+
+    log_dir = Path(location.path)
+    for version, timestamp in zip(parsed_versions, parsed_timestamps, strict=True):
+        log_file = log_dir / f"{version:020}.json"
+        assert log_file.exists(), f"Delta log JSON file does not exist: {log_file}"
+        os.utime(log_file, (timestamp, timestamp))
+
+
+@given(
+    parsers.parse(
+        "delta log commit and checksum timestamps for versions {versions} in {location_var} "
+        "are {timestamps} milliseconds since epoch"
+    )
+)
+def delta_log_commit_timestamps_are_rewritten(
+    versions: str,
+    location_var: str,
+    timestamps: str,
+    variables: dict,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    parsed_versions = _parse_version_list(versions)
+    parsed_timestamps = _parse_i64_list(timestamps)
+    assert parsed_versions, "expected at least one Delta log version to rewrite"
+    assert len(parsed_versions) == len(parsed_timestamps), "expected the same number of versions and timestamps"
+
+    log_dir = Path(location.path)
+
+    for version, timestamp_ms in zip(parsed_versions, parsed_timestamps, strict=True):
+        log_path = log_dir / f"{version:020}.json"
+        assert log_path.exists(), f"Delta log JSON file does not exist: {log_path}"
+
+        rewritten = []
+        with log_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line)
+                if "commitInfo" in obj:
+                    obj["commitInfo"]["inCommitTimestamp"] = timestamp_ms
+                rewritten.append(json.dumps(obj, separators=(",", ":")))
+
+        with log_path.open("w", encoding="utf-8") as f:
+            f.write("\n".join(rewritten))
+
+        crc_path = log_dir / f"{version:020}.crc"
+        assert crc_path.exists(), f"Delta log checksum file does not exist: {crc_path}"
+        with crc_path.open("r", encoding="utf-8") as f:
+            crc_obj = json.load(f)
+        crc_obj["inCommitTimestampOpt"] = timestamp_ms
+        with crc_path.open("w", encoding="utf-8") as f:
+            json.dump(crc_obj, f, separators=(",", ":"))

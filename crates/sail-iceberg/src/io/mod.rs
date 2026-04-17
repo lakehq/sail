@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use datafusion::common::DataFusionError;
 use object_store::path::Path as ObjectPath;
+use object_store::ObjectStoreExt;
 use url::Url;
 
 use crate::spec::{FormatVersion, Manifest, ManifestList};
@@ -70,7 +71,7 @@ impl StoreContext {
 
         let mut full = self.prefix_path.clone();
         for comp in raw_path.split('/').filter(|s| !s.is_empty()) {
-            full = full.child(comp);
+            full = full.join(comp);
         }
         Ok(full)
     }

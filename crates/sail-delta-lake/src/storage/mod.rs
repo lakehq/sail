@@ -28,7 +28,7 @@ use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use log::{debug, error};
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectStore, PutMode, PutOptions};
+use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode, PutOptions};
 use serde_json::Deserializer as JsonDeserializer;
 use url::Url;
 use uuid::Uuid;

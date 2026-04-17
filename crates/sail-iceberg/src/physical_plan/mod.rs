@@ -14,7 +14,9 @@ pub mod action_schema;
 pub mod commit;
 pub mod plan_builder;
 mod writer_exec;
+mod writer_options;
 
 pub use commit::commit_exec::IcebergCommitExec;
 pub use plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 pub use writer_exec::IcebergWriterExec;
+pub use writer_options::IcebergWriterExecOptions;

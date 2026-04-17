@@ -16,6 +16,8 @@ Our mission is to **unify batch processing, stream processing, and compute-inten
 
 **🚀 Sail outperforms Spark, popular Spark accelerators, Databricks, and Snowflake on [ClickBench](https://go.lakesail.com/clickbench).**
 
+**💬 [Join our Slack community](https://www.launchpass.com/lakesail-community/free)** to ask questions, share feedback, and connect with other Sail users and contributors.
+
 ## Documentation
 
 The documentation of the latest Sail version can be found [here](https://docs.lakesail.com/sail/latest/).
@@ -133,18 +135,6 @@ These results come from a derived TPC-H benchmark (22 queries, scale factor 100,
 ![Query Time Comparison](https://github.com/lakehq/sail/raw/46d0520532f22e99de6d9ade6373a117216484ca/.github/images/query-time.svg)
 
 See the full analysis and graphs on our [Benchmark Results](https://docs.lakesail.com/sail/latest/introduction/benchmark-results/) page.
-
-## Contributing
-
-Contributions are more than welcome!
-
-Please submit [GitHub issues](https://github.com/lakehq/sail/issues) for bug reports and feature requests.
-You are also welcome to ask questions in [GitHub discussions](https://github.com/lakehq/sail/discussions).
-
-Feel free to create a [pull request](https://github.com/lakehq/sail/pulls) if you would like to make a code change.
-You can refer to the [Development Guide](https://docs.lakesail.com/sail/main/development/) to get started.
-
-Additionally, please join our [Slack Community](https://www.launchpass.com/lakesail-community/free) if you haven’t already!
 
 ## Why Choose Sail?
 

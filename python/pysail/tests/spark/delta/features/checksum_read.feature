@@ -19,6 +19,7 @@ Feature: Delta Lake checksum read path
         USING DELTA
         LOCATION {{ location.sql }}
         OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES ('delta.enableInCommitTimestamps' = 'true')
         """
       Given statement
         """
@@ -69,6 +70,7 @@ Feature: Delta Lake checksum read path
         USING DELTA
         LOCATION {{ location.sql }}
         OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES ('delta.enableInCommitTimestamps' = 'true')
         """
       Given statement
         """
@@ -119,6 +121,7 @@ Feature: Delta Lake checksum read path
         USING DELTA
         LOCATION {{ location.sql }}
         OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES ('delta.enableInCommitTimestamps' = 'true')
         """
       Given statement
         """
@@ -173,6 +176,7 @@ Feature: Delta Lake checksum read path
         USING DELTA
         LOCATION {{ location.sql }}
         OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES ('delta.enableInCommitTimestamps' = 'true')
         """
       Given statement
         """

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::plan_datafusion_err;
@@ -17,6 +18,91 @@ use datafusion_expr::TableSource;
 use crate::catalog::CatalogPartitionField;
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
+
+/// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
+pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
+
+/// Row-level operation type column appended to the expanded MERGE output.
+/// Value is one of the [`RowLevelOperationType`] integer constants.
+pub const OPERATION_COLUMN: &str = "__sail_operation_type";
+
+/// A layer of options that can be applied to a data source.
+/// Multiple layers are used to represent different sources of options,
+/// applied in order so that later layers override earlier ones.
+#[derive(Debug, Clone)]
+pub enum OptionLayer {
+    /// Options stored as table properties in a catalog.
+    TablePropertyList { items: Vec<(String, String)> },
+    /// Options provided by the data source operation.
+    OptionList { items: Vec<(String, String)> },
+    /// The location of the data source.
+    TableLocation { value: String },
+    /// Time travel: read data as of a specific timestamp.
+    AsOfTimestamp { value: DateTime<Utc> },
+    /// Time travel: read data as of a specific integer version.
+    AsOfIntegerVersion { value: i64 },
+    /// Time travel: read data as of a specific string version (e.g. a branch or tag name).
+    AsOfStringVersion { value: String },
+}
+
+impl OptionLayer {
+    /// Converts this option layer into an opaque key-value map.
+    ///
+    /// This is used for data sources that have not yet migrated to the typed
+    /// option system. The returned map can be passed to existing code that
+    /// accepts `HashMap<String, String>`.
+    pub fn into_opaque_options(self) -> HashMap<String, String> {
+        match self {
+            OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
+            OptionLayer::OptionList { items } => items.into_iter().collect(),
+            OptionLayer::TableLocation { .. }
+            | OptionLayer::AsOfTimestamp { .. }
+            | OptionLayer::AsOfIntegerVersion { .. }
+            | OptionLayer::AsOfStringVersion { .. } => HashMap::new(),
+        }
+    }
+}
+
+/// Row-level operation type tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i32)]
+pub enum RowLevelOperationType {
+    Delete = 1,
+    Update = 2,
+    Insert = 3,
+}
+
+impl RowLevelOperationType {
+    pub fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
+
+/// Materialization strategy for row-level modifications.
+///
+/// - `Eager`: rewrite affected files (Copy-on-Write).
+/// - `MergeOnRead`: write delete files at write time, merge at read time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum MergeStrategy {
+    #[default]
+    Eager,
+    MergeOnRead,
+}
+
+/// Returns true for lakehouse formats that support row-level modifications.
+pub fn is_lakehouse_format(format: &str) -> bool {
+    format.eq_ignore_ascii_case("delta") || format.eq_ignore_ascii_case("iceberg")
+}
+
+/// Implemented by [`TableSource`]s that can expose a per-row file path column
+/// for row-level modifications (MERGE targeted rewrite).
+pub trait MergeCapableSource: Send + Sync {
+    /// Returns the file column name if already configured.
+    fn file_column_name(&self) -> Option<&str>;
+
+    /// Returns a reconfigured source with the file column enabled.
+    fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
@@ -59,16 +145,15 @@ pub struct SourceInfo {
     pub partition_by: Vec<String>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Vec<Sort>,
-    /// The sets of options for the data source.
-    /// A later set of options can override earlier ones.
-    pub options: Vec<HashMap<String, String>>,
+    /// The layers of options for the data source.
+    /// A later layer can override earlier ones.
+    pub options: Vec<OptionLayer>,
 }
 
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
     pub input: Arc<dyn ExecutionPlan>,
-    pub path: String,
     pub mode: PhysicalSinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
@@ -76,37 +161,82 @@ pub struct SinkInfo {
     pub table_properties: HashMap<String, String>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
-    pub options: Vec<HashMap<String, String>>,
+    /// The path for the sink is stored under the `"path"` key in options.
+    pub options: Vec<OptionLayer>,
 }
 
-/// Information required to create a data deleter.
-#[derive(Debug, Clone)]
-pub struct DeleteInfo {
-    pub path: String,
-    pub condition: Option<ExprWithSource>,
-    /// The sets of options for the data deletion.
-    /// A later set of options can override earlier ones.
-    pub options: Vec<HashMap<String, String>>,
+impl SinkInfo {
+    /// Returns the path from options, or an empty string if not set.
+    /// Checks the `"path"` key first, then `"location"`.
+    /// Key comparison is case-insensitive.
+    pub fn path(&self) -> String {
+        let find = |key: &str| -> Option<String> {
+            for layer in self.options.iter().rev() {
+                let items = match layer {
+                    OptionLayer::OptionList { items } => items,
+                    OptionLayer::TablePropertyList { items } => items,
+                    _ => continue,
+                };
+                if let Some(v) = items.iter().find_map(|(k, v)| {
+                    if k.eq_ignore_ascii_case(key) {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                }) {
+                    return Some(v);
+                }
+            }
+            None
+        };
+        find("path")
+            .or_else(|| find("location"))
+            .unwrap_or_default()
+    }
 }
 
+/// Searches option sets in reverse order for a case-insensitive key match.
+/// Returns the value from the last option set that contains the key, or `None`.
+pub fn find_option(options: &[HashMap<String, String>], key: &str) -> Option<String> {
+    for set in options.iter().rev() {
+        if let Some(value) = set.iter().find_map(|(k, v)| {
+            if k.eq_ignore_ascii_case(key) {
+                Some(v.clone())
+            } else {
+                None
+            }
+        }) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// The kind of row-level DML command being executed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RowLevelCommand {
+    Delete,
+    Update,
+    Merge,
+}
+
+/// Target table information shared by all row-level operations.
 #[derive(Debug, Clone)]
-pub struct MergeTargetInfo {
+pub struct RowLevelTargetInfo {
     pub table_name: Vec<String>,
     pub path: String,
     pub partition_by: Vec<String>,
-    pub options: Vec<HashMap<String, String>>,
+    pub options: Vec<OptionLayer>,
 }
 
-/// Merge operation metadata used to construct commit log `operationParameters`.
+/// Operation metadata used to construct commit log `operationParameters`.
 #[derive(Debug, Clone)]
 pub struct MergePredicateInfo {
-    /// The type of merge operation performed (e.g. "update", "delete", "insert").
     pub action_type: String,
-    /// The predicate used for the merge operation.
     pub predicate: Option<String>,
 }
 
-/// Optional override metadata for operation commit logs (currently used by Delta MERGE).
+/// Override metadata for operation commit logs.
 #[derive(Debug, Clone)]
 pub enum OperationOverride {
     Merge {
@@ -118,18 +248,22 @@ pub enum OperationOverride {
     },
 }
 
+/// Unified information for all row-level write operations (DELETE, UPDATE, MERGE).
 #[derive(Debug, Clone)]
-pub struct MergeInfo {
-    pub target: MergeTargetInfo,
-    /// Indicates that join/filter/project have been expanded in the logical plan
-    pub pre_expanded: bool,
-    /// Final physical plan ready for writing (if pre_expanded)
+pub struct RowLevelWriteInfo {
+    pub command: RowLevelCommand,
+    pub target: RowLevelTargetInfo,
+    /// Condition for DELETE/UPDATE. `None` for MERGE.
+    pub condition: Option<ExprWithSource>,
+    /// Pre-expanded physical plan for writing (MERGE, future UPDATE).
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
-    /// Physical plan that yields touched file paths (if pre_expanded)
+    /// Physical plan that yields touched file paths (MERGE targeted rewrite).
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
     pub with_schema_evolution: bool,
-    /// Optional override for commit operation metadata.
+    /// Override for commit operation metadata.
     pub operation_override: Option<OperationOverride>,
+    /// Materialization strategy. Defaults to [`MergeStrategy::Eager`].
+    pub merge_strategy: MergeStrategy,
 }
 
 // TODO: MERGE schema evolution end-to-end
@@ -169,30 +303,23 @@ pub trait TableFormat: Send + Sync {
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Creates a `ExecutionPlan` for delete.
-    async fn create_deleter(
+    /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
+    async fn create_row_level_writer(
         &self,
         ctx: &dyn Session,
-        info: DeleteInfo,
+        info: RowLevelWriteInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let _ = (ctx, info);
         not_impl_err!(
-            "DELETE operation is not yet implemented for {} format",
+            "Row-level operations are not yet implemented for {} format",
             self.name()
         )
     }
 
-    /// Creates an `ExecutionPlan` for MERGE.
-    async fn create_merger(
-        &self,
-        ctx: &dyn Session,
-        info: MergeInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _ = (ctx, info);
-        not_impl_err!(
-            "MERGE operation is not yet implemented for {} format",
-            self.name()
-        )
+    /// Returns the materialization strategy for row-level modifications.
+    /// Defaults to [`MergeStrategy::Eager`]. Override for Merge-on-Read formats.
+    fn merge_strategy(&self) -> MergeStrategy {
+        MergeStrategy::Eager
     }
 }
 

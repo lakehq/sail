@@ -27,6 +27,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
+use object_store::ObjectStoreExt;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -35,10 +36,10 @@ use url::Url;
 use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_to_arrow};
 use crate::operations::write::config::WriterConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
-use crate::options::TableIcebergOptions;
 use crate::physical_plan::action_schema::{
     encode_add_data_files, encode_commit_meta, iceberg_action_schema, CommitMeta,
 };
+use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
 use crate::spec::partition::{
     PartitionSpec as BoundPartitionSpec, UnboundPartitionField, UnboundPartitionSpec,
@@ -58,8 +59,8 @@ pub struct IcebergWriterExec {
     partition_columns: Vec<CatalogPartitionField>,
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
-    options: TableIcebergOptions,
-    cache: PlanProperties,
+    options: IcebergWriterExecOptions,
+    cache: Arc<PlanProperties>,
 }
 
 impl IcebergWriterExec {
@@ -93,7 +94,7 @@ impl IcebergWriterExec {
         partition_columns: Vec<CatalogPartitionField>,
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
-        options: TableIcebergOptions,
+        options: IcebergWriterExecOptions,
     ) -> Self {
         let schema = match iceberg_action_schema() {
             Ok(s) => s,
@@ -114,13 +115,13 @@ impl IcebergWriterExec {
         }
     }
 
-    fn compute_properties(schema: datafusion::arrow::datatypes::SchemaRef) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: datafusion::arrow::datatypes::SchemaRef) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     pub fn table_url(&self) -> &Url {
@@ -139,7 +140,7 @@ impl IcebergWriterExec {
         self.table_exists
     }
 
-    pub fn options(&self) -> &TableIcebergOptions {
+    pub fn options(&self) -> &IcebergWriterExecOptions {
         &self.options
     }
 
@@ -148,7 +149,7 @@ impl IcebergWriterExec {
     }
 
     fn get_schema_mode(
-        options: &TableIcebergOptions,
+        options: &IcebergWriterExecOptions,
         sink_mode: &PhysicalSinkMode,
     ) -> Result<Option<SchemaMode>> {
         match (options.merge_schema, options.overwrite_schema) {
@@ -235,7 +236,7 @@ impl ExecutionPlan for IcebergWriterExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
