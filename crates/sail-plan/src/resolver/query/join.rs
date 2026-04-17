@@ -29,10 +29,6 @@ fn expr_is_python_udf(expr: &Expr) -> bool {
 }
 
 /// Returns a string representation of the join type suitable for error messages.
-/// `JoinType::Inner` is not included because this function is only called for
-/// non-inner join types (see the call site in `resolve_query_join`).
-/// `JoinType::LeftMark` and `JoinType::RightMark` are included for exhaustiveness,
-/// even though the spec-to-DataFusion mapping never produces them via the ON-condition path.
 fn join_type_name(join_type: JoinType) -> &'static str {
     match join_type {
         JoinType::Left => "LEFT OUTER",
@@ -42,9 +38,9 @@ fn join_type_name(join_type: JoinType) -> &'static str {
         JoinType::LeftAnti => "LEFT ANTI",
         JoinType::RightSemi => "RIGHT SEMI",
         JoinType::RightAnti => "RIGHT ANTI",
-        JoinType::Inner | JoinType::LeftMark | JoinType::RightMark => {
-            unreachable!("join_type_name should not be called for {:?}", join_type)
-        }
+        JoinType::Inner => "INNER",
+        JoinType::LeftMark => "LEFT MARK",
+        JoinType::RightMark => "RIGHT MARK",
     }
 }
 
