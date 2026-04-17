@@ -1,6 +1,51 @@
 @schema_of_json
 Feature: schema_of_json() returns the schema of a JSON string as DDL
 
+  Rule: Argument count validation
+
+    Scenario: zero arguments errors
+      When query
+        """
+        SELECT schema_of_json() AS result
+        """
+      Then query error .*
+
+    Scenario: three arguments errors
+      When query
+        """
+        SELECT schema_of_json('{"a":1}', map('mode','FAILFAST'), 'extra') AS result
+        """
+      Then query error .*
+
+    Scenario: two arguments with options
+      When query
+        """
+        SELECT schema_of_json('{"a":1}', map('mode','FAILFAST')) AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: BIGINT> |
+
+  Rule: NULL handling
+
+    @sail-bug
+    # Sail doesn't reject NULL input - should error like Spark
+    Scenario: NULL input errors
+      When query
+        """
+        SELECT schema_of_json(NULL) AS result
+        """
+      Then query error .*
+
+    @sail-bug
+    # Sail doesn't reject typed NULL input - should error like Spark
+    Scenario: typed NULL input errors
+      When query
+        """
+        SELECT schema_of_json(CAST(NULL AS STRING)) AS result
+        """
+      Then query error .*
+
   Rule: Basic struct inference
 
     Scenario: simple types
@@ -458,3 +503,174 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json('{"a": 01}', map('allowNumericLeadingZeros', 'true')) AS result
         """
       Then query error allowNumericLeadingZeros
+
+  Rule: Numeric boundary types
+
+    @sail-bug
+    # Sail infers BIGINT instead of DECIMAL(20,0) for integers > BIGINT_MAX
+    Scenario: very large integer becomes DECIMAL
+      When query
+        """
+        SELECT schema_of_json('{"v":99999999999999999999}') AS result
+        """
+      Then query result
+        | result                  |
+        | STRUCT<v: DECIMAL(20,0)> |
+
+    Scenario: BIGINT max stays BIGINT
+      When query
+        """
+        SELECT schema_of_json('{"v":9223372036854775807}') AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<v: BIGINT> |
+
+    @sail-bug
+    # Sail infers BIGINT instead of DECIMAL(19,0) for BIGINT_MAX+1
+    Scenario: BIGINT overflow becomes DECIMAL
+      When query
+        """
+        SELECT schema_of_json('{"v":9223372036854775808}') AS result
+        """
+      Then query result
+        | result                  |
+        | STRUCT<v: DECIMAL(19,0)> |
+
+    Scenario: INT max stays BIGINT
+      When query
+        """
+        SELECT schema_of_json('{"v":2147483647}') AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<v: BIGINT> |
+
+    Scenario: negative zero float is DOUBLE
+      When query
+        """
+        SELECT schema_of_json('{"v":-0.0}') AS result
+        """
+      Then query result
+        | result             |
+        | STRUCT<v: DOUBLE>  |
+
+    Scenario: negative scientific notation
+      When query
+        """
+        SELECT schema_of_json('{"v":1.5e-3}') AS result
+        """
+      Then query result
+        | result             |
+        | STRUCT<v: DOUBLE>  |
+
+  Rule: Deep nesting
+
+    Scenario: five levels deep
+      When query
+        """
+        SELECT schema_of_json('{"a":{"b":{"c":{"d":{"e":1}}}}}') AS result
+        """
+      Then query result
+        | result                                                       |
+        | STRUCT<a: STRUCT<b: STRUCT<c: STRUCT<d: STRUCT<e: BIGINT>>>>> |
+
+  Rule: Array of objects with missing fields
+
+    Scenario: array of objects merges all fields
+      When query
+        """
+        SELECT schema_of_json('[{"a":1,"b":"x"},{"a":2,"c":true}]') AS result
+        """
+      Then query result
+        | result                                          |
+        | ARRAY<STRUCT<a: BIGINT, b: STRING, c: BOOLEAN>> |
+
+    Scenario: top-level array of objects
+      When query
+        """
+        SELECT schema_of_json('[{"id":1},{"id":2}]') AS result
+        """
+      Then query result
+        | result                    |
+        | ARRAY<STRUCT<id: BIGINT>> |
+
+  Rule: Special key names
+
+    @sail-bug
+    # Sail doesn't backtick-escape keys with dots
+    Scenario: dot in key name
+      When query
+        """
+        SELECT schema_of_json('{"a.b":1}') AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<`a.b`: BIGINT> |
+
+    @sail-bug
+    # Sail doesn't backtick-escape keys with spaces
+    Scenario: space in key name
+      When query
+        """
+        SELECT schema_of_json('{"a b":1}') AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<`a b`: BIGINT> |
+
+  Rule: Nested null values
+
+    Scenario: null in nested object
+      When query
+        """
+        SELECT schema_of_json('{"a":{"b":null}}') AS result
+        """
+      Then query result
+        | result                       |
+        | STRUCT<a: STRUCT<b: STRING>> |
+
+    Scenario: null in nested array
+      When query
+        """
+        SELECT schema_of_json('{"a":[null]}') AS result
+        """
+      Then query result
+        | result                    |
+        | STRUCT<a: ARRAY<STRING>>  |
+
+  Rule: Invalid JSON errors
+
+    @sail-bug
+    # Sail doesn't error on invalid JSON - should raise parse error like Spark
+    Scenario: invalid JSON errors
+      When query
+        """
+        SELECT schema_of_json('not json') AS result
+        """
+      Then query error .*
+
+    @sail-bug
+    # Sail doesn't error on unclosed brace - should raise parse error like Spark
+    Scenario: unclosed brace errors
+      When query
+        """
+        SELECT schema_of_json('{"a":1') AS result
+        """
+      Then query error .*
+
+  Rule: Error conditions
+
+    Scenario: integer input errors
+      When query
+        """
+        SELECT schema_of_json(42) AS result
+        """
+      Then query error .*
+
+    Scenario: boolean input errors
+      When query
+        """
+        SELECT schema_of_json(true) AS result
+        """
+      Then query error .*
