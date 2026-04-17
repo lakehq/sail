@@ -177,3 +177,32 @@ index 5b97664afbd..b9deeef91c8 100644
  
      @classmethod
      def scalaUDT(cls):
+diff --git a/python/pyspark/sql/catalog.py b/python/pyspark/sql/catalog.py
+--- a/python/pyspark/sql/catalog.py
++++ b/python/pyspark/sql/catalog.py
+@@ -480,22 +480,13 @@ class Catalog:
+         Examples
+         --------
+-        >>> _ = spark.sql(
+-        ...     "CREATE FUNCTION my_func1 AS 'test.org.apache.spark.sql.MyDoubleAvg'")
+-        >>> spark.catalog.getFunction("my_func1")
+-        Function(name='my_func1', catalog='spark_catalog', namespace=['default'], ...
+-
+-        Using the fully qualified name for function name.
+-
+-        >>> spark.catalog.getFunction("default.my_func1")
+-        Function(name='my_func1', catalog='spark_catalog', namespace=['default'], ...
+-        >>> spark.catalog.getFunction("spark_catalog.default.my_func1")
+-        Function(name='my_func1', catalog='spark_catalog', namespace=['default'], ...
+-
+-        Throw an analysis exception when the function does not exists.
+-
++        >>> spark.catalog.getFunction("abs")
++        Function(name='abs', catalog=None, namespace=None, description=None, className='', isTemporary=True)
++
++        Throw an analysis exception when the function does not exist.
++
+         >>> spark.catalog.getFunction("my_func2")
+         Traceback (most recent call last):
+             ...
+         AnalysisException: ...

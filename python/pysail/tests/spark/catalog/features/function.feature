@@ -28,3 +28,17 @@ Feature: Catalog function queries
   Scenario: Get a missing function raises an error
     When catalog getFunction for this_function_definitely_does_not_exist
     Then the getFunction call raises an error matching (?i)not found|does not exist|cannot find
+
+  Scenario: List functions returns built-in functions
+    When catalog listFunctions
+    Then the listFunctions result is not empty
+    And the listFunctions result contains a function named count
+
+  Scenario: List functions with pattern filters results
+    When catalog listFunctions with pattern to_*
+    Then the listFunctions result is not empty
+    And the listFunctions result contains a function named to_date
+
+  Scenario: List functions with non-matching pattern returns empty
+    When catalog listFunctions with pattern *this_pattern_will_never_match*
+    Then the listFunctions result is empty

@@ -47,6 +47,9 @@ impl SparkFunctionRegistry {
             catalog: None,
             namespace: None,
             name: name.to_string(),
+            // Sail built-in functions do not have descriptions or JVM class names.
+            // Spark JVM would return something like
+            // `org.apache.spark.sql.catalyst.expressions.Abs` for `abs`.
             description: None,
             class_name: String::new(),
             is_temporary: true,

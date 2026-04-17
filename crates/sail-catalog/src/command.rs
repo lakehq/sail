@@ -424,8 +424,12 @@ impl CatalogCommand {
                 let function = manager.get_catalog_function(&function, registry).await?;
                 display.functions().to_record_batch(vec![function])?
             }
-            CatalogCommand::ListFunctions { .. } => {
-                return Err(CatalogError::NotSupported("list functions".to_string()));
+            CatalogCommand::ListFunctions { database, pattern } => {
+                let registry = service.function_registry();
+                let functions = manager
+                    .list_functions_and_temporary(&database, pattern.as_deref(), registry)
+                    .await?;
+                display.functions().to_record_batch(functions)?
             }
             CatalogCommand::DropFunction {
                 function,

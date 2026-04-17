@@ -53,3 +53,33 @@ def check_get_function_error(pattern: str, get_function_result) -> None:
     assert re.search(pattern, str(get_function_result)), (
         f"expected error matching {pattern!r}, got: {get_function_result!r}"
     )
+
+
+@when(parsers.parse("catalog listFunctions with pattern {pattern}"), target_fixture="list_functions_result")
+def catalog_list_functions_with_pattern(pattern: str, spark):
+    """Invoke ``spark.catalog.listFunctions`` with the given pattern."""
+    return spark.catalog.listFunctions(pattern=pattern)
+
+
+@when("catalog listFunctions", target_fixture="list_functions_result")
+def catalog_list_functions(spark):
+    """Invoke ``spark.catalog.listFunctions`` with no arguments."""
+    return spark.catalog.listFunctions()
+
+
+@then(parsers.parse("the listFunctions result contains a function named {name}"))
+def check_list_functions_contains(name: str, list_functions_result) -> None:
+    names = [f.name for f in list_functions_result]
+    assert name in names, f"expected {name!r} in listFunctions result, got names: {names[:20]}"
+
+
+@then("the listFunctions result is not empty")
+def check_list_functions_not_empty(list_functions_result) -> None:
+    assert len(list_functions_result) > 0, "expected listFunctions to return at least one function"
+
+
+@then("the listFunctions result is empty")
+def check_list_functions_empty(list_functions_result) -> None:
+    assert len(list_functions_result) == 0, (
+        f"expected listFunctions to return no functions, got {len(list_functions_result)}"
+    )

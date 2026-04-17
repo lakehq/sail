@@ -125,6 +125,58 @@ impl CatalogManager {
             Err(e) => Err(e),
         }
     }
+
+    /// Lists all functions visible from the given database qualifier.
+    ///
+    /// Consistent with Spark semantics for `SHOW FUNCTIONS` / `catalog.listFunctions()`:
+    /// - Persistent functions from the resolved database are listed first.
+    ///   If the provider does not support persistent functions, this layer is skipped.
+    /// - Built-in functions from the `registry` are included, filtered by `pattern`.
+    /// - Session-registered temporary functions are included, filtered by `pattern`.
+    ///
+    /// There is no deduplication: if a name is shadowed at a higher precedence level,
+    /// all entries are still returned (consistent with Spark).
+    pub async fn list_functions_and_temporary<T: AsRef<str>>(
+        &self,
+        database: &[T],
+        pattern: Option<&str>,
+        registry: &dyn FunctionRegistry,
+    ) -> CatalogResult<Vec<FunctionStatus>> {
+        use crate::utils::match_pattern;
+
+        // 1. Persistent functions from the catalog provider.
+        let (provider, db_namespace) = self.resolve_database_by_qualifier(database)?;
+        let mut functions: Vec<FunctionStatus> = match provider.list_functions(&db_namespace).await
+        {
+            Ok(funcs) => funcs
+                .into_iter()
+                .filter(|f| match_pattern(&f.name, pattern))
+                .collect(),
+            // Provider does not support persistent functions — skip silently.
+            Err(CatalogError::NotSupported(_)) => vec![],
+            Err(e) => return Err(e),
+        };
+
+        // 2. Built-in functions from the session function registry.
+        functions.extend(registry.list_functions(pattern));
+
+        // 3. Session-registered temporary functions.
+        let state = self.state()?;
+        for name in state.functions.keys() {
+            if match_pattern(name, pattern) {
+                functions.push(FunctionStatus {
+                    catalog: None,
+                    namespace: None,
+                    name: name.to_string(),
+                    description: None,
+                    class_name: String::new(),
+                    is_temporary: true,
+                });
+            }
+        }
+
+        Ok(functions)
+    }
 }
 
 #[cfg(test)]
@@ -180,21 +232,13 @@ mod tests {
             )
             .await;
 
-        match err {
-            Err(CatalogError::NotFound(CatalogObject::Function, name)) => {
-                assert_eq!(name, "count");
-            }
-            Ok(status) => {
-                return Err(CatalogError::Internal(format!(
-                    "expected NotFound, got status: {status:?}"
-                )));
-            }
-            Err(other) => {
-                return Err(CatalogError::Internal(format!(
-                    "unexpected error: {other:?}"
-                )));
-            }
-        }
+        assert!(
+            matches!(
+                &err,
+                Err(CatalogError::NotFound(CatalogObject::Function, name)) if name == "count"
+            ),
+            "expected NotFound for 'count', got: {err:?}"
+        );
         Ok(())
     }
 
