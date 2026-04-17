@@ -114,8 +114,8 @@ impl ScalarUDFImpl for SparkSchemaOfCsv {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Utf8, true),
+                        Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+                        Field::new(SAIL_MAP_VALUE_FIELD_NAME, DataType::Utf8, true),
                     ])),
                     false,
                 )),
