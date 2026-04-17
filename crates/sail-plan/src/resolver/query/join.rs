@@ -12,8 +12,10 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
-/// This matches Spark's `ExtractPythonUDFFromJoinCondition` rule, which only extracts
-/// conjuncts that ARE Python UDF calls, not ones that merely contain a UDF in a sub-expression.
+/// This matches Spark SQL's `ExtractPythonUDFFromJoinCondition` analyzer rule
+/// (`org.apache.spark.sql.catalyst.optimizer.ExtractPythonUDFFromJoinCondition`),
+/// which only extracts conjuncts that ARE Python UDF calls, not ones that merely
+/// contain a UDF in a sub-expression.
 fn expr_is_python_udf(expr: &Expr) -> bool {
     match expr {
         Expr::ScalarFunction(sf) => sf
