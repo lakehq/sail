@@ -28,7 +28,7 @@ use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
     DeltaOperation,
 };
-use crate::table::{open_table_with_object_store, open_table_with_object_store_and_table_config};
+use crate::table::open_table_with_object_store_and_table_config;
 use crate::{create_delta_provider, create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
@@ -326,9 +326,18 @@ impl TableFormat for DeltaTableFormat {
             .get_store(&url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let table = open_table_with_object_store(url, object_store, Default::default())
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        // Only protocol and metadata are needed for ALTER TABLE; skip loading file-level actions.
+        let table = open_table_with_object_store_and_table_config(
+            url,
+            object_store,
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let snapshot = table
             .snapshot()

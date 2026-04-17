@@ -524,9 +524,11 @@ impl CatalogProvider for OneLakeCatalogProvider {
         _table: &str,
         _options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "alter table in OneLake catalog".to_string(),
-        ))
+        // OneLake tables commonly use Delta storage, and property updates may already
+        // be committed at the storage layer before the catalog provider is called.
+        // Until OneLake REST propagation is implemented, treat this as a no-op so we
+        // do not report a failure after the underlying table has already been altered.
+        Ok(())
     }
 
     async fn create_view(
