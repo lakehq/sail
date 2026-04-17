@@ -12,7 +12,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
-/// This matches Spark SQL's `ExtractPythonUDFFromJoinCondition` analyzer rule
+/// This matches Spark SQL's `ExtractPythonUDFFromJoinCondition` optimizer rule
 /// (`org.apache.spark.sql.catalyst.optimizer.ExtractPythonUDFFromJoinCondition`),
 /// which only extracts conjuncts that ARE Python UDF calls, not ones that merely
 /// contain a UDF in a sub-expression.
@@ -29,6 +29,10 @@ fn expr_is_python_udf(expr: &Expr) -> bool {
 }
 
 /// Returns a string representation of the join type suitable for error messages.
+/// `JoinType::Inner` is not included because this function is only called for
+/// non-inner join types (see the call site in `resolve_query_join`).
+/// `JoinType::LeftMark` and `JoinType::RightMark` are included for exhaustiveness,
+/// even though the spec-to-DataFusion mapping never produces them via the ON-condition path.
 fn join_type_name(join_type: JoinType) -> &'static str {
     match join_type {
         JoinType::Left => "LEFT OUTER",
@@ -38,19 +42,18 @@ fn join_type_name(join_type: JoinType) -> &'static str {
         JoinType::LeftAnti => "LEFT ANTI",
         JoinType::RightSemi => "RIGHT SEMI",
         JoinType::RightAnti => "RIGHT ANTI",
-        JoinType::Inner => "INNER",
-        JoinType::LeftMark => "LEFT MARK",
-        JoinType::RightMark => "RIGHT MARK",
+        JoinType::Inner | JoinType::LeftMark | JoinType::RightMark => {
+            unreachable!("join_type_name should not be called for {:?}", join_type)
+        }
     }
 }
 
-fn implicit_cartesian_product_message() -> &'static str {
+const IMPLICIT_CARTESIAN_PRODUCT_MSG: &str =
     "Detected implicit cartesian product for INNER join between logical plans. \
     Join condition is missing or trivial. \
     Either: use the CROSS JOIN syntax to allow cartesian products between \
     these relations, or: enable implicit cartesian products by setting the \
-    configuration variable spark.sql.crossJoin.enabled=true;"
-}
+    configuration variable spark.sql.crossJoin.enabled=true;";
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_join(
@@ -90,7 +93,7 @@ impl PlanResolver<'_> {
                 // we need to check whether implicit cartesian products are allowed.
                 if join_type.is_some() && !self.config.cross_join_enabled {
                     return Err(PlanError::AnalysisError(
-                        implicit_cartesian_product_message().to_string(),
+                        IMPLICIT_CARTESIAN_PRODUCT_MSG.to_string(),
                     ));
                 }
                 Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
@@ -112,7 +115,7 @@ impl PlanResolver<'_> {
                     .data;
 
                 // Validate Python UDF usage in the join condition, matching
-                // Spark's ExtractPythonUDFFromJoinCondition analysis rule.
+                // Spark's ExtractPythonUDFFromJoinCondition optimizer rule.
                 let conjuncts = split_conjunction(&condition);
                 let (udf_conjuncts, other_conjuncts): (Vec<_>, Vec<_>) = conjuncts
                     .into_iter()
@@ -120,11 +123,16 @@ impl PlanResolver<'_> {
                 if !udf_conjuncts.is_empty() {
                     match join_type {
                         JoinType::Inner => {
-                            // For inner joins, Python UDF conditions become a Filter on top of
-                            // a cross join when there are no remaining equi-join conditions.
+                            // In Spark, Python UDF conjuncts in an inner join are extracted into a
+                            // Filter on top of a cross join (using only the non-UDF conjuncts).
+                            // DataFusion can evaluate Python UDFs inside join conditions directly,
+                            // so we pass the full condition to `join_on` without extracting them.
+                            // We only need to reject the case where there are no non-UDF conjuncts
+                            // and implicit cross joins are disabled, because that would degrade to
+                            // a cartesian product.
                             if other_conjuncts.is_empty() && !self.config.cross_join_enabled {
                                 return Err(PlanError::AnalysisError(
-                                    implicit_cartesian_product_message().to_string(),
+                                    IMPLICIT_CARTESIAN_PRODUCT_MSG.to_string(),
                                 ));
                             }
                         }
