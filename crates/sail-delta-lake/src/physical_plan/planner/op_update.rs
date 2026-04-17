@@ -13,7 +13,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::common::{DataFusionError, Result, ToDFSchema};
+use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use datafusion::common::{DFSchema, DataFusionError, Result, ToDFSchema};
 use datafusion::physical_expr::expressions::{CaseExpr, CastExpr, Column};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -21,6 +22,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::datasource::RowLevelWriteInfo;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
@@ -31,6 +33,7 @@ use crate::physical_plan::{
     DeltaDiscoveryExec, DeltaPhysicalExprAdapterFactory, DeltaScanByAddsExec,
     DeltaWriterExecOptions,
 };
+use crate::table::DeltaSnapshot;
 
 pub async fn build_update_plan(
     ctx: &PlannerContext<'_>,
@@ -62,46 +65,22 @@ pub async fn build_update_plan(
         None => None,
     };
 
-    let partition_only = match &condition {
-        Some(cond) => !predicate_requires_stats(&cond.expr, &partition_columns),
-        None => true,
-    };
-
-    let log_replay_options = LogReplayOptions {
-        include_stats_json: !partition_only,
-        ..Default::default()
-    };
-
-    let meta_scan: Arc<dyn ExecutionPlan> =
-        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
-
-    let meta_scan: Arc<dyn ExecutionPlan> = match &condition {
-        Some(cond) => {
-            build_metadata_filter(ctx.session(), meta_scan, snapshot_state, cond.expr.clone())?
-        }
-        None => meta_scan,
-    };
-
-    // UPDATE must always scan file content to produce updated rows, even when the predicate
-    // touches only partition columns. `partition_scan=true` is a DELETE optimization that emits
-    // empty batches and drops touched files — for UPDATE that would silently delete data.
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
-        meta_scan,
-        ctx.table_url().clone(),
-        None,
-        None,
+    let find_files_exec = build_find_files_plan(
+        ctx,
+        snapshot_state,
         version,
-        partition_columns.clone(),
-        false,
-    )?);
+        condition.as_ref(),
+        &partition_columns,
+    )
+    .await?;
 
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-        Arc::clone(&find_files_exec),
+        find_files_exec,
         Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
-    let scan_exec = Arc::new(DeltaScanByAddsExec::new(
+    let scan_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
         version,
@@ -113,9 +92,84 @@ pub async fn build_update_plan(
         None,
     ));
 
+    let projection_exec = build_update_projection(
+        ctx,
+        scan_exec,
+        &table_schema,
+        &table_df_schema,
+        physical_condition,
+        assignments,
+    )?;
+
+    let operation = Some(DeltaOperation::Update {
+        predicate: condition.and_then(|c| c.source),
+    });
+
+    assemble_commit_plan(
+        projection_exec,
+        Some(find_files_exec),
+        ctx.table_url().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone()),
+        ctx.metadata_configuration().clone(),
+        partition_columns,
+        ctx.table_exists(),
+        table_schema,
+        operation,
+    )
+}
+
+async fn build_find_files_plan(
+    ctx: &PlannerContext<'_>,
+    snapshot: &DeltaSnapshot,
+    version: i64,
+    condition: Option<&ExprWithSource>,
+    partition_columns: &[String],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let partition_only = match condition {
+        Some(cond) => !predicate_requires_stats(&cond.expr, partition_columns),
+        None => true,
+    };
+
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: !partition_only,
+        ..Default::default()
+    };
+
+    let meta_scan: Arc<dyn ExecutionPlan> =
+        build_log_replay_pipeline_with_options(ctx, snapshot, log_replay_options).await?;
+
+    let meta_scan: Arc<dyn ExecutionPlan> = match condition {
+        Some(cond) => build_metadata_filter(ctx.session(), meta_scan, snapshot, cond.expr.clone())?,
+        None => meta_scan,
+    };
+
+    // UPDATE must always scan file content to produce updated rows, even when the predicate
+    // touches only partition columns. `partition_scan=true` is a DELETE optimization that emits
+    // empty batches and drops touched files — for UPDATE that would silently delete data.
+    Ok(Arc::new(DeltaDiscoveryExec::with_input(
+        meta_scan,
+        ctx.table_url().clone(),
+        None,
+        None,
+        version,
+        partition_columns.to_vec(),
+        false,
+    )?))
+}
+
+fn build_update_projection(
+    ctx: &PlannerContext<'_>,
+    scan_exec: Arc<dyn ExecutionPlan>,
+    table_schema: &ArrowSchemaRef,
+    table_df_schema: &DFSchema,
+    physical_condition: Option<Arc<dyn PhysicalExpr>>,
+    assignments: Vec<(String, ExprWithSource)>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let scan_schema = scan_exec.schema();
+
     let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
     let adapter = adapter_factory
-        .create(table_schema.clone(), scan_exec.schema())
+        .create(table_schema.clone(), scan_schema.clone())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let adapted_condition = match physical_condition {
@@ -127,16 +181,11 @@ pub async fn build_update_plan(
         None => None,
     };
 
-    let scan_schema = scan_exec.schema();
-
-    // Map assignment column name (lowercase) → adapted RHS physical expression cast to the target
-    // column's type. Casting is required because the RHS expression may not naturally carry the
-    // column's declared type (e.g. a literal NULL has type Null).
     let mut assignment_exprs: HashMap<String, Arc<dyn PhysicalExpr>> = HashMap::new();
     for (col_name, rhs) in assignments {
         let rhs_physical = ctx
             .session()
-            .create_physical_expr(rhs.expr.clone(), &table_df_schema)?;
+            .create_physical_expr(rhs.expr.clone(), table_df_schema)?;
         let adapted_rhs = adapter
             .rewrite(rhs_physical)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -176,22 +225,8 @@ pub async fn build_update_plan(
         projection_exprs.push((expr, name));
     }
 
-    let projection_exec: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(projection_exprs, scan_exec)?);
-
-    let operation = Some(DeltaOperation::Update {
-        predicate: condition.and_then(|c| c.source),
-    });
-
-    assemble_commit_plan(
-        projection_exec,
-        Some(find_files_exec),
-        ctx.table_url().clone(),
-        DeltaWriterExecOptions::from(ctx.options().clone()),
-        ctx.metadata_configuration().clone(),
-        partition_columns,
-        ctx.table_exists(),
-        table_schema,
-        operation,
-    )
+    Ok(Arc::new(ProjectionExec::try_new(
+        projection_exprs,
+        scan_exec,
+    )?))
 }

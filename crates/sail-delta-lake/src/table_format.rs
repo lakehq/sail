@@ -8,8 +8,8 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
-    MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo,
-    SourceInfo, TableFormat, TableFormatRegistry,
+    MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand, RowLevelTargetInfo,
+    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::error::DataSourceResult;
@@ -265,48 +265,23 @@ impl TableFormat for DeltaTableFormat {
 
         match info.command {
             RowLevelCommand::Delete => {
-                let table_url = Self::parse_table_url(ctx, vec![info.target.path]).await?;
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
                 })?;
-                let delta_options = resolve_delta_write_options(info.target.options)?;
-                let delete_config = DeltaPlannerConfig::new(
-                    table_url,
-                    delta_options,
-                    HashMap::new(),
-                    Vec::new(),
-                    None,
-                    true,
-                );
-                let delete_ctx = PlannerContext::new(ctx, delete_config);
+                let delete_ctx =
+                    Self::build_row_level_planner_context(ctx, &info.target, Vec::new()).await?;
                 plan_delete(&delete_ctx, condition).await
             }
             RowLevelCommand::Merge => {
-                let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
-                let merge_config = DeltaPlannerConfig::new(
-                    table_url,
-                    delta_options,
-                    HashMap::new(),
-                    info.target.partition_by.clone(),
-                    None,
-                    true,
-                );
-                let merge_ctx = PlannerContext::new(ctx, merge_config);
+                let partition_by = info.target.partition_by.clone();
+                let merge_ctx =
+                    Self::build_row_level_planner_context(ctx, &info.target, partition_by).await?;
                 plan_merge(&merge_ctx, info).await
             }
             RowLevelCommand::Update => {
-                let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
-                let update_config = DeltaPlannerConfig::new(
-                    table_url,
-                    delta_options,
-                    HashMap::new(),
-                    info.target.partition_by.clone(),
-                    None,
-                    true,
-                );
-                let update_ctx = PlannerContext::new(ctx, update_config);
+                let partition_by = info.target.partition_by.clone();
+                let update_ctx =
+                    Self::build_row_level_planner_context(ctx, &info.target, partition_by).await?;
                 plan_update(&update_ctx, info).await
             }
         }
@@ -320,6 +295,24 @@ impl DeltaTableFormat {
             (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
+    }
+
+    async fn build_row_level_planner_context<'a>(
+        ctx: &'a dyn Session,
+        target: &RowLevelTargetInfo,
+        partition_by: Vec<String>,
+    ) -> Result<PlannerContext<'a>> {
+        let table_url = Self::parse_table_url(ctx, vec![target.path.clone()]).await?;
+        let delta_options = resolve_delta_write_options(target.options.clone())?;
+        let config = DeltaPlannerConfig::new(
+            table_url,
+            delta_options,
+            HashMap::new(),
+            partition_by,
+            None,
+            true,
+        );
+        Ok(PlannerContext::new(ctx, config))
     }
 }
 
