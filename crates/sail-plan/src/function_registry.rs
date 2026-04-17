@@ -50,6 +50,8 @@ impl SparkFunctionRegistry {
             // Sail built-in functions do not have descriptions or JVM class names.
             // Spark JVM would return something like
             // `org.apache.spark.sql.catalyst.expressions.Abs` for `abs`.
+            // Descriptions (docstrings) for built-in functions could be added in the future
+            // if function metadata is annotated in the function registry.
             description: None,
             class_name: String::new(),
             is_temporary: true,

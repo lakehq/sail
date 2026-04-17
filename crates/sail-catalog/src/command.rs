@@ -427,7 +427,7 @@ impl CatalogCommand {
             CatalogCommand::ListFunctions { database, pattern } => {
                 let registry = service.function_registry();
                 let functions = manager
-                    .list_functions_and_temporary(&database, pattern.as_deref(), registry)
+                    .list_all_functions(&database, pattern.as_deref(), registry)
                     .await?;
                 display.functions().to_record_batch(functions)?
             }

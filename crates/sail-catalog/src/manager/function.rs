@@ -131,12 +131,14 @@ impl CatalogManager {
     /// Consistent with Spark semantics for `SHOW FUNCTIONS` / `catalog.listFunctions()`:
     /// - Persistent functions from the resolved database are listed first.
     ///   If the provider does not support persistent functions, this layer is skipped.
+    ///   Pattern filtering is applied at this level because the `CatalogProvider` trait does
+    ///   not accept a pattern argument (consistent with how `list_tables` is handled).
     /// - Built-in functions from the `registry` are included, filtered by `pattern`.
     /// - Session-registered temporary functions are included, filtered by `pattern`.
     ///
     /// There is no deduplication: if a name is shadowed at a higher precedence level,
     /// all entries are still returned (consistent with Spark).
-    pub async fn list_functions_and_temporary<T: AsRef<str>>(
+    pub async fn list_all_functions<T: AsRef<str>>(
         &self,
         database: &[T],
         pattern: Option<&str>,
