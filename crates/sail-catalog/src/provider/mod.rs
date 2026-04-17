@@ -7,7 +7,7 @@ pub use options::*;
 pub use runtime::*;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
-use crate::error::CatalogResult;
+use crate::error::{CatalogError, CatalogResult};
 
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
@@ -88,4 +88,20 @@ pub trait CatalogProvider: Send + Sync {
         view: &str,
         options: DropViewOptions,
     ) -> CatalogResult<()>;
+
+    /// Invalidates any cached metadata for the given table and refreshes it.
+    ///
+    /// The default implementation verifies that the table or view exists but
+    /// otherwise does nothing, which matches Sail's architecture where catalog
+    /// providers load metadata on demand and do not cache it between calls.
+    /// Providers that maintain their own metadata caches should override this
+    /// method to invalidate those caches.
+    async fn refresh_table(&self, database: &Namespace, table: &str) -> CatalogResult<()> {
+        // The table must exist in either the table namespace or the view namespace.
+        match self.get_table(database, table).await {
+            Ok(_) => Ok(()),
+            Err(CatalogError::NotFound(_, _)) => self.get_view(database, table).await.map(|_| ()),
+            Err(e) => Err(e),
+        }
+    }
 }

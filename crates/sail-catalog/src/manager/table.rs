@@ -88,4 +88,29 @@ impl CatalogManager {
         }
         self.get_view(reference).await
     }
+
+    /// Invalidates any cached metadata for the given table and refreshes it.
+    ///
+    /// Temporary views are session-scoped and always reflect the latest state,
+    /// so refreshing them is a no-op (the existence of the view is still
+    /// verified). For persistent tables and views, the call is delegated to
+    /// the underlying catalog provider.
+    pub async fn refresh_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<()> {
+        if let [name] = table {
+            match self.get_temporary_view(name.as_ref()).await {
+                Ok(_) => return Ok(()),
+                Err(CatalogError::NotFound(_, _)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if let [x @ .., name] = table {
+            if self.state()?.is_global_temporary_view_database(x) {
+                // Verify the global temporary view exists.
+                self.get_global_temporary_view(name.as_ref()).await?;
+                return Ok(());
+            }
+        }
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.refresh_table(&database, &table).await
+    }
 }

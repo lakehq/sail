@@ -124,6 +124,12 @@ pub enum CatalogCommand {
         table: Vec<String>,
         extended: bool,
     },
+    RefreshTable {
+        table: Vec<String>,
+    },
+    RefreshByPath {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -165,6 +171,8 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
+            CatalogCommand::RefreshTable { .. } => "RefreshTable",
+            CatalogCommand::RefreshByPath { .. } => "RefreshByPath",
         }
     }
 
@@ -210,7 +218,9 @@ impl CatalogCommand {
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
-            | CatalogCommand::DropView { .. } => display.bools().schema()?,
+            | CatalogCommand::DropView { .. }
+            | CatalogCommand::RefreshTable { .. }
+            | CatalogCommand::RefreshByPath { .. } => display.bools().schema()?,
         };
         Ok(schema)
     }
@@ -480,6 +490,16 @@ impl CatalogCommand {
             }
             CatalogCommand::CreateView { view, options } => {
                 manager.create_view(&view, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::RefreshTable { table } => {
+                manager.refresh_table(&table).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::RefreshByPath { path: _ } => {
+                // Sail does not maintain a path-keyed dataframe cache, so there
+                // is nothing to invalidate. The call is accepted for API
+                // compatibility with PySpark.
                 display.bools().to_record_batch(vec![true])?
             }
         };

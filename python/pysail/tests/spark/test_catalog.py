@@ -82,3 +82,56 @@ class TestListDatabases:
         databases = spark.catalog.listDatabases()
         db_names = [db.name for db in databases]
         assert "default" in db_names
+
+
+class TestRefreshTable:
+    """Test spark.catalog.refreshTable()."""
+
+    @pytest.fixture
+    def refresh_table(self, spark):
+        spark.sql("DROP TABLE IF EXISTS refresh_api_tbl")
+        spark.sql("CREATE TABLE refresh_api_tbl (id INT, name STRING) USING parquet")
+        spark.sql("INSERT INTO refresh_api_tbl VALUES (1, 'a'), (2, 'b')")
+        yield "refresh_api_tbl"
+        spark.sql("DROP TABLE IF EXISTS refresh_api_tbl")
+
+    def test_refresh_table_returns_none(self, spark, refresh_table):
+        """refreshTable returns None (matching PySpark's void semantics)."""
+        assert spark.catalog.refreshTable(refresh_table) is None
+
+    def test_refresh_table_does_not_invalidate_data(self, spark, refresh_table):
+        """refreshTable keeps the table data accessible."""
+        spark.catalog.refreshTable(refresh_table)
+        rows = spark.table(refresh_table).orderBy("id").collect()
+        assert [(r.id, r.name) for r in rows] == [(1, "a"), (2, "b")]
+
+    def test_refresh_table_qualified_name(self, spark, refresh_table):
+        """refreshTable accepts a fully qualified name."""
+        catalog_name = spark.catalog.currentCatalog()
+        db_name = spark.catalog.currentDatabase()
+        assert spark.catalog.refreshTable(f"{catalog_name}.{db_name}.{refresh_table}") is None
+
+    def test_refresh_table_missing_raises(self, spark):
+        """refreshTable raises when the table does not exist."""
+        with pytest.raises(Exception):  # noqa: B017, PT011
+            spark.catalog.refreshTable("no_such_refresh_api_tbl")
+
+    def test_refresh_table_temp_view(self, spark):
+        """refreshTable succeeds for a temporary view."""
+        spark.sql("CREATE OR REPLACE TEMPORARY VIEW refresh_api_tmp AS SELECT 1 AS x")
+        try:
+            assert spark.catalog.refreshTable("refresh_api_tmp") is None
+        finally:
+            spark.catalog.dropTempView("refresh_api_tmp")
+
+
+class TestRefreshByPath:
+    """Test spark.catalog.refreshByPath()."""
+
+    def test_refresh_by_path_returns_none(self, spark, tmp_path):
+        """refreshByPath returns None and does not error for any path."""
+        assert spark.catalog.refreshByPath(str(tmp_path)) is None
+
+    def test_refresh_by_path_nonexistent_is_accepted(self, spark):
+        """refreshByPath accepts paths that do not exist (matching Spark's lenient semantics)."""
+        assert spark.catalog.refreshByPath("/nonexistent/path/for/refresh") is None

@@ -169,8 +169,14 @@ impl PlanResolver<'_> {
             CommandNode::CacheTable { .. } => Err(PlanError::todo("PlanNode::CacheTable")),
             CommandNode::UncacheTable { .. } => Err(PlanError::todo("PlanNode::UncacheTable")),
             CommandNode::ClearCache => Err(PlanError::todo("PlanNode::ClearCache")),
-            CommandNode::RefreshTable { .. } => Err(PlanError::todo("PlanNode::RefreshTable")),
-            CommandNode::RefreshByPath { .. } => Err(PlanError::todo("PlanNode::RefreshByPath")),
+            CommandNode::RefreshTable { table } => {
+                self.resolve_catalog_command(CatalogCommand::RefreshTable {
+                    table: table.into(),
+                })
+            }
+            CommandNode::RefreshByPath { path } => {
+                self.resolve_catalog_command(CatalogCommand::RefreshByPath { path })
+            }
             CommandNode::CurrentCatalog => {
                 self.resolve_catalog_command(CatalogCommand::CurrentCatalog)
             }

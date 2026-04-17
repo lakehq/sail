@@ -102,12 +102,12 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "refreshByPath",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.Catalog",
     "function": "refreshTable",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.Catalog",
