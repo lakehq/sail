@@ -39,7 +39,7 @@ use sail_data_source::options::gen::DeltaReadOptions;
 
 use crate::delta_log::resolve_version_timestamp;
 pub use crate::kernel::snapshot::DeltaSnapshot;
-use crate::kernel::DeltaTableConfig;
+use crate::kernel::DeltaSnapshotConfig;
 use crate::logical::table_source::DeltaTableSource;
 use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
@@ -55,7 +55,7 @@ pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: Option<Arc<DeltaSnapshot>>,
     /// the load options used during load
-    pub config: DeltaTableConfig,
+    pub config: DeltaSnapshotConfig,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
@@ -65,7 +65,7 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
-    pub fn new(log_store: LogStoreRef, config: DeltaTableConfig) -> Self {
+    pub fn new(log_store: LogStoreRef, config: DeltaSnapshotConfig) -> Self {
         Self {
             state: None,
             log_store,
@@ -186,7 +186,7 @@ pub async fn open_table_with_object_store_and_table_config(
     location: Url,
     object_store: Arc<dyn ObjectStore>,
     storage_options: StorageConfig,
-    table_config: DeltaTableConfig,
+    table_config: DeltaSnapshotConfig,
 ) -> DeltaResult<DeltaTable> {
     let log_store =
         create_logstore_with_object_store(object_store.clone(), location, storage_options)?;
@@ -202,7 +202,7 @@ pub async fn open_table_with_object_store_and_table_config_at_version(
     location: Url,
     object_store: Arc<dyn ObjectStore>,
     storage_options: StorageConfig,
-    table_config: DeltaTableConfig,
+    table_config: DeltaSnapshotConfig,
     version: i64,
 ) -> DeltaResult<DeltaTable> {
     let log_store =
@@ -256,7 +256,7 @@ pub async fn create_delta_provider(
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
     let table_config = if options.metadata_as_data_read {
-        DeltaTableConfig {
+        DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
         }
@@ -308,7 +308,7 @@ pub async fn create_delta_source(
     // Create a new DeltaTable instance but do not load it yet.
     // For metadata-as-data reads, avoid eagerly loading active file metadata on the driver.
     let table_config = if options.metadata_as_data_read {
-        DeltaTableConfig {
+        DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
         }

@@ -18,9 +18,11 @@
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/table/builder.rs>
 
-/// Configuration options for the local Delta table integration.
+/// Configuration options for loading Delta table snapshots.
+///
+/// Controls how the log-replay reads the `_delta_log`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeltaTableConfig {
+pub struct DeltaSnapshotConfig {
     /// Whether snapshots should eagerly load file level metadata.
     pub require_files: bool,
     /// Number of log files buffered concurrently when replaying the Delta log.
@@ -29,7 +31,7 @@ pub struct DeltaTableConfig {
     pub log_batch_size: usize,
 }
 
-impl Default for DeltaTableConfig {
+impl Default for DeltaSnapshotConfig {
     fn default() -> Self {
         Self {
             require_files: true,

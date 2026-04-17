@@ -23,7 +23,7 @@ use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
 use crate::physical_plan::planner::utils::LogReplayOptions;
-use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
+use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
@@ -287,7 +287,7 @@ pub(crate) async fn plan_delta_scan(
 
     let planner_ctx = PlannerContext::new(
         session,
-        PlannerTableConfig::new(
+        DeltaPlannerConfig::new(
             table_url.clone(),
             planner_options,
             HashMap::new(),

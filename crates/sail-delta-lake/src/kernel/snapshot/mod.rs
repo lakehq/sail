@@ -38,7 +38,7 @@ use crate::kernel::checkpoints::{
 };
 use crate::kernel::log_segment::ReplayedTableHeader;
 pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
-use crate::kernel::{DeltaTableConfig, SchemaRef};
+use crate::kernel::{DeltaSnapshotConfig, SchemaRef};
 use crate::schema::{arrow_field_physical_name, arrow_schema_reorder_partitions};
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_PATH,
@@ -62,7 +62,7 @@ mod stats;
 pub struct DeltaSnapshot {
     version: i64,
     table_url: Url,
-    config: DeltaTableConfig,
+    config: DeltaSnapshotConfig,
     protocol: Protocol,
     metadata: Metadata,
     table_properties: TableProperties,
@@ -114,7 +114,7 @@ impl Clone for DeltaSnapshot {
 impl DeltaSnapshot {
     pub(crate) async fn try_new(
         log_store: &dyn LogStore,
-        config: DeltaTableConfig,
+        config: DeltaSnapshotConfig,
         version: Option<i64>,
         replay_hint: Option<&ReplayedTableHeader>,
     ) -> DeltaResult<Self> {
@@ -152,7 +152,7 @@ impl DeltaSnapshot {
 
     fn from_replayed_state(
         log_store: &dyn LogStore,
-        config: DeltaTableConfig,
+        config: DeltaSnapshotConfig,
         replayed: ReplayedTableState,
     ) -> DeltaResult<Self> {
         Self::from_replayed_parts(
@@ -171,7 +171,7 @@ impl DeltaSnapshot {
 
     fn from_replayed_header(
         log_store: &dyn LogStore,
-        config: DeltaTableConfig,
+        config: DeltaSnapshotConfig,
         replayed: ReplayedTableHeader,
     ) -> DeltaResult<Self> {
         let arrow_schema = Arc::new(replayed.metadata.parse_schema_arrow()?);
@@ -197,7 +197,7 @@ impl DeltaSnapshot {
     #[expect(clippy::too_many_arguments)]
     fn from_replayed_parts(
         log_store: &dyn LogStore,
-        config: DeltaTableConfig,
+        config: DeltaSnapshotConfig,
         version: i64,
         protocol: Protocol,
         metadata: Metadata,
@@ -311,7 +311,7 @@ impl DeltaSnapshot {
         self.domain_metadata.as_ref()
     }
 
-    pub fn load_config(&self) -> &DeltaTableConfig {
+    pub fn load_config(&self) -> &DeltaSnapshotConfig {
         &self.config
     }
 
@@ -902,7 +902,7 @@ mod tests {
 
     use super::DeltaSnapshot;
     use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
-    use crate::kernel::DeltaTableConfig;
+    use crate::kernel::DeltaSnapshotConfig;
     use crate::logical::table_source::DeltaTableSource;
     use crate::spec::{
         Add, ColumnMappingMode, ColumnMetadataKey, DataType, DomainMetadata, Metadata,
@@ -948,7 +948,7 @@ mod tests {
         DeltaSnapshot {
             version: 0,
             table_url: Url::parse("file:///tmp/test-table").unwrap(),
-            config: DeltaTableConfig::default(),
+            config: DeltaSnapshotConfig::default(),
             protocol,
             metadata: metadata.clone(),
             table_properties,

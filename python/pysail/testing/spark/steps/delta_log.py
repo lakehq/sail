@@ -395,6 +395,41 @@ def delta_log_json_file_matches_snapshot(
     assert obj == snapshot
 
 
+@then(parsers.parse("delta log JSON file {filename} in {location_var} contains"))
+def delta_log_json_file_contains(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    datatable,
+) -> None:
+    """Assert that specific fields in a delta log JSON file match expected values.
+
+    The datatable must have two columns: ``path`` and ``value``.
+    ``path`` is a JSONPath expression (without leading ``$``).
+    ``value`` is a JSON-encoded expected value.
+    """
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    obj = _read_delta_log_json_file(Path(location.path), filename)
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+        "expected datatable with columns: | path | value |"
+    )
+    for row in rows:
+        if not row or len(row) < 2:  # noqa: PLR2004
+            continue
+        path, raw_value = row[0], row[1]
+        actual = _get_by_path(obj, path)
+        expected = _parse_expected_value(raw_value)
+        assert actual == expected, f"field {path!r}: expected {expected!r}, got {actual!r}"
+
+
 @given(
     parsers.parse("delta log JSON files for versions {versions} in {location_var} are backdated by {seconds:d} seconds")
 )
