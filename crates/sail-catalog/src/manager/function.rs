@@ -66,10 +66,11 @@ impl CatalogManager {
         let Some(udf) = self.get_function(name)? else {
             return Ok(None);
         };
+        let name = Self::canonical_function_name(udf.name());
         Ok(Some(FunctionStatus {
             catalog: None,
             namespace: None,
-            name: udf.name().to_string(),
+            name: name.to_string(),
             description: None,
             class_name: String::new(),
             is_temporary: true,
@@ -123,5 +124,254 @@ impl CatalogManager {
             Err(CatalogError::NotFound(_, _)) => Ok(false),
             Err(e) => Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::DataType;
+    use datafusion_expr::{create_udf, ColumnarValue, ScalarUDF, Volatility};
+
+    use super::*;
+    use crate::manager::CatalogManagerOptions;
+    use crate::provider::{
+        CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
+        DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    };
+
+    #[tokio::test]
+    async fn test_temporary_function_status_uses_canonical_name() -> CatalogResult<()> {
+        let manager = test_catalog_manager()?;
+        manager.register_function(test_udf("MiXeD"))?;
+
+        let status = manager
+            .get_catalog_function(&["mixed"], &TestFunctionRegistry::default())
+            .await?;
+        assert_eq!(status.name, "mixed");
+        assert!(status.is_temporary);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_temporary_function_shadows_built_in() -> CatalogResult<()> {
+        let manager = test_catalog_manager()?;
+        manager.register_function(test_udf("count"))?;
+
+        let status = manager
+            .get_catalog_function(&["count"], &TestFunctionRegistry::with_builtin("count"))
+            .await?;
+        assert_eq!(status.name, "count");
+        assert_eq!(status.class_name, "");
+        assert!(status.is_temporary);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_qualified_function_does_not_consult_built_in_registry() -> CatalogResult<()> {
+        let manager = test_catalog_manager()?;
+
+        let err = manager
+            .get_catalog_function(
+                &["default", "count"],
+                &TestFunctionRegistry::with_builtin("count"),
+            )
+            .await;
+
+        match err {
+            Err(CatalogError::NotFound(CatalogObject::Function, name)) => {
+                assert_eq!(name, "count");
+            }
+            Ok(status) => {
+                return Err(CatalogError::Internal(format!(
+                    "expected NotFound, got status: {status:?}"
+                )));
+            }
+            Err(other) => {
+                return Err(CatalogError::Internal(format!(
+                    "unexpected error: {other:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn test_catalog_manager() -> CatalogResult<CatalogManager> {
+        let provider: Arc<dyn CatalogProvider> = Arc::new(TestCatalogProvider);
+        let catalogs = HashMap::from([(String::from("sail"), provider)]);
+        CatalogManager::try_new(CatalogManagerOptions {
+            catalogs,
+            default_catalog: "sail".to_string(),
+            default_database: vec!["default".to_string()],
+            global_temporary_database: vec!["global_temp".to_string()],
+        })
+    }
+
+    #[derive(Debug)]
+    struct TestCatalogProvider;
+
+    #[async_trait::async_trait]
+    impl CatalogProvider for TestCatalogProvider {
+        fn get_name(&self) -> &str {
+            "sail"
+        }
+
+        async fn create_database(
+            &self,
+            _database: &Namespace,
+            _options: CreateDatabaseOptions,
+        ) -> CatalogResult<sail_common_datafusion::catalog::DatabaseStatus> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn get_database(
+            &self,
+            _database: &Namespace,
+        ) -> CatalogResult<sail_common_datafusion::catalog::DatabaseStatus> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn list_databases(
+            &self,
+            _prefix: Option<&Namespace>,
+        ) -> CatalogResult<Vec<sail_common_datafusion::catalog::DatabaseStatus>> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn drop_database(
+            &self,
+            _database: &Namespace,
+            _options: DropDatabaseOptions,
+        ) -> CatalogResult<()> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn create_table(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            _options: CreateTableOptions,
+        ) -> CatalogResult<sail_common_datafusion::catalog::TableStatus> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn get_table(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+        ) -> CatalogResult<sail_common_datafusion::catalog::TableStatus> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn list_tables(
+            &self,
+            _database: &Namespace,
+        ) -> CatalogResult<Vec<sail_common_datafusion::catalog::TableStatus>> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn drop_table(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            _options: DropTableOptions,
+        ) -> CatalogResult<()> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn create_view(
+            &self,
+            _database: &Namespace,
+            _view: &str,
+            _options: CreateViewOptions,
+        ) -> CatalogResult<sail_common_datafusion::catalog::TableStatus> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn get_view(
+            &self,
+            _database: &Namespace,
+            _view: &str,
+        ) -> CatalogResult<sail_common_datafusion::catalog::TableStatus> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn list_views(
+            &self,
+            _database: &Namespace,
+        ) -> CatalogResult<Vec<sail_common_datafusion::catalog::TableStatus>> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn drop_view(
+            &self,
+            _database: &Namespace,
+            _view: &str,
+            _options: DropViewOptions,
+        ) -> CatalogResult<()> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+    }
+
+    #[derive(Default)]
+    struct TestFunctionRegistry {
+        builtins: Vec<String>,
+    }
+
+    impl TestFunctionRegistry {
+        fn with_builtin(name: &str) -> Self {
+            Self {
+                builtins: vec![name.to_ascii_lowercase()],
+            }
+        }
+    }
+
+    impl FunctionRegistry for TestFunctionRegistry {
+        fn contains_function(&self, name: &str) -> bool {
+            self.builtins
+                .iter()
+                .any(|builtin| builtin == &name.to_ascii_lowercase())
+        }
+
+        fn get_function(&self, name: &str) -> Option<FunctionStatus> {
+            self.contains_function(name).then(|| FunctionStatus {
+                catalog: None,
+                namespace: None,
+                name: name.to_ascii_lowercase(),
+                description: Some("built-in".to_string()),
+                class_name: "builtin".to_string(),
+                is_temporary: true,
+            })
+        }
+
+        fn list_functions(&self, _pattern: Option<&str>) -> Vec<FunctionStatus> {
+            self.builtins
+                .iter()
+                .map(|name| FunctionStatus {
+                    catalog: None,
+                    namespace: None,
+                    name: name.clone(),
+                    description: Some("built-in".to_string()),
+                    class_name: "builtin".to_string(),
+                    is_temporary: true,
+                })
+                .collect()
+        }
+    }
+
+    fn test_udf(name: &str) -> ScalarUDF {
+        create_udf(
+            name,
+            vec![DataType::Int32],
+            DataType::Int32,
+            Volatility::Immutable,
+            Arc::new(|_| -> datafusion_common::Result<ColumnarValue> {
+                Err(datafusion_common::DataFusionError::Execution(
+                    "not used in tests".to_string(),
+                ))
+            }),
+        )
     }
 }

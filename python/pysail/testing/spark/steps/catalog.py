@@ -34,7 +34,8 @@ def check_function_attribute(attribute: str, value: str, get_function_result) ->
         msg = f"expected Function, got exception: {get_function_result!r}"
         raise AssertionError(msg)  # noqa: TRY004
     actual = getattr(get_function_result, attribute)
-    expected = value.strip().lower() == "true" if isinstance(actual, bool) else value
+    normalized = value.strip().lower()
+    expected = normalized == "true" if normalized in {"true", "false"} else value
     assert actual == expected, f"expected {attribute}={expected!r}, got {actual!r}"
 
 
