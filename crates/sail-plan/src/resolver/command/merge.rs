@@ -127,8 +127,8 @@ impl PlanResolver<'_> {
                 let disambiguated = merge_disambiguate_unqualified_plan_ids(
                     spec_expr,
                     state,
-                    &target_schema,
-                    &source_schema,
+                    target_schema,
+                    source_schema,
                 );
                 let resolved = self
                     .resolve_expression(disambiguated, &merge_schema, state)

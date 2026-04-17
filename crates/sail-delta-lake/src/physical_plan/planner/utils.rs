@@ -121,7 +121,8 @@ pub fn build_standard_write_layers(
     let writer = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
-        DeltaWriterExecOptions::from(ctx.options().clone()),
+        DeltaWriterExecOptions::from(ctx.options().clone())
+            .with_generation_expressions(ctx.generation_expressions().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         sink_mode.clone(),

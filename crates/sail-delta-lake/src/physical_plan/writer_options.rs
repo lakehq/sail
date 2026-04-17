@@ -16,8 +16,18 @@ use sail_data_source::options::gen::DeltaWriteOptions;
 use serde::{Deserialize, Serialize};
 
 /// Options for the Delta Lake writer execution plan.
+///
 /// This is a subset of `DeltaWriteOptions` containing only the fields used
 /// during physical writing. It derives serde for use in the physical plan.
+///
+/// Note on column-level metadata (e.g. generation expressions, identity
+/// columns, default values): the canonical carrier is arrow `Field::metadata`
+/// on the sink schema, but DataFusion's physical planner can strip field
+/// metadata set via `Expr::Alias::with_metadata` when lowering to arrow. The
+/// `generation_expressions` field below mirrors that metadata so the writer
+/// can still commit the correct Delta schema for new tables. It is populated
+/// programmatically from the write input's logical schema at plan-build time,
+/// not via a user-facing configuration option.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeltaWriterExecOptions {
     pub target_file_size: u64,
@@ -25,25 +35,31 @@ pub struct DeltaWriterExecOptions {
     pub merge_schema: bool,
     pub overwrite_schema: bool,
     pub replace_where: Option<String>,
-    /// Map of column name to generation expression for Delta generated columns.
     #[serde(default)]
     pub generation_expressions: HashMap<String, String>,
 }
 
 impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
     fn from(options: DeltaWriteOptions) -> Self {
-        let generation_expressions = options
-            .generation_expressions
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<HashMap<String, String>>(s).ok())
-            .unwrap_or_default();
         Self {
             target_file_size: options.target_file_size,
             write_batch_size: options.write_batch_size,
             merge_schema: options.merge_schema,
             overwrite_schema: options.overwrite_schema,
             replace_where: options.replace_where,
-            generation_expressions,
+            generation_expressions: HashMap::new(),
         }
+    }
+}
+
+impl DeltaWriterExecOptions {
+    /// Attach column-level generation expressions resolved from the write input's
+    /// logical schema.
+    pub fn with_generation_expressions(
+        mut self,
+        generation_expressions: HashMap<String, String>,
+    ) -> Self {
+        self.generation_expressions = generation_expressions;
+        self
     }
 }

@@ -61,7 +61,7 @@ use crate::schema::{
 };
 use crate::spec::{
     contains_timestampntz_arrow, Action, ColumnMappingMode, ColumnMetadataKey, MetadataValue,
-    StructType, TableProperties,
+    StructField, StructType, TableProperties,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
@@ -459,26 +459,22 @@ impl DeltaWriterExec {
             // table properties are persisted in the first Delta log commit.
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
-                // Build kernel schema for feature detection
+                // Build kernel schema for feature detection. Column-level metadata such as
+                // `delta.generationExpression` is carried on the arrow schema (propagated
+                // end-to-end via Alias field metadata) and preserved by `StructType::try_from`
+                // for sources that keep arrow `Field::metadata`. However, DataFusion's
+                // physical planner strips Alias metadata when lowering to arrow, so we also
+                // fall back to `options.generation_expressions`, which the planner resolves
+                // from the write input's logical schema at plan-build time.
                 let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
-                let kernel_schema = StructType::try_from(final_schema.as_ref())
+                let mut kernel_schema = StructType::try_from(final_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                // Inject generation expressions into the schema field metadata.
-                let kernel_schema = if options.generation_expressions.is_empty() {
-                    kernel_schema
-                } else {
-                    let fields = kernel_schema.into_fields().map(|mut field| {
-                        if let Some(expr) = options.generation_expressions.get(&field.name) {
-                            field.metadata.insert(
-                                ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
-                                MetadataValue::String(expr.clone()),
-                            );
-                        }
-                        field
-                    });
-                    StructType::new_unchecked(fields)
-                };
+                if !options.generation_expressions.is_empty() {
+                    kernel_schema = inject_generation_expressions(
+                        kernel_schema,
+                        &options.generation_expressions,
+                    );
+                }
 
                 let mut configuration = metadata_configuration.clone();
                 let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
@@ -1049,6 +1045,54 @@ impl DeltaWriterExec {
         RecordBatch::try_new(final_schema.clone(), adapted_columns)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
+}
+
+/// Attach `delta.generationExpression` metadata to top-level fields of a kernel
+/// schema based on a column-name keyed map.
+///
+/// DataFusion's physical planner may strip `Field::metadata` set via
+/// `Expr::Alias::with_metadata` when lowering logical expressions to arrow, which
+/// means a downstream `StructType::try_from(arrow_schema)` loses per-field
+/// generation expressions. This helper re-attaches them from a map resolved at
+/// plan-build time from the logical schema.
+fn inject_generation_expressions(
+    schema: StructType,
+    generation_expressions: &HashMap<String, String>,
+) -> StructType {
+    let fields = schema.into_fields().map(|field| {
+        if let Some(expr) = generation_expressions.get(&field.name) {
+            let existing_expr = field
+                .metadata
+                .get(ColumnMetadataKey::GenerationExpression.as_ref())
+                .and_then(|v| match v {
+                    MetadataValue::String(s) => Some(s.clone()),
+                    _ => None,
+                });
+            if existing_expr.as_deref() == Some(expr.as_str()) {
+                field
+            } else {
+                let StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    mut metadata,
+                } = field;
+                metadata.insert(
+                    ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
+                    MetadataValue::String(expr.clone()),
+                );
+                StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    metadata,
+                }
+            }
+        } else {
+            field
+        }
+    });
+    StructType::new_unchecked(fields)
 }
 
 fn reinterpret_timestamp_timezone(

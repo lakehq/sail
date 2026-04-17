@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::catalog::DELTA_GENERATION_EXPRESSION_METADATA_KEY;
 use sail_common_datafusion::datasource::{
     MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo,
     SourceInfo, TableFormat, TableFormatRegistry,
@@ -99,6 +100,7 @@ impl TableFormat for DeltaTableFormat {
             sort_order,
             table_properties,
             options,
+            logical_schema,
         } = info;
 
         if is_flow_event_schema(&input.schema()) {
@@ -238,7 +240,8 @@ impl TableFormat for DeltaTableFormat {
             partition_columns,
             table_schema_for_cond,
             table_exists,
-        );
+        )
+        .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()));
         let planner_ctx = PlannerContext::new(ctx, table_config);
         let planner = DeltaPhysicalPlanner::new(planner_ctx);
         let sink_exec = planner.create_plan(input, unified_mode, sort_order).await?;
@@ -310,6 +313,29 @@ impl DeltaTableFormat {
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
     }
+}
+
+/// Extract column-level generation expressions from a DataFusion logical schema.
+///
+/// Column-level expressions are attached via `Expr::Alias::with_metadata` in the
+/// plan resolver (see `sail-plan/src/resolver/command/write.rs`) and survive
+/// through the logical plan's `DFSchema`. The physical planner may strip field
+/// metadata when lowering to arrow, so the logical schema is the canonical place
+/// to read these values at sink construction time.
+fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<String, String> {
+    let Some(schema) = logical_schema else {
+        return HashMap::new();
+    };
+    schema
+        .fields()
+        .iter()
+        .filter_map(|field| {
+            field
+                .metadata()
+                .get(DELTA_GENERATION_EXPRESSION_METADATA_KEY)
+                .map(|expr| (field.name().clone(), expr.clone()))
+        })
+        .collect()
 }
 
 pub fn resolve_delta_read_options(options: Vec<OptionLayer>) -> DataSourceResult<DeltaReadOptions> {

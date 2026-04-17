@@ -202,7 +202,7 @@ Feature: Delta Lake Generated Columns
         | id | event_year | event_month | event_day |
         | 1  | 2024       | 10          | 15        |
 
-  Rule: Explicit wrong values for generated columns are overwritten (W-7)
+  Rule: Explicit generated column values must match the generation expression (W-7)
 
     Background:
       Given variable location for temporary directory gen_col_enforce
@@ -212,7 +212,7 @@ Feature: Delta Lake Generated Columns
         """
 
     @sail-only
-    Scenario: Insert with incorrect explicit generated column value is overwritten
+    Scenario: Insert with correct explicit generated column value succeeds
       Given statement template
         """
         CREATE TABLE delta_gen_col_enforce (
@@ -226,7 +226,7 @@ Feature: Delta Lake Generated Columns
       Given statement
         """
         INSERT INTO delta_gen_col_enforce
-        VALUES (1, TIMESTAMP '2024-05-10 12:00:00', DATE '2099-01-01')
+        VALUES (1, TIMESTAMP '2024-05-10 12:00:00', DATE '2024-05-10')
         """
       When query
         """
@@ -235,6 +235,49 @@ Feature: Delta Lake Generated Columns
       Then query result ordered
         | id | event_time          | event_date |
         | 1  | 2024-05-10 12:00:00 | 2024-05-10 |
+
+    @sail-only
+    Scenario: Insert with NULL explicit generated column value is replaced by the expression
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_enforce (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_enforce
+        VALUES (1, TIMESTAMP '2024-05-10 12:00:00', CAST(NULL AS DATE))
+        """
+      When query
+        """
+        SELECT id, event_date FROM delta_gen_col_enforce ORDER BY id
+        """
+      Then query result ordered
+        | id | event_date |
+        | 1  | 2024-05-10 |
+
+    @sail-only
+    Scenario: Insert with incorrect explicit generated column value fails
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_enforce (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement with error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+        """
+        INSERT INTO delta_gen_col_enforce
+        VALUES (1, TIMESTAMP '2024-05-10 12:00:00', DATE '2099-01-01')
+        """
 
   Rule: Generated columns are recomputed during MERGE (W-8)
 
