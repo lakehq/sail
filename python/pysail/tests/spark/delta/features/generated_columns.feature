@@ -221,6 +221,84 @@ Feature: Delta Lake Generated Columns
         | id | event_year | event_month | event_day |
         | 1  | 2024       | 10          | 15        |
 
+  Rule: Type coercion for generated columns and their dependencies
+
+    Background:
+      Given variable location for temporary directory gen_col_coerce
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_gen_col_coerce
+        """
+
+    @sail-only
+    Scenario: Insert with BIGINT generated column using arithmetic on BIGINT dependency coerces INT input
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_coerce (
+          id INT,
+          value BIGINT,
+          doubled BIGINT GENERATED ALWAYS AS (value * 2)
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_coerce (id, value)
+        VALUES (1, 100), (2, 200)
+        """
+      When query
+        """
+        SELECT id, value, doubled FROM delta_gen_col_coerce ORDER BY id
+        """
+      Then query result ordered
+        | id | value | doubled |
+        | 1  | 100   | 200     |
+        | 2  | 200   | 400     |
+
+    @sail-only
+    Scenario: Insert with explicit BIGINT generated column value of compatible type succeeds
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_coerce (
+          id INT,
+          value BIGINT,
+          doubled BIGINT GENERATED ALWAYS AS (value * 2)
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_coerce
+        VALUES (1, 100, 200)
+        """
+      When query
+        """
+        SELECT id, value, doubled FROM delta_gen_col_coerce ORDER BY id
+        """
+      Then query result ordered
+        | id | value | doubled |
+        | 1  | 100   | 200     |
+
+    @sail-only
+    Scenario: Insert with incorrect BIGINT generated column value raises mismatch error
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_coerce (
+          id INT,
+          value BIGINT,
+          doubled BIGINT GENERATED ALWAYS AS (value * 2)
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement with error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+        """
+        INSERT INTO delta_gen_col_coerce
+        VALUES (1, 100, 999)
+        """
+
   Rule: Explicit generated column values must match the generation expression
 
     Background:

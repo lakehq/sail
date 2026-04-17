@@ -725,13 +725,19 @@ impl PlanResolver<'_> {
 
         // Build intermediate plan: one alias expression per non-generated table column,
         // plus one extra alias per user-provided generated-column value.
+        // Cast each expression to the target column type so that generation expressions
+        // are resolved against correctly-typed values (e.g. INT -> BIGINT, string ->
+        // timestamp) and the mismatch check compares type-compatible values.
         let mut intermediate_aliases: Vec<Expr> = Vec::new();
         for (idx, provided) in provided_by_input.iter().enumerate() {
             let col = &info.columns[idx];
             if col.generated_always_as.is_some() {
                 if let Some(user_expr) = provided {
                     let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
-                    intermediate_aliases.push(user_expr.clone().alias(check_id.clone()));
+                    let cast_expr = user_expr
+                        .clone()
+                        .cast_to(col.field().data_type(), input.schema())?;
+                    intermediate_aliases.push(cast_expr.alias(check_id.clone()));
                     gen_check_field_ids[idx] = Some(check_id);
                 }
                 continue;
@@ -742,7 +748,10 @@ impl PlanResolver<'_> {
                     col.name
                 )));
             };
-            intermediate_aliases.push(input_expr.clone().alias(field_ids[idx].clone()));
+            let cast_expr = input_expr
+                .clone()
+                .cast_to(col.field().data_type(), input.schema())?;
+            intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
         }
         let intermediate = LogicalPlanBuilder::new(input)
             .project(intermediate_aliases)?
@@ -792,14 +801,22 @@ impl PlanResolver<'_> {
                     //     value IS NULL OR value <=> generation_expression IS TRUE
                     // Use `<=>` (null-safe equal) so NULL on either side is handled
                     // without spurious "IS TRUE" wrapping.
+                    // Cast both sides to the target column type so that type-compatible
+                    // values (e.g. INT 2024 vs BIGINT 2024) are not treated as mismatches.
                     let user_value = col(Column::from_name(check_id));
+                    let user_value_cast = user_value
+                        .clone()
+                        .cast_to(field.data_type(), &intermediate_schema)?;
+                    let gen_expr_cast = gen_expr
+                        .clone()
+                        .cast_to(field.data_type(), &intermediate_schema)?;
                     let check = user_value
                         .clone()
                         .is_null()
                         .or(Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(user_value),
+                            Box::new(user_value_cast),
                             Operator::IsNotDistinctFrom,
-                            Box::new(gen_expr.clone()),
+                            Box::new(gen_expr_cast),
                         )));
                     let err_msg = format!(
                         "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] \

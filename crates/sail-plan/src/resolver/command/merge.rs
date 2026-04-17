@@ -538,9 +538,7 @@ fn merge_schema_has_column_name(
     })
 }
 
-/// Extract `(column_name, generation_expression)` pairs from a DFSchema whose underlying Arrow
-/// fields carry the `delta.generationExpression` metadata key.
-/// Parse a generation expression string into a spec::Expr.
+/// Parse and analyze a single generation expression string into a `spec::Expr`.
 fn parse_gen_expr(gen_expr_str: &str) -> PlanResult<spec::Expr> {
     let ast_expr = sail_sql_analyzer::parser::parse_expression(gen_expr_str).map_err(|e| {
         PlanError::invalid(format!(
