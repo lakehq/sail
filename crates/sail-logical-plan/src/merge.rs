@@ -1085,8 +1085,8 @@ fn build_insert_only_projection(
     // with clause order determining first-match semantics.
     let mut projections = Vec::new();
 
-    // Build lookup for source expressions by name. Source columns are prefixed
-    // with `__sail_src_`, so target field "id" maps to source column "__sail_src_id".
+    // Source columns are prefixed with `__sail_src_`, so target field "id" maps
+    // to source column "__sail_src_id".
     let source_exprs_by_name: HashMap<String, Expr> = source_schema
         .fields()
         .iter()
@@ -1097,13 +1097,6 @@ fn build_insert_only_projection(
             )
         })
         .collect();
-    let source_expr_for_target = |target_name: &str| -> Expr {
-        let prefixed = format!("__sail_src_{target_name}");
-        source_exprs_by_name
-            .get(&prefixed)
-            .cloned()
-            .unwrap_or_else(|| lit(ScalarValue::Null))
-    };
 
     for field in target_schema.fields().iter() {
         if field.name() == path_column || field.name() == TARGET_ROW_ID_COLUMN {
@@ -1119,7 +1112,10 @@ fn build_insert_only_projection(
                 .map(|x| x.expr.clone())
                 .unwrap_or_else(|| lit(true));
             let value = match &clause.action {
-                MergeNotMatchedByTargetAction::InsertAll => source_expr_for_target(&name),
+                MergeNotMatchedByTargetAction::InsertAll => source_exprs_by_name
+                    .get(&format!("__sail_src_{name}"))
+                    .cloned()
+                    .unwrap_or_else(|| lit(ScalarValue::Null)),
                 MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
                     // If column not specified in this clause, it becomes NULL for this clause
                     // (and must NOT fall through to later clauses).
