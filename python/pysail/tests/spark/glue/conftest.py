@@ -11,14 +11,10 @@ from pyspark.sql import SparkSession
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
-from pysail.spark import SparkConnectServer
 from pysail.tests.spark.conftest import configure_spark_session, patch_spark_connect_session
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-
-# Skipping the tests at the module level.
-pytest.skip("not working", allow_module_level=True)
 
 
 # Override the spark_doctest autouse fixture from parent conftest
@@ -50,6 +46,8 @@ def moto_endpoint(moto_container: DockerContainer) -> str:
 @pytest.fixture(scope="module")
 def glue_remote(moto_endpoint: str) -> Generator[str, None, None]:
     """Start Sail server configured with Glue catalog as the default."""
+    from pysail.spark import SparkConnectServer
+
     # Configure Sail with Glue as the default catalog (TOML inline table format)
     # Using Glue as the sole catalog to work around Figment env var parsing limitations
     catalogs_config = f'[{{name="sail", type="glue", region="us-east-1", endpoint_url="{moto_endpoint}"}}]'

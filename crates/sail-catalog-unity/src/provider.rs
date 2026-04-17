@@ -22,7 +22,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    identity_partition_fields, DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind,
+    TableStatus,
 };
 use secrecy::SecretString;
 use tokio::sync::OnceCell;
@@ -141,6 +142,14 @@ impl UnityCatalogProvider {
 
     fn get_full_table_name(catalog_name: &str, schema_name: &str, table_name: &str) -> String {
         format!("{catalog_name}.{schema_name}.{table_name}")
+    }
+
+    fn get_full_function_name(
+        catalog_name: &str,
+        schema_name: &str,
+        function_name: &str,
+    ) -> String {
+        format!("{catalog_name}.{schema_name}.{function_name}")
     }
 
     fn schema_info_to_database_status(
@@ -334,6 +343,26 @@ impl UnityCatalogProvider {
                 properties,
             },
         })
+    }
+
+    fn function_info_to_function_status(
+        &self,
+        function_info: types::FunctionInfo,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> FunctionStatus {
+        let catalog = function_info
+            .catalog_name
+            .unwrap_or(catalog_name.to_string());
+        let schema = function_info.schema_name.unwrap_or(schema_name.to_string());
+        FunctionStatus {
+            catalog: Some(self.name.clone()),
+            namespace: Some(vec![catalog, schema]),
+            name: function_info.name.unwrap_or_default(),
+            description: function_info.comment,
+            class_name: String::new(),
+            is_temporary: false,
+        }
     }
 }
 
@@ -803,6 +832,67 @@ impl CatalogProvider for UnityCatalogProvider {
         Err(CatalogError::NotSupported(
             "Open source Unity Catalog does not support dropping views".to_string(),
         ))
+    }
+
+    async fn get_function(
+        &self,
+        database: &Namespace,
+        function: &str,
+    ) -> CatalogResult<FunctionStatus> {
+        let client = self
+            .get_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let full_name = Self::get_full_function_name(&catalog_name, &schema_name, function);
+
+        let result = client.get_function().name(&full_name).send().await;
+
+        match result {
+            Ok(response) => Ok(self.function_info_to_function_status(
+                response.into_inner(),
+                &catalog_name,
+                &schema_name,
+            )),
+            Err(progenitor_client::Error::UnexpectedResponse(response))
+                if response.status().as_u16() == 404 =>
+            {
+                Err(CatalogError::NotFound(CatalogObject::Function, full_name))
+            }
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to get function: {e}"
+            ))),
+        }
+    }
+
+    async fn list_functions(&self, database: &Namespace) -> CatalogResult<Vec<FunctionStatus>> {
+        let client = self
+            .get_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let result = client
+            .list_functions()
+            .catalog_name(&catalog_name)
+            .schema_name(&schema_name)
+            .send()
+            .await;
+
+        match result {
+            Ok(response) => Ok(response
+                .into_inner()
+                .functions
+                .into_iter()
+                .map(|function_info| {
+                    self.function_info_to_function_status(function_info, &catalog_name, &schema_name)
+                })
+                .collect()),
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to list functions: {e}"
+            ))),
+        }
     }
 }
 

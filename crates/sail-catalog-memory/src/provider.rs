@@ -8,12 +8,15 @@ use sail_catalog::provider::{
     DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
+};
 
 struct MemoryDatabase {
     status: DatabaseStatus,
     tables: HashMap<String, TableStatus>,
     views: HashMap<String, TableStatus>,
+    functions: HashMap<String, FunctionStatus>,
 }
 
 /// An in-memory catalog provider.
@@ -41,9 +44,22 @@ impl MemoryCatalogProvider {
                 },
                 tables: HashMap::new(),
                 views: HashMap::new(),
+                functions: HashMap::new(),
             },
         );
         Self { name, databases }
+    }
+
+    pub fn insert_function(
+        &self,
+        database: &Namespace,
+        function: FunctionStatus,
+    ) -> CatalogResult<()> {
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
+        })?;
+        db.functions.insert(function.name.clone(), function);
+        Ok(())
     }
 }
 
@@ -88,6 +104,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     status: status.clone(),
                     tables: HashMap::new(),
                     views: HashMap::new(),
+                    functions: HashMap::new(),
                 };
                 entry.insert(db);
                 Ok(status)
@@ -402,6 +419,37 @@ impl CatalogProvider for MemoryCatalogProvider {
             }
         } else if if_exists {
             Ok(())
+        } else {
+            Err(CatalogError::NotFound(
+                CatalogObject::Database,
+                quote_namespace_if_needed(database),
+            ))
+        }
+    }
+
+    async fn get_function(
+        &self,
+        database: &Namespace,
+        function: &str,
+    ) -> CatalogResult<FunctionStatus> {
+        if let Some(db) = self.databases.get(database) {
+            if let Some(status) = db.functions.get(function) {
+                return Ok(status.clone());
+            }
+            return Err(CatalogError::NotFound(
+                CatalogObject::Function,
+                function.to_string(),
+            ));
+        }
+        Err(CatalogError::NotFound(
+            CatalogObject::Database,
+            quote_namespace_if_needed(database),
+        ))
+    }
+
+    async fn list_functions(&self, database: &Namespace) -> CatalogResult<Vec<FunctionStatus>> {
+        if let Some(db) = self.databases.get(database) {
+            Ok(db.functions.values().cloned().collect())
         } else {
             Err(CatalogError::NotFound(
                 CatalogObject::Database,

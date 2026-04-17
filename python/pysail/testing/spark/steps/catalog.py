@@ -14,7 +14,7 @@ def catalog_function_exists(function_name: str, spark) -> bool:
 @then(parsers.parse("the function existence result is {expected}"))
 def check_function_exists_result(expected: str, function_exists_result) -> None:
     expected_value = expected.strip().lower() == "true"
-    assert function_exists_result is expected_value, (
+    assert function_exists_result == expected_value, (
         f"expected functionExists to return {expected_value}, got {function_exists_result!r}"
     )
 
