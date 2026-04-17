@@ -5,6 +5,13 @@ import re
 from pytest_bdd import parsers, then, when
 
 
+def parse_bool_string(value: str):
+    normalized = value.strip().lower()
+    if normalized in {"true", "false"}:
+        return normalized == "true"
+    return value
+
+
 @when(parsers.parse("catalog functionExists for {function_name}"), target_fixture="function_exists_result")
 def catalog_function_exists(function_name: str, spark) -> bool:
     """Invoke ``spark.catalog.functionExists`` for the given function name."""
@@ -13,7 +20,7 @@ def catalog_function_exists(function_name: str, spark) -> bool:
 
 @then(parsers.parse("the function existence result is {expected}"))
 def check_function_exists_result(expected: str, function_exists_result) -> None:
-    expected_value = expected.strip().lower() == "true"
+    expected_value = parse_bool_string(expected)
     assert function_exists_result == expected_value, (
         f"expected functionExists to return {expected_value}, got {function_exists_result!r}"
     )
@@ -34,8 +41,7 @@ def check_function_attribute(attribute: str, value: str, get_function_result) ->
         msg = f"expected Function, got exception: {get_function_result!r}"
         raise AssertionError(msg)  # noqa: TRY004
     actual = getattr(get_function_result, attribute)
-    normalized = value.strip().lower()
-    expected = normalized == "true" if normalized in {"true", "false"} else value
+    expected = parse_bool_string(value)
     assert actual == expected, f"expected {attribute}={expected!r}, got {actual!r}"
 
 

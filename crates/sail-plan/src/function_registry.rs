@@ -17,8 +17,12 @@ use crate::function::{
 pub struct SparkFunctionRegistry;
 
 impl SparkFunctionRegistry {
+    fn canonical_name(name: &str) -> String {
+        name.to_ascii_lowercase()
+    }
+
     fn is_built_in(name: &str) -> bool {
-        let key = name.to_ascii_lowercase();
+        let key = Self::canonical_name(name);
         BUILT_IN_SCALAR_FUNCTIONS.contains_key(key.as_str())
             || BUILT_IN_GENERATOR_FUNCTIONS.contains_key(key.as_str())
             || BUILT_IN_AGGREGATE_FUNCTIONS.contains_key(key.as_str())
@@ -57,7 +61,7 @@ impl FunctionRegistry for SparkFunctionRegistry {
 
     fn get_function(&self, name: &str) -> Option<FunctionStatus> {
         if Self::is_built_in(name) {
-            Some(Self::make_status(&name.to_ascii_lowercase()))
+            Some(Self::make_status(&Self::canonical_name(name)))
         } else {
             None
         }

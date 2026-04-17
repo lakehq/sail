@@ -46,6 +46,8 @@ def moto_endpoint(moto_container: DockerContainer) -> str:
 @pytest.fixture(scope="module")
 def glue_remote(moto_endpoint: str) -> Generator[str, None, None]:
     """Start Sail server configured with Glue catalog as the default."""
+    # Import lazily so the parent test environment hook can configure PySail before
+    # the native module is loaded.
     from pysail.spark import SparkConnectServer
 
     # Configure Sail with Glue as the default catalog (TOML inline table format)
