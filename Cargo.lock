@@ -6663,7 +6663,6 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "lazy_static",
- "log",
  "regex",
  "sail-common-datafusion",
  "serde",

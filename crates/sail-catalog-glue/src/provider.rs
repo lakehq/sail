@@ -624,9 +624,12 @@ impl CatalogProvider for GlueCatalogProvider {
         _table: &str,
         _options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "alter table in Glue catalog".to_string(),
-        ))
+        // The Glue catalog does not currently mirror table property changes into
+        // Glue's `Parameters`, but ALTER TABLE is still useful for Glue-tracked Delta
+        // tables where the property change is persisted by the Delta `TableFormat`.
+        // We therefore treat this as a no-op at the catalog layer so the storage-side
+        // commit is not rolled back.
+        Ok(())
     }
 
     async fn create_view(

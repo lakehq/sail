@@ -101,6 +101,10 @@ pub enum DeltaOperation {
     SetTableProperties {
         properties: HashMap<String, String>,
     },
+    #[serde(rename_all = "camelCase")]
+    UnsetTableProperties {
+        properties: Vec<String>,
+    },
 }
 
 impl DeltaOperation {
@@ -117,6 +121,7 @@ impl DeltaOperation {
             Self::FileSystemCheck { .. } => "FSCK",
             Self::Restore { .. } => "RESTORE",
             Self::SetTableProperties { .. } => "SET TBLPROPERTIES",
+            Self::UnsetTableProperties { .. } => "UNSET TBLPROPERTIES",
         }
     }
 
@@ -193,6 +198,9 @@ impl DeltaOperation {
                 insert_opt(&mut parameters, "datetime", *datetime);
             }
             Self::SetTableProperties { properties } => {
+                insert_json(&mut parameters, "properties", properties)?;
+            }
+            Self::UnsetTableProperties { properties } => {
                 insert_json(&mut parameters, "properties", properties)?;
             }
         }

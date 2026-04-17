@@ -122,3 +122,90 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | id | value |
         | 1  | v0    |
         | 2  | v1    |
+
+  @sail-only
+  Rule: ALTER TABLE UNSET TBLPROPERTIES records a dedicated Delta log operation
+
+    Scenario: Delta log commit info records UNSET TBLPROPERTIES operation on ALTER TABLE UNSET
+      Given variable location for temporary directory delta_alter_table_unset_op
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_alter_table_unset_op_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_alter_table_unset_op_test (
+          id INT
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('my.tag' = 'remove-me')
+        """
+      Given statement
+        """
+        INSERT INTO delta_alter_table_unset_op_test VALUES (1)
+        """
+      Given statement
+        """
+        ALTER TABLE delta_alter_table_unset_op_test
+        UNSET TBLPROPERTIES ('my.tag')
+        """
+      Then delta log latest commit info contains
+        | path                                     | value         |
+        | operation                                | "UNSET TBLPROPERTIES" |
+        | operationParameters.properties           | ["my.tag"]    |
+
+  @sail-only
+  Rule: ALTER TABLE UNSET TBLPROPERTIES validates property existence unless IF EXISTS is specified
+
+    Scenario: ALTER TABLE UNSET TBLPROPERTIES on a missing property fails without IF EXISTS
+      Given variable location for temporary directory delta_alter_table_unset_missing
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_alter_table_unset_missing_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_alter_table_unset_missing_test (
+          id INT
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_alter_table_unset_missing_test VALUES (1)
+        """
+      Given statement with error not set on the table
+        """
+        ALTER TABLE delta_alter_table_unset_missing_test
+        UNSET TBLPROPERTIES ('does.not.exist')
+        """
+
+    Scenario: ALTER TABLE UNSET TBLPROPERTIES IF EXISTS on a missing property is a no-op
+      Given variable location for temporary directory delta_alter_table_unset_if_exists
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_alter_table_unset_if_exists_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_alter_table_unset_if_exists_test (
+          id INT
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('keep.me' = 'yes')
+        """
+      Given statement
+        """
+        INSERT INTO delta_alter_table_unset_if_exists_test VALUES (1)
+        """
+      Given statement
+        """
+        ALTER TABLE delta_alter_table_unset_if_exists_test
+        UNSET TBLPROPERTIES IF EXISTS ('does.not.exist')
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                                       | value |
+        | metaData.configuration['keep.me']          | "yes" |

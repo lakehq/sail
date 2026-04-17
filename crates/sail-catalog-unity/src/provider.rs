@@ -777,9 +777,12 @@ impl CatalogProvider for UnityCatalogProvider {
         _table: &str,
         _options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "alter table in Unity catalog".to_string(),
-        ))
+        // The Unity catalog does not currently propagate ALTER TABLE property changes to
+        // the Unity REST API. However, returning `NotSupported` here would abort a Delta
+        // storage-side commit that has already succeeded. Treat this as a no-op so the
+        // on-disk Delta table remains the source of truth until the REST integration
+        // is wired up.
+        Ok(())
     }
 
     async fn create_view(

@@ -1843,7 +1843,6 @@ impl TryFrom<Vec<ColumnAlterationOption>> for ColumnAlterationOptions {
 }
 
 // TODO: implement the conversion properly for column-level ALTER TABLE operations
-#[expect(dead_code)]
 fn from_ast_column_alteration_list(items: ColumnAlterationList) -> SqlResult<()> {
     // TODO: implement the conversion properly
     let columns = match items {
@@ -1921,16 +1920,21 @@ fn from_ast_alter_table_operation(
         }
         AlterTableOperation::RenameTable { .. }
         | AlterTableOperation::RenamePartition { .. }
-        | AlterTableOperation::AddColumns { .. }
         | AlterTableOperation::DropColumns { .. }
         | AlterTableOperation::RenameColumn { .. }
         | AlterTableOperation::AlterColumn { .. }
-        | AlterTableOperation::ReplaceColumns { .. }
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
         | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
+        AlterTableOperation::AddColumns { items, .. }
+        | AlterTableOperation::ReplaceColumns { items, .. } => {
+            // Validate column descriptors (e.g. detect duplicate COMMENT/DEFAULT/NOT NULL/POSITION
+            // clauses) even though we do not yet translate these operations.
+            from_ast_column_alteration_list(items)?;
+            Ok(spec::AlterTableOperation::Unknown)
+        }
     }
 }
 

@@ -425,24 +425,10 @@ impl PlanResolver<'_> {
                 return Err(PlanError::todo("unsupported ALTER TABLE operation"));
             }
         };
-        if if_exists {
-            let manager = self.ctx.extension::<CatalogManager>()?;
-            let table_names: Vec<String> = table.clone().into();
-            match manager.get_table_or_view(&table_names).await {
-                Ok(_) => {}
-                Err(sail_catalog::error::CatalogError::NotFound(_, _)) => {
-                    return self.resolve_catalog_command(CatalogCommand::AlterTable {
-                        table: table.into(),
-                        options,
-                    });
-                }
-                Err(e) => return Err(PlanError::internal(e.to_string())),
-            }
-        }
-        let command = CatalogCommand::AlterTable {
+        self.resolve_catalog_command(CatalogCommand::AlterTable {
             table: table.into(),
+            if_exists,
             options,
-        };
-        self.resolve_catalog_command(command)
+        })
     }
 }

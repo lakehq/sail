@@ -79,6 +79,7 @@ pub enum CatalogCommand {
     },
     AlterTable {
         table: Vec<String>,
+        if_exists: bool,
         options: AlterTableOptions,
     },
     ListColumns {
@@ -354,49 +355,63 @@ impl CatalogCommand {
                 manager.drop_table(&table, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
-            CatalogCommand::AlterTable { table, options } => {
-                // Fetch the table status before altering to find the location and format
-                // so we can propagate property changes to the underlying storage (e.g. Delta log).
-                let table_location_and_format: Option<(String, String)> =
-                    manager.get_table_or_view(&table).await.ok().and_then(|ts| {
-                        if let sail_common_datafusion::catalog::TableKind::Table {
-                            location: Some(loc),
-                            format,
-                            ..
-                        } = ts.kind
-                        {
-                            Some((loc, format))
-                        } else {
-                            None
-                        }
-                    });
+            CatalogCommand::AlterTable {
+                table,
+                if_exists,
+                options,
+            } => {
+                // Fetch the table status before altering so we can propagate
+                // property changes to the underlying storage (e.g. Delta log).
+                let table_status = match manager.get_table_or_view(&table).await {
+                    Ok(status) => status,
+                    Err(CatalogError::NotFound(_, _)) if if_exists => {
+                        return Ok(display.bools().to_record_batch(vec![true])?);
+                    }
+                    Err(e) => return Err(e),
+                };
 
-                manager.alter_table(&table, options.clone()).await?;
+                let (location, format) = match &table_status.kind {
+                    sail_common_datafusion::catalog::TableKind::Table {
+                        location: Some(loc),
+                        format,
+                        ..
+                    } => (Some(loc.clone()), Some(format.clone())),
+                    sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
+                        (None, Some(format.clone()))
+                    }
+                    _ => (None, None),
+                };
 
-                // Propagate property changes to underlying storage format if applicable
-                if let Some((location, format)) = table_location_and_format {
+                // Persist changes to storage first (source of truth for table formats
+                // such as Delta Lake). Only after storage commits successfully do we
+                // update the catalog metadata, so we never end up with the two layers
+                // out of sync.
+                if let (Some(location), Some(format)) = (location, format) {
                     if let Ok(registry) = ctx.extension::<TableFormatRegistry>() {
                         if let Ok(table_format) = registry.get(&format) {
                             let runtime = ctx.runtime_env();
-                            let changes: Vec<(String, Option<String>)> = match &options {
-                                AlterTableOptions::SetTableProperties { properties } => properties
-                                    .iter()
-                                    .map(|(k, v)| (k.clone(), Some(v.clone())))
-                                    .collect(),
-                                AlterTableOptions::UnsetTableProperties { keys, .. } => {
-                                    keys.iter().map(|k| (k.clone(), None)).collect()
-                                }
+                            let (changes, if_exists_flag) = match &options {
+                                AlterTableOptions::SetTableProperties { properties } => (
+                                    properties
+                                        .iter()
+                                        .map(|(k, v)| (k.clone(), Some(v.clone())))
+                                        .collect::<Vec<_>>(),
+                                    false,
+                                ),
+                                AlterTableOptions::UnsetTableProperties { keys, if_exists } => (
+                                    keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>(),
+                                    *if_exists,
+                                ),
                             };
-                            if let Err(e) = table_format
-                                .alter_table_properties(runtime, &location, changes)
+                            table_format
+                                .alter_table_properties(runtime, &location, changes, if_exists_flag)
                                 .await
-                            {
-                                log::warn!("failed to persist ALTER TABLE properties to storage at {location}: {e}");
-                            }
+                                .map_err(|e| CatalogError::External(e.to_string()))?;
                         }
                     }
                 }
 
+                manager.alter_table(&table, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::ListColumns { table } => {
