@@ -89,6 +89,22 @@ def normalize_pandas_data_frame(df):
     return df.sort_values(by=columns, ignore_index=True)
 
 
+def normalize_datetime_dtypes(df):
+    """Normalize datetime column dtypes from nanosecond to microsecond resolution.
+
+    Sail uses microsecond precision for timestamps (per Spark specification).
+    In Pandas 2.0-2.1, Python datetime objects and ``pd.Timestamp.apply()``
+    produce ``datetime64[ns]`` dtype, while Sail's ``toPandas()`` returns
+    ``datetime64[us]``. This normalization ensures that dtype comparisons in
+    ``assert_frame_equal`` do not fail due to this precision difference.
+    """
+    result = df.copy()
+    for col in result.columns:
+        if str(result[col].dtype) == "datetime64[ns]":
+            result[col] = result[col].astype("datetime64[us]")
+    return result
+
+
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pyspark_pandas_test_utils():
     from pyspark.testing.pandasutils import PandasOnSparkTestUtils
@@ -122,6 +138,8 @@ def patch_pandas_test_utils():
     def assert_frame_equal(left, right, **kwargs):
         left = normalize_pandas_data_frame(left)
         right = normalize_pandas_data_frame(right)
+        left = normalize_datetime_dtypes(left)
+        right = normalize_datetime_dtypes(right)
         _assert_frame_equal(left, right, **kwargs)
 
     modules = [
@@ -274,6 +292,16 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_parity_job_cancellation.py"],
         reason="Slow test not working yet",
+    ),
+    # The following tests rely on direct JVM access (RDD API, Java gateway),
+    # which is not supported by Sail.
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.rdd"],
+        reason="JVM-dependent test",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.java_method"],
+        reason="JVM-dependent test",
     ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
