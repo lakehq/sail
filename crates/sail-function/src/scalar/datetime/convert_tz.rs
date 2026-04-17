@@ -18,12 +18,26 @@ use sail_common::datetime::time_unit_to_multiplier;
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ConvertTz {
     signature: Signature,
+    /// When `true`, the output timestamp has no timezone annotation (NTZ).
+    /// Used by `convert_timezone`, which always returns TIMESTAMP_NTZ per Spark semantics.
+    /// When `false`, the output timestamp carries the system-local timezone offset annotation.
+    return_ntz: bool,
 }
 
 impl ConvertTz {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(3, Volatility::Immutable),
+            return_ntz: false,
+        }
+    }
+
+    /// Creates a `ConvertTz` that returns a NTZ (timestamp without time zone) result.
+    /// This matches Spark's `convert_timezone` semantics.
+    pub fn new_ntz() -> Self {
+        Self {
+            signature: Signature::any(3, Volatility::Immutable),
+            return_ntz: true,
         }
     }
 }
@@ -40,7 +54,11 @@ impl ScalarUDFImpl for ConvertTz {
     }
 
     fn name(&self) -> &str {
-        "convert_tz"
+        if self.return_ntz {
+            "convert_tz_ntz"
+        } else {
+            "convert_tz"
+        }
     }
 
     fn signature(&self) -> &Signature {
@@ -51,24 +69,27 @@ impl ScalarUDFImpl for ConvertTz {
         if arg_types.len() != 3 {
             return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
         }
-        match &arg_types[2] {
-            DataType::Timestamp(unit, _tz) => Ok(DataType::Timestamp(*unit, local_offset_opt())),
-            _ => Ok(DataType::Timestamp(
-                TimeUnit::Microsecond,
-                local_offset_opt(),
-            )), // TODO: strict type coersion
+        let time_unit = match &arg_types[2] {
+            DataType::Timestamp(unit, _) => *unit,
+            _ => TimeUnit::Microsecond,
+        };
+        if self.return_ntz {
+            Ok(DataType::Timestamp(time_unit, None))
+        } else {
+            Ok(DataType::Timestamp(time_unit, local_offset_opt()))
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let return_ntz = self.return_ntz;
         make_scalar_function(
-            convert_tz_inner,
+            move |args| convert_tz_inner(args, return_ntz),
             [Hint::AcceptsSingular].repeat(args.args.len()),
         )(args.args.as_slice())
     }
 }
 
-fn convert_tz_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn convert_tz_inner(args: &[ArrayRef], return_ntz: bool) -> Result<ArrayRef> {
     let legacy_timezones = HashMap::from([
         ("ACT", "Australia/Darwin"),
         ("AET", "Australia/Sydney"),
@@ -224,7 +245,8 @@ fn convert_tz_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         _ => TimeUnit::Microsecond,
     };
 
-    nanoseconds_to_timestamp(results, &DataType::Timestamp(time_unit, local_offset_opt()))
+    let output_tz = if return_ntz { None } else { local_offset_opt() };
+    nanoseconds_to_timestamp(results, &DataType::Timestamp(time_unit, output_tz))
 }
 
 fn local_offset_opt() -> Option<Arc<str>> {
@@ -268,7 +290,7 @@ fn timestamp_to_nanoseconds(array: &dyn Array) -> Result<Int64Array> {
 
 fn nanoseconds_to_timestamp(array: Int64Array, data_type: &DataType) -> Result<ArrayRef> {
     match data_type {
-        DataType::Timestamp(time_unit, _tz) => Ok(cast::cast(
+        DataType::Timestamp(time_unit, tz) => Ok(cast::cast(
             &numeric::div(
                 &array,
                 &numeric::div(
@@ -276,15 +298,12 @@ fn nanoseconds_to_timestamp(array: Int64Array, data_type: &DataType) -> Result<A
                     &Int64Array::new_scalar(time_unit_to_multiplier(time_unit)),
                 )?,
             )?,
-            &DataType::Timestamp(
-                *time_unit,
-                Some(Arc::from(Local::now().offset().to_string())),
-            ),
+            &DataType::Timestamp(*time_unit, tz.clone()),
         )?),
         _ => {
             exec_err!(
                 "`convert_timezone`: result type must coerce to timestamp, received {:?}",
-                array.data_type()
+                data_type
             )
         }
     }
