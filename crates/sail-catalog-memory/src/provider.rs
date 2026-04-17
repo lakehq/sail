@@ -458,3 +458,35 @@ impl CatalogProvider for MemoryCatalogProvider {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_get_and_list_functions() -> CatalogResult<()> {
+        let database = Namespace::try_from(vec!["default".to_string()])?;
+        let provider = MemoryCatalogProvider::new("memory".to_string(), database.clone(), None);
+        let function = FunctionStatus {
+            catalog: Some("memory".to_string()),
+            namespace: Some(vec!["default".to_string()]),
+            name: "my_function".to_string(),
+            description: Some("test function".to_string()),
+            class_name: "com.example.MyFunction".to_string(),
+            is_temporary: false,
+        };
+
+        provider.insert_function(&database, function.clone())?;
+
+        let actual = provider.get_function(&database, "my_function").await?;
+        assert_eq!(actual.name, function.name);
+        assert_eq!(actual.namespace, function.namespace);
+        assert_eq!(actual.class_name, function.class_name);
+        assert!(!actual.is_temporary);
+
+        let functions = provider.list_functions(&database).await?;
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "my_function");
+        Ok(())
+    }
+}

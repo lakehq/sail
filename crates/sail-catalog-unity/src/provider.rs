@@ -886,7 +886,11 @@ impl CatalogProvider for UnityCatalogProvider {
                 .functions
                 .into_iter()
                 .map(|function_info| {
-                    self.function_info_to_function_status(function_info, &catalog_name, &schema_name)
+                    self.function_info_to_function_status(
+                        function_info,
+                        &catalog_name,
+                        &schema_name,
+                    )
                 })
                 .collect()),
             Err(e) => Err(CatalogError::External(format!(

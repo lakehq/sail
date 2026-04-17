@@ -11,7 +11,7 @@ def test_glue_catalog_get_function(glue_spark, moto_endpoint):
         region_name="us-east-1",
         endpoint_url=moto_endpoint,
         aws_access_key_id="testing",
-        aws_secret_access_key="testing",
+        aws_secret_access_key="testing",  # noqa: S106
     )
 
     function_name = "my_glue_function"
