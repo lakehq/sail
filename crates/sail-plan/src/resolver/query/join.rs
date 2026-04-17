@@ -112,8 +112,9 @@ impl PlanResolver<'_> {
                 // Validate Python UDF usage in the join condition, matching
                 // Spark's ExtractPythonUDFFromJoinCondition analysis rule.
                 let conjuncts = split_conjunction(&condition);
-                let (udf_conjuncts, other_conjuncts): (Vec<_>, Vec<_>) =
-                    conjuncts.into_iter().partition(expr_is_python_udf);
+                let (udf_conjuncts, other_conjuncts): (Vec<_>, Vec<_>) = conjuncts
+                    .into_iter()
+                    .partition(|expr| expr_is_python_udf(expr));
                 if !udf_conjuncts.is_empty() {
                     match join_type {
                         JoinType::Inner => {
