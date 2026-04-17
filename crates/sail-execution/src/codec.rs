@@ -113,7 +113,7 @@ use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
-use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
+use sail_function::scalar::csv::{spark_from_csv::SparkFromCSV, SparkSchemaOfCsv};
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -1916,6 +1916,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_schema_of_json" | "schema_of_json" => {
                 Ok(Arc::new(ScalarUDF::from(SparkSchemaOfJson::new())))
             }
+            "schema_of_csv" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfCsv::new()))),
             "xpath" => Ok(Arc::new(ScalarUDF::from(
                 sail_function::scalar::xml::xpath::Xpath::new(),
             ))),
@@ -2105,6 +2106,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSequence>()
+            || node_inner.is::<SparkSchemaOfCsv>()
             || node_inner.is::<SparkSchemaOfJson>()
             || node_inner.is::<SparkShuffle>()
             || node_inner.is::<SparkSha1>()
