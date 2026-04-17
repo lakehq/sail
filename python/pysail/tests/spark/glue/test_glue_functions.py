@@ -25,11 +25,11 @@ def test_glue_catalog_get_function(glue_spark, moto_endpoint):
         },
     )
 
-    assert glue_spark.catalog.functionExists(f"test_db.{function_name}") == True  # noqa: E712
+    assert glue_spark.catalog.functionExists(f"test_db.{function_name}")
 
     function = glue_spark.catalog.getFunction(f"test_db.{function_name}")
     assert function.name == function_name
     assert function.catalog == "sail"
     assert function.namespace == ["test_db"]
     assert function.className == "com.example.MyGlueFunction"
-    assert function.isTemporary == False  # noqa: E712
+    assert not function.isTemporary
