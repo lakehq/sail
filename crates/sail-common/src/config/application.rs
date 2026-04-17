@@ -511,7 +511,6 @@ pub struct PythonConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FlightConfig {
-    pub max_rows: usize,
     pub session_timeout_secs: u64,
 }
 

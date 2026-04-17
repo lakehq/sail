@@ -69,15 +69,8 @@ impl PlanResolver<'_> {
         let state = scope.state();
         state.config_mut().arrow_allow_large_var_types = true;
 
-        let payload = PySparkUdtfPayload::build(
-            &function.python_version,
-            &function.command,
-            function.eval_type,
-            arguments.len(),
-            kwargs,
-            &function.return_type,
-            &self.config.pyspark_udf_config,
-        )?;
+        let arguments_len = arguments.len();
+
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
             spec::PySparkUdfType::ArrowTable | spec::PySparkUdfType::ArrowUdtf => {
@@ -116,6 +109,16 @@ impl PlanResolver<'_> {
             .iter()
             .map(|e| e.get_type(plan.schema()))
             .collect::<datafusion_common::Result<Vec<_>>>()?;
+        let payload = PySparkUdtfPayload::build(
+            &function.python_version,
+            &function.command,
+            function.eval_type,
+            arguments_len,
+            &input_types,
+            kwargs,
+            &function.return_type,
+            &self.config.pyspark_udf_config,
+        )?;
         let udtf = PySparkUDTF::try_new(
             kind,
             get_udf_name(name, &payload),

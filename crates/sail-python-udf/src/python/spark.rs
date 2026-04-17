@@ -213,6 +213,7 @@ impl PySpark {
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
         input_names: &[String],
+        input_types: &[DataType],
         passthrough_columns: usize,
         output_schema: &SchemaRef,
         config: &PySparkUdfConfig,
@@ -223,6 +224,7 @@ impl PySpark {
             (
                 udf,
                 input_names.to_vec(),
+                input_types.try_to_py(py)?,
                 passthrough_columns,
                 output_schema.try_to_py(py)?,
                 config.clone(),

@@ -6,6 +6,7 @@ It is written in Rust and Python, and is built using technologies such as Apache
 ## Project Layout
 
 - `crates/`: All Rust crates.
+  - `sail-build-scripts`: Rust code generation logic to be used in `build.rs`.
   - `sail-cache`: Caching implementations.
   - `sail-catalog`: Catalog interface and common utilities.
   - `sail-catalog-*`: Catalog implementations.
@@ -15,9 +16,15 @@ It is written in Rust and Python, and is built using technologies such as Apache
   - `sail-data-source`: Data source implementations.
   - `sail-delta-lake`: Delta Lake integration.
   - `sail-execution`: Distributed execution implementation.
+  - `sail-flight`: Arrow Flight SQL server implementation.
   - `sail-function`: Scalar and aggregate functions.
+  - `sail-gold-test`: SQL gold tests.
   - `sail-iceberg`: Apache Iceberg integration.
+  - `sail-logical-optimizer`: Custom logical optimization rules.
+  - `sail-logical-plan`: Custom logical plan nodes.
   - `sail-object-store`: Object store implementations and utilities.
+  - `sail-physical-optimizer`: Custom physical optimization rules.
+  - `sail-physical-plan`: Custom physical plan nodes.
   - `sail-plan`: Logical plan resolver.
   - `sail-python`: Native module for the `pysail` Python package.
   - `sail-python-udf`: Python UDF support.

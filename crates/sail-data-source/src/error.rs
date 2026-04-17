@@ -5,8 +5,12 @@ use thiserror::Error;
 pub enum DataSourceError {
     #[error("missing option: {key}")]
     MissingOption { key: &'static str },
-    #[error("invalid option: {key}: {value}")]
-    InvalidOption { key: String, value: String },
+    #[error("invalid option: {key}: {value}{}", .cause.as_deref().map(|c| format!(" ({})", c)).unwrap_or_default())]
+    InvalidOption {
+        key: String,
+        value: String,
+        cause: Option<String>,
+    },
 }
 
 pub type DataSourceResult<T> = Result<T, DataSourceError>;

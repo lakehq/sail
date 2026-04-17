@@ -20,6 +20,30 @@ def _is_spark_testing():
 
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
+def spark_cached_remote_relation_patch():
+    from pyspark.sql.connect import plan
+
+    _del = getattr(plan.CachedRemoteRelation, "__del__", None)
+
+    if _del is None:
+        yield
+        return
+
+    def _noop_del(self) -> None:  # noqa: ARG001
+        # Spark Connect client can hang when a CachedRemoteRelation finalizer issues
+        # a blocking gRPC cleanup call during GC while another gRPC request is started
+        # by another thread.
+        return None
+
+    plan.CachedRemoteRelation.__del__ = _noop_del
+
+    try:
+        yield
+    finally:
+        plan.CachedRemoteRelation.__del__ = _del
+
+
+@pytest.fixture(scope="session", autouse=_is_spark_testing())
 def spark_working_dir(tmp_path_factory):
     import pyspark
 
@@ -71,8 +95,10 @@ def spark_doctest_session(doctest_namespace, request):
 
         spark = SparkSession.builder.appName("doctest").remote("local").getOrCreate()
         doctest_namespace["spark"] = spark
-        yield
-        spark.stop()
+        try:
+            yield
+        finally:
+            spark.stop()
     else:
         yield
 
@@ -87,6 +113,22 @@ def normalize_pandas_data_frame(df):
 
     columns = [col for col in df.columns if all(is_hashable(v) for v in df[col])]
     return df.sort_values(by=columns, ignore_index=True)
+
+
+def normalize_datetime_dtypes(df):
+    """Normalize datetime column dtypes from nanosecond to microsecond resolution.
+
+    Sail uses microsecond precision for timestamps (per Spark specification).
+    In Pandas 2.0-2.1, Python datetime objects and ``pd.Timestamp.apply()``
+    produce ``datetime64[ns]`` dtype, while Sail's ``toPandas()`` returns
+    ``datetime64[us]``. This normalization ensures that dtype comparisons in
+    ``assert_frame_equal`` do not fail due to this precision difference.
+    """
+    result = df.copy()
+    for col in result.columns:
+        if str(result[col].dtype) == "datetime64[ns]":
+            result[col] = result[col].astype("datetime64[us]")
+    return result
 
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
@@ -122,6 +164,8 @@ def patch_pandas_test_utils():
     def assert_frame_equal(left, right, **kwargs):
         left = normalize_pandas_data_frame(left)
         right = normalize_pandas_data_frame(right)
+        left = normalize_datetime_dtypes(left)
+        right = normalize_datetime_dtypes(right)
         _assert_frame_equal(left, right, **kwargs)
 
     modules = [
@@ -274,6 +318,16 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_parity_job_cancellation.py"],
         reason="Slow test not working yet",
+    ),
+    # The following tests rely on direct JVM access (RDD API, Java gateway),
+    # which is not supported by Sail.
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.rdd"],
+        reason="JVM-dependent test",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.java_method"],
+        reason="JVM-dependent test",
     ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
