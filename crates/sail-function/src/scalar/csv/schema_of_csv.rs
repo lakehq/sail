@@ -151,6 +151,9 @@ impl Default for SparkSchemaOfCsvOptions {
 impl SparkSchemaOfCsvOptions {
     fn from_map(map_array: &MapArray) -> Result<Self> {
         let mut options = Self::default();
+        if map_array.is_empty() || map_array.is_null(0) {
+            return Ok(options);
+        }
         let entries = map_array.value(0);
         let entries = entries
             .as_any()
@@ -214,6 +217,9 @@ fn schema_of_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return Err(DataFusionError::Execution(
             "No value passed into input".to_string(),
         ));
+    }
+    if rows.is_null(0) {
+        return Ok(Arc::new(StringArray::from(vec![Option::<String>::None])));
     }
     let ddl = infer_csv_schema(rows.value(0), &options);
     Ok(Arc::new(StringArray::from(vec![ddl])))
