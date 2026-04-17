@@ -387,28 +387,34 @@ impl CatalogCommand {
                 // update the catalog metadata, so we never end up with the two layers
                 // out of sync.
                 if let (Some(location), Some(format)) = (location, format) {
-                    if let Ok(registry) = ctx.extension::<TableFormatRegistry>() {
-                        if let Ok(table_format) = registry.get(&format) {
-                            let runtime = ctx.runtime_env();
-                            let (changes, if_exists_flag) = match &options {
-                                AlterTableOptions::SetTableProperties { properties } => (
-                                    properties
-                                        .iter()
-                                        .map(|(k, v)| (k.clone(), Some(v.clone())))
-                                        .collect::<Vec<_>>(),
-                                    false,
-                                ),
-                                AlterTableOptions::UnsetTableProperties { keys, if_exists } => (
-                                    keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>(),
-                                    *if_exists,
-                                ),
-                            };
-                            table_format
-                                .alter_table_properties(runtime, &location, changes, if_exists_flag)
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
-                        }
-                    }
+                    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                        CatalogError::External(format!(
+                            "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
+                        ))
+                    })?;
+                    let table_format = registry.get(&format).map_err(|e| {
+                        CatalogError::External(format!(
+                            "unknown table format '{format}' for storage-backed ALTER TABLE: {e}"
+                        ))
+                    })?;
+                    let runtime = ctx.runtime_env();
+                    let (changes, if_exists_flag) = match &options {
+                        AlterTableOptions::SetTableProperties { properties } => (
+                            properties
+                                .iter()
+                                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                                .collect::<Vec<_>>(),
+                            false,
+                        ),
+                        AlterTableOptions::UnsetTableProperties { keys, if_exists } => (
+                            keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>(),
+                            *if_exists,
+                        ),
+                    };
+                    table_format
+                        .alter_table_properties(runtime, &location, changes, if_exists_flag)
+                        .await
+                        .map_err(|e| CatalogError::External(e.to_string()))?;
                 }
 
                 manager.alter_table(&table, options).await?;

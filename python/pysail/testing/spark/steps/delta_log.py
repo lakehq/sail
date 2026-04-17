@@ -535,7 +535,7 @@ def _latest_effective_protocol_and_metadata_from_variables(variables: dict) -> d
     location = variables.get("location")
     assert location is not None, "expected variable `location` to be defined for delta log inspection"
     log_dir = Path(location.path) / "_delta_log"
-    log_files = sorted(log_dir.glob("*.json"))
+    log_files = sorted(f for f in log_dir.glob("*.json") if not f.stem.endswith(".compacted"))
     assert log_files, f"no delta logs found in {log_dir}"
 
     result: dict = {}

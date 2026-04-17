@@ -359,12 +359,9 @@ impl TableFormat for DeltaTableFormat {
         if !if_exists {
             for key in &canonical_unsets {
                 if !existing_config.contains_key(key) {
-                    return Err(DataFusionError::External(
-                        format!(
-                            "cannot remove property '{key}' because it is not set on the table"
-                        )
-                        .into(),
-                    ));
+                    return plan_err!(
+                        "cannot remove property '{key}' because it is not set on the table"
+                    );
                 }
             }
         }
@@ -503,11 +500,11 @@ fn parse_location_to_url(path: &str) -> Result<Url> {
     }
     if std::path::Path::new(path).is_absolute() {
         return Url::from_file_path(path)
-            .map_err(|_| DataFusionError::External(format!("invalid file path: {path}").into()));
+            .map_err(|_| DataFusionError::Plan(format!("invalid file path: {path}")));
     }
-    Err(DataFusionError::External(
-        format!("table location must be an absolute path or URL: {path}").into(),
-    ))
+    Err(DataFusionError::Plan(format!(
+        "table location must be an absolute path or URL: {path}"
+    )))
 }
 
 impl DeltaTableFormat {
