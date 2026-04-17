@@ -113,6 +113,16 @@ impl ScalarUDFImpl for SparkToChar {
             ColumnarValue::Scalar(scalar) => match scalar.try_as_str().flatten() {
                 Some(s) => s.to_string(),
                 None if scalar.is_null() => {
+                    // Spark: binary with NULL format is an error, not NULL
+                    if matches!(
+                        args[0].data_type(),
+                        DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_)
+                    ) {
+                        return Err(generic_exec_err(
+                            "to_char",
+                            "binary format parameter must be non-NULL",
+                        ));
+                    }
                     return match &args[0] {
                         ColumnarValue::Scalar(_) => {
                             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
@@ -463,14 +473,8 @@ fn insert_sign_left(number: &str, sign_char: char) -> String {
 /// Apply currency symbol.
 fn apply_currency(number: &str, spec: &RegexSpec) -> String {
     match (&spec.currency_left, &spec.currency_right) {
-        (Some(c), _) => {
-            let symbol = if c == "L" { "$" } else { c.as_str() };
-            format!("{symbol}{number}")
-        }
-        (_, Some(c)) => {
-            let symbol = if c == "L" { "$" } else { c.as_str() };
-            format!("{number}{symbol}")
-        }
+        (Some(c), _) => format!("{c}{number}"),
+        (_, Some(c)) => format!("{number}{c}"),
         _ => number.to_string(),
     }
 }

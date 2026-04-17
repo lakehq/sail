@@ -358,6 +358,14 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         )
     {
         Ok(ScalarUDF::from(SparkToChar::new()).call(vec![value, format]))
+    } else if matches!(
+        dt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        // Spark casts STRING to numeric for formatting. Use DOUBLE to avoid
+        // the decimal scale overflow check that DECIMAL(38,18) would trigger.
+        let numeric_value = value.cast_to(&DataType::Float64, schema.as_ref())?;
+        Ok(ScalarUDF::from(SparkToChar::new()).call(vec![numeric_value, format]))
     } else {
         Err(PlanError::invalid(format!(
             "to_char/to_varchar requires a numeric, temporal, or binary type, got {dt}"
