@@ -59,25 +59,44 @@ impl SparkSchemaOfCsv {
     }
 
     fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
-        match arg_types {
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
-                match map_field.data_type() {
+        fn is_valid_csv_arg(arg_type: &DataType) -> bool {
+            matches!(
+                arg_type,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null
+            )
+        }
+
+        fn validate_options_arg(arg_type: &DataType) -> Result<()> {
+            match arg_type {
+                DataType::Null => Ok(()),
+                DataType::Map(map_field, _) => match map_field.data_type() {
                     DataType::Struct(fields) => {
                         let key = fields[0].clone();
                         let value = fields[1].clone();
                         if !key.data_type().is_string() || !value.data_type().is_string() {
                             return Err(DataFusionError::Plan(format!(
-                            "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
-                            Self::SCHEMA_OF_CSV_NAME,
-                            key.data_type(),
-                            value.data_type(),
-                        )));
+                                "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
+                                SparkSchemaOfCsv::SCHEMA_OF_CSV_NAME,
+                                key.data_type(),
+                                value.data_type(),
+                            )));
                         }
                         Ok(())
                     }
                     _ => unreachable!(),
-                }
+                },
+                _ => plan_err!(
+                    "For function `{}` found invalid options arg type: {:?}",
+                    SparkSchemaOfCsv::SCHEMA_OF_CSV_NAME,
+                    arg_type
+                ),
+            }
+        }
+
+        match arg_types {
+            [arg_type] if is_valid_csv_arg(arg_type) => Ok(()),
+            [csv_arg_type, options_arg_type] if is_valid_csv_arg(csv_arg_type) => {
+                validate_options_arg(options_arg_type)
             }
             _ => plan_err!(
                 "For function `{}` found invalid arg types: {:?}",
@@ -186,19 +205,10 @@ impl SparkSchemaOfCsvOptions {
             match key {
                 "sep" | "delimiter" => options.sep = value.to_string(),
                 "timestampFormat" => {
-                    options.timestamp_format = value
-                        .replace("yyyy", "%Y")
-                        .replace("MM", "%m")
-                        .replace("dd", "%d")
-                        .replace("HH", "%H")
-                        .replace("mm", "%M")
-                        .replace("ss", "%S");
+                    options.timestamp_format = super::convert_java_timestamp_format(value);
                 }
-                other => {
-                    return plan_err!(
-                        "Found unsupported option type when parsing options: {other}"
-                    );
-                }
+                // Silently ignore unrecognised options, matching Spark's behaviour.
+                _ => {}
             }
         }
         Ok(options)

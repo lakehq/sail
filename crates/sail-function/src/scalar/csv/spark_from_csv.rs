@@ -66,24 +66,13 @@ impl SparkFromCSVOptions {
 
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(Self::convert_format)
+            .map(super::convert_java_timestamp_format)
             .unwrap_or(Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
 
         Self {
             sep,
             timestamp_format,
         }
-    }
-
-    /// Converts a Spark/Java-style timestamp format string (e.g., "yyyy-MM-dd")
-    /// into a format compatible with the `chrono` crate (e.g., "%Y-%m-%d").
-    fn convert_format(fmt: &str) -> String {
-        fmt.replace("yyyy", "%Y")
-            .replace("MM", "%m")
-            .replace("dd", "%d")
-            .replace("HH", "%H")
-            .replace("mm", "%M")
-            .replace("ss", "%S")
     }
 }
 
