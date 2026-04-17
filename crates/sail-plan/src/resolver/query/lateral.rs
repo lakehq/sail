@@ -131,7 +131,7 @@ impl PlanResolver<'_> {
             .columns()
             .into_iter()
             .map(Expr::Column)
-            .chain(expr.into_iter())
+            .chain(expr)
             .collect::<Vec<_>>();
         Ok(LogicalPlan::Projection(Projection::try_new(
             projections,

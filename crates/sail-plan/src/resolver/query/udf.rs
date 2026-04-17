@@ -297,11 +297,7 @@ impl PlanResolver<'_> {
             .zip(right.grouping.iter())
             .map(|(left, right)| left.clone().eq(right.clone()))
             .collect::<Vec<_>>();
-        let offsets: Vec<usize> = left
-            .offsets
-            .into_iter()
-            .chain(right.offsets.into_iter())
-            .collect();
+        let offsets: Vec<usize> = left.offsets.into_iter().chain(right.offsets).collect();
 
         // prepare the output mapping UDF
         let spec::CommonInlineUserDefinedFunction {

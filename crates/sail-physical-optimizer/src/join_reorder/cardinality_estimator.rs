@@ -502,7 +502,7 @@ mod tests {
         let r: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
         let pred: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(l, Operator::Gt, r));
 
-        let join_set = JoinSet::from_iter([0usize, 1usize].into_iter())?;
+        let join_set = JoinSet::from_iter([0usize, 1usize])?;
         graph.add_edge(JoinEdge::new(join_set, pred, JoinType::Inner, vec![]))?;
 
         let estimator = CardinalityEstimator::new(graph);
