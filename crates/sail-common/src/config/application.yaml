@@ -727,14 +727,6 @@
     the session active.
   experimental: true
 
-- key: flight.max_rows
-  type: number
-  default: "0"
-  description: |
-    Maximum number of rows to return per query from the Flight SQL server.
-    If the value is `0`, there is no limit on the number of rows returned.
-  experimental: true
-
 - key: flight.session_timeout_secs
   type: number
   default: "3600"

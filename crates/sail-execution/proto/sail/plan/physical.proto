@@ -84,6 +84,7 @@ message ExtendedScalarUdf {
     SparkDateUdf spark_date = 11;
     SparkFromCsvUdf spark_from_csv = 12;
     XpathTypedUdf xpath_typed = 13;
+    SparkVariantGetUdf spark_variant_get = 14;
   }
 }
 
@@ -164,6 +165,10 @@ message SparkTimestampUdf {
 
 message SparkDateUdf {
   bool is_try = 1;
+}
+
+message SparkVariantGetUdf {
+  bool safe = 1;
 }
 
 message SparkFromCsvUdf {
@@ -257,6 +262,10 @@ message PySparkUdfConfig {
   bool pandas_grouped_map_assign_columns_by_name = 3;
   bool pandas_convert_to_arrow_array_safely = 4;
   uint64 arrow_max_records_per_batch = 5;
+  bool python_udf_pandas_conversion_enabled = 6;
+  bool python_udtf_pandas_conversion_enabled = 7;
+  bool python_udf_pandas_int_to_decimal_coercion_enabled = 8;
+  bool binary_as_bytes = 9;
 }
 
 message EquivalenceProperties {
