@@ -92,6 +92,25 @@ Feature: Delta Lake Generated Columns
         | path                                                   | value                |
         | protocol.minWriterVersion                              | 7                    |
 
+    @sail-only
+    Scenario: Delta log first commit snapshot records generation expression and writerFeatures
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_meta (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_meta (id, event_time)
+        VALUES (1, TIMESTAMP '2024-10-15 10:30:00')
+        """
+      Then delta log first commit protocol and metadata matches snapshot
+
   Rule: Generated columns with different expressions
 
     Background:
@@ -202,7 +221,7 @@ Feature: Delta Lake Generated Columns
         | id | event_year | event_month | event_day |
         | 1  | 2024       | 10          | 15        |
 
-  Rule: Explicit generated column values must match the generation expression (W-7)
+  Rule: Explicit generated column values must match the generation expression
 
     Background:
       Given variable location for temporary directory gen_col_enforce
@@ -279,7 +298,7 @@ Feature: Delta Lake Generated Columns
         VALUES (1, TIMESTAMP '2024-05-10 12:00:00', DATE '2099-01-01')
         """
 
-  Rule: Generated columns are recomputed during MERGE (W-8)
+  Rule: Generated columns are recomputed during MERGE
 
     Background:
       Given variable location for temporary directory gen_col_merge
@@ -383,3 +402,53 @@ Feature: Delta Lake Generated Columns
         | id | event_time          | event_date |
         | 1  | 2024-01-01 00:00:00 | 2024-01-01 |
         | 2  | 2024-09-01 00:00:00 | 2024-09-01 |
+
+  Rule: Generation expression is recovered from delta log metadata when catalog has no column definitions
+
+    Background:
+      Given variable location for temporary directory gen_col_recovery
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_gen_col_recovery
+        """
+
+    @sail-only
+    Scenario: INSERT into a schema-only registered table recovers generation expression from delta log
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_recovery (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_recovery (id, event_time)
+        VALUES (1, TIMESTAMP '2024-03-20 09:00:00')
+        """
+      Given statement
+        """
+        DROP TABLE IF EXISTS delta_gen_col_recovery
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_recovery
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_recovery (id, event_time)
+        VALUES (2, TIMESTAMP '2024-06-15 18:30:00')
+        """
+      When query
+        """
+        SELECT id, event_time, event_date FROM delta_gen_col_recovery ORDER BY id
+        """
+      Then query result ordered
+        | id | event_time          | event_date |
+        | 1  | 2024-03-20 09:00:00 | 2024-03-20 |
+        | 2  | 2024-06-15 18:30:00 | 2024-06-15 |
