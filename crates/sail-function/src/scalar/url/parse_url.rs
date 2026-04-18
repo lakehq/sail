@@ -64,15 +64,27 @@ impl ParseUrl {
                 "HOST" => url.host_str().map(String::from),
                 "PATH" => {
                     let path = url.path().to_string();
-                    let path = if path == "/" { "".to_string() } else { path };
+                    // Spark: "https://example.com" → empty PATH, "https://example.com/" → "/"
+                    let path = if path == "/" && !value.ends_with('/') {
+                        "".to_string()
+                    } else {
+                        path
+                    };
                     Some(path)
                 }
                 "QUERY" => match key {
                     None => url.query().map(String::from),
-                    Some(key) => url
-                        .query_pairs()
-                        .find(|(k, _)| k == key)
-                        .map(|(_, v)| v.into_owned()),
+                    Some(key) => {
+                        // Spark doesn't decode percent-encoding in query values.
+                        // Use raw query string parsing instead of url.query_pairs()
+                        // which auto-decodes.
+                        url.query().and_then(|q| {
+                            q.split('&')
+                                .filter_map(|pair| pair.split_once('='))
+                                .find(|(k, _)| *k == key)
+                                .map(|(_, v)| v.to_string())
+                        })
+                    }
                 },
                 "REF" => url.fragment().map(String::from),
                 "PROTOCOL" => Some(url.scheme().to_string()),
@@ -83,7 +95,33 @@ impl ParseUrl {
                         None => Some(path.to_string()),
                     }
                 }
-                "AUTHORITY" => Some(url.authority().to_string()),
+                "AUTHORITY" => {
+                    // Build authority manually to preserve explicit port
+                    // (url crate strips default ports like 443 for https)
+                    let mut auth = String::new();
+                    let username = url.username();
+                    if !username.is_empty() {
+                        auth.push_str(username);
+                        if let Some(password) = url.password() {
+                            auth.push(':');
+                            auth.push_str(password);
+                        }
+                        auth.push('@');
+                    }
+                    if let Some(host) = url.host_str() {
+                        auth.push_str(host);
+                    }
+                    // Spark preserves the port even if it's the default for the scheme.
+                    // Re-parse from the original string to get the explicit port.
+                    if let Some(port_str) = extract_explicit_port(value) {
+                        auth.push(':');
+                        auth.push_str(port_str);
+                    } else if let Some(port) = url.port() {
+                        auth.push(':');
+                        auth.push_str(&port.to_string());
+                    }
+                    Some(auth)
+                }
                 "USERINFO" => {
                     let username = url.username();
                     if username.is_empty() {
@@ -225,6 +263,30 @@ impl ScalarUDFImpl for ParseUrl {
     }
 }
 
+/// Extract the explicit port string from a raw URL, even if it's a default port.
+/// Returns None if no port is specified in the URL string.
+fn extract_explicit_port(url: &str) -> Option<&str> {
+    // Find authority section: after "://" and before first "/" or "?" or "#" or end
+    let after_scheme = url.find("://").map(|i| i + 3)?;
+    let authority_end = url[after_scheme..]
+        .find(['/', '?', '#'])
+        .map(|i| after_scheme + i)
+        .unwrap_or(url.len());
+    let authority = &url[after_scheme..authority_end];
+    // Strip userinfo if present
+    let host_port = match authority.rfind('@') {
+        Some(i) => &authority[i + 1..],
+        None => authority,
+    };
+    // Find last colon that's part of port (not IPv6)
+    if host_port.starts_with('[') {
+        // IPv6: [::1]:port
+        host_port.rfind("]:").map(|i| &host_port[i + 2..])
+    } else {
+        host_port.rfind(':').map(|i| &host_port[i + 1..])
+    }
+}
+
 fn is_string_type(dt: &DataType) -> bool {
     matches!(
         dt,
@@ -272,6 +334,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8, DataType::Utf8, DataType::Utf8View) => {
@@ -280,6 +343,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8, DataType::Utf8, DataType::LargeUtf8) => {
@@ -288,6 +352,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8, DataType::Utf8View, DataType::Utf8) => {
@@ -296,6 +361,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8, DataType::Utf8View, DataType::Utf8View) => {
@@ -304,6 +370,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8, DataType::Utf8View, DataType::LargeUtf8) => {
@@ -312,6 +379,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8, DataType::LargeUtf8, DataType::Utf8) => {
@@ -320,6 +388,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View) => {
@@ -328,6 +397,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -336,6 +406,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::Utf8, DataType::Utf8) => {
@@ -344,6 +415,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::Utf8, DataType::Utf8View) => {
@@ -352,6 +424,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::Utf8, DataType::LargeUtf8) => {
@@ -360,6 +433,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::Utf8View, DataType::Utf8) => {
@@ -368,6 +442,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::Utf8View, DataType::Utf8View) => {
@@ -376,6 +451,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::Utf8View, DataType::LargeUtf8) => {
@@ -384,6 +460,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::LargeUtf8, DataType::Utf8) => {
@@ -392,6 +469,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::LargeUtf8, DataType::Utf8View) => {
@@ -400,6 +478,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::Utf8View, DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -408,6 +487,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8, DataType::Utf8) => {
@@ -416,6 +496,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View) => {
@@ -424,6 +505,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8, DataType::LargeUtf8) => {
@@ -432,6 +514,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8View, DataType::Utf8) => {
@@ -440,6 +523,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8View, DataType::Utf8View) => {
@@ -448,6 +532,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8View, DataType::LargeUtf8) => {
@@ -456,6 +541,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8, DataType::Utf8) => {
@@ -464,6 +550,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8, DataType::Utf8View) => {
@@ -472,6 +559,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_string_view_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -480,6 +568,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     as_large_string_array(key)?,
                     handler_err,
+                    true,
                 )
             }
             _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
@@ -502,12 +591,14 @@ fn spark_handled_parse_url(
                 as_string_array(part)?,
                 &key,
                 handler_err,
+                false,
             ),
             (DataType::Utf8, DataType::Utf8View) => process_parse_url::<_, _, _, StringArray>(
                 as_string_array(url)?,
                 as_string_view_array(part)?,
                 &key,
                 handler_err,
+                false,
             ),
             (DataType::Utf8, DataType::LargeUtf8) => {
                 process_parse_url::<_, _, _, LargeStringArray>(
@@ -515,6 +606,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             (DataType::Utf8View, DataType::Utf8) => process_parse_url::<_, _, _, StringArray>(
@@ -522,12 +614,14 @@ fn spark_handled_parse_url(
                 as_string_array(part)?,
                 &key,
                 handler_err,
+                false,
             ),
             (DataType::Utf8View, DataType::Utf8View) => process_parse_url::<_, _, _, StringArray>(
                 as_string_view_array(url)?,
                 as_string_view_array(part)?,
                 &key,
                 handler_err,
+                false,
             ),
             (DataType::Utf8View, DataType::LargeUtf8) => {
                 process_parse_url::<_, _, _, LargeStringArray>(
@@ -535,6 +629,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8) => {
@@ -543,6 +638,7 @@ fn spark_handled_parse_url(
                     as_string_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8View) => {
@@ -551,6 +647,7 @@ fn spark_handled_parse_url(
                     as_string_view_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -559,6 +656,7 @@ fn spark_handled_parse_url(
                     as_large_string_array(part)?,
                     &key,
                     handler_err,
+                    false,
                 )
             }
             _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
@@ -572,6 +670,7 @@ fn process_parse_url<'a, A, B, C, T>(
     part_array: &'a B,
     key_array: &'a C,
     handle: impl Fn(Result<Option<String>>) -> Result<Option<String>>,
+    has_key_arg: bool,
 ) -> Result<ArrayRef>
 where
     &'a A: StringArrayType<'a>,
@@ -584,7 +683,11 @@ where
         .zip(part_array.iter())
         .zip(key_array.iter())
         .map(|((url, part), key)| {
-            if let (Some(url), Some(part), key) = (url, part, key) {
+            // Spark: if 3-arg mode and key is NULL, return NULL
+            if has_key_arg && key.is_none() {
+                return Ok(None);
+            }
+            if let (Some(url), Some(part)) = (url, part) {
                 handle(ParseUrl::parse(url, part, key))
             } else {
                 Ok(None)

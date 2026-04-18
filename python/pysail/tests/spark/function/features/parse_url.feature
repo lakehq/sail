@@ -72,8 +72,6 @@ Feature: parse_url() extracts URL component
         | result |
         | NULL   |
 
-    @sail-bug
-    # Sail doesn't handle NULL key correctly in 3-arg form
     Scenario: parse_url valid url and part with NULL key
       When query
         """
@@ -478,8 +476,6 @@ Feature: parse_url() extracts URL component
         | result |
         |        |
 
-    @sail-bug
-    # Sail returns empty string instead of "/" for root path
     Scenario: parse_url root path returns slash
       When query
         """
@@ -500,8 +496,6 @@ Feature: parse_url() extracts URL component
         | result      |
         | 192.168.1.1 |
 
-    @sail-bug
-    # Sail returns different authority format with port
     Scenario: parse_url port in authority
       When query
         """
@@ -511,8 +505,6 @@ Feature: parse_url() extracts URL component
         | result          |
         | example.com:443 |
 
-    @sail-bug
-    # Sail decodes %20 to space but Spark returns raw encoded value
     Scenario: parse_url encoded query value not decoded
       When query
         """
@@ -540,8 +532,6 @@ Feature: parse_url() extracts URL component
         | result |
         |        |
 
-    @sail-bug
-    # Sail returns empty string instead of NULL for key without = sign
     Scenario: parse_url query key without value returns NULL
       When query
         """
