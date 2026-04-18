@@ -10,8 +10,6 @@ Feature: sequence comprehensive tests
         """
       Then query error .*
 
-    @sail-bug
-    # Sail doesn't error on 1 arg - may accept it differently
     Scenario: sequence one argument errors
       When query
         """
@@ -68,8 +66,6 @@ Feature: sequence comprehensive tests
         | result          |
         | [1, 2, 3, 4, 5] |
 
-    @sail-bug
-    # Sail returns [] instead of [5,4,3,2,1] - no default step -1
     Scenario: sequence descending
       When query
         """
@@ -155,8 +151,6 @@ Feature: sequence comprehensive tests
         | result               |
         | [-5, -4, -3, -2, -1] |
 
-    @sail-bug
-    # Sail returns [] instead of [-1,-2,-3,-4,-5] - no default step -1
     Scenario: sequence negative descending
       When query
         """
@@ -177,8 +171,6 @@ Feature: sequence comprehensive tests
         | result          |
         | [1, 2, 3, 4, 5] |
 
-    @sail-bug
-    # Sail returns [] instead of [5,4,3,2,1] - no default step -1 for BIGINT
     Scenario: sequence BIGINT descending
       When query
         """
@@ -210,8 +202,6 @@ Feature: sequence comprehensive tests
 
   Rule: Multi-row
 
-    @sail-bug
-    # Sail returns [] for descending rows - no default step -1
     Scenario: sequence multi-row
       When query
         """
@@ -225,8 +215,6 @@ Feature: sequence comprehensive tests
 
   Rule: Error conditions
 
-    @sail-bug
-    # Sail doesn't error on step=0
     Scenario: sequence step zero errors
       When query
         """
@@ -234,8 +222,6 @@ Feature: sequence comprehensive tests
         """
       Then query error .*
 
-    @sail-bug
-    # Sail doesn't error on wrong step direction
     Scenario: sequence step wrong direction errors
       When query
         """
