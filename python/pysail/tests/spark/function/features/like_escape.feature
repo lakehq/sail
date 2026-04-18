@@ -47,6 +47,24 @@ Feature: LIKE and ILIKE with ESCAPE clause
       | result |
       | true   |
 
+    Scenario: like with '!' escape before a non-special char (lenient pass-through)
+      When query
+      """
+      SELECT 'a!b' LIKE 'a!b' ESCAPE '!' AS result
+      """
+      Then query result
+      | result |
+      | true   |
+
+    Scenario: like with '!' escape and literal '!' in value but not pattern
+      When query
+      """
+      SELECT 'a!b' LIKE 'ab' ESCAPE '!' AS result
+      """
+      Then query result
+      | result |
+      | false  |
+
   Rule: Default backslash escape
 
     Scenario: ilike with default backslash escape
