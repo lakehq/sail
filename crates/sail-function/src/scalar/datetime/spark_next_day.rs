@@ -8,6 +8,8 @@ use datafusion_common::types::NativeType;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
+use crate::error::invalid_arg_count_exec_err;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkNextDay {
     signature: Signature,
@@ -59,6 +61,7 @@ impl ScalarUDFImpl for SparkNextDay {
                     (ScalarValue::Date32(days), ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
                         if let Some(days) = days {
                             if let Some(day_of_week) = day_of_week {
+                                validate_day_of_week(day_of_week.as_str())?;
                                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(
                                     spark_next_day(*days, day_of_week.as_str()),
                                 )))
@@ -78,6 +81,8 @@ impl ScalarUDFImpl for SparkNextDay {
                 match (date_array.data_type(), day_of_week) {
                     (DataType::Date32, ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
                         if let Some(day_of_week) = day_of_week {
+                            // Validate day name once, error if invalid
+                            validate_day_of_week(day_of_week.as_str())?;
                             let result: Date32Array = date_array
                                 .as_primitive::<Date32Type>()
                                 .unary_opt(|days| spark_next_day(days, day_of_week.as_str()))
@@ -131,10 +136,11 @@ impl ScalarUDFImpl for SparkNextDay {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 2 {
-            return exec_err!(
-                "Spark `next_day` function requires 2 arguments, got {}",
-                arg_types.len()
-            );
+            return Err(invalid_arg_count_exec_err(
+                "next_day",
+                (2, 2),
+                arg_types.len(),
+            ));
         }
 
         let current_native_type: NativeType = (&arg_types[0]).into();
@@ -173,24 +179,34 @@ fn process_next_day_arrays<'a, S>(
 where
     &'a S: StringArrayType<'a>,
 {
-    let result = date_array
+    let result: Result<Date32Array> = date_array
         .iter()
         .zip(day_of_week_array.iter())
         .map(|(days, day_of_week)| {
             if let Some(days) = days {
                 if let Some(day_of_week) = day_of_week {
-                    spark_next_day(days, day_of_week)
+                    validate_day_of_week(day_of_week)?;
+                    Ok(spark_next_day(days, day_of_week))
                 } else {
-                    // TODO: if spark.sql.ansi.enabled is false,
-                    //  returns NULL instead of an error for a malformed dayOfWeek.
-                    None
+                    Ok(None)
                 }
             } else {
-                None
+                Ok(None)
             }
         })
-        .collect::<Date32Array>();
-    Ok(Arc::new(result) as ArrayRef)
+        .collect();
+    Ok(Arc::new(result?) as ArrayRef)
+}
+
+/// Validates that a day-of-week string is recognized. Returns error for invalid names.
+fn validate_day_of_week(day_of_week: &str) -> Result<()> {
+    let upper = day_of_week.trim().to_uppercase();
+    match upper.as_str() {
+        "MO" | "MON" | "MONDAY" | "TU" | "TUE" | "TUESDAY" | "WE" | "WED" | "WEDNESDAY" | "TH"
+        | "THU" | "THURSDAY" | "FR" | "FRI" | "FRIDAY" | "SA" | "SAT" | "SATURDAY" | "SU"
+        | "SUN" | "SUNDAY" => Ok(()),
+        other => exec_err!("Illegal input for day of week: {other}"),
+    }
 }
 
 fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
@@ -205,11 +221,7 @@ fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
         "FR" | "FRI" | "FRIDAY" => Some("FRIDAY"),
         "SA" | "SAT" | "SATURDAY" => Some("SATURDAY"),
         "SU" | "SUN" | "SUNDAY" => Some("SUNDAY"),
-        _ => {
-            // TODO: if spark.sql.ansi.enabled is false,
-            //  returns NULL instead of an error for a malformed dayOfWeek.
-            None
-        }
+        _ => None,
     };
 
     if let Some(day_of_week) = day_of_week {
@@ -218,11 +230,7 @@ fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
             Ok(day_of_week) => Some(Date32Type::from_naive_date(
                 date + Duration::days((7 - date.weekday().days_since(day_of_week)) as i64),
             )),
-            Err(_) => {
-                // TODO: if spark.sql.ansi.enabled is false,
-                //  returns NULL instead of an error for a malformed dayOfWeek.
-                None
-            }
+            Err(_) => None,
         }
     } else {
         None

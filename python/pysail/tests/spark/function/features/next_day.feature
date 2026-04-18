@@ -193,8 +193,6 @@ Feature: next_day comprehensive tests
 
   Rule: Error conditions
 
-    @sail-bug
-    # Sail returns NULL instead of erroring for invalid day name
     Scenario: next_day invalid day name errors
       When query
         """
