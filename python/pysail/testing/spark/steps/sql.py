@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import time
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -124,7 +126,15 @@ def query(template, docstring, variables):
 def query_schema(docstring, query, spark):
     """Analyze the SQL query and compare schema with expected schema tree string."""
     df = spark.sql(query)
-    assert docstring.strip() == df.schema.treeString().strip()
+    if hasattr(df.schema, "treeString"):
+        actual = df.schema.treeString()
+    else:
+        # PySpark < 4.x has no StructType.treeString(); capture printSchema() output instead.
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            df.printSchema()
+        actual = buf.getvalue()
+    assert docstring.strip() == actual.strip()
 
 
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))
