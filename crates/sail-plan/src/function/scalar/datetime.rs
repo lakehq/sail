@@ -338,7 +338,9 @@ fn to_timestamp_ntz(args: Vec<Expr>) -> PlanResult<Expr> {
         let format = to_chrono_fmt(format);
         Ok(expr_fn::to_timestamp_micros(vec![expr, format]))
     } else {
-        Err(PlanError::invalid("to_timestamp_ntz requires 1 or 2 arguments"))
+        Err(PlanError::invalid(
+            "to_timestamp_ntz requires 1 or 2 arguments",
+        ))
     }
 }
 

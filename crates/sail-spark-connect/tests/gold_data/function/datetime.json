@@ -2966,7 +2966,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Function 'to_local_time' requires TypeSignatureClass::Timestamp, but received String (DataType: Utf8). No function matches the given name and argument types 'to_local_time(Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tto_local_time(Coercion(TypeSignatureClass::Timestamp))"
       }
     },
     {
