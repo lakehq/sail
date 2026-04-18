@@ -61,7 +61,6 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("get_json_object", F::binary(get_json_object)),
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
-        // json_tuple is registered as a generator function in generator.rs
         ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
         ("to_json", F::var_arg(to_json)),
     ]

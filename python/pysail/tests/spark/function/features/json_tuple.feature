@@ -1,6 +1,56 @@
 @json_tuple
 Feature: json_tuple function
 
+  Rule: Argument count validation
+
+    Scenario: json_tuple zero arguments errors
+      When query
+        """
+        SELECT json_tuple()
+        """
+      Then query error .*
+
+    Scenario: json_tuple one argument errors
+      When query
+        """
+        SELECT json_tuple('{"a":1}')
+        """
+      Then query error .*
+
+  Rule: NULL key handling
+
+    Scenario: json_tuple NULL key returns NULL
+      When query
+        """
+        SELECT json_tuple('{"a":1}', CAST(NULL AS STRING))
+        """
+      Then query result
+        | c0   |
+        | NULL |
+
+    Scenario: json_tuple mixed NULL and valid keys
+      When query
+        """
+        SELECT json_tuple('{"a":1,"b":2}', 'a', CAST(NULL AS STRING), 'b')
+        """
+      Then query result
+        | c0 | c1   | c2 |
+        | 1  | NULL | 2  |
+
+  Rule: Multi-row without LATERAL VIEW
+
+    Scenario: json_tuple multi-row from VALUES
+      When query
+        """
+        SELECT json_tuple(v, 'a', 'b') FROM VALUES ('{"a":1,"b":2}'), ('{"a":3}'), (NULL), ('{"b":4}') AS t(v)
+        """
+      Then query result
+        | c0   | c1   |
+        | 1    | 2    |
+        | 3    | NULL |
+        | NULL | NULL |
+        | NULL | 4    |
+
   Rule: Basic extraction
     Scenario: Extract single field
       When query
@@ -214,7 +264,8 @@ Feature: json_tuple function
         | c0 | c1   | c2 |
         | 42 | 3.14 | -7 |
 
-    @xfail
+    @sail-bug
+    # Sail doesn't preserve scientific notation format for json_tuple values
     Scenario: Scientific notation positive
       When query
         """
@@ -233,7 +284,8 @@ Feature: json_tuple function
         | c0      |
         | -0.0015 |
 
-    @xfail
+    @sail-bug
+    # Sail loses precision for very large integers in json_tuple
     Scenario: Very large number
       When query
         """
@@ -252,7 +304,8 @@ Feature: json_tuple function
         | c0                  |
         | 0.12345678901234568 |
 
-    @xfail
+    @sail-bug
+    # Sail doesn't normalize -0 to 0 in json_tuple
     Scenario: Zero and negative zero
       When query
         """
@@ -388,7 +441,8 @@ Feature: json_tuple function
         | 3  | NULL | NULL |
 
   Rule: Additional edge cases
-    @xfail
+    @sail-bug
+    # Sail doesn't handle escaped backslash correctly in json_tuple
     Scenario: Escaped backslash in value
       When query
         """
@@ -398,7 +452,8 @@ Feature: json_tuple function
         | c0           |
         | hello\nworld |
 
-    @xfail
+    @sail-bug
+    # Sail doesn't handle very long string values in json_tuple
     Scenario: Long string value (1000 chars)
       When query
         """
