@@ -181,6 +181,6 @@ pub fn create_catalog_manager(
         default_database: config.catalog.default_database.clone(),
         global_temporary_database: config.catalog.global_temporary_database.clone(),
     };
-    CatalogManager::new(options)
+    CatalogManager::try_new(options)
         .map_err(|e| plan_datafusion_err!("failed to create catalog manager: {e}"))
 }

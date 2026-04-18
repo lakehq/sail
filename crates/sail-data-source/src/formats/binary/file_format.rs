@@ -32,7 +32,6 @@ impl BinaryFileFormat {
         }
     }
 
-    #[allow(unused)]
     pub fn options(&self) -> &TableBinaryOptions {
         &self.options
     }

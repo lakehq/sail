@@ -14,6 +14,7 @@ use sail_common_datafusion::streaming::event::schema::{
     is_flow_event_schema, MARKER_FIELD_NAME, RETRACTED_FIELD_NAME,
 };
 use sail_common_datafusion::streaming::source::{StreamSource, StreamSourceTableProvider};
+use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::show_string::ShowStringNode;
@@ -46,6 +47,9 @@ impl StreamingRewriter {
                 node: show.with_exprs_and_inputs(vec![], vec![input])?,
             })))
         } else if node.as_any().is::<FileWriteNode>() {
+            Ok(Transformed::no(LogicalPlan::Extension(extension)))
+        } else if node.as_any().is::<BarrierNode>() {
+            // TODO: support BarrierNode for streaming properly.
             Ok(Transformed::no(LogicalPlan::Extension(extension)))
         } else {
             plan_err!("unsupported extension node for streaming: {node:?}")
@@ -94,27 +98,32 @@ impl TreeNodeRewriter for StreamingRewriter {
                 not_impl_err!("streaming repartition: {plan:?}")
             }
             LogicalPlan::TableScan(ref scan) => {
-                let provider = source_as_provider(&scan.source)?;
-                if let Some(source) = get_stream_source_opt(provider.as_ref()) {
-                    let NamedStreamSource { source, names } = source;
-                    let TableScan {
-                        table_name,
-                        source: _,
-                        projection,
-                        projected_schema: _,
-                        filters,
-                        fetch,
-                    } = scan;
-                    Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                        node: Arc::new(StreamSourceWrapperNode::try_new(
-                            table_name.clone(),
-                            source,
-                            names,
-                            projection.clone(),
-                            filters.clone(),
-                            *fetch,
-                        )?),
-                    })))
+                if let Ok(provider) = source_as_provider(&scan.source) {
+                    if let Some(source) = get_stream_source_opt(provider.as_ref()) {
+                        let NamedStreamSource { source, names } = source;
+                        let TableScan {
+                            table_name,
+                            source: _,
+                            projection,
+                            projected_schema: _,
+                            filters,
+                            fetch,
+                        } = scan;
+                        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                            node: Arc::new(StreamSourceWrapperNode::try_new(
+                                table_name.clone(),
+                                source,
+                                names,
+                                projection.clone(),
+                                filters.clone(),
+                                *fetch,
+                            )?),
+                        })))
+                    } else {
+                        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                            node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
+                        })))
+                    }
                 } else {
                     Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                         node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),

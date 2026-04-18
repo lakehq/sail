@@ -6,7 +6,7 @@ use datafusion_common::DataFusionError;
 use thiserror::Error;
 
 /// Result type alias for Python data source operations.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub type PythonDataSourceResult<T> = Result<T, PythonDataSourceError>;
 
 /// Errors specific to Python data source operations.

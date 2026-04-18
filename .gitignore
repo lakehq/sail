@@ -66,6 +66,8 @@ Chart.lock
 __pycache__/
 *.py[cod]
 *.so
+*.dylib
+*.dSYM/
 *.egg-info/
 *.egg
 .coverage
@@ -100,5 +102,7 @@ docs/.vitepress/.temp
 
 # Claude Code settings
 .claude/
+.worktrees/
 
 CLAUDE.md
+AGENTS.md

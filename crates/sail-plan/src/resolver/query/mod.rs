@@ -14,6 +14,7 @@ mod dedup;
 mod filter;
 mod join;
 mod lateral;
+mod lateral_join;
 mod limit;
 mod misc;
 mod na;
@@ -26,6 +27,7 @@ mod sample;
 mod set_op;
 mod sort;
 mod stat;
+mod time_travel;
 mod udf;
 mod udtf;
 mod values;
@@ -65,11 +67,14 @@ impl PlanResolver<'_> {
                 is_streaming: _,
             } => match read_type {
                 spec::ReadType::NamedTable(table) => {
-                    self.resolve_query_read_named_table(table, state).await?
+                    self.resolve_query_read_named_table(*table, state).await?
                 }
-                spec::ReadType::Udtf(udtf) => self.resolve_query_read_udtf(udtf, state).await?,
+                spec::ReadType::Udtf(udtf) => self.resolve_query_read_udtf(*udtf, state).await?,
                 spec::ReadType::DataSource(source) => {
-                    self.resolve_query_read_data_source(source, state).await?
+                    self.resolve_query_read_data_source(*source, state).await?
+                }
+                spec::ReadType::DynamicTable(table) => {
+                    self.resolve_query_read_dynamic_table(*table, state).await?
                 }
             },
             QueryNode::Project { input, expressions } => {
@@ -342,6 +347,15 @@ impl PlanResolver<'_> {
                     state,
                 )
                 .await?
+            }
+            QueryNode::LateralJoin {
+                left,
+                right,
+                join_condition,
+                join_type,
+            } => {
+                self.resolve_query_lateral_join(*left, *right, join_condition, join_type, state)
+                    .await?
             }
         };
         self.verify_query_plan(&plan, state)?;

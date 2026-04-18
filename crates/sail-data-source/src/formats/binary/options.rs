@@ -1,48 +1,50 @@
-use std::collections::HashMap;
+use sail_common_datafusion::datasource::OptionLayer;
 
+use crate::error::DataSourceResult;
 use crate::formats::binary::TableBinaryOptions;
-use crate::options::{load_default_options, load_options, BinaryReadOptions};
+use crate::options::gen::{BinaryReadOptions, BinaryReadPartialOptions};
+use crate::options::{BuildPartialOptions, PartialOptions};
 
-fn apply_binary_read_options(
-    from: BinaryReadOptions,
-    to: &mut TableBinaryOptions,
-) -> datafusion_common::Result<()> {
-    if let Some(path_glob_filter) = from.path_glob_filter {
-        if !path_glob_filter.is_empty() {
-            to.path_glob_filter = Some(path_glob_filter);
-        }
+impl BinaryReadOptions {
+    pub fn into_table_options(self) -> TableBinaryOptions {
+        let BinaryReadOptions { path_glob_filter } = self;
+        TableBinaryOptions { path_glob_filter }
     }
-    Ok(())
 }
 
 pub fn resolve_binary_read_options(
-    options: Vec<HashMap<String, String>>,
-) -> datafusion_common::Result<TableBinaryOptions> {
-    let mut text_options = TableBinaryOptions::default();
-    apply_binary_read_options(load_default_options()?, &mut text_options)?;
-    for opt in options {
-        apply_binary_read_options(load_options(opt)?, &mut text_options)?;
+    options: Vec<OptionLayer>,
+) -> DataSourceResult<BinaryReadOptions> {
+    let mut partial = BinaryReadPartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    Ok(text_options)
+    partial.finalize()
 }
 
 #[cfg(test)]
 mod tests {
     use crate::formats::binary::options::resolve_binary_read_options;
-    use crate::options::build_options;
+    use crate::options::option_list;
 
     #[test]
     fn test_resolve_binary_read_options() -> datafusion_common::Result<()> {
-        let kv = build_options(&[]);
-        let options = resolve_binary_read_options(vec![kv])?;
+        let kv = option_list(&[]);
+        let options = resolve_binary_read_options(vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options();
         assert_eq!(options.path_glob_filter, None);
 
-        let kv = build_options(&[("path_glob_filter", "*.png")]);
-        let options = resolve_binary_read_options(vec![kv])?;
+        let kv = option_list(&[("path_glob_filter", "*.png")]);
+        let options = resolve_binary_read_options(vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options();
         assert_eq!(options.path_glob_filter, Some("*.png".to_string()));
 
-        let kv = build_options(&[("pathGlobFilter", "*.pdf")]);
-        let options = resolve_binary_read_options(vec![kv])?;
+        let kv = option_list(&[("pathGlobFilter", "*.pdf")]);
+        let options = resolve_binary_read_options(vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?
+            .into_table_options();
         assert_eq!(options.path_glob_filter, Some("*.pdf".to_string()));
 
         Ok(())

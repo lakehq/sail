@@ -17,7 +17,8 @@ use sail_sql_parser::token::Token;
 
 use crate::error::{SqlError, SqlResult};
 use crate::literal::datetime::{
-    create_date_parser, create_timestamp_parser, DateValue, TimestampValue,
+    create_date_parser, create_time_parser, create_timestamp_parser, DateValue, TimeValue,
+    TimestampValue,
 };
 use crate::literal::interval::{parse_unqualified_interval_string, IntervalValue};
 
@@ -63,6 +64,7 @@ pub fn parse_statements(s: &str) -> SqlResult<Vec<Statement>> {
     parse!(s, create_parser)
 }
 
+/// Parses a SQL string containing exactly one statement into an AST.
 pub fn parse_one_statement(s: &str) -> SqlResult<Statement> {
     let mut plan = parse_statements(s)?;
     match (plan.pop(), plan.is_empty()) {
@@ -97,6 +99,10 @@ pub fn parse_date(s: &str) -> SqlResult<DateValue> {
 
 pub fn parse_timestamp(s: &str) -> SqlResult<TimestampValue<'_>> {
     parse_simple!(s, create_timestamp_parser)
+}
+
+pub fn parse_time(s: &str) -> SqlResult<TimeValue> {
+    parse_simple!(s, create_time_parser)
 }
 
 #[cfg(test)]

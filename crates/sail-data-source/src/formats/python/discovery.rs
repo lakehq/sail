@@ -225,7 +225,7 @@ pub fn validate_datasource_class(py: Python<'_>, cls: &Bound<'_, PyAny>) -> Resu
 }
 
 /// Validate a datasource instance has required methods.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub fn validate_datasource_instance(_py: Python<'_>, instance: &Bound<'_, PyAny>) -> Result<()> {
     let required_methods = ["name", "schema", "reader"];
 

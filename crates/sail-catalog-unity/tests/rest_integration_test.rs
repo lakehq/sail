@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,11 +28,40 @@ use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
 use sail_common_datafusion::catalog::{DatabaseStatus, TableKind};
-use testcontainers::core::{ContainerPort, Mount, WaitFor};
+use testcontainers::core::{ContainerPort, ContainerRequest, Mount, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 const DEFAULT_CATALOG: &str = "sail_test_catalog";
+
+const MAX_CONTAINER_START_RETRIES: u32 = 3;
+
+async fn start_container_with_retry<F>(image_fn: F) -> ContainerAsync<GenericImage>
+where
+    F: Fn() -> ContainerRequest<GenericImage>,
+{
+    let mut last_error = String::new();
+    for attempt in 0..MAX_CONTAINER_START_RETRIES {
+        if attempt > 0 {
+            let delay = std::time::Duration::from_secs(2u64.pow(attempt));
+            eprintln!(
+                "Container start attempt {} failed: {}. Retrying in {:?}...",
+                attempt, last_error, delay
+            );
+            tokio::time::sleep(delay).await;
+        }
+        match image_fn().start().await {
+            Ok(container) => return container,
+            Err(e) => {
+                last_error = e.to_string();
+            }
+        }
+    }
+    panic!(
+        "Failed to start container after {} attempts: {}",
+        MAX_CONTAINER_START_RETRIES, last_error
+    );
+}
 
 async fn setup_catalog(
     network_name: &str,
@@ -44,17 +73,17 @@ async fn setup_catalog(
 ) {
     let network = format!("unity_{}", network_name);
 
-    let postgres = GenericImage::new("postgres", "latest")
-        .with_wait_for(WaitFor::message_on_stderr(
-            "database system is ready to accept connections",
-        ))
-        .with_env_var("POSTGRES_USER", "test")
-        .with_env_var("POSTGRES_PASSWORD", "test")
-        .with_env_var("POSTGRES_DB", "test")
-        .with_network(&network)
-        .start()
-        .await
-        .expect("Failed to start PostgreSQL");
+    let postgres = start_container_with_retry(|| {
+        GenericImage::new("postgres", "latest")
+            .with_wait_for(WaitFor::message_on_stderr(
+                "database system is ready to accept connections",
+            ))
+            .with_env_var("POSTGRES_USER", "test")
+            .with_env_var("POSTGRES_PASSWORD", "test")
+            .with_env_var("POSTGRES_DB", "test")
+            .with_network(&network)
+    })
+    .await;
 
     let postgres_host = postgres
         .get_bridge_ip_address()
@@ -75,19 +104,26 @@ async fn setup_catalog(
     std::fs::write(&hibernate_path, hibernate_config)
         .expect("Failed to write hibernate.properties");
 
-    let unity_catalog = GenericImage::new("unitycatalog/unitycatalog", "v0.3.0")
-        .with_wait_for(WaitFor::message_on_stdout(
-            "###################################################################",
-        ))
-        .with_exposed_port(ContainerPort::Tcp(8080))
-        .with_mount(Mount::bind_mount(
-            hibernate_path.to_str().unwrap(),
-            "/home/unitycatalog/etc/conf/hibernate.properties",
-        ))
-        .with_network(&network)
-        .start()
+    let unity_catalog = {
+        let hibernate_path_str = hibernate_path
+            .to_str()
+            .expect("hibernate path is valid UTF-8")
+            .to_string();
+        let network = network.clone();
+        start_container_with_retry(move || {
+            GenericImage::new("unitycatalog/unitycatalog", "v0.3.0")
+                .with_wait_for(WaitFor::message_on_stdout(
+                    "###################################################################",
+                ))
+                .with_exposed_port(ContainerPort::Tcp(8080))
+                .with_mount(Mount::bind_mount(
+                    &hibernate_path_str,
+                    "/home/unitycatalog/etc/conf/hibernate.properties",
+                ))
+                .with_network(&network)
+        })
         .await
-        .expect("Failed to start Unity Catalog");
+    };
 
     let host = unity_catalog.get_host().await.expect("get host");
     let port = unity_catalog
@@ -100,7 +136,6 @@ async fn setup_catalog(
     let runtime = RuntimeHandle::new(
         tokio::runtime::Handle::current(),
         tokio::runtime::Handle::current(),
-        true,
     );
 
     let catalog = RuntimeAwareCatalogProvider::try_new(
@@ -197,7 +232,7 @@ async fn test_create_schema() {
         .iter()
         .any(|(k, v)| k == "created_at" && !v.is_empty()));
 
-    assert_eq!(catalog, DEFAULT_CATALOG.to_string());
+    assert_eq!(catalog, "sail".to_string());
     assert_eq!(database, Vec::<String>::from(full_namespace.clone()));
     assert_eq!(comment, Some("test comment".to_string()));
     assert_eq!(location, Some("s3://bucket/path".to_string()));
@@ -667,7 +702,7 @@ async fn test_create_table() {
     assert_eq!(properties.get("table_type"), Some(&"EXTERNAL".to_string()));
 
     assert_eq!(table.name, "t1".to_string());
-    assert_eq!(table.catalog, Some("sail_test_catalog".to_string()));
+    assert_eq!(table.catalog, Some("sail".to_string()));
     assert_eq!(table.database, Vec::<String>::from(full_ns.clone()));
     assert_eq!(comment, Some("peow".to_string()));
     assert_eq!(constraints, vec![]);
@@ -676,7 +711,7 @@ async fn test_create_table() {
         Some("s3://deltadata/custom/path/meow".to_string())
     );
     assert_eq!(format, "delta".to_string());
-    assert_eq!(partition_by, Vec::<String>::new());
+    assert_eq!(partition_by, Vec::<CatalogPartitionField>::new());
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
     assert_eq!(options, Vec::<(String, String)>::new());
@@ -869,7 +904,7 @@ async fn test_create_table() {
     };
 
     assert_eq!(table.name, "t2".to_string());
-    assert_eq!(table.catalog, Some("sail_test_catalog".to_string()));
+    assert_eq!(table.catalog, Some("sail".to_string()));
     assert_eq!(table.database, Vec::<String>::from(full_ns.clone()));
     assert_eq!(comment, Some("test table".to_string()));
     assert!(constraints.is_empty());
@@ -878,7 +913,13 @@ async fn test_create_table() {
         Some("s3://deltadata/custom/path/meow2".to_string())
     );
     assert_eq!(format, "delta".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert!(sort_by.is_empty());
     assert_eq!(bucket_by, None);
     assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
@@ -1042,7 +1083,7 @@ async fn test_get_table() {
     assert_eq!(properties.get("team"), Some(&"data-eng".to_string()));
 
     assert_eq!(table_ns.name, "t2".to_string());
-    assert_eq!(table_ns.catalog, Some("sail_test_catalog".to_string()));
+    assert_eq!(table_ns.catalog, Some("sail".to_string()));
     assert_eq!(table_ns.database, Vec::<String>::from(full_ns.clone()));
     assert_eq!(comment, Some("test table".to_string()));
     assert!(constraints.is_empty());
@@ -1051,7 +1092,13 @@ async fn test_get_table() {
         Some("s3://deltadata/custom/path/meow2".to_string())
     );
     assert_eq!(format, "delta".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert!(sort_by.is_empty());
     assert_eq!(bucket_by, None);
     assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
@@ -1191,7 +1238,7 @@ async fn test_list_tables() {
             let TableKind::Table { format, .. } = &table.kind else {
                 panic!("Expected TableKind::Table");
             };
-            assert_eq!(table.catalog, Some("sail_test_catalog".to_string()));
+            assert_eq!(table.catalog, Some("sail".to_string()));
             assert_eq!(table.database, Vec::<String>::from(full_ns.clone()));
             assert_eq!(format, "delta");
         }

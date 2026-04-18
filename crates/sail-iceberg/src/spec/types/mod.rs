@@ -756,7 +756,7 @@ impl NestedField {
     }
 
     /// Set the id of the field.
-    #[allow(unused)]
+    #[expect(unused)]
     pub(crate) fn with_id(mut self, id: i32) -> Self {
         self.id = id;
         self

@@ -129,14 +129,20 @@ impl PlanResolver<'_> {
                 interval_unit,
                 start_field: _,
                 end_field: _,
-            } => {
-                // TODO: Currently `start_field` and `end_field` is lost in translation.
-                //  This does not impact computation accuracy,
-                //  This may affect the display string in the `data_type_to_simple_string` function.
-                Ok(adt::DataType::Interval(Self::resolve_interval_unit(
-                    interval_unit,
-                )))
-            }
+            } => match interval_unit {
+                spec::IntervalUnit::YearMonth => {
+                    Ok(adt::DataType::Interval(adt::IntervalUnit::YearMonth))
+                }
+                // Spark's DayTimeInterval has microsecond precision.
+                // Arrow's IntervalUnit::DayTime has millisecond precision.
+                // Use Duration to preserve microsecond precision.
+                spec::IntervalUnit::DayTime => {
+                    Ok(adt::DataType::Duration(adt::TimeUnit::Microsecond))
+                }
+                spec::IntervalUnit::MonthDayNano => {
+                    Ok(adt::DataType::Interval(adt::IntervalUnit::MonthDayNano))
+                }
+            },
             DataType::Binary => Ok(adt::DataType::Binary),
             DataType::FixedSizeBinary { size } => Ok(adt::DataType::FixedSizeBinary(*size)),
             DataType::LargeBinary => Ok(adt::DataType::LargeBinary),
@@ -267,6 +273,15 @@ impl PlanResolver<'_> {
                 Ok(self.arrow_string_type(state))
             }
             DataType::ConfiguredBinary => Ok(self.arrow_binary_type(state)),
+            DataType::Variant => {
+                // Variant layout using Binary for PySpark compatibility.
+                // parquet-variant uses BinaryView internally but we convert to Binary
+                let fields = adt::Fields::from(vec![
+                    adt::Field::new("metadata", adt::DataType::Binary, false),
+                    adt::Field::new("value", adt::DataType::Binary, false),
+                ]);
+                Ok(adt::DataType::Struct(fields))
+            }
             DataType::UserDefined { .. } => Err(PlanError::unsupported(
                 "user defined data type should only exist in a field",
             )),
@@ -316,14 +331,17 @@ impl PlanResolver<'_> {
                 // and are automatically filtered from Spark client responses.
                 // Edges default to planar in GeoArrow, so we omit them for Geometry.
                 metadata.insert(
-                    "ARROW:extension:name".to_string(),
+                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
                 let mut ext = json!({});
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert("ARROW:extension:metadata".to_string(), ext.to_string());
+                metadata.insert(
+                    spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                    ext.to_string(),
+                );
                 data_type
             }
             spec::DataType::Geography { srid, algorithm: _ } => {
@@ -332,14 +350,24 @@ impl PlanResolver<'_> {
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
                 metadata.insert(
-                    "ARROW:extension:name".to_string(),
+                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
                 let mut ext = json!({"edges": "spherical"});
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert("ARROW:extension:metadata".to_string(), ext.to_string());
+                metadata.insert(
+                    spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                    ext.to_string(),
+                );
+                data_type
+            }
+            spec::DataType::Variant => {
+                metadata.insert(
+                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                    spec::VARIANT_EXTENSION_NAME.to_string(),
+                );
                 data_type
             }
             x => x,
@@ -377,14 +405,6 @@ impl PlanResolver<'_> {
             spec::TimeUnit::Millisecond => Ok(adt::TimeUnit::Millisecond),
             spec::TimeUnit::Microsecond => Ok(adt::TimeUnit::Microsecond),
             spec::TimeUnit::Nanosecond => Ok(adt::TimeUnit::Nanosecond),
-        }
-    }
-
-    pub fn resolve_interval_unit(interval_unit: &spec::IntervalUnit) -> adt::IntervalUnit {
-        match interval_unit {
-            spec::IntervalUnit::YearMonth => adt::IntervalUnit::YearMonth,
-            spec::IntervalUnit::DayTime => adt::IntervalUnit::DayTime,
-            spec::IntervalUnit::MonthDayNano => adt::IntervalUnit::MonthDayNano,
         }
     }
 

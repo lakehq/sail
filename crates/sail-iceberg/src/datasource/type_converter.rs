@@ -383,7 +383,7 @@ pub fn arrow_struct_to_iceberg(struct_type: &ArrowDataType) -> Result<StructType
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::expect_used)]
 mod tests {
     use std::sync::Arc;
 
@@ -642,7 +642,7 @@ mod tests {
         assert_eq!(price_field.doc, Some("Price in USD".to_string()));
     }
 
-    #[allow(clippy::panic)]
+    #[expect(clippy::panic)]
     #[test]
     fn test_arrow_list_to_iceberg_conversion() {
         let element_field = ArrowField::new(SAIL_LIST_FIELD_NAME, ArrowDataType::Int64, true)
@@ -676,7 +676,7 @@ mod tests {
         }
     }
 
-    #[allow(clippy::panic)]
+    #[expect(clippy::panic)]
     #[test]
     fn test_iceberg_list_to_arrow_conversion() {
         let element_field = NestedField::new(
@@ -707,7 +707,7 @@ mod tests {
         }
     }
 
-    #[allow(clippy::panic)]
+    #[expect(clippy::panic)]
     #[test]
     fn test_arrow_map_to_iceberg_conversion() {
         let key_field = ArrowField::new(SAIL_MAP_KEY_FIELD_NAME, ArrowDataType::Utf8, false)

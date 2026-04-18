@@ -8,13 +8,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, Result};
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
+use datafusion_common::Result;
+use sail_common_datafusion::datasource::{
+    OptionLayer, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+};
 
+use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
-use super::python_datasource::PythonDataSource;
-use super::python_table_provider::PythonTableProvider;
+use super::table_provider::PythonTableProvider;
 
 /// TableFormat implementation for a Python data source.
 ///
@@ -172,13 +174,19 @@ impl TableFormat for PythonTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         // Create PythonDataSource from options
-        let datasource = self.create_datasource(&info.options)?;
+        let opaque_options: Vec<HashMap<String, String>> = info
+            .options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let datasource = self.create_datasource(&opaque_options)?;
 
-        // Get schema (use provided schema or discover from Python)
-        let schema = if let Some(schema) = info.schema {
-            Arc::new(schema)
-        } else {
-            datasource.schema()?
+        // Get schema (use provided schema or discover from Python).
+        // When a table is created without column definitions (e.g. `CREATE TABLE t USING fmt`),
+        // the catalog stores an empty schema. Fall back to Python discovery in that case.
+        let schema = match info.schema {
+            Some(schema) if !schema.fields().is_empty() => Arc::new(schema),
+            _ => datasource.schema()?,
         };
 
         // Create executor (MVP: in-process via PyO3)
@@ -193,12 +201,90 @@ impl TableFormat for PythonTableFormat {
     async fn create_writer(
         &self,
         _ctx: &dyn Session,
-        _info: SinkInfo,
+        info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!(
-            "Write operations are not yet supported for Python datasource '{}'. Coming in PR #2.",
-            self.name
-        )
+        use sail_common_datafusion::datasource::PhysicalSinkMode;
+
+        let SinkInfo {
+            input,
+            mode,
+            partition_by,
+            table_properties: _,
+            mut options,
+            ..
+        } = info;
+
+        // Warn about unsupported partitionBy (PySpark compat: silently ignored)
+        if !partition_by.is_empty() {
+            log::warn!(
+                "partitionBy is not supported for Python datasource '{}' and will be ignored. \
+                 Handle partitioning in your DataSourceWriter.write() method.",
+                self.name
+            );
+        }
+
+        // The path (if any) is already present in options under the "path" key,
+        // so it will be forwarded to the Python DataSource via self.options["path"]
+        // in __init__ (matches PySpark behavior). No additional injection needed.
+
+        // Map save mode to overwrite bool (PySpark convention).
+        // PySpark's DataSource.writer(schema, overwrite) only receives a boolean:
+        //   Overwrite variants → True, everything else → False.
+        // ErrorIfExists and IgnoreIfExists are pre-write semantics that PySpark
+        // handles at the catalog level for managed tables. For Python datasources
+        // that manage their own storage, the mode is passed as an option so the
+        // datasource can implement its own existence checks if desired.
+        let overwrite = matches!(
+            mode,
+            PhysicalSinkMode::Overwrite
+                | PhysicalSinkMode::OverwriteIf { .. }
+                | PhysicalSinkMode::OverwritePartitions
+        );
+
+        // Pass the save mode as an option for datasources that need it
+        let mode_str = match &mode {
+            PhysicalSinkMode::ErrorIfExists => "error",
+            PhysicalSinkMode::IgnoreIfExists => "ignore",
+            PhysicalSinkMode::Append => "append",
+            PhysicalSinkMode::Overwrite => "overwrite",
+            PhysicalSinkMode::OverwriteIf { .. } => "overwrite",
+            PhysicalSinkMode::OverwritePartitions => "overwrite",
+        };
+        options.push(OptionLayer::OptionList {
+            items: vec![("mode".to_string(), mode_str.to_string())],
+        });
+
+        // Create datasource and get writer using the same executor configuration
+        // path as write execution for consistent Python datasource behavior.
+        let opaque_options: Vec<HashMap<String, String>> = options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let datasource = self.create_datasource(&opaque_options)?;
+        let executor: Arc<dyn super::executor::PythonExecutor> =
+            Arc::new(InProcessExecutor::from_app_config());
+        let schema = input.schema();
+        let expected_partitions = input.properties().partitioning.partition_count();
+
+        let writer_plan = executor
+            .get_writer(datasource.command(), &schema, overwrite)
+            .await?;
+
+        let pickled_writer = writer_plan.pickled_writer;
+        let write_exec: Arc<dyn ExecutionPlan> =
+            Arc::new(super::write_exec::PythonDataSourceWriteExec::new(
+                input,
+                pickled_writer.clone(),
+                writer_plan.is_arrow,
+            ));
+
+        Ok(Arc::new(
+            super::commit_exec::PythonDataSourceWriteCommitExec::new(
+                write_exec,
+                pickled_writer,
+                expected_partitions,
+            ),
+        ))
     }
 }
 

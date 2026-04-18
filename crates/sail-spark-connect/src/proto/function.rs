@@ -31,7 +31,7 @@ mod tests {
         schema: JsonDataType,
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn format_record_batches(batches: Vec<RecordBatch>) -> SparkResult<Vec<String>> {
         let options = FormatOptions::default();
         let mut output = vec![];
@@ -74,7 +74,7 @@ mod tests {
             |example: FunctionExample| -> SparkResult<String> {
                 let relation = Relation {
                     common: None,
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     rel_type: Some(RelType::Sql(Sql {
                         query: example.query,
                         args: HashMap::new(),

@@ -60,6 +60,13 @@ pub fn cast_record_batch_relaxed_tz(
     batch: &RecordBatch,
     target: &SchemaRef,
 ) -> Result<RecordBatch> {
+    if target.fields().is_empty() {
+        return Ok(RecordBatch::try_new_with_options(
+            target.clone(),
+            vec![],
+            &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+        )?);
+    }
     let mut cols: Vec<ArrayRef> = Vec::with_capacity(target.fields().len());
 
     for field in target.fields() {
@@ -245,7 +252,7 @@ pub fn record_batch_with_schema(batch: RecordBatch, schema: &SchemaRef) -> Resul
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::{ArrayRef, Int32Array, StructArray};
     use datafusion::arrow::datatypes::{Field, Fields};

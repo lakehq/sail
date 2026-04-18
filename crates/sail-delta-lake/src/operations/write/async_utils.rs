@@ -45,7 +45,6 @@ impl AsyncShareableBuffer {
             .map(|lock| lock.into_inner())
     }
 
-    #[allow(dead_code)]
     pub async fn to_vec(&self) -> Vec<u8> {
         let inner = self.buffer.read().await;
         inner.clone()
@@ -56,7 +55,6 @@ impl AsyncShareableBuffer {
         inner.len()
     }
 
-    #[allow(dead_code)]
     pub async fn is_empty(&self) -> bool {
         let inner = self.buffer.read().await;
         inner.is_empty()

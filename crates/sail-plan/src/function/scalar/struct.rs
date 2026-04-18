@@ -16,7 +16,7 @@ fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
         .map(|(i, (expr, name))| -> PlanResult<_> {
             match expr {
                 Expr::Column(_) | Expr::Alias(_) => Ok(name.clone()),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Expr::Wildcard { .. } => Err(PlanError::internal(
                     "wildcard should have been expanded before struct",
                 )),

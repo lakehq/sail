@@ -177,7 +177,7 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
     let limit = match limit {
         None => None,
         Some(LimitValue::All(_)) => None,
-        Some(LimitValue::Value(value)) => Some(value),
+        Some(LimitValue::Value(value)) => Some(*value),
     };
 
     let plan = match (offset, limit) {
@@ -212,7 +212,7 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
 
 fn from_ast_query_term(term: QueryTerm) -> SqlResult<spec::QueryPlan> {
     match term {
-        QueryTerm::Select(select) => from_ast_query_select(select),
+        QueryTerm::Select(select) => from_ast_query_select(*select),
         QueryTerm::Table(_, name) => from_ast_query_table(name),
         QueryTerm::Values(values) => from_ast_values(values),
         QueryTerm::Nested(_, query, _) => from_ast_query(query),
@@ -320,7 +320,7 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
 
 fn from_ast_query_body(body: QueryBody) -> SqlResult<spec::QueryPlan> {
     match body {
-        QueryBody::Term(term) => from_ast_query_term(term),
+        QueryBody::Term(term) => from_ast_query_term(*term),
         QueryBody::SetOperation {
             left,
             operator,
@@ -358,12 +358,12 @@ fn from_ast_query_body(body: QueryBody) -> SqlResult<spec::QueryPlan> {
 fn from_ast_query_table(name: ObjectName) -> SqlResult<spec::QueryPlan> {
     Ok(spec::QueryPlan::new(spec::QueryNode::Read {
         is_streaming: false,
-        read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+        read_type: spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
             name: from_ast_object_name(name)?,
             temporal: None,
             sample: None,
             options: Default::default(),
-        }),
+        })),
     }))
 }
 
@@ -400,7 +400,17 @@ fn from_ast_table(
         if !joins.is_empty() {
             return Err(SqlError::unsupported("lateral table with join"));
         }
-        query_plan_with_lateral_table_factor(input, table, true)
+        match &table {
+            TableFactor::TableFunction { .. } => {
+                query_plan_with_lateral_table_factor(input, table, true)
+            }
+            TableFactor::Query { .. } => {
+                query_plan_with_lateral_subquery(input, table, None, spec::JoinType::Cross)
+            }
+            _ => Err(SqlError::invalid(
+                "expected function or subquery for lateral table factor",
+            )),
+        }
     } else {
         query_plan_with_table_factor(input, table, joins)
     }
@@ -436,16 +446,16 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
             modifiers,
             alias,
         } => {
-            let temporal = temporal.map(from_ast_temporal).transpose()?;
-            let sample = sample.map(from_ast_table_sample).transpose()?;
+            let temporal = temporal.map(|t| from_ast_temporal(*t)).transpose()?;
+            let sample = sample.map(|s| from_ast_table_sample(*s)).transpose()?;
             let plan = spec::QueryPlan::new(spec::QueryNode::Read {
                 is_streaming: false,
-                read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                read_type: spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
                     name: from_ast_object_name(name)?,
                     temporal,
                     sample,
                     options: Default::default(),
-                }),
+                })),
             });
             let plan = query_plan_with_table_modifiers(plan, modifiers)?;
             query_plan_with_table_alias(plan, alias)
@@ -460,7 +470,7 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
         } => {
             let plan = from_ast_query(query)?;
             let plan = if let Some(sample) = sample {
-                let sample = from_ast_table_sample(sample)?;
+                let sample = from_ast_table_sample(*sample)?;
                 spec::QueryPlan::new(spec::QueryNode::TableSample {
                     input: Box::new(plan),
                     sample,
@@ -495,17 +505,36 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
                 .unwrap_or_default();
             let plan = spec::QueryPlan::new(spec::QueryNode::Read {
                 is_streaming: false,
-                read_type: spec::ReadType::Udtf(spec::ReadUdtf {
+                read_type: spec::ReadType::Udtf(Box::new(spec::ReadUdtf {
                     name: from_ast_object_name(name)?,
                     arguments,
                     named_arguments,
                     options: Default::default(),
-                }),
+                })),
             });
             query_plan_with_table_alias(plan, alias)
         }
         TableFactor::Values { values, alias } => {
             let plan = from_ast_values(values)?;
+            query_plan_with_table_alias(plan, alias)
+        }
+        TableFactor::Identifier {
+            identifier: _,
+            left: _,
+            expr,
+            right: _,
+            modifiers,
+            alias,
+        } => {
+            let plan = spec::QueryPlan::new(spec::QueryNode::Read {
+                is_streaming: false,
+                read_type: spec::ReadType::DynamicTable(Box::new(spec::ReadDynamicTable {
+                    name: from_ast_expression(expr)?,
+                    sample: None,
+                    options: Default::default(),
+                })),
+            });
+            let plan = query_plan_with_table_modifiers(plan, modifiers)?;
             query_plan_with_table_alias(plan, alias)
         }
     }
@@ -836,17 +865,37 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
         criteria,
     } = join;
     if lateral.is_some() {
-        if criteria.is_some() {
-            return Err(SqlError::unsupported("LATERAL JOIN with criteria"));
-        }
-        let outer = match operator {
-            None | Some(JoinOperator::Inner(_)) => false,
-            Some(JoinOperator::LeftOuter(_, _))
-            | Some(JoinOperator::Left(_))
-            | Some(JoinOperator::Cross(_)) => true,
-            _ => return Err(SqlError::invalid("LATERAL JOIN operator")),
+        return match &right {
+            TableFactor::TableFunction { .. } => {
+                if criteria.is_some() {
+                    return Err(SqlError::unsupported(
+                        "LATERAL table function with criteria",
+                    ));
+                }
+                let outer = match operator {
+                    None | Some(JoinOperator::Inner(_)) => false,
+                    Some(JoinOperator::LeftOuter(_, _))
+                    | Some(JoinOperator::Left(_))
+                    | Some(JoinOperator::Cross(_)) => true,
+                    _ => return Err(SqlError::invalid("LATERAL JOIN operator")),
+                };
+                query_plan_with_lateral_table_factor(Some(left), right, outer)
+            }
+            TableFactor::Query { .. } => {
+                let join_type = match operator {
+                    None | Some(JoinOperator::Inner(_)) => spec::JoinType::Inner,
+                    Some(JoinOperator::LeftOuter(_, _)) | Some(JoinOperator::Left(_)) => {
+                        spec::JoinType::LeftOuter
+                    }
+                    Some(JoinOperator::Cross(_)) => spec::JoinType::Cross,
+                    _ => return Err(SqlError::invalid("LATERAL JOIN operator")),
+                };
+                query_plan_with_lateral_subquery(Some(left), right, criteria, join_type)
+            }
+            _ => Err(SqlError::invalid(
+                "expected function or subquery for lateral join",
+            )),
         };
-        return query_plan_with_lateral_table_factor(Some(left), right, outer);
     }
     let right = from_ast_table_factor(right)?;
     let join_type = match operator {
@@ -978,4 +1027,46 @@ fn query_plan_with_lateral_views(
                 outer: outer.is_some(),
             }))
         })
+}
+
+fn query_plan_with_lateral_subquery(
+    input: Option<spec::QueryPlan>,
+    table: TableFactor,
+    criteria: Option<JoinCriteria>,
+    join_type: spec::JoinType,
+) -> SqlResult<spec::QueryPlan> {
+    let TableFactor::Query {
+        left: _,
+        query,
+        right: _,
+        sample: _sample,
+        modifiers: _modifiers,
+        alias,
+    } = table
+    else {
+        return Err(SqlError::invalid("expected subquery for lateral join"));
+    };
+
+    let right = from_ast_query(query)?;
+    let right = query_plan_with_table_alias(right, alias)?;
+    let left = input.unwrap_or_else(|| {
+        spec::QueryPlan::new(spec::QueryNode::Empty {
+            produce_one_row: true,
+        })
+    });
+
+    let join_condition = match criteria {
+        Some(JoinCriteria::On(_, expr)) => Some(from_ast_expression(expr)?),
+        Some(JoinCriteria::Using(_, _)) => {
+            return Err(SqlError::unsupported("LATERAL JOIN with USING"));
+        }
+        None => None,
+    };
+
+    Ok(spec::QueryPlan::new(spec::QueryNode::LateralJoin {
+        left: Box::new(left),
+        right: Box::new(right),
+        join_condition,
+        join_type,
+    }))
 }

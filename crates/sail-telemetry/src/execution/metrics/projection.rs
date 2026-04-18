@@ -10,7 +10,7 @@ use crate::metrics::{MetricAttribute, MetricRegistry};
 
 lazy_static! {
     static ref EXPR_EVAL_TIME_METRIC_NAME_REGEX: Regex = {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         Regex::new(r"^expr_([0-9]+)_eval_time$").unwrap()
     };
 }

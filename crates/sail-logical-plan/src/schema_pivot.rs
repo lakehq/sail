@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -6,40 +5,22 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct SchemaPivotNode {
     input: Arc<LogicalPlan>,
+    // names is part of schema so we skip it in PartialOrd
+    #[educe(PartialOrd(ignore))]
     names: Vec<String>,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
     exprs: Vec<Expr>,
 }
 
-#[derive(PartialEq, PartialOrd)]
-struct SchemaPivotNodeOrd<'a> {
-    // names is part of schema so we skip that
-    input: &'a Arc<LogicalPlan>,
-    exprs: &'a Vec<Expr>,
-}
-
-impl<'a> From<&'a SchemaPivotNode> for SchemaPivotNodeOrd<'a> {
-    fn from(node: &'a SchemaPivotNode) -> Self {
-        Self {
-            input: &node.input,
-            exprs: &node.exprs,
-        }
-    }
-}
-
-impl PartialOrd for SchemaPivotNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        SchemaPivotNodeOrd::from(self).partial_cmp(&other.into())
-    }
-}
-
 impl SchemaPivotNode {
-    #[allow(dead_code)]
     pub fn try_new(
         input: Arc<LogicalPlan>,
         names: Vec<String>,

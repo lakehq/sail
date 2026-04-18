@@ -122,6 +122,8 @@ impl TryFrom<adt::Field> for sdt::StructField {
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
         let is_udt = field.metadata().keys().any(|k| k.starts_with("udt."));
         let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
+        let is_variant =
+            field.extension_type_name() == Some(sail_common::spec::VARIANT_EXTENSION_NAME);
 
         let data_type = if is_udt {
             DataType {
@@ -140,7 +142,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
             // Parse geoarrow extension metadata to determine Geometry vs Geography
             let ext_metadata = field
                 .metadata()
-                .get("ARROW:extension:metadata")
+                .get(sail_common::spec::EXTENSION_TYPE_METADATA_KEY)
                 .cloned()
                 .unwrap_or_default();
             let geo_meta = GeoArrowMetadata::from_json(&ext_metadata)?;
@@ -159,6 +161,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
                         type_variation_reference: 0,
                     })),
                 }
+            }
+        } else if is_variant {
+            DataType {
+                kind: Some(sdt::Kind::Variant(sdt::Variant {
+                    type_variation_reference: 0,
+                })),
             }
         } else {
             field.data_type().clone().try_into()?
@@ -223,9 +231,7 @@ impl TryFrom<adt::DataType> for DataType {
                 Kind::String(sdt::String::default())
             }
             adt::DataType::Date32 => Kind::Date(sdt::Date::default()),
-            adt::DataType::Date64 | adt::DataType::Time32 { .. } | adt::DataType::Time64 { .. } => {
-                return Err(error(&data_type))
-            }
+            adt::DataType::Date64 => return Err(error(&data_type)),
             adt::DataType::Timestamp(adt::TimeUnit::Microsecond, None) => {
                 Kind::TimestampNtz(sdt::TimestampNtz::default())
             }
@@ -237,6 +243,20 @@ impl TryFrom<adt::DataType> for DataType {
             | adt::DataType::Timestamp(adt::TimeUnit::Nanosecond, _) => {
                 return Err(error(&data_type))
             }
+            adt::DataType::Time32(adt::TimeUnit::Second) => Kind::Time(sdt::Time {
+                precision: Some(0),
+                type_variation_reference: 0,
+            }),
+            adt::DataType::Time32(adt::TimeUnit::Millisecond) => Kind::Time(sdt::Time {
+                precision: Some(3),
+                type_variation_reference: 0,
+            }),
+            adt::DataType::Time64(adt::TimeUnit::Microsecond) => Kind::Time(sdt::Time {
+                precision: Some(6),
+                type_variation_reference: 0,
+            }),
+            adt::DataType::Time64(adt::TimeUnit::Nanosecond) => return Err(error(&data_type)),
+            adt::DataType::Time32(_) | adt::DataType::Time64(_) => return Err(error(&data_type)),
             adt::DataType::Interval(adt::IntervalUnit::MonthDayNano) => {
                 Kind::CalendarInterval(sdt::CalendarInterval::default())
             }
@@ -404,11 +424,11 @@ mod tests {
         // Geometry omits "edges" (defaults to planar in GeoArrow)
         let metadata: HashMap<String, String> = [
             (
-                "ARROW:extension:name".to_string(),
+                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                "ARROW:extension:metadata".to_string(),
+                sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84"}"#.to_string(),
             ),
         ]
@@ -437,11 +457,11 @@ mod tests {
         // Create an Arrow field with geoarrow.wkb metadata for Geography (spherical)
         let metadata: HashMap<String, String> = [
             (
-                "ARROW:extension:name".to_string(),
+                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                "ARROW:extension:metadata".to_string(),
+                sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84","edges":"spherical"}"#.to_string(),
             ),
         ]
@@ -470,10 +490,13 @@ mod tests {
         // Test mixed SRID (-1): CRS and edges are omitted from metadata
         let metadata: HashMap<String, String> = [
             (
-                "ARROW:extension:name".to_string(),
+                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
-            ("ARROW:extension:metadata".to_string(), r#"{}"#.to_string()),
+            (
+                sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                r#"{}"#.to_string(),
+            ),
         ]
         .into_iter()
         .collect();
@@ -492,5 +515,68 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_time_arrow_to_proto() -> SparkResult<()> {
+        use crate::spark::connect::data_type::{Kind, Time};
+
+        // Time32 Second -> TIME(0)
+        let arrow_type = adt::DataType::Time32(adt::TimeUnit::Second);
+        assert_eq!(
+            crate::spark::connect::DataType::try_from(arrow_type)?,
+            DataType {
+                kind: Some(Kind::Time(Time {
+                    precision: Some(0),
+                    type_variation_reference: 0,
+                })),
+            }
+        );
+
+        // Time32 Millisecond -> TIME(3)
+        let arrow_type = adt::DataType::Time32(adt::TimeUnit::Millisecond);
+        assert_eq!(
+            crate::spark::connect::DataType::try_from(arrow_type)?,
+            DataType {
+                kind: Some(Kind::Time(Time {
+                    precision: Some(3),
+                    type_variation_reference: 0,
+                })),
+            }
+        );
+
+        // Time64 Microsecond -> TIME(6)
+        let arrow_type = adt::DataType::Time64(adt::TimeUnit::Microsecond);
+        assert_eq!(
+            crate::spark::connect::DataType::try_from(arrow_type)?,
+            DataType {
+                kind: Some(Kind::Time(Time {
+                    precision: Some(6),
+                    type_variation_reference: 0,
+                })),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_time_arrow_to_proto_unsupported() {
+        // Invalid Arrow Time32 combinations (only Second and Millisecond are valid)
+        let arrow_type = adt::DataType::Time32(adt::TimeUnit::Microsecond);
+        assert!(DataType::try_from(arrow_type).is_err());
+
+        let arrow_type = adt::DataType::Time32(adt::TimeUnit::Nanosecond);
+        assert!(DataType::try_from(arrow_type).is_err());
+
+        // Invalid Arrow Time64 combinations (only Microsecond and Nanosecond are valid)
+        let arrow_type = adt::DataType::Time64(adt::TimeUnit::Second);
+        assert!(DataType::try_from(arrow_type).is_err());
+
+        let arrow_type = adt::DataType::Time64(adt::TimeUnit::Millisecond);
+        assert!(DataType::try_from(arrow_type).is_err());
+
+        // Time64 Nanosecond - valid Arrow but rejected by Spark (only precision 0, 3, 6 supported)
+        let arrow_type = adt::DataType::Time64(adt::TimeUnit::Nanosecond);
+        assert!(DataType::try_from(arrow_type).is_err());
     }
 }

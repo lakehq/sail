@@ -24,10 +24,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use delta_kernel::expressions::Scalar;
+use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 use object_store::path::Path;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::metadata::ParquetMetaData;
@@ -38,8 +38,8 @@ use uuid::Uuid;
 use super::async_utils::AsyncShareableBuffer;
 use super::partitioning::partition_ranges;
 use super::stats::create_add;
-use crate::kernel::models::{Add, ScalarExt};
-use crate::kernel::DeltaTableError;
+use crate::conversion::ScalarExt;
+use crate::spec::{Add, DeltaError as DeltaTableError};
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -47,7 +47,7 @@ pub trait PartitionsExt {
     fn hive_partition_segments(&self) -> Vec<String>;
 }
 
-impl PartitionsExt for IndexMap<String, Scalar> {
+impl PartitionsExt for IndexMap<String, ScalarValue> {
     fn hive_partition_path(&self) -> String {
         self.hive_partition_segments().join("/")
     }
@@ -210,7 +210,7 @@ impl DeltaWriter {
     async fn switch_partition_if_needed(
         &mut self,
         partition_key: String,
-        partition_values: IndexMap<String, Scalar>,
+        partition_values: IndexMap<String, ScalarValue>,
     ) -> Result<(), DeltaTableError> {
         if self.current_partition_key.as_deref() == Some(partition_key.as_str())
             && self.current_writer.is_some()
@@ -281,7 +281,7 @@ pub struct PartitionWriterConfig {
     /// Partition path segments
     pub partition_segments: Vec<String>,
     /// Values for all partition columns
-    pub partition_values: IndexMap<String, Scalar>,
+    pub partition_values: IndexMap<String, ScalarValue>,
     /// Properties passed to underlying parquet writer
     pub writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk
@@ -294,7 +294,7 @@ impl PartitionWriterConfig {
     pub fn new(
         table_path: Path,
         file_schema: ArrowSchemaRef,
-        partition_values: IndexMap<String, Scalar>,
+        partition_values: IndexMap<String, ScalarValue>,
         writer_properties: WriterProperties,
         target_file_size: u64,
         write_batch_size: usize,
@@ -321,9 +321,7 @@ pub struct PartitionWriter {
     arrow_writer: Option<AsyncArrowWriter<AsyncShareableBuffer>>,
     part_counter: usize,
     files_written: Vec<Add>,
-    #[allow(dead_code)]
     num_indexed_cols: i32,
-    #[allow(dead_code)]
     stats_columns: Option<Vec<String>>,
 }
 
@@ -462,16 +460,21 @@ impl PartitionWriter {
             self.part_counter, self.writer_id, compression_suffix
         );
 
-        let mut full_path = self.config.table_path.clone();
-        for segment in &self.config.partition_segments {
-            full_path = full_path.child(segment.as_str());
-        }
-        full_path = full_path.child(file_name.as_str());
-
         let relative_path = if self.config.partition_segments.is_empty() {
-            file_name
+            file_name.clone()
         } else {
             format!("{}/{}", self.config.partition_segments.join("/"), file_name)
+        };
+
+        #[expect(clippy::expect_used)]
+        let full_path = {
+            let table_root = self.config.table_path.as_ref();
+            let full_str = if table_root.is_empty() {
+                relative_path.clone()
+            } else {
+                format!("{}/{}", table_root, relative_path)
+            };
+            Path::parse(full_str).expect("partition segments and file name form a valid path")
         };
 
         (relative_path, full_path)
@@ -555,7 +558,7 @@ mod tests {
     use object_store::ObjectStore;
 
     use super::{DeltaWriter, WriterConfig};
-    use crate::kernel::DeltaTableError;
+    use crate::spec::DeltaError as DeltaTableError;
 
     fn make_batch(values: Vec<i32>, parts: Vec<&str>) -> Result<RecordBatch, DeltaTableError> {
         let schema = Arc::new(Schema::new(vec![
@@ -628,12 +631,79 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "input violated partition grouping contract")]
     async fn debug_contract_panics_on_partition_key_regression() {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let mut writer = make_writer().unwrap();
 
         // Key re-appears after switching away: a -> b -> a
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"]).unwrap();
         let _ = writer.write(&batch).await;
+    }
+
+    #[tokio::test]
+    async fn partition_path_with_percent_encoded_value_is_not_double_encoded(
+    ) -> Result<(), DeltaTableError> {
+        use datafusion::arrow::datatypes::TimeUnit;
+
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let table_path = Path::from("delta_table");
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+        ]));
+        let config = WriterConfig::new(
+            schema.clone(),
+            vec!["ts".to_string()],
+            vec!["ts".to_string()],
+            None,
+            1024 * 1024,
+            1024,
+            0,
+            None,
+        );
+        let mut writer = DeltaWriter::new(Arc::clone(&object_store), table_path.clone(), config);
+
+        use datafusion::arrow::array::{Int32Array, TimestampMicrosecondArray};
+        let ts_us: i64 = 1_705_283_400_i64 * 1_000_000; // 2024-01-15 02:30:00 UTC
+        let id_arr: ArrayRef = Arc::new(Int32Array::from(vec![1_i32]));
+        let ts_arr: ArrayRef = Arc::new(
+            TimestampMicrosecondArray::from(vec![ts_us]).with_timezone(Arc::<str>::from("UTC")),
+        );
+        #[expect(clippy::unwrap_used)]
+        let batch = RecordBatch::try_new(schema, vec![id_arr, ts_arr]).unwrap();
+        writer.write(&batch).await?;
+        let adds = writer.close().await?;
+
+        assert_eq!(adds.len(), 1);
+        let path = &adds[0].path;
+
+        assert!(
+            path.contains("%20"),
+            "path should contain %20 (encoded space) in partition dir, got: {path}"
+        );
+        assert!(
+            !path.contains("%2520"),
+            "path must not contain double-encoded %2520: {path}"
+        );
+        assert!(
+            !path.contains("%253A"),
+            "path must not contain double-encoded %253A: {path}"
+        );
+
+        use crate::spec::utils::{decode_path, encode_path};
+        let encoded = encode_path(path);
+        #[expect(clippy::expect_used)]
+        let decoded = decode_path(&encoded).expect("valid percent-encoded path");
+        assert_eq!(
+            decoded, *path,
+            "path should survive one encode/decode round-trip unchanged"
+        );
+
+        Ok(())
     }
 }

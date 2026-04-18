@@ -4,6 +4,7 @@ import json
 from typing import TYPE_CHECKING
 
 from pyspark.sql import Row
+from pyspark.sql import functions as F  # noqa: N812
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -19,8 +20,8 @@ class TestDeltaColumnMapping:
             ]
         )
 
-        # Write new table with column mapping name mode
-        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
+        # Write new table with the official Delta table property name.
+        (df.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(base)))
 
         # Basic read should succeed
         out = spark.read.format("delta").load(str(base)).orderBy("id").collect()
@@ -288,3 +289,26 @@ class TestDeltaColumnMapping:
             {"id": 3, "region": "us", "data": "c"},
             {"id": 4, "region": "asia", "data": "d"},
         ]
+
+    def test_column_mapping_supports_special_characters_in_column_names(self, spark, tmp_path: Path):
+        """Column mapping should preserve Delta-supported special characters in column names."""
+
+        base = tmp_path / "delta_cm_special_names"
+        df = spark.createDataFrame(
+            [
+                Row(**{"first.name": "alice", "name with space": 1, "a,b": "x=y"}),
+                Row(**{"first.name": "bob", "name with space": 2, "a,b": "p=q"}),
+            ]
+        )
+
+        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
+
+        out = spark.read.format("delta").load(str(base)).orderBy(F.col("`name with space`"))
+        rows = [row.asDict() for row in out.collect()]
+        assert rows == [
+            {"first.name": "alice", "name with space": 1, "a,b": "x=y"},
+            {"first.name": "bob", "name with space": 2, "a,b": "p=q"},
+        ]
+
+        projected = out.selectExpr("`first.name`", "`name with space`", "`a,b`").collect()
+        assert [row.asDict() for row in projected] == rows

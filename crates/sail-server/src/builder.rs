@@ -34,7 +34,7 @@ impl Default for ServerBuilderOptions {
 }
 
 pub struct ServerBuilder<'b> {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     name: &'static str,
     options: ServerBuilderOptions,
     health_reporter: HealthReporter,

@@ -1,6 +1,6 @@
 ---
 title: Configuration
-rank: 10
+rank: 11
 ---
 
 # Configuration

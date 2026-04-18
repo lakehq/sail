@@ -10,9 +10,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_imports)]
-#![allow(dead_code)]
-#![allow(clippy::all)]
+#![expect(unused_imports)]
+#![expect(dead_code)]
+#![expect(clippy::all)]
 
 pub mod apis;
 mod models;

@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use reqwest::Client;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
+use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use serde::Deserialize;
 use tokio::sync::OnceCell;
@@ -76,7 +77,7 @@ struct ListSchemasResponse {
 #[derive(Debug, Deserialize)]
 struct SchemaInfo {
     name: Option<String>,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     catalog_name: Option<String>,
     comment: Option<String>,
 }
@@ -90,10 +91,10 @@ struct ListTablesResponse {
 #[derive(Debug, Deserialize)]
 struct TableInfo {
     name: Option<String>,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     catalog_name: Option<String>,
     schema_name: Option<String>,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     table_type: Option<String>,
     data_source_format: Option<String>,
     storage_location: Option<String>,
@@ -157,6 +158,17 @@ impl OneLakeCatalogProvider {
             self.config.item_name,
             self.config.item_type
         )
+    }
+
+    fn schema_name(database: &Namespace) -> CatalogResult<String> {
+        if database.tail.is_empty() {
+            Ok(database.head.to_string())
+        } else {
+            Err(CatalogError::InvalidArgument(format!(
+                "OneLake catalog does not support multi-level namespaces: {}",
+                quote_namespace_if_needed(database)
+            )))
+        }
     }
 
     fn catalog_name(&self) -> String {
@@ -327,7 +339,7 @@ impl CatalogProvider for OneLakeCatalogProvider {
     }
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
-        let schema_name = database.head_to_string();
+        let schema_name = Self::schema_name(database)?;
         let client = self.get_client().await?;
 
         // OneLake API requires full qualified schema name: catalog.schema
@@ -353,7 +365,7 @@ impl CatalogProvider for OneLakeCatalogProvider {
                 properties: vec![],
             })
         } else if response.status().as_u16() == 404 {
-            Err(CatalogError::NotFound("schema", schema_name))
+            Err(CatalogError::NotFound(CatalogObject::Schema, schema_name))
         } else {
             Err(CatalogError::External(format!(
                 "Failed to get schema: HTTP {}",
@@ -421,7 +433,7 @@ impl CatalogProvider for OneLakeCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let schema_name = database.head_to_string();
+        let schema_name = Self::schema_name(database)?;
         let client = self.get_client().await?;
 
         let full_table_name = format!("{}.{}.{}", self.catalog_name(), schema_name, table);
@@ -438,7 +450,10 @@ impl CatalogProvider for OneLakeCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to get table: {e}")))?;
 
         if response.status().as_u16() == 404 {
-            return Err(CatalogError::NotFound("table", table.to_string()));
+            return Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                table.to_string(),
+            ));
         }
 
         if !response.status().is_success() {
@@ -457,7 +472,7 @@ impl CatalogProvider for OneLakeCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let schema_name = database.head_to_string();
+        let schema_name = Self::schema_name(database)?;
         let client = self.get_client().await?;
 
         let url = format!(

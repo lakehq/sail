@@ -1,21 +1,20 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::prelude::SessionContext;
-use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
     CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
 };
-use crate::utils::quote_namespace_if_needed;
+use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
-#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum CatalogCommand {
     CurrentCatalog,
     SetCurrentCatalog {
@@ -56,6 +55,14 @@ pub enum CatalogCommand {
     GetTable {
         table: Vec<String>,
     },
+    ShowTables {
+        database: Vec<String>,
+        pattern: Option<String>,
+    },
+    ShowTableExtended {
+        database: Vec<String>,
+        pattern: String,
+    },
     ListTables {
         database: Vec<String>,
         pattern: Option<String>,
@@ -87,9 +94,8 @@ pub enum CatalogCommand {
         is_temporary: bool,
     },
     RegisterFunction {
-        udf: ScalarUDF,
+        udf: CatalogFunctionId,
     },
-    #[allow(unused)]
     RegisterTableFunction {
         name: String,
         // We have to be explicit about the UDTF types we support.
@@ -108,7 +114,7 @@ pub enum CatalogCommand {
     CreateTemporaryView {
         view: String,
         is_global: bool,
-        options: CreateTemporaryViewOptions,
+        options: CreateTemporaryViewOptions<CatalogLogicalPlanId>,
     },
     CreateView {
         view: Vec<String>,
@@ -120,7 +126,7 @@ pub enum CatalogCommand {
     },
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CatalogTableFunction {
     // We do not support any kind of table functions yet.
     // PySpark UDTF is registered as a scalar UDF.
@@ -142,6 +148,8 @@ impl CatalogCommand {
             CatalogCommand::CreateTable { .. } => "CreateTable",
             CatalogCommand::TableExists { .. } => "TableExists",
             CatalogCommand::GetTable { .. } => "GetTable",
+            CatalogCommand::ShowTables { .. } => "ShowTables",
+            CatalogCommand::ShowTableExtended { .. } => "ShowTableExtended",
             CatalogCommand::ListTables { .. } => "ListTables",
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
@@ -160,7 +168,7 @@ impl CatalogCommand {
         }
     }
 
-    pub fn schema(&self, ctx: &SessionContext) -> CatalogResult<SchemaRef> {
+    pub fn schema<C: SessionExtensionAccessor>(&self, ctx: &C) -> CatalogResult<SchemaRef> {
         let service = ctx.extension::<PlanService>()?;
         let display = service.catalog_display();
         let schema = match self {
@@ -171,6 +179,12 @@ impl CatalogCommand {
             CatalogCommand::GetTable { .. }
             | CatalogCommand::ListTables { .. }
             | CatalogCommand::ListViews { .. } => display.tables().schema()?,
+            CatalogCommand::ShowTables { .. } => {
+                ArrowSerializer::default().schema::<ShowTablesRow>()?
+            }
+            CatalogCommand::ShowTableExtended { .. } => {
+                ArrowSerializer::default().schema::<ShowTableExtendedRow>()?
+            }
             CatalogCommand::ListColumns { .. } => display.table_columns().schema()?,
             CatalogCommand::GetFunction { .. } | CatalogCommand::ListFunctions { .. } => {
                 display.functions().schema()?
@@ -201,9 +215,9 @@ impl CatalogCommand {
         Ok(schema)
     }
 
-    pub async fn execute(
+    pub async fn execute<C: SessionExtensionAccessor>(
         self,
-        ctx: &SessionContext,
+        ctx: &C,
         manager: &CatalogManager,
     ) -> CatalogResult<RecordBatch> {
         // TODO: make sure we return the same schema as Spark for each command
@@ -283,6 +297,38 @@ impl CatalogCommand {
                 // We are supposed to return an error if the table or view does not exist.
                 let table = manager.get_table_or_view(&table).await?;
                 display.tables().to_record_batch(vec![table])?
+            }
+            CatalogCommand::ShowTables { database, pattern } => {
+                let rows = manager
+                    .list_tables_and_temporary_views(&database, pattern.as_deref())
+                    .await?;
+                let rows = rows
+                    .into_iter()
+                    .map(|row| ShowTablesRow {
+                        database: quote_names_if_needed(&row.database),
+                        table_name: row.name,
+                        is_temporary: row.kind.is_temporary(),
+                    })
+                    .collect::<Vec<_>>();
+                ArrowSerializer::default().build_record_batch(&rows)?
+            }
+            CatalogCommand::ShowTableExtended { database, pattern } => {
+                let rows = manager
+                    .list_tables_and_temporary_views(&database, Some(pattern.as_str()))
+                    .await?;
+                let formatter = service.plan_formatter();
+                let rows = rows
+                    .into_iter()
+                    .map(|row| {
+                        Ok(ShowTableExtendedRow {
+                            database: quote_names_if_needed(&row.database),
+                            table_name: row.name.clone(),
+                            is_temporary: row.kind.is_temporary(),
+                            information: row.show_table_extended_information(formatter)?,
+                        })
+                    })
+                    .collect::<CatalogResult<Vec<_>>>()?;
+                ArrowSerializer::default().build_record_batch(&rows)?
             }
             CatalogCommand::ListTables { database, pattern } => {
                 let rows = manager
@@ -376,23 +422,23 @@ impl CatalogCommand {
             CatalogCommand::ListFunctions { .. } => {
                 return Err(CatalogError::NotSupported("list functions".to_string()));
             }
-            // TODO: `ctx` will not be needed if `CatalogManager` manages functions internally.
             CatalogCommand::DropFunction {
                 function,
                 if_exists,
                 is_temporary,
             } => {
                 manager
-                    .deregister_function(ctx, &function, if_exists, is_temporary)
+                    .deregister_function(&function, if_exists, is_temporary)
                     .await?;
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::RegisterFunction { udf } => {
-                manager.register_function(ctx, udf)?;
+                let udf = manager.get_tracked_function(udf)?;
+                manager.register_function(udf)?;
                 display.empty().to_record_batch(vec![])?
             }
             CatalogCommand::RegisterTableFunction { name, udtf } => {
-                manager.register_table_function(ctx, name, udtf)?;
+                manager.register_table_function(name, udtf)?;
                 display.empty().to_record_batch(vec![])?
             }
             CatalogCommand::DropTemporaryView {
@@ -416,6 +462,15 @@ impl CatalogCommand {
                 is_global,
                 options,
             } => {
+                let input = manager.get_tracked_logical_plan(options.input)?;
+                let options = CreateTemporaryViewOptions {
+                    input,
+                    columns: options.columns,
+                    if_not_exists: options.if_not_exists,
+                    replace: options.replace,
+                    comment: options.comment,
+                    properties: options.properties,
+                };
                 if is_global {
                     manager.create_global_temporary_view(&view, options).await?;
                 } else {
@@ -437,4 +492,23 @@ struct DescribeTableRow {
     col_name: String,
     data_type: String,
     comment: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShowTablesRow {
+    database: String,
+    #[serde(rename = "tableName")]
+    table_name: String,
+    is_temporary: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShowTableExtendedRow {
+    database: String,
+    #[serde(rename = "tableName")]
+    table_name: String,
+    is_temporary: bool,
+    information: String,
 }

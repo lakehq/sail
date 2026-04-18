@@ -13,7 +13,6 @@ use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
 use crate::formats::rate::options::resolve_rate_read_options;
-pub use crate::formats::rate::options::TableRateOptions;
 pub use crate::formats::rate::reader::RateSourceExec;
 use crate::formats::rate::reader::RateStreamSource;
 

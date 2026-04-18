@@ -63,6 +63,11 @@ pub enum Expr {
         function_name: ObjectName,
         arguments: Vec<Expr>,
     },
+    /// A named argument expression (e.g., `func(key=value)` in Python UDF kwargs)
+    NamedArgument {
+        key: String,
+        value: Box<Expr>,
+    },
     // extensions
     Placeholder(String),
     Rollup(Vec<Expr>),
@@ -130,9 +135,15 @@ pub enum Expr {
     UnresolvedDate {
         value: String,
     },
+    UnresolvedTime {
+        value: String,
+    },
     UnresolvedTimestamp {
         value: String,
         timestamp_type: TimestampType,
+    },
+    IdentifierClause {
+        expr: Box<Expr>,
     },
 }
 
@@ -293,7 +304,7 @@ pub struct CommonInlineUserDefinedFunction {
     pub function: FunctionDefinition,
 }
 
-#[allow(clippy::enum_variant_names)]
+#[expect(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum FunctionDefinition {
@@ -370,8 +381,22 @@ pub enum PySparkUdfType {
     GroupedMapPandasWithState = 208,
     GroupedMapArrow = 209,
     CogroupedMapArrow = 210,
+    TransformWithStatePandas = 211,
+    TransformWithStatePandasInitState = 212,
+    TransformWithStatePythonRow = 213,
+    TransformWithStatePythonRowInitState = 214,
+    GroupedMapArrowIter = 215,
+    GroupedMapPandasIter = 216,
+    GroupedAggPandasIter = 217,
+    // Spark 4.0 Arrow-native UDF types (Arrow-in, Arrow-out — no Pandas conversion)
+    ScalarArrow = 250,
+    ScalarArrowIter = 251,
+    GroupedAggArrow = 252,
+    WindowAggArrow = 253,
+    GroupedAggArrowIter = 254,
     Table = 300,
     ArrowTable = 301,
+    ArrowUdtf = 302,
 }
 
 impl PySparkUdfType {
@@ -380,7 +405,10 @@ impl PySparkUdfType {
     }
 
     pub fn is_table_function(&self) -> bool {
-        matches!(self, PySparkUdfType::Table | PySparkUdfType::ArrowTable)
+        matches!(
+            self,
+            PySparkUdfType::Table | PySparkUdfType::ArrowTable | PySparkUdfType::ArrowUdtf
+        )
     }
 }
 

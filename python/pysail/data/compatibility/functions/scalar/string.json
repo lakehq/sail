@@ -209,8 +209,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "regexp_extract_all",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/508"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -255,8 +254,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "sentences",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/508"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

@@ -509,6 +509,11 @@ impl DriverActor {
         }
     }
 
+    /// Assigns pending tasks to available workers and dispatches them for execution.
+    ///
+    /// Gets task assignments from the task assigner, builds task definitions from the job
+    /// scheduler, and dispatches each task to either the driver or a remote worker via gRPC.
+    /// Tasks that fail to build a definition are reported as failed.
     fn run_tasks(&mut self, ctx: &mut ActorContext<Self>) {
         let assignments = self.task_assigner.assign_tasks();
         self.task_assigner.track_streams(&assignments);

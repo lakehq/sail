@@ -13,7 +13,7 @@ Sail supports all the Spark SQL literal syntax. Please refer to the [Literals](.
 
 ## Data Types
 
-Sail supports all Spark SQL data types except the `VARIANT` type introduced in Spark 4.0. Support for the `VARIANT` type is tracked in the [GitHub issue](https://github.com/lakehq/sail/issues/511).
+Sail supports all Spark SQL data types.
 
 ## Expressions
 
@@ -31,7 +31,7 @@ The following table lists the supported clauses in the `SELECT` statement.
 | Clause                            | Supported          |
 | --------------------------------- | ------------------ |
 | `FROM <relation>`                 | :white_check_mark: |
-| `FROM <format>.<path>` (files)    | :construction:     |
+| `FROM <format>.<path>` (files)    | :white_check_mark: |
 | `WHERE`                           | :white_check_mark: |
 | `GROUP BY`                        | :white_check_mark: |
 | `HAVING`                          | :white_check_mark: |
@@ -53,7 +53,7 @@ The following table lists the supported clauses in the `SELECT` statement.
 | `UNPIVOT`                         | :construction:     |
 | `LATERAL VIEW`                    | :white_check_mark: |
 | `LATERAL <subquery>`              | :construction:     |
-| `TABLESAMPLE`                     | :construction:     |
+| `TABLESAMPLE`                     | :white_check_mark: |
 | `TRANSFORM`                       | :construction:     |
 
 The `EXPLAIN` statement is also supported, but the output shows the Sail logical and physical plan.
@@ -91,7 +91,7 @@ But some extensions support these statements for lakehouse tables (e.g., Delta L
 | `CREATE VIEW`           | :construction:               |
 | `DESCRIBE DATABASE`     | :construction:               |
 | `DESCRIBE FUNCTION`     | :construction:               |
-| `DESCRIBE TABLE`        | :construction:               |
+| `DESCRIBE TABLE`        | :white_check_mark:           |
 | `DROP DATABASE`         | :white_check_mark:           |
 | `DROP FUNCTION`         | :construction:               |
 | `DROP TABLE`            | :white_check_mark:           |

@@ -96,6 +96,7 @@ pub struct Stage {
     pub placement: TaskPlacement,
 }
 
+/// Specifies whether a task must run on the driver or on any available worker node.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum TaskPlacement {
     Driver,

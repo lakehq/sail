@@ -50,7 +50,6 @@ where
 macro_rules! keyword_types {
     ([$(($_:expr, $name:ident),)* $(,)?]) => {
         $(
-            #[allow(unused)]
             #[derive(Debug, Clone)]
             pub struct $name {
                 pub span: TokenSpan,

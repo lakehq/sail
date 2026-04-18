@@ -9,7 +9,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference}
 use k8s_openapi::{DeepMerge, Resource};
 use kube::Api;
 use rand::distr::Uniform;
-use rand::Rng;
+use rand::RngExt;
 use sail_common::config::ClusterConfigEnv;
 use sail_server::RetryStrategy;
 use sail_telemetry::common::ContextPropagationEnv;
@@ -47,7 +47,7 @@ impl KubernetesWorkerManager {
     }
 
     pub fn generate_name() -> String {
-        #[allow(clippy::unwrap_used)]
+        #[expect(clippy::unwrap_used)]
         rand::rng()
             .sample_iter(Uniform::new(0, 36).unwrap())
             .take(10)
@@ -285,7 +285,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn test_label_merging_from_template() {
         // Test that labels from worker_pod_template are properly merged with default labels
 
