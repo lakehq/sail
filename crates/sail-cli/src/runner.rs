@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use sail_common::error::CommonError;
 
+use crate::flight::run_flight_server;
+use crate::spark::run::run_pyspark_script;
 use crate::spark::{
     run_pyspark_shell, run_spark_connect_server, run_spark_mcp_server, McpSettings, McpTransport,
 };
@@ -17,8 +19,35 @@ struct Cli {
 enum Command {
     #[command(subcommand, about = "Run Spark workloads with Sail")]
     Spark(SparkCommand),
+    #[command(subcommand, about = "Arrow Flight SQL interface for Sail")]
+    Flight(FlightCommand),
     #[command(about = "Start the Sail worker (internal use only)")]
     Worker,
+}
+
+#[derive(Subcommand)]
+enum FlightCommand {
+    #[command(about = "Start the Arrow Flight SQL server")]
+    Server {
+        #[arg(
+            long,
+            default_value = "127.0.0.1",
+            help = "The IP address that the server binds to"
+        )]
+        ip: String,
+        #[arg(
+            long,
+            default_value_t = 32010,
+            help = "The port number that the server listens on"
+        )]
+        port: u16,
+        #[arg(
+            short = 'C',
+            long,
+            help = "The directory to change to before starting the server"
+        )]
+        directory: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -48,6 +77,22 @@ enum SparkCommand {
         about = "Start the PySpark shell with a Spark Connect server running in the background"
     )]
     Shell,
+    #[command(about = "Run a PySpark script and exit")]
+    Run {
+        #[arg(
+            short = 'f',
+            long,
+            help = "The PySpark script file to run, or '-' for stdin",
+            default_value = "-"
+        )]
+        file: String,
+        #[arg(
+            short = 'C',
+            long,
+            help = "The directory to change to before running the script"
+        )]
+        directory: Option<String>,
+    },
     #[command(about = "Start the Spark MCP (Model Context Protocol) server")]
     McpServer {
         #[arg(
@@ -109,6 +154,12 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 //   according to the Python multiprocessing resource tracker?
                 run_pyspark_shell()
             }
+            SparkCommand::Run { file, directory } => {
+                if let Some(directory) = directory {
+                    std::env::set_current_dir(directory)?;
+                }
+                run_pyspark_script(file)
+            }
             SparkCommand::McpServer {
                 host,
                 port,
@@ -119,12 +170,26 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(directory) = directory {
                     std::env::set_current_dir(directory)?;
                 }
-                run_spark_mcp_server(McpSettings {
-                    transport,
-                    host,
-                    port,
+                run_spark_mcp_server(
+                    McpSettings {
+                        transport,
+                        host,
+                        port,
+                    },
                     spark_remote,
-                })
+                )
+            }
+        },
+        Command::Flight(command) => match command {
+            FlightCommand::Server {
+                ip,
+                port,
+                directory,
+            } => {
+                if let Some(directory) = directory {
+                    std::env::set_current_dir(directory)?;
+                }
+                run_flight_server(ip.parse()?, port)
             }
         },
     }

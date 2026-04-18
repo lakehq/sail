@@ -99,3 +99,9 @@ Each field in the interval must have a non-negative value, but an interval can b
 - **ArrayType(_elementType_, _containsNull_)** represents sequences of elements of the same type **_elementType_**. An array type has an element type and a nullability flag **_containsNull_** indicating whether its elements can be null or not.
 - **MapType(_keyType_, _valueType_, _valueContainsNull_)** represents sets of key-value pairs. The keys must be of the same type **_keyType_** and cannot be null. The values must be of the same type **_valueType_**, and a value nullability flag **_valueContainsNull_** indicates whether values can be null or not.
 - **StructType(_fields_)** represents values with a structure described by a sequence of **_fields_**. Each field **StructField(_name_, _dataType_, _nullable_)** has a name, a data type, and a nullability flag indicating whether the field can be null or not.
+
+## Extension Types
+
+- **VariantType** represents semi-structured values.
+- **GeometryType(_srid_)** represents geometry values with a spatial reference identifier (SRID).
+- **GeographyType(_srid_)** represents geography values with a spatial reference identifier (SRID).

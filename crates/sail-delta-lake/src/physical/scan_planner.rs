@@ -1,9 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_schema::DataType;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
-use datafusion::common::{Result, ToDFSchema};
+use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
@@ -13,13 +14,17 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_data_source::options::gen::DeltaWritePartialOptions;
+use sail_data_source::options::PartialOptions;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
-use crate::options::TableDeltaOptions;
-use crate::physical_plan::planner::utils::{LogReplayFilter, LogReplayOptions};
-use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
-use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
+use crate::physical_plan::planner::metadata_predicate::{
+    build_metadata_filter, predicate_requires_stats,
+};
+use crate::physical_plan::planner::utils::LogReplayOptions;
+use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
+use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::storage::LogStoreRef;
@@ -36,6 +41,9 @@ pub(crate) async fn plan_delta_scan(
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let config = config.clone();
+    snapshot
+        .ensure_data_read_supported()
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
     let schema = match config.schema.clone() {
         Some(value) => Ok(value),
@@ -132,13 +140,15 @@ pub(crate) async fn plan_delta_scan(
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
     let pruning_expr = conjunction(pruning_filters);
-    let pruning_predicate = if let Some(expr) = pruning_expr {
+    let pruning_predicate = if let Some(expr) = pruning_expr.as_ref() {
         let df_schema = logical_schema.clone().to_dfschema()?;
-        Some(simplify_expr(session, &df_schema, expr).map_err(|e| {
-            datafusion::common::DataFusionError::Plan(format!(
-                "failed to simplify scan pruning filter: {e}"
-            ))
-        })?)
+        Some(
+            simplify_expr(session, &df_schema, expr.clone()).map_err(|e| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "failed to simplify scan pruning filter: {e}"
+                ))
+            })?,
+        )
     } else {
         None
     };
@@ -228,45 +238,70 @@ pub(crate) async fn plan_delta_scan(
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
         let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
+        let output_schema = if let Some(used_columns) = projection {
+            let fields = used_columns
+                .iter()
+                .map(|idx| full_logical_schema.field(*idx).to_owned())
+                .collect::<Vec<_>>();
+            Arc::new(ArrowSchema::new(fields))
+        } else {
+            Arc::clone(&full_logical_schema)
+        };
+
+        let renamed_schema = renamed.schema();
+
+        let needs_wrapping = output_schema.fields().iter().any(|field| {
+            let Ok(input_field) = renamed_schema.field_with_name(field.name()) else {
+                return false;
+            };
+            matches!(
+                (input_field.data_type(), field.data_type()),
+                (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+            ) && input_field.data_type() != field.data_type()
+        });
+        if needs_wrapping {
+            return Ok(
+                Arc::new(RelaxedTzCastExec::new(renamed, output_schema)) as Arc<dyn ExecutionPlan>
+            );
+        }
         return Ok(renamed);
     }
 
     // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
     let table_url = log_store.config().location.clone();
 
-    let planner_options = TableDeltaOptions {
-        delta_log_replay_strategy: config.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: config.delta_log_replay_hash_threshold,
-        ..TableDeltaOptions::default()
-    };
+    // TODO: Decouple planning for reading and writing. It is strange to require
+    // construction of write options (DeltaWritePartialOptions) just to drive the
+    // log-replay strategy for a read scan. The replay strategy and hash threshold
+    // should ideally come from read options or a dedicated configuration.
+    let mut partial = DeltaWritePartialOptions::initialize();
+    partial.delta_log_replay_strategy = Some(config.delta_log_replay_strategy);
+    // NonZeroUsize::new returns None for zero, causing finalize() to use the YAML default (100).
+    // A zero threshold is invalid and should not occur in practice since the option is now
+    // parsed with parse_non_zero_usize; falling back to the default is safe behavior.
+    partial.delta_log_replay_hash_threshold =
+        std::num::NonZeroUsize::new(config.delta_log_replay_hash_threshold);
+    let planner_options = partial
+        .finalize()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let planner_ctx = PlannerContext::new(
         session,
-        PlannerTableConfig::new(
+        DeltaPlannerConfig::new(
             table_url.clone(),
             planner_options,
+            HashMap::new(),
             table_partition_cols.clone(),
             None,
             true,
         ),
     );
-    let mut log_replay_options = LogReplayOptions::default();
-    if let Some(predicate) = pruning_predicate.as_ref() {
-        let mut expr_props =
-            crate::datasource::PredicateProperties::new(table_partition_cols.clone());
-        expr_props
-            .analyze_predicate(predicate)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-        log_replay_options.include_stats_json = !expr_props.partition_only;
-        if expr_props.partition_only {
-            log_replay_options.log_filter = Some(LogReplayFilter {
-                predicate: Arc::clone(predicate),
-                table_schema: table_schema.clone(),
-            });
-        }
-    } else {
-        log_replay_options.include_stats_json = false;
-    }
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: pruning_expr
+            .as_ref()
+            .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols)),
+        ..Default::default()
+    };
 
     let meta_scan: Arc<dyn ExecutionPlan> =
         crate::physical_plan::planner::utils::build_log_replay_pipeline_with_options(
@@ -280,6 +315,11 @@ pub(crate) async fn plan_delta_scan(
                 "failed to build log replay pipeline: {e}"
             ))
         })?;
+    let meta_scan: Arc<dyn ExecutionPlan> = if let Some(predicate) = pruning_expr {
+        build_metadata_filter(session, meta_scan, snapshot, predicate)?
+    } else {
+        meta_scan
+    };
     // TODO(metadata-as-data-aqe): This path intentionally prioritizes metadata scalability and
     // low TTFB over perfect static CBO. Add a runtime re-optimization hook after replay/discovery
     // so downstream repartitioning and join strategy can react to exact file cardinality/bytes.
@@ -287,8 +327,8 @@ pub(crate) async fn plan_delta_scan(
     let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         table_url.clone(),
-        pruning_predicate.clone(),
-        Some(table_schema.clone()),
+        None,
+        None,
         snapshot.version(),
         table_partition_cols.clone(),
         false,

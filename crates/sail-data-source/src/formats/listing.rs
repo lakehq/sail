@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -8,7 +7,7 @@ use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::physical_plan::FileSinkConfig;
+use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -16,7 +15,7 @@ use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::datasource::{
-    get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
+    get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo, TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
@@ -36,7 +35,7 @@ pub trait SchemaInfer: Debug + Send + Sync + 'static {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &ListingOptions,
-        options: &[HashMap<String, String>],
+        options: &[OptionLayer],
     ) -> Result<Schema>;
 }
 
@@ -52,7 +51,7 @@ impl SchemaInfer for DefaultSchemaInfer {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &ListingOptions,
-        _options: &[HashMap<String, String>],
+        _options: &[OptionLayer],
     ) -> Result<Schema> {
         Ok(list_options
             .format
@@ -70,13 +69,13 @@ pub trait ListingFormat: Debug + Send + Sync + 'static {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
+        options: Vec<OptionLayer>,
         compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>>;
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
+        options: Vec<OptionLayer>,
     ) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
 
     /// Get the schema inferrer for this format
@@ -279,16 +278,25 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let path = info.path();
         let SinkInfo {
             input,
-            path,
             // TODO: sink mode is ignored since the file formats only support append operation
             mode: _,
             partition_by,
             bucket_by,
             sort_order,
+            table_properties,
             options,
         } = info;
+        // Prepend table properties as an OptionLayer so that format-level options
+        // specified via TBLPROPERTIES (e.g. `option.delimiter`) are applied when writing,
+        // matching the behavior of the read path.
+        let options: Vec<OptionLayer> = std::iter::once(OptionLayer::TablePropertyList {
+            items: table_properties.into_iter().collect(),
+        })
+        .chain(options)
+        .collect();
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
         }
@@ -353,6 +361,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             )
             .map(|exec| Arc::new(exec) as Arc<dyn ExecutionPlan>);
         }
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for writing listing table format");
+        }
         // always write multi-file output
         let path = if path.ends_with(object_store::path::DELIMITER) {
             path
@@ -370,7 +381,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // This is how DataFusion handles physical planning for `LogicalPlan::Copy`.
         let table_partition_cols = partition_by
             .iter()
-            .map(|s| (s.clone(), DataType::Null))
+            .map(|field| (field.column.clone(), DataType::Null))
             .collect::<Vec<_>>();
         let (format, compression) = self.inner.create_write_format(ctx, options)?;
         let file_extension = if let Some(file_compression_type) = format.compression_type() {
@@ -412,6 +423,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             insert_op: InsertOp::Append,
             keep_partition_by_columns: false,
             file_extension,
+            file_output_mode: FileOutputMode::Automatic,
         };
         format
             .create_writer_physical_plan(input, ctx, conf, sort_order)

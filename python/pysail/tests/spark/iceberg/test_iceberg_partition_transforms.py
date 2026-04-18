@@ -1,13 +1,13 @@
 """Tests for partition transforms with the DataFrameWriterV2 API.
 
 These tests verify that partition transforms are correctly parsed when using
-PySpark's writeTo().partitionedBy() API. The memory catalog does not support
+PySpark's writeTo().partitionedBy() API. Non-Iceberg tables do not support
 partition transforms, so these tests verify parsing by checking the error message.
 """
 
 import pytest
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 try:
     from pyspark.sql.functions import partitioning
@@ -39,7 +39,7 @@ def test_partition_transform_time_based(spark, tmp_path, transform_name, transfo
     )
     df = df.selectExpr("id", "to_date(ts) as dt", "to_timestamp(ts) as ts")
 
-    with pytest.raises(Exception, match=r"partition transforms are not supported by memory catalog"):
+    with pytest.raises(Exception, match=r"partition transforms are only supported for Iceberg tables"):
         df.writeTo(f"t_{transform_name}").option("path", location).partitionedBy(transform_func(partitioning)).create()
 
 
@@ -50,5 +50,5 @@ def test_partition_transform_bucket(spark, tmp_path):
     location = str(tmp_path / "t_bucket")
     df = spark.createDataFrame([(1, "a")], schema="id INT, name STRING")
 
-    with pytest.raises(Exception, match=r"partition transforms are not supported by memory catalog"):
+    with pytest.raises(Exception, match=r"partition transforms are only supported for Iceberg tables"):
         df.writeTo("t_bucket").option("path", location).partitionedBy(partitioning.bucket(10, "id")).create()

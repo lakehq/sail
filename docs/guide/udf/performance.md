@@ -14,6 +14,11 @@ This is usually more performant than the scalar UDF.
 In Sail, the internal in-memory data in Arrow format is converted to Pandas objects before Python function invocation, and the result is converted back to the Arrow format. Such conversion can be zero-copy, but data copy occurs when the `pyarrow` library decides it is unavoidable.
 
 Since Spark 3.3, the `pyspark.sql.DataFrame.mapInArrow()` method can be used to call Arrow UDFs on Spark data. This method expects a Python function that operates on Arrow record batches (`pyarrow.RecordBatch`).
+
+Since Spark 4.0, the `pyspark.sql.GroupedData.applyInArrow()` and `pyspark.sql.PandasCogroupedOps.applyInArrow()` methods can be used to call Arrow UDFs on grouped or co-grouped data.
+
+Since Spark 4.1, the `pyspark.sql.functions.arrow_udf()` and `pyspark.sql.functions.arrow_udtf()` decorators can be used to define Arrow UDFs, UDAFs, and UDTFs.
+
 **It is recommended to use such Arrow UDFs to maximize performance.**
 In Sail, the implementation does not involve any data copy. The Python function and the Rust-based execution engine share Arrow data directly via pointers.
 

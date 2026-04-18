@@ -1,0 +1,28 @@
+# serializer version: 1
+---
+name: "test_explain_select_on_v2_checkpoint_table_uses_driver_file_scan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as id, #3@1 as value]
+      SortExec: expr=[#2@0 ASC], preserve_partitioning=[false]
+        DataSourceExec: file_groups={1 group: [[<tmp>/delta_v2_checkpoint_explain_driver/part-<id>.snappy.parquet, <tmp>/delta_v2_checkpoint_explain_driver/part-<id>.snappy.parquet]]}, projection=[id@0 as #2, value@1 as #3], file_type=parquet
+---
+name: "test_explain_select_on_v2_checkpoint_table_with_metadataasdata_shows_sidecar_in_log_replay"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as id, #3@1 as value]
+      SortPreservingMergeExec: [#2@0 ASC]
+        SortExec: expr=[#2@0 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[id@0 as #2, value@1 as #3]
+            DeltaScanByAddsExec(table_path=file://<tmp>/delta_v2_checkpoint_explain_metadata/, version=1, projection=Some([0, 1]), limit=None, pushdown=false)
+              DeltaDiscoveryExec(table_path=file://<tmp>/delta_v2_checkpoint_explain_metadata/)
+                DeltaLogReplayExec(table_path=file://<tmp>/delta_v2_checkpoint_explain_metadata/, version=1)
+                  RepartitionExec: partitioning=Hash([__sail_delta_replay_path@5], 4), input_partitions=4
+                    ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+                        DataSourceExec: file_groups={2 groups: [[<tmp>/delta_v2_checkpoint_explain_metadata/_delta_log/00000000000000000001.checkpoint.<uuid>.parquet], [<tmp>/delta_v2_checkpoint_explain_metadata/_delta_log/_sidecars/<uuid>.parquet]]}, projection=[add, remove, __sail_delta_log_version], file_type=parquet
+                  RepartitionExec: partitioning=Hash([__sail_delta_replay_path@5], 4), input_partitions=1
+                    ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                      EmptyExec

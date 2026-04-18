@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import io
 import json
+import time
+from contextlib import redirect_stdout
+from pathlib import Path
 
 import pytest
 from jinja2 import Template
 from pytest_bdd import given, parsers, then, when
 
-from pysail.tests.spark.utils import escape_sql_string_literal, parse_show_string
+from pysail.testing.spark.utils.sql import escape_sql_string_literal, parse_show_string
 
 
 @pytest.fixture
@@ -38,6 +42,16 @@ class PathWrapper:
         """The corresponding SQL string literal for the path."""
         return f"'{escape_sql_string_literal(str(self.path))}'"
 
+    @property
+    def uri(self):
+        """The file URI representation of the path."""
+        return f"'{self.path.absolute().as_uri()}'"
+
+    @property
+    def file_uri(self):
+        """The unquoted file URI representation of the path."""
+        return self.path.absolute().as_uri()
+
 
 @given(parsers.parse("variable {name} for temporary directory {directory}"), target_fixture="variables")
 def variable_for_temporary_directory(name, directory, tmp_path, variables):
@@ -46,6 +60,15 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
     This step does not create the directory, it only stores its absolute path.
     """
     variables[name] = PathWrapper(tmp_path / directory)
+    return variables
+
+
+@given(parsers.parse("variable {name} for delta log of {location_var}"), target_fixture="variables")
+def variable_for_delta_log(name: str, location_var: str, variables: dict) -> dict:
+    """Defines a variable pointing to the _delta_log subdirectory of a Delta table location."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    variables[name] = PathWrapper(Path(location.path) / "_delta_log")
     return variables
 
 
@@ -88,6 +111,11 @@ def final_statement(template, docstring, spark, variables):
     spark.sql(s)
 
 
+@given(parsers.parse("sleep for {seconds:d} seconds"))
+def sleep_for_seconds(seconds: int) -> None:
+    time.sleep(seconds)
+
+
 @when(parsers.re("query(?P<template>( template)?)"), target_fixture="query")
 def query(template, docstring, variables):
     """Defines a SQL query (not executed here)."""
@@ -98,7 +126,15 @@ def query(template, docstring, variables):
 def query_schema(docstring, query, spark):
     """Analyze the SQL query and compare schema with expected schema tree string."""
     df = spark.sql(query)
-    assert docstring.strip() == df.schema.treeString().strip()
+    if hasattr(df.schema, "treeString"):
+        actual = df.schema.treeString()
+    else:
+        # PySpark < 4.x has no StructType.treeString(); capture printSchema() output instead.
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            df.printSchema()
+        actual = buf.getvalue()
+    assert docstring.strip() == actual.strip()
 
 
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))

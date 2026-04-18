@@ -98,7 +98,13 @@ async fn test_create_table() {
             assert_eq!(comment, &Some("Product catalog table".to_string()));
             assert_eq!(location, &Some("s3://bucket/products".to_string()));
             assert_eq!(format, "parquet");
-            assert_eq!(partition_by, &vec!["category".to_string()]);
+            assert_eq!(
+                partition_by,
+                &vec![CatalogPartitionField {
+                    column: "category".to_string(),
+                    transform: None,
+                }]
+            );
             assert!(properties
                 .iter()
                 .any(|(k, v)| k == "owner" && v == "test_user"));

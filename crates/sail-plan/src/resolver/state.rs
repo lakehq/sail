@@ -142,6 +142,7 @@ impl PlanResolverState {
         self.register_field_info(field.as_ref().name(), false)
     }
 
+    /// Registers each field and returns unique internal names to avoid column name collisions.
     pub fn register_fields(
         &mut self,
         fields: impl IntoIterator<Item = impl AsRef<Field>>,
@@ -149,6 +150,17 @@ impl PlanResolverState {
         fields
             .into_iter()
             .map(|field| self.register_field(field))
+            .collect()
+    }
+
+    /// Registers each name and returns unique internal IDs, like `register_fields` but for plain strings.
+    pub fn register_field_names(
+        &mut self,
+        names: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Vec<String> {
+        names
+            .into_iter()
+            .map(|name| self.register_field_name(name))
             .collect()
     }
 

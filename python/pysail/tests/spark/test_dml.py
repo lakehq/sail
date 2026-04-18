@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 # TODO: We should revisit all DML tests once we support lakehouse formats.
 #   The tests involving update and delete operations are not supposed to work
