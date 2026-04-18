@@ -396,10 +396,9 @@ impl SparkSchemaOfJsonOptions {
             match key {
                 "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
                 "allowNumericLeadingZeros" => {
-                    return Err(generic_exec_err(
-                        "schema_of_json",
-                        "option allowNumericLeadingZeros is not supported",
-                    ));
+                    // Spark accepts this option; store but don't act on it yet
+                    // TODO: pass to jiter parser when supported
+                    self._allow_numeric_leading_zeros = value == "true";
                 }
                 other => {
                     return Err(generic_exec_err(

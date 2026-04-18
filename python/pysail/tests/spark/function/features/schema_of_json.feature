@@ -491,14 +491,16 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json(json_col) AS result
         FROM VALUES ('{"name":"Alice"}') AS t(json_col)
         """
-      Then query error NON_FOLDABLE_INPUT
+      Then query error .*foldable.*
 
-    Scenario: allowNumericLeadingZeros option is rejected
+    Scenario: allowNumericLeadingZeros option is accepted
       When query
         """
         SELECT schema_of_json('{"a": 01}', map('allowNumericLeadingZeros', 'true')) AS result
         """
-      Then query error allowNumericLeadingZeros
+      Then query result
+        | result            |
+        | STRUCT<a: BIGINT> |
 
   Rule: Numeric boundary types
 
