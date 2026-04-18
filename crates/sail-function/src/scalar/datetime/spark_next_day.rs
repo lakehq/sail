@@ -5,7 +5,7 @@ use chrono::{Datelike, Duration, Weekday};
 use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, StringArrayType};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::types::NativeType;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::invalid_arg_count_exec_err;
@@ -63,8 +63,7 @@ impl ScalarUDFImpl for SparkNextDay {
                                     spark_next_day(*days, weekday),
                                 )))
                             } else {
-                                // TODO: if spark.sql.ansi.enabled is false,
-                                //  returns NULL instead of an error for a malformed dayOfWeek.
+                                // NULL day name → NULL result (Spark behavior)
                                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
                             }
                         } else {
@@ -85,8 +84,7 @@ impl ScalarUDFImpl for SparkNextDay {
                                 .with_data_type(DataType::Date32);
                             Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
                         } else {
-                            // TODO: if spark.sql.ansi.enabled is false,
-                            //  returns NULL instead of an error for a malformed dayOfWeek.
+                            // NULL day name → NULL result (Spark behavior)
                             Ok(ColumnarValue::Array(Arc::new(new_null_array(&DataType::Date32, date_array.len()))))
                         }
                     }
@@ -197,20 +195,16 @@ where
 /// Parse and validate a day-of-week string. Returns the Weekday or error for invalid names.
 fn parse_day_of_week(day_of_week: &str) -> Result<Weekday> {
     let upper = day_of_week.trim().to_uppercase();
-    let canonical = match upper.as_str() {
-        "MO" | "MON" | "MONDAY" => "Monday",
-        "TU" | "TUE" | "TUESDAY" => "Tuesday",
-        "WE" | "WED" | "WEDNESDAY" => "Wednesday",
-        "TH" | "THU" | "THURSDAY" => "Thursday",
-        "FR" | "FRI" | "FRIDAY" => "Friday",
-        "SA" | "SAT" | "SATURDAY" => "Saturday",
-        "SU" | "SUN" | "SUNDAY" => "Sunday",
-        other => return exec_err!("Illegal input for day of week: {other}"),
-    };
-    // Safe: canonical strings are always valid Weekday names
-    canonical
-        .parse::<Weekday>()
-        .map_err(|_| DataFusionError::Internal(format!("Failed to parse weekday: {canonical}")))
+    match upper.as_str() {
+        "MO" | "MON" | "MONDAY" => Ok(Weekday::Mon),
+        "TU" | "TUE" | "TUESDAY" => Ok(Weekday::Tue),
+        "WE" | "WED" | "WEDNESDAY" => Ok(Weekday::Wed),
+        "TH" | "THU" | "THURSDAY" => Ok(Weekday::Thu),
+        "FR" | "FRI" | "FRIDAY" => Ok(Weekday::Fri),
+        "SA" | "SAT" | "SATURDAY" => Ok(Weekday::Sat),
+        "SU" | "SUN" | "SUNDAY" => Ok(Weekday::Sun),
+        other => exec_err!("Illegal input for day of week: {other}"),
+    }
 }
 
 fn spark_next_day(days: i32, target: Weekday) -> Option<i32> {
