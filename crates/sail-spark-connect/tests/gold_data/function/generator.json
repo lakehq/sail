@@ -43,7 +43,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": "ok"
       }
     },
     {
@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": "ok"
       }
     },
     {
@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": "ok"
       }
     },
     {
@@ -205,7 +205,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": "ok"
       }
     },
     {
@@ -263,7 +263,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": "ok"
       }
     },
     {
@@ -321,7 +321,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": "ok"
       }
     },
     {

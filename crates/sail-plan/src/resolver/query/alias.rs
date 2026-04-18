@@ -47,7 +47,7 @@ impl PlanResolver<'_> {
             let expr: Vec<Expr> = schema
                 .columns()
                 .into_iter()
-                .zip(columns.into_iter())
+                .zip(columns)
                 .map(|(col, name)| Expr::Column(col.clone()).alias(state.register_field_name(name)))
                 .collect();
             LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?)

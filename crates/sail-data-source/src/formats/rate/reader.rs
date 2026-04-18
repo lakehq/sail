@@ -20,16 +20,16 @@ use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
 use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::source::StreamSource;
 
-use crate::formats::rate::options::TableRateOptions;
+use crate::options::gen::RateReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct RateStreamSource {
-    options: TableRateOptions,
+    options: RateReadOptions,
     schema: SchemaRef,
 }
 
 impl RateStreamSource {
-    pub fn try_new(options: TableRateOptions, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new(options: RateReadOptions, schema: SchemaRef) -> Result<Self> {
         Self::validate_schema(&schema)?;
         Ok(Self { options, schema })
     }
@@ -81,7 +81,7 @@ impl StreamSource for RateStreamSource {
 
 #[derive(Debug)]
 pub struct RateSourceExec {
-    options: TableRateOptions,
+    options: RateReadOptions,
     time_zone: Arc<str>,
     original_schema: SchemaRef,
     projected_schema: SchemaRef,
@@ -93,7 +93,7 @@ impl RateSourceExec {
     /// Creates a new execution plan for the rate source.
     /// The schema should be the original schema before projection.
     pub fn try_new(
-        options: TableRateOptions,
+        options: RateReadOptions,
         schema: SchemaRef,
         projection: Vec<usize>,
     ) -> Result<Self> {
@@ -118,7 +118,7 @@ impl RateSourceExec {
         })
     }
 
-    pub fn options(&self) -> &TableRateOptions {
+    pub fn options(&self) -> &RateReadOptions {
         &self.options
     }
 

@@ -24,6 +24,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::runtime::SpawnedTask;
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -41,9 +42,10 @@ use crate::delta_log::{
 };
 use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
-    checkpoint_path, last_checkpoint_path, Action, Add, CheckpointActionRow,
-    DeltaError as DeltaTableError, DeltaResult, DomainMetadata, LastCheckpointHint, Metadata,
-    Protocol, Remove, TableProperties, Transaction,
+    checkpoint_path, last_checkpoint_path, sidecar_file_path, uuid_checkpoint_path, Action, Add,
+    CheckpointActionRow, CheckpointMetadata, DeltaError as DeltaTableError, DeltaResult,
+    DomainMetadata, LastCheckpointHint, Metadata, Protocol, Remove, Sidecar, TableFeature,
+    TableProperties, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
 
@@ -99,6 +101,9 @@ pub(crate) struct ReconciledCheckpointState {
     // TODO: Use `(path, dvId)` once replay is deletion-vector aware.
     pub(crate) adds: HashMap<String, Add>,
     pub(crate) removes: HashMap<String, Remove>,
+    /// Sidecar descriptors collected from a V2 checkpoint. These reference external
+    /// parquet files in `_delta_log/_sidecars/` that contain the add/remove actions.
+    pub(crate) sidecars: Vec<Sidecar>,
 }
 
 impl ReconciledCheckpointState {
@@ -137,12 +142,11 @@ impl ReconciledCheckpointState {
     }
 
     pub(crate) fn apply_checkpoint_row(&mut self, row: CheckpointActionRow) -> DeltaResult<()> {
-        if row.sidecar.is_some() {
-            // TODO: Implement V2 checkpoint replay by loading add/remove payload rows from the
-            // referenced sidecar parquet files instead of rejecting them here.
-            return Err(DeltaTableError::Unsupported(
-                "V2 checkpoints with sidecars are not yet supported for reading".to_string(),
-            ));
+        // Collect sidecar descriptors from V2 checkpoints. The actual add/remove
+        // payload will be loaded from the referenced sidecar files after the main
+        // checkpoint rows have been fully consumed.
+        if let Some(sidecar) = row.sidecar {
+            self.sidecars.push(sidecar);
         }
 
         if let Some(protocol) = row.protocol {
@@ -390,6 +394,43 @@ impl CheckpointBatchIter {
     }
 }
 
+/// Batch iterator for sidecar (add/remove) actions in V2 checkpoint writes.
+/// Mirrors [`CheckpointBatchIter`] to avoid materializing all rows into a
+/// single `Vec`/`RecordBatch`.
+struct SidecarBatchIter {
+    batch_size: usize,
+    adds: std::collections::hash_map::IntoValues<String, Add>,
+    removes: std::collections::hash_map::IntoValues<String, Remove>,
+}
+
+impl SidecarBatchIter {
+    fn next_batch(&mut self) -> DeltaResult<Option<RecordBatch>> {
+        let mut rows = Vec::with_capacity(self.batch_size);
+        while rows.len() < self.batch_size {
+            if let Some(add) = self.adds.next() {
+                rows.push(CheckpointActionRow {
+                    add: Some(add),
+                    ..Default::default()
+                });
+                continue;
+            }
+            if let Some(remove) = self.removes.next() {
+                rows.push(CheckpointActionRow {
+                    remove: Some(remove),
+                    ..Default::default()
+                });
+                continue;
+            }
+            break;
+        }
+        if rows.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(encode_checkpoint_rows(&rows)?))
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ReplayedTableState {
     pub version: i64,
@@ -501,8 +542,8 @@ impl<'a> CheckpointManager<'a> {
                 }
             }
         }
-        commit_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
-        checkpoint_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
+        commit_entries.sort_by_key(|(av, _)| *av);
+        checkpoint_entries.sort_by_key(|(av, _)| *av);
 
         let mut state = ReconciledCheckpointState::default();
         let start_commit_version = if let Some((cp_ver, cp_meta)) = checkpoint_entries.pop() {
@@ -524,8 +565,25 @@ impl<'a> CheckpointManager<'a> {
         .await?;
         state.prune_expired_checkpoint_actions(Utc::now().timestamp_millis())?;
 
-        // Batching avoids one giant RecordBatch, but full-state materialization
-        // is still the main memory cost here.
+        // Check if the protocol enables V2 checkpoints.
+        let use_v2 = state
+            .protocol
+            .as_ref()
+            .is_some_and(|p| p.has_writer_feature(&TableFeature::V2Checkpoint));
+
+        if use_v2 {
+            self.write_v2_checkpoint(version, state, store).await
+        } else {
+            self.write_v1_checkpoint(version, state, store).await
+        }
+    }
+
+    async fn write_v1_checkpoint(
+        &self,
+        version: i64,
+        state: ReconciledCheckpointState,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<()> {
         const CHECKPOINT_WRITE_BATCH_SIZE: usize = 16_384;
         let (mut checkpoint_batches, checkpoint_add_count) =
             state.into_checkpoint_batch_iter(CHECKPOINT_WRITE_BATCH_SIZE)?;
@@ -563,6 +621,141 @@ impl<'a> CheckpointManager<'a> {
         let hint = LastCheckpointHint {
             version,
             size: Some(checkpoint_row_count),
+            parts: None,
+            size_in_bytes: Some(file_meta.size as i64),
+            num_of_add_files: Some(checkpoint_add_count),
+            checkpoint_schema: None,
+            checksum: None,
+            tags: None,
+        };
+        let hint_bytes = serde_json::to_vec(&hint).map_err(DeltaTableError::generic_err)?;
+        store.put(&last_checkpoint_path, hint_bytes.into()).await?;
+
+        Ok(())
+    }
+
+    async fn write_v2_checkpoint(
+        &self,
+        version: i64,
+        state: ReconciledCheckpointState,
+        store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<()> {
+        let now_millis = Utc::now().timestamp_millis();
+        let checkpoint_add_count = i64::try_from(state.adds.len())
+            .map_err(|_| DeltaTableError::generic("add action count overflow"))?;
+
+        // Step 1: Write add/remove actions into a sidecar file using batched writes.
+        const SIDECAR_WRITE_BATCH_SIZE: usize = 16_384;
+        let sidecar_uuid = Uuid::new_v4();
+        let sidecar_filename = format!("{sidecar_uuid}.parquet");
+        let sidecar_path = sidecar_file_path(&sidecar_filename);
+
+        let mut sidecar_batches = SidecarBatchIter {
+            batch_size: SIDECAR_WRITE_BATCH_SIZE,
+            adds: state.adds.into_values(),
+            removes: state.removes.into_values(),
+        };
+
+        let sidecar_descriptor = if let Some(first_batch) = sidecar_batches.next_batch()? {
+            ensure_schema_supported_for_parquet(&first_batch)?;
+            let sidecar_writer = ParquetObjectWriter::new(store.clone(), sidecar_path.clone());
+            let mut writer = AsyncArrowWriter::try_new(sidecar_writer, first_batch.schema(), None)
+                .map_err(DeltaTableError::generic_err)?;
+            writer
+                .write(&first_batch)
+                .await
+                .map_err(DeltaTableError::generic_err)?;
+            while let Some(batch) = sidecar_batches.next_batch()? {
+                writer
+                    .write(&batch)
+                    .await
+                    .map_err(DeltaTableError::generic_err)?;
+            }
+            let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
+            let sidecar_meta = store.head(&sidecar_path).await?;
+            Some(Sidecar {
+                path: sidecar_filename,
+                size_in_bytes: i64::try_from(sidecar_meta.size)
+                    .map_err(|_| DeltaTableError::generic("sidecar size overflow"))?,
+                modification_time: now_millis,
+                tags: None,
+            })
+        } else {
+            None
+        };
+
+        // Step 2: Build the main V2 checkpoint with header actions + sidecar refs.
+        let protocol = state.protocol.ok_or_else(|| {
+            DeltaTableError::generic("Cannot create checkpoint without protocol action")
+        })?;
+        let metadata = state.metadata.ok_or_else(|| {
+            DeltaTableError::generic("Cannot create checkpoint without metadata action")
+        })?;
+
+        let mut main_rows: Vec<CheckpointActionRow> = Vec::new();
+
+        // V2 checkpoint marker
+        main_rows.push(CheckpointActionRow {
+            checkpoint_metadata: Some(CheckpointMetadata {
+                version,
+                tags: None,
+            }),
+            ..Default::default()
+        });
+        main_rows.push(CheckpointActionRow {
+            protocol: Some(protocol),
+            ..Default::default()
+        });
+        main_rows.push(CheckpointActionRow {
+            metadata: Some(metadata),
+            ..Default::default()
+        });
+        for (_, txn) in state.txns.into_iter().collect::<BTreeMap<_, _>>() {
+            main_rows.push(CheckpointActionRow {
+                txn: Some(txn),
+                ..Default::default()
+            });
+        }
+        for (_, domain_metadata) in state
+            .domain_metadata
+            .into_iter()
+            .collect::<BTreeMap<_, _>>()
+        {
+            main_rows.push(CheckpointActionRow {
+                domain_metadata: Some(domain_metadata),
+                ..Default::default()
+            });
+        }
+        if let Some(sidecar) = &sidecar_descriptor {
+            main_rows.push(CheckpointActionRow {
+                sidecar: Some(sidecar.clone()),
+                ..Default::default()
+            });
+        }
+
+        let main_batch = encode_checkpoint_rows(&main_rows)?;
+        ensure_schema_supported_for_parquet(&main_batch)?;
+        let main_row_count = i64::try_from(main_rows.len())
+            .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
+
+        // Write the UUID-named V2 checkpoint file.
+        let checkpoint_uuid = Uuid::new_v4();
+        let cp_path = uuid_checkpoint_path(version, &checkpoint_uuid);
+        let cp_writer = ParquetObjectWriter::new(store.clone(), cp_path.clone());
+        let mut writer = AsyncArrowWriter::try_new(cp_writer, main_batch.schema(), None)
+            .map_err(DeltaTableError::generic_err)?;
+        writer
+            .write(&main_batch)
+            .await
+            .map_err(DeltaTableError::generic_err)?;
+        let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
+        let file_meta = store.head(&cp_path).await?;
+
+        // Step 3: Write _last_checkpoint hint pointing to the UUID-named checkpoint.
+        let last_checkpoint_path = last_checkpoint_path();
+        let hint = LastCheckpointHint {
+            version,
+            size: Some(main_row_count),
             parts: None,
             size_in_bytes: Some(file_meta.size as i64),
             num_of_add_files: Some(checkpoint_add_count),
@@ -624,15 +817,16 @@ pub(crate) async fn replay_commit_actions(
     Ok(commit_timestamps)
 }
 
-pub(crate) async fn read_checkpoint_rows_from_parquet(
+/// Read only the main checkpoint parquet file (without loading sidecars).
+/// Useful when callers only need non-file actions (protocol, metadata, sidecar
+/// descriptors, etc.) — for example during sidecar garbage collection.
+pub(crate) async fn read_checkpoint_main_rows_from_parquet(
     root_store: std::sync::Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
-    let bytes = root_store.get(&meta.location).await?.bytes().await?;
-    tokio::task::spawn_blocking(move || {
-        // TODO: V2 checkpoints move add/remove rows into sidecars; full replay
-        // needs to read those parquet files too.
-        let mut batches = ParquetRecordBatchReaderBuilder::try_new(bytes)
+    let main_bytes = root_store.get(&meta.location).await?.bytes().await?;
+    SpawnedTask::spawn_blocking(move || {
+        let mut batches = ParquetRecordBatchReaderBuilder::try_new(main_bytes)
             .map_err(DeltaTableError::generic_err)?
             .build()
             .map_err(DeltaTableError::generic_err)?;
@@ -646,6 +840,42 @@ pub(crate) async fn read_checkpoint_rows_from_parquet(
     })
     .await
     .map_err(DeltaTableError::generic_err)?
+}
+
+pub(crate) async fn read_checkpoint_rows_from_parquet(
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    meta: ObjectMeta,
+) -> DeltaResult<Vec<CheckpointActionRow>> {
+    let mut rows = read_checkpoint_main_rows_from_parquet(root_store.clone(), meta).await?;
+
+    // Collect sidecar descriptors from V2 checkpoint rows and load add/remove
+    // payload from the referenced sidecar parquet files.
+    let sidecars: Vec<Sidecar> = rows.iter().filter_map(|r| r.sidecar.clone()).collect();
+
+    if !sidecars.is_empty() {
+        for sidecar in &sidecars {
+            let sidecar_path = sidecar_file_path(&sidecar.path);
+            let sidecar_bytes = root_store.get(&sidecar_path).await?.bytes().await?;
+            let sidecar_rows = SpawnedTask::spawn_blocking(move || {
+                let mut batches = ParquetRecordBatchReaderBuilder::try_new(sidecar_bytes)
+                    .map_err(DeltaTableError::generic_err)?
+                    .build()
+                    .map_err(DeltaTableError::generic_err)?;
+                let mut sidecar_rows = Vec::new();
+                for batch in &mut batches {
+                    let batch = batch.map_err(DeltaTableError::generic_err)?;
+                    let mut decoded = decode_checkpoint_rows(&batch)?;
+                    sidecar_rows.append(&mut decoded);
+                }
+                Ok::<_, DeltaTableError>(sidecar_rows)
+            })
+            .await
+            .map_err(DeltaTableError::generic_err)??;
+            rows.extend(sidecar_rows);
+        }
+    }
+
+    Ok(rows)
 }
 
 pub(crate) async fn replay_commit_header_actions(
@@ -695,6 +925,191 @@ pub(crate) async fn replay_commit_header_actions(
     Ok(commit_timestamps)
 }
 
+/// Replay commit actions with compacted JSON files.
+///
+/// Compacted JSON files replace ranges of individual commit files during replay.
+/// Both compacted and individual commit files use the same ndjson format.
+/// Compacted files contain reconciled actions for version range [start, end].
+pub(crate) async fn replay_commit_actions_with_compactions(
+    state: &mut ReconciledCheckpointState,
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    commit_entries: &[(i64, ObjectMeta)],
+    compaction_entries: &[((i64, i64), ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> DeltaResult<BTreeMap<i64, i64>> {
+    if compaction_entries.is_empty() {
+        return replay_commit_actions(
+            state,
+            root_store,
+            commit_entries,
+            start_version,
+            end_version,
+        )
+        .await;
+    }
+
+    let replay_sequence = build_replay_sequence(
+        commit_entries,
+        compaction_entries,
+        start_version,
+        end_version,
+    );
+
+    let mut commit_timestamps = BTreeMap::new();
+    for entry in &replay_sequence {
+        match entry {
+            ReplayEntry::Commit(version, meta) => {
+                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                let actions = get_actions(*version, &bytes)?;
+                let commit_timestamp = resolve_commit_timestamp_from_actions(
+                    *version,
+                    meta,
+                    state.protocol.as_ref(),
+                    state.metadata.as_ref(),
+                    &actions,
+                )?;
+                for action in actions {
+                    state.apply_action(action);
+                }
+                commit_timestamps.insert(*version, commit_timestamp);
+            }
+            ReplayEntry::Compaction(start, end, meta) => {
+                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                // Compacted JSON files use the same ndjson format as regular commits.
+                // Use end_version for the "version" parameter in error messages.
+                let actions = get_actions(*end, &bytes)?;
+                for action in actions {
+                    state.apply_action(action);
+                }
+                // Use the compaction file's modification time as timestamp for the end version.
+                let timestamp = meta.last_modified.timestamp_millis();
+                for v in *start..=*end {
+                    commit_timestamps.insert(v, timestamp);
+                }
+            }
+        }
+    }
+    Ok(commit_timestamps)
+}
+
+/// Replay only header-relevant actions with compacted JSON files.
+pub(crate) async fn replay_commit_header_actions_with_compactions(
+    state: &mut ReconciledHeaderState,
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    commit_entries: &[(i64, ObjectMeta)],
+    compaction_entries: &[((i64, i64), ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> DeltaResult<BTreeMap<i64, i64>> {
+    if compaction_entries.is_empty() {
+        return replay_commit_header_actions(
+            state,
+            root_store,
+            commit_entries,
+            start_version,
+            end_version,
+        )
+        .await;
+    }
+
+    let replay_sequence = build_replay_sequence(
+        commit_entries,
+        compaction_entries,
+        start_version,
+        end_version,
+    );
+
+    let mut commit_timestamps = BTreeMap::new();
+    for entry in &replay_sequence {
+        match entry {
+            ReplayEntry::Commit(version, meta) => {
+                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                let actions = get_actions(*version, &bytes)?;
+                let commit_timestamp = resolve_commit_timestamp_from_actions(
+                    *version,
+                    meta,
+                    state.protocol.as_ref(),
+                    state.metadata.as_ref(),
+                    &actions,
+                )?;
+                for action in actions {
+                    state.apply_action(action);
+                }
+                commit_timestamps.insert(*version, commit_timestamp);
+            }
+            ReplayEntry::Compaction(start, end, meta) => {
+                let bytes = root_store.get(&meta.location).await?.bytes().await?;
+                let actions = get_actions(*end, &bytes)?;
+                for action in actions {
+                    state.apply_action(action);
+                }
+                let timestamp = meta.last_modified.timestamp_millis();
+                for v in *start..=*end {
+                    commit_timestamps.insert(v, timestamp);
+                }
+            }
+        }
+    }
+    Ok(commit_timestamps)
+}
+
+/// An entry in the ordered replay sequence.
+enum ReplayEntry<'a> {
+    /// A single commit file for one version.
+    Commit(i64, &'a ObjectMeta),
+    /// A compacted JSON file covering [start, end].
+    Compaction(i64, i64, &'a ObjectMeta),
+}
+
+/// Build an ordered replay sequence by merging individual commits and compaction files.
+///
+/// The sequence is ordered by version. Compaction files are placed at their start_version
+/// position. Individual commits that fall within a compaction range are excluded
+/// (the resolver should have already removed them, but this is a safety measure).
+fn build_replay_sequence<'a>(
+    commit_entries: &'a [(i64, ObjectMeta)],
+    compaction_entries: &'a [((i64, i64), ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> Vec<ReplayEntry<'a>> {
+    let mut sequence: Vec<ReplayEntry<'a>> = Vec::new();
+
+    // Build a map of compaction start versions for quick lookup.
+    let mut compaction_map: BTreeMap<i64, (i64, &'a ObjectMeta)> = BTreeMap::new();
+    for ((s, e), meta) in compaction_entries {
+        compaction_map.insert(*s, (*e, meta));
+    }
+
+    let mut version = start_version;
+    let mut commit_idx = 0;
+
+    while version <= end_version {
+        if let Some(&(comp_end, meta)) = compaction_map.get(&version) {
+            sequence.push(ReplayEntry::Compaction(version, comp_end, meta));
+            version = comp_end.saturating_add(1);
+            // Skip any individual commits that overlap with this compaction.
+            while commit_idx < commit_entries.len() && commit_entries[commit_idx].0 < version {
+                commit_idx += 1;
+            }
+        } else if commit_idx < commit_entries.len() {
+            let (v, meta) = &commit_entries[commit_idx];
+            if *v == version {
+                sequence.push(ReplayEntry::Commit(*v, meta));
+                commit_idx += 1;
+                version = version.saturating_add(1);
+            } else {
+                // Gap — advance version to match.
+                version = version.saturating_add(1);
+            }
+        } else {
+            break;
+        }
+    }
+
+    sequence
+}
+
 /// Creates a checkpoint for the given table version.
 pub(crate) async fn create_checkpoint_for(
     version: i64,
@@ -704,6 +1119,150 @@ pub(crate) async fn create_checkpoint_for(
     CheckpointManager::new(log_store, operation_id)
         .create_checkpoint(version)
         .await
+}
+
+/// Creates a log compaction file for versions [start_version, end_version].
+///
+/// Reads all commit files in the range, reconciles actions using the same rules
+/// as checkpoint creation, and writes the result as a compacted JSON file.
+/// CommitInfo actions are excluded per the Delta protocol spec.
+pub(crate) async fn create_log_compaction_for(
+    start_version: i64,
+    end_version: i64,
+    log_store: &dyn LogStore,
+    min_file_retention_timestamp_millis: i64,
+) -> DeltaResult<()> {
+    use crate::spec::compacted_json_path;
+
+    let store = log_store.object_store(None);
+    let compacted_path = compacted_json_path(start_version, end_version);
+
+    debug!(
+        "Writing log compaction file for versions {} to {} at {:?}",
+        start_version, end_version, compacted_path
+    );
+
+    // Replay the commit range to reconcile actions.
+    let mut state = ReconciledCheckpointState::default();
+    let mut commit_count: i64 = 0;
+    for version in start_version..=end_version {
+        let bytes = match log_store.read_commit_entry(version).await? {
+            Some(b) => b,
+            None => {
+                return Err(DeltaTableError::generic(format!(
+                    "Missing commit file for version {version} during log compaction"
+                )));
+            }
+        };
+        let actions = get_actions(version, &bytes)?;
+        for action in actions {
+            state.apply_action(action);
+        }
+        commit_count += 1;
+    }
+    let expected_count = end_version - start_version + 1;
+    if commit_count != expected_count {
+        return Err(DeltaTableError::generic(format!(
+            "Expected {expected_count} commits for compaction [{start_version}, {end_version}], found {commit_count}"
+        )));
+    }
+
+    // Build the compacted ndjson content (same format as commits, excluding commitInfo).
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(protocol) = &state.protocol {
+        lines.push(
+            serde_json::to_string(&Action::Protocol(protocol.clone()))
+                .map_err(DeltaTableError::generic_err)?,
+        );
+    }
+    if let Some(metadata) = &state.metadata {
+        lines.push(
+            serde_json::to_string(&Action::Metadata(metadata.clone()))
+                .map_err(DeltaTableError::generic_err)?,
+        );
+    }
+    let mut txns: Vec<_> = state.txns.values().collect();
+    txns.sort_by(|a, b| a.app_id.cmp(&b.app_id));
+    for txn in txns {
+        lines.push(
+            serde_json::to_string(&Action::Txn(txn.clone()))
+                .map_err(DeltaTableError::generic_err)?,
+        );
+    }
+    let mut domains: Vec<_> = state.domain_metadata.values().collect();
+    domains.sort_by(|a, b| a.domain.cmp(&b.domain));
+    for domain in domains {
+        if !domain.removed {
+            lines.push(
+                serde_json::to_string(&Action::DomainMetadata(domain.clone()))
+                    .map_err(DeltaTableError::generic_err)?,
+            );
+        }
+    }
+    // Filter removes that are expired (tombstone retention).
+    // Removes with no deletion_timestamp are retained, matching checkpoint pruning semantics.
+    let mut removes: Vec<_> = state.removes.values().collect();
+    removes.sort_by(|a, b| a.path.cmp(&b.path));
+    for remove in removes {
+        if remove
+            .deletion_timestamp
+            .map(|ts| ts >= min_file_retention_timestamp_millis)
+            .unwrap_or(true)
+        {
+            lines.push(
+                serde_json::to_string(&Action::Remove(remove.clone()))
+                    .map_err(DeltaTableError::generic_err)?,
+            );
+        }
+    }
+    let mut adds: Vec<_> = state.adds.values().collect();
+    adds.sort_by(|a, b| a.path.cmp(&b.path));
+    for add in adds {
+        lines.push(
+            serde_json::to_string(&Action::Add(add.clone()))
+                .map_err(DeltaTableError::generic_err)?,
+        );
+    }
+
+    let content = lines.join("\n");
+    let bytes = bytes::Bytes::from(content);
+
+    // Write atomically — if file already exists (race), that is fine.
+    match store
+        .put_opts(
+            &compacted_path,
+            bytes.into(),
+            object_store::PutOptions {
+                mode: object_store::PutMode::Create,
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        Ok(_) => {
+            debug!(
+                "Successfully wrote log compaction file for versions {} to {}",
+                start_version, end_version
+            );
+        }
+        Err(object_store::Error::AlreadyExists { .. }) => {
+            debug!(
+                "Log compaction file already exists for versions {} to {}, skipping",
+                start_version, end_version
+            );
+        }
+        Err(e) => return Err(DeltaTableError::generic_err(e)),
+    }
+
+    Ok(())
+}
+
+/// Determine whether log compaction should run for the given commit version.
+/// `commitVersion > 0 && (commitVersion + 1) % interval == 0`
+pub(crate) fn should_create_compaction(version: i64, compaction_interval: u64) -> bool {
+    compaction_interval > 0
+        && version > 0
+        && ((version + 1) as u64).is_multiple_of(compaction_interval)
 }
 #[cfg(test)]
 mod tests {
@@ -1242,23 +1801,23 @@ mod tests {
 
     #[test]
     #[expect(clippy::unwrap_used)]
-    fn reconciled_checkpoint_state_rejects_sidecars() {
+    fn reconciled_checkpoint_state_collects_sidecars() {
         let mut state = ReconciledCheckpointState::default();
-        let err = state
+        state
             .apply_checkpoint_row(CheckpointActionRow {
                 sidecar: Some(Sidecar {
-                    path: "_sidecars/00001.parquet".to_string(),
+                    path: "00001.parquet".to_string(),
                     size_in_bytes: 128,
                     modification_time: 256,
                     tags: None,
                 }),
                 ..Default::default()
             })
-            .unwrap_err();
+            .unwrap();
 
-        assert!(
-            matches!(err, DeltaTableError::Unsupported(message) if message.contains("sidecars"))
-        );
+        assert_eq!(state.sidecars.len(), 1);
+        assert_eq!(state.sidecars[0].path, "00001.parquet");
+        assert_eq!(state.sidecars[0].size_in_bytes, 128);
     }
 
     #[test]

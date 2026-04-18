@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
     CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
@@ -611,7 +611,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map_err(|e| match e {
                 apis::Error::ResponseError(apis::ResponseContent { status, .. }) => {
                     if status == 404 {
-                        CatalogError::NotFound("namespace", quote_namespace_if_needed(database))
+                        CatalogError::NotFound(
+                            CatalogObject::Namespace,
+                            quote_namespace_if_needed(database),
+                        )
                     } else {
                         CatalogError::External(format!(
                             "Failed to load namespace {}: {e}",
@@ -851,7 +854,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     if status == 404 =>
                 {
                     CatalogError::NotFound(
-                        "table",
+                        CatalogObject::Table,
                         format!(
                             "{}.{}",
                             quote_namespace_if_needed(database),

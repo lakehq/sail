@@ -48,14 +48,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "bitmap_construct_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "bitmap_or_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -143,8 +141,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "histogram_numeric",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

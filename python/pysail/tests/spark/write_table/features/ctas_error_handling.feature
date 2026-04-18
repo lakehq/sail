@@ -16,7 +16,7 @@ Feature: CREATE TABLE AS SELECT error handling
         (2, 'Bob')
       AS t(id, name)
       """
-    Given statement template with error table already exists
+    Given statement template with error Table already exists
       """
       CREATE TABLE ctas_exists_table
       USING PARQUET
@@ -124,24 +124,6 @@ Feature: CREATE TABLE AS SELECT error handling
         (2, 'Bob')
       AS t(id, name)
       """
-
-  Scenario: CREATE TABLE AS SELECT fails with REPLACE clause
-    Given variable location for temporary directory ctas_error_replace
-    Given final statement
-      """
-      DROP TABLE IF EXISTS ctas_error_replace
-      """
-    Given statement template with error REPLACE in CREATE TABLE AS SELECT statement
-      """
-      CREATE OR REPLACE TABLE ctas_error_replace
-      USING PARQUET
-      LOCATION {{ location.sql }}
-      AS SELECT * FROM VALUES
-        (1, 'Alice'),
-        (2, 'Bob')
-      AS t(id, name)
-      """
-
 
   Scenario: CREATE TABLE AS SELECT fails when schema is specified
     Given variable location for temporary directory ctas_error_schema

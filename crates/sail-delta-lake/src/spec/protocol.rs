@@ -115,6 +115,21 @@ impl TableFeature {
             ))),
         }
     }
+
+    /// Returns `true` if this feature requires reader support (readerVersion >= 3).
+    pub fn is_reader_feature(&self) -> bool {
+        matches!(
+            self,
+            Self::ColumnMapping
+                | Self::DeletionVectors
+                | Self::TimestampWithoutTimezone
+                | Self::V2Checkpoint
+                | Self::VacuumProtocolCheck
+                | Self::CatalogManaged
+                | Self::VariantType
+                | Self::TypeWidening
+        )
+    }
 }
 
 #[cfg(test)]

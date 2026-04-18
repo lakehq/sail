@@ -32,7 +32,7 @@ def test_struct_wildcard_after_join(spark):
                         StructField("some_payload", StringType(), True),
                     ]
                 ),
-                True,
+                False,
             )
         ]
     )
@@ -61,7 +61,7 @@ def test_struct_wildcard_on_struct_column(spark):
                         StructField("some_payload", StringType(), True),
                     ]
                 ),
-                True,
+                False,
             )
         ]
     )

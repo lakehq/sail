@@ -75,11 +75,19 @@ fn trunc(date: Expr, part: Expr) -> Expr {
     )
 }
 
-fn date_trunc(part: Expr, timestamp: Expr) -> Expr {
-    cast(
-        expr_fn::date_trunc(trunc_part_conversion(part), timestamp),
-        DataType::Timestamp(TimeUnit::Microsecond, None),
-    )
+fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let (part, timestamp) = input.arguments.two()?;
+    let truncated = expr_fn::date_trunc(trunc_part_conversion(part), timestamp);
+    match truncated.get_type(input.function_context.schema)? {
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(truncated),
+        DataType::Timestamp(_, tz) => Ok(cast(
+            truncated,
+            DataType::Timestamp(TimeUnit::Microsecond, tz),
+        )),
+        other => Err(PlanError::InternalError(format!(
+            "date_trunc expected a timestamp result, got {other:?}"
+        ))),
+    }
 }
 
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
@@ -617,7 +625,8 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     };
 
     let seconds_in_day = |dt: Expr, tu: TimeUnit| {
-        (cast(dt.clone(), DataType::Int64) - cast(date_trunc(lit("DAY"), dt), DataType::Int64))
+        (cast(dt.clone(), DataType::Int64)
+            - cast(expr_fn::date_trunc(lit("DAY"), dt), DataType::Int64))
             / lit(time_unit_to_multiplier(&tu))
     };
 
@@ -692,7 +701,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
         ),
-        ("date_trunc", F::binary(date_trunc)),
+        ("date_trunc", F::custom(date_trunc)),
         (
             "dateadd",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),

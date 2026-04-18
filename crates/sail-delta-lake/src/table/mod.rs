@@ -35,12 +35,12 @@ pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
+use sail_data_source::options::gen::DeltaReadOptions;
 
 use crate::delta_log::resolve_version_timestamp;
 pub use crate::kernel::snapshot::DeltaSnapshot;
-use crate::kernel::DeltaTableConfig;
+use crate::kernel::DeltaSnapshotConfig;
 use crate::logical::table_source::DeltaTableSource;
-use crate::options::TableDeltaOptions;
 use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
@@ -55,7 +55,7 @@ pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: Option<Arc<DeltaSnapshot>>,
     /// the load options used during load
-    pub config: DeltaTableConfig,
+    pub config: DeltaSnapshotConfig,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
@@ -65,7 +65,7 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
-    pub fn new(log_store: LogStoreRef, config: DeltaTableConfig) -> Self {
+    pub fn new(log_store: LogStoreRef, config: DeltaSnapshotConfig) -> Self {
         Self {
             state: None,
             log_store,
@@ -186,7 +186,7 @@ pub async fn open_table_with_object_store_and_table_config(
     location: Url,
     object_store: Arc<dyn ObjectStore>,
     storage_options: StorageConfig,
-    table_config: DeltaTableConfig,
+    table_config: DeltaSnapshotConfig,
 ) -> DeltaResult<DeltaTable> {
     let log_store =
         create_logstore_with_object_store(object_store.clone(), location, storage_options)?;
@@ -202,7 +202,7 @@ pub async fn open_table_with_object_store_and_table_config_at_version(
     location: Url,
     object_store: Arc<dyn ObjectStore>,
     storage_options: StorageConfig,
-    table_config: DeltaTableConfig,
+    table_config: DeltaSnapshotConfig,
     version: i64,
 ) -> DeltaResult<DeltaTable> {
     let log_store =
@@ -247,7 +247,7 @@ pub async fn create_delta_provider(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
-    options: TableDeltaOptions,
+    options: DeltaReadOptions,
 ) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
@@ -256,7 +256,7 @@ pub async fn create_delta_provider(
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
     let table_config = if options.metadata_as_data_read {
-        DeltaTableConfig {
+        DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
         }
@@ -281,7 +281,7 @@ pub async fn create_delta_provider(
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
         delta_log_replay_strategy: options.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold,
+        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
     };
 
     let mut table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
@@ -297,7 +297,7 @@ pub async fn create_delta_source(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
-    options: TableDeltaOptions,
+    options: DeltaReadOptions,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
@@ -308,7 +308,7 @@ pub async fn create_delta_source(
     // Create a new DeltaTable instance but do not load it yet.
     // For metadata-as-data reads, avoid eagerly loading active file metadata on the driver.
     let table_config = if options.metadata_as_data_read {
-        DeltaTableConfig {
+        DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
         }
@@ -334,7 +334,7 @@ pub async fn create_delta_source(
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
         delta_log_replay_strategy: options.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold,
+        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
     };
 
     Ok(Arc::new(DeltaTableSource::try_new(
@@ -345,7 +345,7 @@ pub async fn create_delta_source(
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.
-async fn load_table_by_options(table: &mut DeltaTable, options: &TableDeltaOptions) -> Result<()> {
+async fn load_table_by_options(table: &mut DeltaTable, options: &DeltaReadOptions) -> Result<()> {
     // Precedence: version > timestamp > latest.
     if let Some(version) = options.version_as_of {
         table.load_version(version).await?;

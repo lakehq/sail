@@ -1,16 +1,16 @@
 ---
-title: CLI
+title: Command Line Interface
 rank: 10
 ---
 
-# CLI
+# Command Line Interface
 
-The Sail CLI provides commands for interacting with Sail from the terminal.
+The Sail command line interface (CLI) provides commands for interacting with Sail from the terminal.
 You can start and manage Sail servers, run PySpark scripts, and more.
 
 ## One-Shot Execution
 
-Starting with Sail 0.5.3, you can use the `sail spark run` command to run any PySpark script without explicitly provisioning a server.
+You can use the `sail spark run` command to run any PySpark script without explicitly provisioning a server.
 A local Sail server starts instantly when you run the command and automatically stops when the script finishes.
 
 The script can access the Spark session through the `spark` variable, which connects to the local Sail server using the Spark Connect protocol.
@@ -45,7 +45,33 @@ You can also write the PySpark script to a file and run it by specifying the fil
 sail spark run -f script.py
 ```
 
-## Using with Agents
+### Using with Agents
 
 The `sail spark run` command can also be exposed as an agent skill, enabling LLM agents to perform data processing tasks using PySpark.
 See the [Agent Skills](/guide/integrations/agent-skills) page for more details.
+
+## Spark Connect Server
+
+You can start a Spark Connect server that uses Sail for computation.
+
+```bash
+sail spark server --ip 127.0.0.1 --port 50051
+```
+
+## PySpark Shell
+
+You can start an interactive PySpark shell that uses Sail for computation.
+
+```bash
+sail spark shell
+```
+
+## Arrow Flight SQL Server
+
+You can run Sail as an Arrow Flight SQL server.
+
+```bash
+sail flight server --ip 127.0.0.1 --port 32010
+```
+
+More details can be found on the [Arrow Flight SQL](/guide/integrations/flight-sql) page.

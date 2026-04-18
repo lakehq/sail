@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource};
+use sail_common_datafusion::datasource::MergeCapableSource;
 
 use crate::datasource::{df_logical_schema, get_pushdown_filters, DeltaScanConfig};
 use crate::storage::LogStoreRef;
@@ -90,5 +91,23 @@ impl TableSource for DeltaTableSource {
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         let partition_cols = self.snapshot.metadata().partition_columns().as_slice();
         Ok(get_pushdown_filters(filter, partition_cols))
+    }
+}
+
+impl MergeCapableSource for DeltaTableSource {
+    fn file_column_name(&self) -> Option<&str> {
+        self.config.file_column_name.as_deref()
+    }
+
+    fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>> {
+        let mut new_config = self.config.clone();
+        new_config.file_column_name = Some(name.to_string());
+        let new_source = DeltaTableSource::try_new(
+            Arc::clone(&self.snapshot),
+            self.log_store.clone(),
+            new_config,
+        )
+        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        Ok(Arc::new(new_source))
     }
 }

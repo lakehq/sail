@@ -118,6 +118,26 @@ fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> 
         .collect()
 }
 
+/// Create partitioned files from V2 sidecar file metadata, assigning a fixed checkpoint version
+/// as the partition value since sidecar filenames do not carry a version prefix.
+fn to_partitioned_files_with_version(
+    metas: Vec<ObjectMeta>,
+    version: i64,
+) -> Result<Vec<PartitionedFile>> {
+    Ok(metas
+        .into_iter()
+        .map(|m| PartitionedFile {
+            object_meta: m,
+            partition_values: vec![ScalarValue::Int64(Some(version))],
+            range: None,
+            statistics: None,
+            ordering: None,
+            extensions: None,
+            metadata_size_hint: None,
+        })
+        .collect())
+}
+
 fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Result<Vec<FileGroup>> {
     let target_partitions = target_partitions.max(1);
     if metas.is_empty() {
@@ -151,6 +171,7 @@ pub async fn build_delta_log_datasource_scans_with_options(
     ctx: &PlannerContext<'_>,
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
+    sidecar_files: Vec<String>,
     options: LogScanOptions,
 ) -> Result<(
     Option<Arc<dyn ExecutionPlan>>,
@@ -167,20 +188,35 @@ pub async fn build_delta_log_datasource_scans_with_options(
     // Commit/checkpoint lists are expected to be selected by the planner log-segment resolver.
     // This builder only materializes datasource scans from those resolved filenames.
     let table_root_path = log_store.config().location.path();
-    let (checkpoint_metas, commit_metas) = tokio::try_join!(
+    let (checkpoint_metas, commit_metas, sidecar_metas) = tokio::try_join!(
         head_many(&store, table_root_path, &checkpoint_files),
-        head_many(&store, table_root_path, &commit_files)
+        head_many(&store, table_root_path, &commit_files),
+        head_many(&store, table_root_path, &sidecar_files)
     )?;
+
+    // Resolve the checkpoint version for assigning to sidecar partition values.
+    let checkpoint_version = checkpoint_files
+        .first()
+        .and_then(|f| parse_log_version_prefix(f))
+        .map(|v| v as i64);
 
     // Infer schemas for parquet checkpoint files only. JSON commit files use the canonical
     // Delta log file schema (see `DELTA_LOG_FILE_SCHEMA`) to avoid type mismatches for
     // map-like fields (e.g. `add.partitionValues`).
-    let parquet_schema = if checkpoint_metas.is_empty() {
+    //
+    // For V2 checkpoints with sidecars, include sidecar files in schema inference since they
+    // share the same `CheckpointActionRow` encoding.
+    let all_parquet_metas: Vec<ObjectMeta> = checkpoint_metas
+        .iter()
+        .chain(sidecar_metas.iter())
+        .cloned()
+        .collect();
+    let parquet_schema = if all_parquet_metas.is_empty() {
         None
     } else {
         Some(
             ParquetFormat::default()
-                .infer_schema(ctx.session(), &store, &checkpoint_metas)
+                .infer_schema(ctx.session(), &store, &all_parquet_metas)
                 .await?,
         )
     };
@@ -253,7 +289,31 @@ pub async fn build_delta_log_datasource_scans_with_options(
             source = source.with_predicate(Arc::clone(predicate));
         }
         let source: Arc<dyn datafusion::datasource::physical_plan::FileSource> = Arc::new(source);
-        let groups = to_file_groups(checkpoint_metas, target_partitions)?;
+        // For V2 checkpoints, include sidecar files alongside the main checkpoint.
+        // Both use the same CheckpointActionRow parquet schema.
+        let mut all_checkpoint_files = to_partitioned_files(checkpoint_metas)?;
+        if let Some(cp_version) = checkpoint_version {
+            let sidecar_partitioned = to_partitioned_files_with_version(sidecar_metas, cp_version)?;
+            all_checkpoint_files.extend(sidecar_partitioned);
+        }
+        all_checkpoint_files.sort_by(|a, b| {
+            a.object_meta
+                .location
+                .as_ref()
+                .cmp(b.object_meta.location.as_ref())
+        });
+        let num_groups = std::cmp::min(target_partitions.max(1), all_checkpoint_files.len().max(1));
+        let chunk_size = all_checkpoint_files.len().div_ceil(num_groups);
+        let mut groups = Vec::with_capacity(num_groups);
+        while !all_checkpoint_files.is_empty() {
+            let rest = if all_checkpoint_files.len() > chunk_size {
+                all_checkpoint_files.split_off(chunk_size)
+            } else {
+                Vec::new()
+            };
+            groups.push(FileGroup::from(std::mem::take(&mut all_checkpoint_files)));
+            all_checkpoint_files = rest;
+        }
         let conf = FileScanConfigBuilder::new(object_store_url.clone(), source)
             .with_file_groups(groups)
             .with_projection_indices(projection_indices.clone())?
@@ -286,8 +346,14 @@ pub async fn build_delta_log_datasource_union_with_options(
     options: LogScanOptions,
 ) -> Result<(Arc<dyn ExecutionPlan>, Vec<String>, Vec<String>)> {
     let (checkpoint_scan, commit_scan, checkpoint_files, commit_files) =
-        build_delta_log_datasource_scans_with_options(ctx, checkpoint_files, commit_files, options)
-            .await?;
+        build_delta_log_datasource_scans_with_options(
+            ctx,
+            checkpoint_files,
+            commit_files,
+            vec![],
+            options,
+        )
+        .await?;
 
     let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
     if let Some(cp) = checkpoint_scan {

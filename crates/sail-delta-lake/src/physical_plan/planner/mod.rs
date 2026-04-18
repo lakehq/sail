@@ -17,6 +17,7 @@ use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 
+mod commit;
 pub mod context;
 mod log_scan;
 mod log_segment;
@@ -28,7 +29,7 @@ mod op_merge;
 mod op_update;
 mod op_write;
 
-pub use context::{DeltaTableConfig, PlannerContext};
+pub use context::{DeltaPlannerConfig, PlannerContext};
 pub use op_delete::build_delete_plan as plan_delete;
 pub use op_merge::build_merge_plan as plan_merge;
 pub use op_update::build_update_plan as plan_update;

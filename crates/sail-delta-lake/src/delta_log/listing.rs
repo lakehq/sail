@@ -6,12 +6,15 @@ use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectSto
 
 use crate::spec::{
     delta_log_prefix_path, delta_log_root_path, last_checkpoint_path, parse_checkpoint_version,
-    parse_checksum_version, parse_commit_version, DeltaResult, LastCheckpointHint,
+    parse_checksum_version, parse_commit_version, parse_compacted_json_versions, DeltaResult,
+    LastCheckpointHint,
 };
 
 pub(crate) fn parse_delta_log_entry_version(meta: &ObjectMeta) -> Option<i64> {
     let filename = meta.location.as_ref().rsplit('/').next()?;
-    parse_commit_version(filename).or_else(|| parse_checkpoint_version(filename))
+    parse_commit_version(filename)
+        .or_else(|| parse_checkpoint_version(filename))
+        .or_else(|| parse_compacted_json_versions(filename).map(|(_, end)| end))
 }
 
 pub(crate) fn parse_checksum_version_from_location(location: &Path) -> Option<i64> {
@@ -36,6 +39,14 @@ pub(crate) fn parse_checkpoint_version_from_location(location: &Path) -> Option<
         .rsplit('/')
         .next()
         .and_then(parse_checkpoint_version)
+}
+
+pub(crate) fn parse_compacted_json_versions_from_location(location: &Path) -> Option<(i64, i64)> {
+    location
+        .as_ref()
+        .rsplit('/')
+        .next()
+        .and_then(parse_compacted_json_versions)
 }
 
 pub(crate) async fn read_last_checkpoint_version_from_store(

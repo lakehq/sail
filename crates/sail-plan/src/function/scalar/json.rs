@@ -3,7 +3,7 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
 use sail_function::scalar::json::{
-    json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf,
+    json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf, SparkSchemaOfJson,
 };
 
 use crate::error::{PlanError, PlanResult};
@@ -42,6 +42,9 @@ fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     // to_json accepts 1 or 2 arguments:
     // - to_json(expr) - convert expr to JSON string
     // - to_json(expr, options) - convert expr to JSON string with options
+    // Note: the SparkToJson UDF detects Variant inputs and delegates to variant_to_json,
+    // which ignores any options provided.
+    // See: https://docs.databricks.com/en/sql/language-manual/functions/to_json.html
     match args.len() {
         1 | 2 => Ok(to_json_udf().call(args)),
         n => Err(PlanError::invalid(format!(
@@ -59,7 +62,7 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
         // json_tuple is registered as a generator function in generator.rs
-        ("schema_of_json", F::unknown("schema_of_json")),
+        ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
         ("to_json", F::var_arg(to_json)),
     ]
 }

@@ -29,6 +29,16 @@ _ICEBERG_SNAP_FILE_RE = re.compile(r"^snap-\d+\.avro$")
 
 _UUID_SUFFIX_RE = re.compile(r"^(.+)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
+# Delta V2 checkpoint patterns
+_DELTA_UUID_CHECKPOINT_RE = re.compile(
+    r"^(\d{20}\.checkpoint\.)"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"\.parquet$"
+)
+_DELTA_SIDECAR_FILE_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.parquet$"
+)
+
 
 def _normalize_name(name: str) -> str | None:
     """
@@ -70,6 +80,18 @@ def _normalize_name(name: str) -> str | None:
     # Normalize Iceberg snapshot files (snap-<id>.avro)
     if _ICEBERG_SNAP_FILE_RE.match(name):
         return "snap-*.avro"
+
+    # Normalize Delta V2 UUID-named checkpoint files
+    # e.g., `00000000000000000001.checkpoint.80a083e8-7026-4e79-81be-64bd76c43a11.parquet`
+    #     → `00000000000000000001.checkpoint.<uuid>.parquet`
+    m = _DELTA_UUID_CHECKPOINT_RE.match(name)
+    if m is not None:
+        return f"{m.group(1)}<uuid>.parquet"
+
+    # Normalize Delta V2 sidecar files (UUID-named parquet in _sidecars/)
+    # e.g., `3a0d65cd-4056-49b8-937b-95f9e3ee90e5.parquet` → `<uuid>.parquet`
+    if _DELTA_SIDECAR_FILE_RE.match(name):
+        return "<uuid>.parquet"
 
     # Normalize Spark data file names.
     m = _SPARK_PART_FILE_RE.match(name)
@@ -122,13 +144,7 @@ def render_normalized_file_tree(root_path: Path) -> str:
             lines.append(f"{indent}📂 {name}")
             render_dir(p, depth=depth + 1)
 
-        dedup_names = {"*.parquet", "*.metadata.json", "snap-*.avro"}
-        seen_files = set()
         for name in files:
-            if name in dedup_names:
-                if name in seen_files:
-                    continue
-                seen_files.add(name)
             indent = "  " * depth
             lines.append(f"{indent}📄 {name}")
 

@@ -450,12 +450,7 @@ fn rewrite_data_file_location(table_root: Path, location: Path) -> Path {
         return location;
     }
 
-    Path::from(format!(
-        "{}{}{}",
-        table_root,
-        object_store::path::DELIMITER,
-        location
-    ))
+    table_root.parts().chain(location.parts()).collect()
 }
 
 fn looks_like_absolute_uri(path: &str) -> bool {
@@ -655,6 +650,21 @@ mod tests {
         assert_eq!(
             rewritten,
             Path::from("bucket/table/part=1/part-000.parquet")
+        );
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_preserves_percent_encoded_partition_dirs() {
+        #[expect(clippy::expect_used)]
+        let location =
+            Path::parse("ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet")
+                .expect("valid path");
+
+        let rewritten = rewrite_data_file_location(Path::from("bucket/table"), location);
+
+        assert_eq!(
+            rewritten.as_ref(),
+            "bucket/table/ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet"
         );
     }
 

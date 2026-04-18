@@ -246,7 +246,7 @@ impl ObjectStore for HuggingFaceObjectStore {
         _opts: PutOptions,
     ) -> object_store::Result<PutResult> {
         Err(object_store::Error::NotImplemented {
-            operation: "unsupported".to_string(),
+            operation: "put_opts".to_string(),
             implementer: "HuggingFaceObjectStore".to_string(),
         })
     }
@@ -257,7 +257,7 @@ impl ObjectStore for HuggingFaceObjectStore {
         _opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         Err(object_store::Error::NotImplemented {
-            operation: "unsupported".to_string(),
+            operation: "put_multipart_opts".to_string(),
             implementer: "HuggingFaceObjectStore".to_string(),
         })
     }
@@ -284,7 +284,7 @@ impl ObjectStore for HuggingFaceObjectStore {
             || version.is_some()
         {
             return Err(object_store::Error::NotImplemented {
-                operation: "unsupported".to_string(),
+                operation: "get_opts".to_string(),
                 implementer: "HuggingFaceObjectStore".to_string(),
             });
         }
@@ -366,7 +366,7 @@ impl ObjectStore for HuggingFaceObjectStore {
         _prefix: Option<&Path>,
     ) -> object_store::Result<ListResult> {
         Err(object_store::Error::NotImplemented {
-            operation: "unsupported".to_string(),
+            operation: "list_with_delimiter".to_string(),
             implementer: "HuggingFaceObjectStore".to_string(),
         })
     }

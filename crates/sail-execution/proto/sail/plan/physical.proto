@@ -54,6 +54,7 @@ message ExtendedPhysicalPlanNode {
     PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 39;
     CatalogCommandExecNode catalog_command = 40;
     BarrierExecNode barrier = 41;
+    RelaxedTzCastExecNode relaxed_tz_cast = 42;
   }
 }
 
@@ -82,6 +83,8 @@ message ExtendedScalarUdf {
     SparkTimestampUdf spark_timestamp = 10;
     SparkDateUdf spark_date = 11;
     SparkFromCsvUdf spark_from_csv = 12;
+    XpathTypedUdf xpath_typed = 13;
+    SparkVariantGetUdf spark_variant_get = 14;
   }
 }
 
@@ -134,6 +137,10 @@ message ExplodeUdf {
   string name = 1;
 }
 
+message XpathTypedUdf {
+  string name = 1;
+}
+
 message SparkUnixTimestampUdf {
   string timezone = 1;
 }
@@ -160,11 +167,21 @@ message SparkDateUdf {
   bool is_try = 1;
 }
 
+message SparkVariantGetUdf {
+  bool safe = 1;
+}
+
 message SparkFromCsvUdf {
   string session_timezone = 1;
 }
 
 message StandardUdaf {}
+
+// Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
+enum PySparkGroupAggKind {
+  PY_SPARK_GROUP_AGG_KIND_PANDAS = 0;
+  PY_SPARK_GROUP_AGG_KIND_ARROW = 1;
+}
 
 message PySparkGroupAggUdaf {
   string name = 1;
@@ -174,6 +191,11 @@ message PySparkGroupAggUdaf {
   repeated bytes input_types = 5;
   bytes output_type = 6;
   PySparkUdfConfig config = 7;
+  PySparkGroupAggKind kind = 8;
+  // Number of arguments the Python function actually accepts.
+  // Absent for backward compatibility: if not set, defaults to input_types.len().
+  // When a dummy Int64 argument has been injected (0-arg UDF), this is 0.
+  optional uint64 actual_arg_count = 9;
 }
 
 message PySparkGroupMapUdaf {
@@ -219,6 +241,9 @@ enum PySparkUdfKind {
   PY_SPARK_UDF_KIND_ARROW_BATCH = 1;
   PY_SPARK_UDF_KIND_SCALAR_PANDAS = 2;
   PY_SPARK_UDF_KIND_SCALAR_PANDAS_ITER = 3;
+  // Spark 4.0 Arrow-native scalar UDF kinds
+  PY_SPARK_UDF_KIND_SCALAR_ARROW = 4;
+  PY_SPARK_UDF_KIND_SCALAR_ARROW_ITER = 5;
 }
 
 enum PySparkMapIterKind {
@@ -237,6 +262,10 @@ message PySparkUdfConfig {
   bool pandas_grouped_map_assign_columns_by_name = 3;
   bool pandas_convert_to_arrow_array_safely = 4;
   uint64 arrow_max_records_per_batch = 5;
+  bool python_udf_pandas_conversion_enabled = 6;
+  bool python_udtf_pandas_conversion_enabled = 7;
+  bool python_udf_pandas_int_to_decimal_coercion_enabled = 8;
+  bool binary_as_bytes = 9;
 }
 
 message EquivalenceProperties {
@@ -547,6 +576,11 @@ message MonotonicIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message RelaxedTzCastExecNode {
+  bytes input = 1;
+  bytes schema = 2;
 }
 
 message JoinOn {

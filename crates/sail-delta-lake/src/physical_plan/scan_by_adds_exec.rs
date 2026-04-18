@@ -580,7 +580,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
     }
 }
 
-fn map_statistics_to_schema(
+pub(crate) fn map_statistics_to_schema(
     statistics: &Statistics,
     source_schema: &SchemaRef,
     target_schema: &SchemaRef,

@@ -10,13 +10,14 @@ use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
     AlterTableOperation, AlterViewOperation, AnalyzeTableModifier, AsQueryClause, Assignment,
     AssignmentList, ColumnAlteration, ColumnAlterationList, ColumnAlterationOption,
-    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition, CommentValue,
-    CreateDatabaseClause, CreateTableClause, CreateViewClause, DeleteTableAlias, DescribeItem,
-    ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
-    MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
-    PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
-    PropertyKeyValue, PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause,
-    SortColumn, SortColumnList, Statement, UpdateTableAlias, ViewColumn,
+    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
+    ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
+    DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
+    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
+    MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
+    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyValue, PropertyList, PropertyValue,
+    RowFormat, RowFormatDelimitedClause, SetClause, SortColumn, SortColumnList, Statement,
+    UpdateTableAlias, ViewColumn,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -26,6 +27,7 @@ use crate::expression::{from_ast_expression, from_ast_identifier_list, from_ast_
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
 
+/// Converts a parsed SQL AST statement into a spec plan (either a query or a command).
 pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
     match statement {
         Statement::Query(query) => {
@@ -257,7 +259,21 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let pattern = like
                 .map(|(_, pattern)| from_ast_string(pattern))
                 .transpose()?;
-            let node = spec::CommandNode::ListTables { database, pattern };
+            let node = spec::CommandNode::ShowTables { database, pattern };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ShowTableExtended {
+            show: _,
+            table: _,
+            extended: _,
+            from,
+            like,
+        } => {
+            let database = from
+                .map(|(_, name)| from_ast_object_name(name))
+                .transpose()?;
+            let pattern = from_ast_string(like.1)?;
+            let node = spec::CommandNode::ShowTableExtended { database, pattern };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::ShowCreateTable { .. } => Err(SqlError::todo("SHOW CREATE TABLE")),
@@ -318,6 +334,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             } else {
                 None
             };
+            let query_text = query.text();
             let query = from_ast_query(query)?;
             let name = from_ast_object_name(name)?;
             let CreateViewClauses {
@@ -371,8 +388,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 None => spec::CommandNode::CreateView {
                     view: name,
                     definition: spec::ViewDefinition {
-                        // TODO: handle view definition
-                        definition: "".to_string(),
+                        definition: query_text,
                         columns,
                         if_not_exists: if_not_exists.is_some(),
                         replace: or_replace.is_some(),
@@ -1053,6 +1069,24 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         column,
                     }
                 }
+                DescribeItem::TableExtended {
+                    extended: _,
+                    name,
+                    partition,
+                    column,
+                } => {
+                    let partition = partition
+                        .map(from_ast_partition)
+                        .transpose()?
+                        .unwrap_or_default();
+                    let column = column.map(from_ast_object_name).transpose()?;
+                    spec::CommandNode::DescribeTable {
+                        table: from_ast_object_name(name)?,
+                        extended: true,
+                        partition,
+                        column,
+                    }
+                }
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -1153,12 +1187,30 @@ fn from_ast_table_definition(
         .into_iter()
         .flatten()
         .map(|x| match x {
-            PartitionByItem::ColumnDefinition(column) => Ok(spec::Expr::UnresolvedAttribute {
-                name: spec::ObjectName::bare(column.name.value),
-                plan_id: None,
-                is_metadata_column: false,
-            }),
-            PartitionByItem::Expression(expr) => from_ast_expression(expr),
+            PartitionByItem::ColumnDefinition(ColumnTypeDefinition {
+                name,
+                data_type,
+                not_null,
+                comment,
+                colon: _,
+            }) => {
+                let name = name.value;
+                let data_type = from_ast_data_type(data_type)?;
+                let comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
+                Ok(spec::PartitionColumn::Definition(
+                    spec::TableColumnDefinition {
+                        name,
+                        data_type,
+                        nullable: not_null.is_none(),
+                        default: None,
+                        comment,
+                        generated_always_as: None,
+                    },
+                ))
+            }
+            PartitionByItem::Expression(expr) => {
+                from_ast_expression(expr).map(spec::PartitionColumn::Expression)
+            }
         })
         .collect::<SqlResult<Vec<_>>>()?;
     let (sort_by, bucket_by) = if let Some(bucket_by) = bucket_by {

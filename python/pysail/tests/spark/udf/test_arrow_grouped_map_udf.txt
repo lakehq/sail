@@ -1,0 +1,17 @@
+>>> import pyarrow as pa
+>>> import pyarrow.compute as pc
+>>>
+>>> def center(t):
+...     v = t.column("v")
+...     norm = pc.subtract(v, pc.mean(v))
+...     return t.set_column(1, "v", norm)
+...
+>>> df = spark.createDataFrame([(1, 1.0), (1, 2.0), (2, 3.0)], ["id", "v"])
+>>> df.groupby("id").applyInArrow(center, schema="id long, v double").sort("id", "v").show()
++---+----+
+| id|   v|
++---+----+
+|  1|-0.5|
+|  1| 0.5|
+|  2| 0.0|
++---+----+
