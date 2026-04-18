@@ -193,6 +193,13 @@ Feature: next_day comprehensive tests
 
   Rule: Error conditions
 
+    Scenario: next_day multi-row with invalid day name errors
+      When query
+        """
+        SELECT next_day(d, day) AS result FROM VALUES (DATE'2024-01-10', 'Monday'), (DATE'2024-01-10', 'InvalidDay') AS t(d, day)
+        """
+      Then query error .*
+
     Scenario: next_day invalid day name errors
       When query
         """

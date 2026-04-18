@@ -5,7 +5,7 @@ use chrono::{Datelike, Duration, Weekday};
 use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, StringArrayType};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::types::NativeType;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::invalid_arg_count_exec_err;
@@ -49,10 +49,7 @@ impl ScalarUDFImpl for SparkNextDay {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let [date, day_of_week] = args.as_slice() else {
-            return exec_err!(
-                "Spark `next_day` function requires 2 arguments, got {}",
-                args.len()
-            );
+            return Err(invalid_arg_count_exec_err("next_day", (2, 2), args.len()));
         };
 
         match (date, day_of_week) {
@@ -61,9 +58,9 @@ impl ScalarUDFImpl for SparkNextDay {
                     (ScalarValue::Date32(days), ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
                         if let Some(days) = days {
                             if let Some(day_of_week) = day_of_week {
-                                validate_day_of_week(day_of_week.as_str())?;
+                                let weekday = parse_day_of_week(day_of_week.as_str())?;
                                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(
-                                    spark_next_day(*days, day_of_week.as_str()),
+                                    spark_next_day(*days, weekday),
                                 )))
                             } else {
                                 // TODO: if spark.sql.ansi.enabled is false,
@@ -81,11 +78,10 @@ impl ScalarUDFImpl for SparkNextDay {
                 match (date_array.data_type(), day_of_week) {
                     (DataType::Date32, ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
                         if let Some(day_of_week) = day_of_week {
-                            // Validate day name once, error if invalid
-                            validate_day_of_week(day_of_week.as_str())?;
+                            let weekday = parse_day_of_week(day_of_week.as_str())?;
                             let result: Date32Array = date_array
                                 .as_primitive::<Date32Type>()
-                                .unary_opt(|days| spark_next_day(days, day_of_week.as_str()))
+                                .unary_opt(|days| spark_next_day(days, weekday))
                                 .with_data_type(DataType::Date32);
                             Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
                         } else {
@@ -185,8 +181,8 @@ where
         .map(|(days, day_of_week)| {
             if let Some(days) = days {
                 if let Some(day_of_week) = day_of_week {
-                    validate_day_of_week(day_of_week)?;
-                    Ok(spark_next_day(days, day_of_week))
+                    let weekday = parse_day_of_week(day_of_week)?;
+                    Ok(spark_next_day(days, weekday))
                 } else {
                     Ok(None)
                 }
@@ -198,41 +194,28 @@ where
     Ok(Arc::new(result?) as ArrayRef)
 }
 
-/// Validates that a day-of-week string is recognized. Returns error for invalid names.
-fn validate_day_of_week(day_of_week: &str) -> Result<()> {
+/// Parse and validate a day-of-week string. Returns the Weekday or error for invalid names.
+fn parse_day_of_week(day_of_week: &str) -> Result<Weekday> {
     let upper = day_of_week.trim().to_uppercase();
-    match upper.as_str() {
-        "MO" | "MON" | "MONDAY" | "TU" | "TUE" | "TUESDAY" | "WE" | "WED" | "WEDNESDAY" | "TH"
-        | "THU" | "THURSDAY" | "FR" | "FRI" | "FRIDAY" | "SA" | "SAT" | "SATURDAY" | "SU"
-        | "SUN" | "SUNDAY" => Ok(()),
-        other => exec_err!("Illegal input for day of week: {other}"),
-    }
+    let canonical = match upper.as_str() {
+        "MO" | "MON" | "MONDAY" => "Monday",
+        "TU" | "TUE" | "TUESDAY" => "Tuesday",
+        "WE" | "WED" | "WEDNESDAY" => "Wednesday",
+        "TH" | "THU" | "THURSDAY" => "Thursday",
+        "FR" | "FRI" | "FRIDAY" => "Friday",
+        "SA" | "SAT" | "SATURDAY" => "Saturday",
+        "SU" | "SUN" | "SUNDAY" => "Sunday",
+        other => return exec_err!("Illegal input for day of week: {other}"),
+    };
+    // Safe: canonical strings are always valid Weekday names
+    canonical
+        .parse::<Weekday>()
+        .map_err(|_| DataFusionError::Internal(format!("Failed to parse weekday: {canonical}")))
 }
 
-fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
+fn spark_next_day(days: i32, target: Weekday) -> Option<i32> {
     let date = Date32Type::to_naive_date_opt(days)?;
-
-    let day_of_week = day_of_week.trim().to_uppercase();
-    let day_of_week = match day_of_week.as_str() {
-        "MO" | "MON" | "MONDAY" => Some("MONDAY"),
-        "TU" | "TUE" | "TUESDAY" => Some("TUESDAY"),
-        "WE" | "WED" | "WEDNESDAY" => Some("WEDNESDAY"),
-        "TH" | "THU" | "THURSDAY" => Some("THURSDAY"),
-        "FR" | "FRI" | "FRIDAY" => Some("FRIDAY"),
-        "SA" | "SAT" | "SATURDAY" => Some("SATURDAY"),
-        "SU" | "SUN" | "SUNDAY" => Some("SUNDAY"),
-        _ => None,
-    };
-
-    if let Some(day_of_week) = day_of_week {
-        let day_of_week = day_of_week.parse::<Weekday>();
-        match day_of_week {
-            Ok(day_of_week) => Some(Date32Type::from_naive_date(
-                date + Duration::days((7 - date.weekday().days_since(day_of_week)) as i64),
-            )),
-            Err(_) => None,
-        }
-    } else {
-        None
-    }
+    Some(Date32Type::from_naive_date(
+        date + Duration::days((7 - date.weekday().days_since(target)) as i64),
+    ))
 }
