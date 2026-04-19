@@ -111,17 +111,6 @@ impl PlanResolver<'_> {
                 "CLUSTER BY in CREATE TABLE AS SELECT statement",
             ));
         }
-        if replace {
-            return Err(PlanError::todo(
-                "REPLACE in CREATE TABLE AS SELECT statement",
-            ));
-        }
-        if !properties.is_empty() {
-            return Err(PlanError::todo(
-                "PROPERTIES in CREATE TABLE AS SELECT statement",
-            ));
-        }
-
         // sort_by and bucket_by are supported for Parquet format
         // (handled in BucketedParquetSinkExec)
         if comment.is_some() {

@@ -53,15 +53,15 @@ Feature: CREATE TABLE AS SELECT error handling
       AS t(id, name)
       """
 
-  Scenario: CREATE TABLE AS SELECT fails with TBLPROPERTIES clause
-    Given variable location for temporary directory ctas_error_properties
+  Scenario: CREATE TABLE AS SELECT with TBLPROPERTIES persists data
+    Given variable location for temporary directory ctas_properties_table
     Given final statement
       """
-      DROP TABLE IF EXISTS ctas_error_properties
+      DROP TABLE IF EXISTS ctas_properties_table
       """
-    Given statement template with error PROPERTIES in CREATE TABLE AS SELECT statement
+    Given statement template
       """
-      CREATE TABLE ctas_error_properties
+      CREATE TABLE ctas_properties_table
       USING PARQUET
       LOCATION {{ location.sql }}
       TBLPROPERTIES ('p1'='v1', 'p2'='v2')
@@ -70,6 +70,14 @@ Feature: CREATE TABLE AS SELECT error handling
         (2, 'Bob')
       AS t(id, name)
       """
+    When query
+      """
+      SELECT * FROM ctas_properties_table ORDER BY id
+      """
+    Then query result ordered
+      | id | name  |
+      | 1  | Alice |
+      | 2  | Bob   |
 
   Scenario: CREATE TABLE AS SELECT fails with CLUSTER BY clause
     Given variable location for temporary directory ctas_error_cluster_by
