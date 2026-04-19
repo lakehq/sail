@@ -377,6 +377,15 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | 1000   |
 
+    Scenario: scale -37 is the max negative scale that fits Decimal128
+      When query
+        """
+        SELECT ceil(123.456, -37) AS result
+        """
+      Then query result
+        | result                                  |
+        | 10000000000000000000000000000000000000  |
+
     Scenario: ceil negative with negative scale
       When query
         """
@@ -529,8 +538,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
 
   Rule: Special float values with scale (2-arg) — Spark returns NULL
 
-    @sail-bug
-    Scenario: NaN with positive scale returns NULL in JVM
+    Scenario: NaN with positive scale returns NULL
       When query
         """
         SELECT ceil(CAST('NaN' AS DOUBLE), 2) AS result
@@ -539,8 +547,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | NULL   |
 
-    @sail-bug
-    Scenario: NaN with negative scale returns NULL in JVM
+    Scenario: NaN with negative scale returns NULL
       When query
         """
         SELECT ceil(CAST('NaN' AS DOUBLE), -1) AS result
@@ -549,8 +556,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | NULL   |
 
-    @sail-bug
-    Scenario: Infinity with positive scale returns NULL in JVM
+    Scenario: Infinity with positive scale returns NULL
       When query
         """
         SELECT ceil(CAST('Infinity' AS DOUBLE), 2) AS result
@@ -559,8 +565,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | NULL   |
 
-    @sail-bug
-    Scenario: -Infinity with positive scale returns NULL in JVM
+    Scenario: -Infinity with positive scale returns NULL
       When query
         """
         SELECT ceil(CAST('-Infinity' AS DOUBLE), 2) AS result
@@ -569,8 +574,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | NULL   |
 
-    @sail-bug
-    Scenario: floor NaN with scale returns NULL in JVM
+    Scenario: floor NaN with scale returns NULL
       When query
         """
         SELECT floor(CAST('NaN' AS DOUBLE), 2) AS result
@@ -663,6 +667,71 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       Then query result
         | result |
 
+  Rule: Algebraic simplification (idempotent)
+
+    Scenario: ceil of ceil is ceil
+      When query
+        """
+        SELECT ceil(ceil(1.9)) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: ceil of ceil negative
+      When query
+        """
+        SELECT ceil(ceil(-1.9)) AS result
+        """
+      Then query result
+        | result |
+        | -1     |
+
+    Scenario: floor of floor is floor
+      When query
+        """
+        SELECT floor(floor(1.9)) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: floor of floor negative
+      When query
+        """
+        SELECT floor(floor(-1.1)) AS result
+        """
+      Then query result
+        | result |
+        | -2     |
+
+    Scenario: triple nested ceil collapses
+      When query
+        """
+        SELECT ceil(ceil(ceil(1.9))) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: ceil of integer is integer (no rounding)
+      When query
+        """
+        SELECT ceil(CAST(7 AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | 7      |
+
+    Scenario: floor of integer is integer (no rounding)
+      When query
+        """
+        SELECT floor(CAST(-42 AS BIGINT)) AS result
+        """
+      Then query result
+        | result |
+        | -42    |
+
   Rule: Error conditions
 
     Scenario: non-foldable scale errors
@@ -686,8 +755,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         """
       Then query error .*
 
-    @sail-bug
-    Scenario: scale -38 overflow should error
+    Scenario: scale -38 overflows decimal128 precision
       When query
         """
         SELECT ceil(123.456, -38) AS result
