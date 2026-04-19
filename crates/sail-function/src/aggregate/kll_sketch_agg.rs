@@ -759,11 +759,9 @@ mod tests {
         let right = build_i64_sketch(32, &[4, 5, 6])?;
 
         let result = left.merge(right);
-        assert!(
-            matches!(&result, Err(e) if e.to_string().contains(
-                "kll_sketch_agg: incompatible sketch state k=32, expected 16"
-            ))
-        );
+        assert!(matches!(&result, Err(e) if e.to_string().contains(
+            "kll_sketch_agg: incompatible sketch state k=32, expected 16"
+        )));
         Ok(())
     }
 
