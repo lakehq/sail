@@ -110,6 +110,118 @@ Feature: Bucketed Parquet Writing
         | cnt |
         | 3   |
 
+  Rule: NULL handling in bucket column
+    Scenario: NULL rows in bucket column are preserved on roundtrip
+      Given variable location for temporary directory test_bucket_nulls
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_nulls
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_nulls USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES
+          (CAST(1 AS INT), 'alice'),
+          (CAST(NULL AS INT), 'bob'),
+          (CAST(3 AS INT), 'carol'),
+          (CAST(NULL AS INT), 'dave'),
+          (CAST(5 AS INT), 'eve')
+        AS t(id, name)
+        """
+      When query
+        """
+        SELECT count(*) as total, count(id) as non_null, count(*) - count(id) as null_count
+        FROM test_bucket_nulls
+        """
+      Then query result
+        | total | non_null | null_count |
+        | 5     | 3        | 2          |
+
+    Scenario: WHERE IS NULL on bucket column returns NULL rows
+      Given variable location for temporary directory test_bucket_where_null
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_where_null
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_where_null USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES
+          (CAST(1 AS INT), 'a'),
+          (CAST(NULL AS INT), 'b'),
+          (CAST(2 AS INT), 'c'),
+          (CAST(NULL AS INT), 'd')
+        AS t(id, name)
+        """
+      When query
+        """
+        SELECT name FROM test_bucket_where_null WHERE id IS NULL ORDER BY name
+        """
+      Then query result ordered
+        | name |
+        | b    |
+        | d    |
+
+    Scenario: WHERE equality on bucket column excludes NULLs
+      Given variable location for temporary directory test_bucket_eq_null
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_eq_null
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_eq_null USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES
+          (CAST(1 AS INT), 'a'),
+          (CAST(NULL AS INT), 'b'),
+          (CAST(1 AS INT), 'c'),
+          (CAST(NULL AS INT), 'd')
+        AS t(id, name)
+        """
+      When query
+        """
+        SELECT count(*) as cnt FROM test_bucket_eq_null WHERE id = 1
+        """
+      Then query result
+        | cnt |
+        | 2   |
+
+    Scenario: GROUP BY on bucket column with NULLs preserves NULL group
+      Given variable location for temporary directory test_bucket_group_null
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_group_null
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_group_null USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (key) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES
+          (CAST(1 AS INT), 10),
+          (CAST(NULL AS INT), 20),
+          (CAST(1 AS INT), 30),
+          (CAST(NULL AS INT), 40),
+          (CAST(2 AS INT), 50)
+        AS t(key, val)
+        """
+      When query
+        """
+        SELECT key, sum(val) as total
+        FROM test_bucket_group_null GROUP BY key ORDER BY key NULLS LAST
+        """
+      Then query result ordered
+        | key  | total |
+        | 1    | 40    |
+        | 2    | 50    |
+        | NULL | 60    |
+
   Rule: Bucketed join
     @sail-only
     Scenario: join two bucketed tables on bucket column
