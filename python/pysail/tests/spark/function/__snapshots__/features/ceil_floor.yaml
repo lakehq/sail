@@ -1,6 +1,6 @@
 # serializer version: 1
 ---
-name: "test_explain_2arg_ceilv_2_with_range_filter"
+name: "test_explain_2arg_ceil_with_positive_scale_and_range_filter"
 data:
   |-
     == Physical Plan ==

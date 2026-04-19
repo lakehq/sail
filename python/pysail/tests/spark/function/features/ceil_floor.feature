@@ -489,7 +489,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | 0.00   |
 
-  Rule: Special float values (1-arg returns zero/LONG_MAX/LONG_MIN)
+  Rule: Special float values (1-arg) — NaN/Infinity clamp to integer bounds
 
     Scenario: Infinity to LONG_MAX
       When query
@@ -573,13 +573,6 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       Then query result
         | result |
         | NULL   |
-
-    Scenario: ceil very large double with scale overflows decimal
-      When query
-        """
-        SELECT ceil(CAST(1e300 AS DOUBLE), 2) AS result
-        """
-      Then query error .*
 
   Rule: Negative zero
 
@@ -1110,7 +1103,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       Then query plan matches snapshot
 
     @sail-only
-    Scenario: EXPLAIN 2-arg ceil(v, 2) with range filter
+    Scenario: EXPLAIN 2-arg ceil with positive scale and range filter
       Given variable location for temporary directory explain_ceil_2arg
       Given final statement
         """
@@ -1197,7 +1190,7 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         """
       Then query plan matches snapshot
 
-  Rule: Plan snapshot — filter pushdown
+  Rule: Plan snapshot — filter pushdown on in-memory VALUES
 
     @sail-only
     Scenario: EXPLAIN WHERE ceil(col) > N
@@ -1265,5 +1258,12 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       When query
         """
         SELECT ceil(123.456, -38) AS result
+        """
+      Then query error .*
+
+    Scenario: ceil very large double with scale overflows decimal
+      When query
+        """
+        SELECT ceil(CAST(1e300 AS DOUBLE), 2) AS result
         """
       Then query error .*
