@@ -1,5 +1,57 @@
 # serializer version: 1
 ---
+name: "test_explain_ceilceilcol_collapses_to_ceilcol"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as CEIL(CEIL(v))]
+      ProjectionExec: expr=[spark_ceil(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_ceilint_col_rewrites_to_cast"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as CEIL(v)]
+      ProjectionExec: expr=[CAST(column1@0 AS Int64) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_floorbigint_col_rewrites_to_cast"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as FLOOR(v)]
+      ProjectionExec: expr=[column1@0 as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_floorfloorcol_collapses_to_floorcol"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as FLOOR(FLOOR(v))]
+      ProjectionExec: expr=[spark_floor(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_order_by_on_subquery_already_sorted_by_col_avoids_resorting_ceilcol"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as c]
+      ProjectionExec: expr=[spark_ceil(#2@0) as #3]
+        SortExec: expr=[#2@0 ASC], preserve_partitioning=[false]
+          ProjectionExec: expr=[column1@0 as #2]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_order_by_on_subquery_already_sorted_by_col_avoids_resorting_floorcol"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as f]
+      ProjectionExec: expr=[spark_floor(#2@0) as #3]
+        SortExec: expr=[#2@0 ASC], preserve_partitioning=[false]
+          ProjectionExec: expr=[column1@0 as #2]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+---
 name: "test_explain_select_from_parquet_with_ceil_filter_shows_pushdown"
 data:
   |-
@@ -8,7 +60,7 @@ data:
       ProjectionExec: expr=[v@0 as #1]
         FilterExec: spark_ceil(v@0) > 2
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/explain_ceil_pushdown/VeyoHekXjTqurxPD_0.zst.parquet]]}, projection=[v], file_type=parquet, predicate=spark_ceil(v@0) > 2
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_ceil_pushdown/<id>.zst.parquet]]}, projection=[v], file_type=parquet, predicate=spark_ceil(v@0) > 2
 ---
 name: "test_explain_select_from_parquet_with_floor_filter_shows_pushdown"
 data:
@@ -18,7 +70,15 @@ data:
       ProjectionExec: expr=[v@0 as #1]
         FilterExec: spark_floor(v@0) <= 1
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/explain_floor_pushdown/fjamL2fm8Dvs6uLu_0.zst.parquet]]}, projection=[v], file_type=parquet, predicate=spark_floor(v@0) <= 1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_floor_pushdown/<id>.zst.parquet]]}, projection=[v], file_type=parquet, predicate=spark_floor(v@0) <= 1
+---
+name: "test_explain_triple_nested_ceil_collapses_to_single_ceil"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as CEIL(CEIL(CEIL(v)))]
+      ProjectionExec: expr=[spark_ceil(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_where_ceilcol__n"
 data:

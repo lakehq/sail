@@ -97,6 +97,12 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    # Normalize Sail default CTAS parquet filenames: <16-char random>_<partition>.<codec>.parquet
+    text = re.sub(
+        r"[A-Za-z0-9]{16}_\d+\.(zst|snappy|gzip|lz4|brotli)\.parquet",
+        r"<id>.\1.parquet",
+        text,
+    )
 
     # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
     # TODO: consider sorting the file groups during planner.

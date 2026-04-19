@@ -27,10 +27,7 @@ use crate::scalar::math::utils::decimal::round_decimal_base;
 /// Extract the `target_scale` for the optional 2nd argument of `ceil` / `floor`.
 /// Arity and integer type are already enforced by `coerce_types`; this only verifies
 /// the scalar Int32 literal shape.
-fn extract_target_scale<'a>(
-    name: &str,
-    args: &'a [ColumnarValue],
-) -> Result<&'a Option<i32>> {
+fn extract_target_scale<'a>(name: &str, args: &'a [ColumnarValue]) -> Result<&'a Option<i32>> {
     if args.len() < 2 {
         return Ok(&None);
     }

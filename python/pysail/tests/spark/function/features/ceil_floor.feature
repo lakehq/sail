@@ -832,6 +832,70 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | c |
         | 2 |
 
+  Rule: Plan snapshot — simplify (idempotent + integer identity)
+
+    @sail-only
+    Scenario: EXPLAIN ceil(ceil(col)) collapses to ceil(col)
+      When query
+        """
+        EXPLAIN SELECT ceil(ceil(v)) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN floor(floor(col)) collapses to floor(col)
+      When query
+        """
+        EXPLAIN SELECT floor(floor(v)) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN triple nested ceil collapses to single ceil
+      When query
+        """
+        EXPLAIN SELECT ceil(ceil(ceil(v))) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN ceil(int_col) rewrites to cast
+      When query
+        """
+        EXPLAIN SELECT ceil(v) FROM VALUES (CAST(5 AS INT)) AS t(v)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN floor(bigint_col) rewrites to cast
+      When query
+        """
+        EXPLAIN SELECT floor(v) FROM VALUES (CAST(42 AS BIGINT)) AS t(v)
+        """
+      Then query plan matches snapshot
+
+  Rule: Plan snapshot — output_ordering (order preservation)
+
+    @sail-only
+    Scenario: EXPLAIN ORDER BY on subquery already sorted by col avoids re-sorting ceil(col)
+      When query
+        """
+        EXPLAIN SELECT ceil(v) AS c FROM (
+          SELECT * FROM VALUES (CAST(3.0 AS DOUBLE)), (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)) AS t(v) ORDER BY v
+        ) ORDER BY ceil(v)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN ORDER BY on subquery already sorted by col avoids re-sorting floor(col)
+      When query
+        """
+        EXPLAIN SELECT floor(v) AS f FROM (
+          SELECT * FROM VALUES (CAST(3.0 AS DOUBLE)), (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)) AS t(v) ORDER BY v
+        ) ORDER BY floor(v)
+        """
+      Then query plan matches snapshot
+
   Rule: Plan snapshot — filter pushdown on Parquet (propagate_constraints)
 
     @sail-only
