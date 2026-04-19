@@ -117,15 +117,31 @@ fn extract_k(acc_args: &AccumulatorArgs) -> Result<u16> {
             "kll_sketch_agg requires a non-null integer literal for k".to_string(),
         )
     })?;
-    let k_i64 = match scalar {
-        ScalarValue::Int8(Some(v)) => v as i64,
-        ScalarValue::Int16(Some(v)) => v as i64,
-        ScalarValue::Int32(Some(v)) => v as i64,
-        ScalarValue::Int64(Some(v)) => v,
-        ScalarValue::UInt8(Some(v)) => v as i64,
-        ScalarValue::UInt16(Some(v)) => v as i64,
-        ScalarValue::UInt32(Some(v)) => v as i64,
-        ScalarValue::UInt64(Some(v)) => v as i64,
+    let k_u64 = match scalar {
+        ScalarValue::Int8(Some(v)) => u64::try_from(v).map_err(|_| {
+            DataFusionError::Plan(format!(
+                "kll_sketch_agg requires k to be in the range 8 to 65535, got {v}",
+            ))
+        })?,
+        ScalarValue::Int16(Some(v)) => u64::try_from(v).map_err(|_| {
+            DataFusionError::Plan(format!(
+                "kll_sketch_agg requires k to be in the range 8 to 65535, got {v}",
+            ))
+        })?,
+        ScalarValue::Int32(Some(v)) => u64::try_from(v).map_err(|_| {
+            DataFusionError::Plan(format!(
+                "kll_sketch_agg requires k to be in the range 8 to 65535, got {v}",
+            ))
+        })?,
+        ScalarValue::Int64(Some(v)) => u64::try_from(v).map_err(|_| {
+            DataFusionError::Plan(format!(
+                "kll_sketch_agg requires k to be in the range 8 to 65535, got {v}",
+            ))
+        })?,
+        ScalarValue::UInt8(Some(v)) => u64::from(v),
+        ScalarValue::UInt16(Some(v)) => u64::from(v),
+        ScalarValue::UInt32(Some(v)) => u64::from(v),
+        ScalarValue::UInt64(Some(v)) => v,
         ScalarValue::Int8(None)
         | ScalarValue::Int16(None)
         | ScalarValue::Int32(None)
@@ -145,12 +161,12 @@ fn extract_k(acc_args: &AccumulatorArgs) -> Result<u16> {
             )));
         }
     };
-    if !(8..=65535).contains(&k_i64) {
+    if !(8..=65535).contains(&k_u64) {
         return Err(DataFusionError::Plan(format!(
-            "kll_sketch_agg requires k to be in the range 8 to 65535, got {k_i64}",
+            "kll_sketch_agg requires k to be in the range 8 to 65535, got {k_u64}",
         )));
     }
-    Ok(k_i64 as u16)
+    Ok(k_u64 as u16)
 }
 
 #[derive(Debug, Clone)]
@@ -694,5 +710,68 @@ impl Accumulator for KllSketchAggDoubleAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         self.inner.merge_serialized_states(states)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_i64_sketch(k: u16, values: &[i64]) -> Result<CompactSketch<i64>> {
+        let mut sketch = CompactSketch::new(k);
+        for value in values {
+            sketch.update(*value)?;
+        }
+        Ok(sketch)
+    }
+
+    #[test]
+    fn test_compact_sketch_compacts_and_bounds_level_zero() -> Result<()> {
+        let k = 8;
+        let mut sketch = CompactSketch::new(k);
+        for value in 0..=(usize::from(k) * MAX_LEVEL_SIZE_FACTOR) {
+            sketch.update(value as i64)?;
+        }
+
+        assert_eq!(sketch.n, 17);
+        assert!(sketch.levels.len() > 1);
+        assert!(sketch.levels[0].len() <= sketch.max_level_size());
+        assert_eq!(sketch.levels[0].len(), 1);
+        assert_eq!(sketch.levels[1].len(), usize::from(k));
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_sketch_serialize_roundtrip() -> Result<()> {
+        let original = build_i64_sketch(16, &(0..64).collect::<Vec<_>>())?;
+        let encoded = original.serialize()?;
+        let decoded = CompactSketch::<i64>::deserialize(&encoded, "kll_sketch_agg_bigint")?;
+
+        assert_eq!(decoded.k, original.k);
+        assert_eq!(decoded.n, original.n);
+        assert_eq!(decoded.levels, original.levels);
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_sketch_merge_rejects_k_mismatch() -> Result<()> {
+        let mut left = build_i64_sketch(16, &[1, 2, 3])?;
+        let right = build_i64_sketch(32, &[4, 5, 6])?;
+
+        let error = left.merge(right).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("kll_sketch_agg: incompatible sketch state k=32, expected 16"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_sketch_is_deterministic_for_same_input() -> Result<()> {
+        let values: Vec<i64> = (0..256).collect();
+        let left = build_i64_sketch(32, &values)?;
+        let right = build_i64_sketch(32, &values)?;
+
+        assert_eq!(left.serialize()?, right.serialize()?);
+        Ok(())
     }
 }
