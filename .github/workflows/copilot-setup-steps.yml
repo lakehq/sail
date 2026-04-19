@@ -53,3 +53,7 @@ jobs:
         with:
           node-version: "22"
           cache: pnpm
+
+      - name: Configure development environment
+        run: |
+          echo "CARGO_PROFILE_DEV_DEBUG=0" >> "$GITHUB_ENV"

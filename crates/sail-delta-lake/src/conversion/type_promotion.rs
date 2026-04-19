@@ -214,12 +214,10 @@ impl DeltaTypeConverter {
             (
                 DataType::Decimal128(from_precision, from_scale),
                 DataType::Decimal128(to_precision, to_scale),
-            ) => {
-                if from_precision > to_precision || from_scale > to_scale {
-                    return Err(DataFusionError::Plan(format!(
+            ) if (from_precision > to_precision || from_scale > to_scale) => {
+                return Err(DataFusionError::Plan(format!(
                         "Potential precision loss in decimal cast for field '{field_name}': from Decimal({from_precision},{from_scale}) to Decimal({to_precision},{to_scale})"
                     )));
-                }
             }
             (DataType::Int64, DataType::Int32)
             | (DataType::Int32, DataType::Int16)

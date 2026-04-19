@@ -24,6 +24,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::runtime::SpawnedTask;
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -541,8 +542,8 @@ impl<'a> CheckpointManager<'a> {
                 }
             }
         }
-        commit_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
-        checkpoint_entries.sort_by(|(av, _), (bv, _)| av.cmp(bv));
+        commit_entries.sort_by_key(|(av, _)| *av);
+        checkpoint_entries.sort_by_key(|(av, _)| *av);
 
         let mut state = ReconciledCheckpointState::default();
         let start_commit_version = if let Some((cp_ver, cp_meta)) = checkpoint_entries.pop() {
@@ -824,7 +825,7 @@ pub(crate) async fn read_checkpoint_main_rows_from_parquet(
     meta: ObjectMeta,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
     let main_bytes = root_store.get(&meta.location).await?.bytes().await?;
-    tokio::task::spawn_blocking(move || {
+    SpawnedTask::spawn_blocking(move || {
         let mut batches = ParquetRecordBatchReaderBuilder::try_new(main_bytes)
             .map_err(DeltaTableError::generic_err)?
             .build()
@@ -855,7 +856,7 @@ pub(crate) async fn read_checkpoint_rows_from_parquet(
         for sidecar in &sidecars {
             let sidecar_path = sidecar_file_path(&sidecar.path);
             let sidecar_bytes = root_store.get(&sidecar_path).await?.bytes().await?;
-            let sidecar_rows = tokio::task::spawn_blocking(move || {
+            let sidecar_rows = SpawnedTask::spawn_blocking(move || {
                 let mut batches = ParquetRecordBatchReaderBuilder::try_new(sidecar_bytes)
                     .map_err(DeltaTableError::generic_err)?
                     .build()

@@ -460,16 +460,21 @@ impl PartitionWriter {
             self.part_counter, self.writer_id, compression_suffix
         );
 
-        let mut full_path = self.config.table_path.clone();
-        for segment in &self.config.partition_segments {
-            full_path = full_path.join(segment.as_str());
-        }
-        full_path = full_path.join(file_name.as_str());
-
         let relative_path = if self.config.partition_segments.is_empty() {
-            file_name
+            file_name.clone()
         } else {
             format!("{}/{}", self.config.partition_segments.join("/"), file_name)
+        };
+
+        #[expect(clippy::expect_used)]
+        let full_path = {
+            let table_root = self.config.table_path.as_ref();
+            let full_str = if table_root.is_empty() {
+                relative_path.clone()
+            } else {
+                format!("{}/{}", table_root, relative_path)
+            };
+            Path::parse(full_str).expect("partition segments and file name form a valid path")
         };
 
         (relative_path, full_path)
@@ -633,5 +638,72 @@ mod tests {
         #[expect(clippy::unwrap_used)]
         let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"]).unwrap();
         let _ = writer.write(&batch).await;
+    }
+
+    #[tokio::test]
+    async fn partition_path_with_percent_encoded_value_is_not_double_encoded(
+    ) -> Result<(), DeltaTableError> {
+        use datafusion::arrow::datatypes::TimeUnit;
+
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let table_path = Path::from("delta_table");
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+        ]));
+        let config = WriterConfig::new(
+            schema.clone(),
+            vec!["ts".to_string()],
+            vec!["ts".to_string()],
+            None,
+            1024 * 1024,
+            1024,
+            0,
+            None,
+        );
+        let mut writer = DeltaWriter::new(Arc::clone(&object_store), table_path.clone(), config);
+
+        use datafusion::arrow::array::{Int32Array, TimestampMicrosecondArray};
+        let ts_us: i64 = 1_705_283_400_i64 * 1_000_000; // 2024-01-15 02:30:00 UTC
+        let id_arr: ArrayRef = Arc::new(Int32Array::from(vec![1_i32]));
+        let ts_arr: ArrayRef = Arc::new(
+            TimestampMicrosecondArray::from(vec![ts_us]).with_timezone(Arc::<str>::from("UTC")),
+        );
+        #[expect(clippy::unwrap_used)]
+        let batch = RecordBatch::try_new(schema, vec![id_arr, ts_arr]).unwrap();
+        writer.write(&batch).await?;
+        let adds = writer.close().await?;
+
+        assert_eq!(adds.len(), 1);
+        let path = &adds[0].path;
+
+        assert!(
+            path.contains("%20"),
+            "path should contain %20 (encoded space) in partition dir, got: {path}"
+        );
+        assert!(
+            !path.contains("%2520"),
+            "path must not contain double-encoded %2520: {path}"
+        );
+        assert!(
+            !path.contains("%253A"),
+            "path must not contain double-encoded %253A: {path}"
+        );
+
+        use crate::spec::utils::{decode_path, encode_path};
+        let encoded = encode_path(path);
+        #[expect(clippy::expect_used)]
+        let decoded = decode_path(&encoded).expect("valid percent-encoded path");
+        assert_eq!(
+            decoded, *path,
+            "path should survive one encode/decode round-trip unchanged"
+        );
+
+        Ok(())
     }
 }
