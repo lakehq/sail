@@ -6,6 +6,7 @@ use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryA
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::datasource::TableFormatRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
@@ -458,6 +459,21 @@ impl PlanResolver<'_> {
     }
 
     async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {
+        // Handle path-based table access like `delta.`/path/to/table``
+        // where the first part is a registered table format name.
+        if let [format, path] = table.parts() {
+            let format_str = format.as_ref().to_ascii_lowercase();
+            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            if registry.get(&format_str).is_ok() {
+                return Ok(MergeTargetInfo {
+                    table_name: table.clone().into(),
+                    format: format_str,
+                    location: path.as_ref().to_string(),
+                    partition_by: vec![],
+                    options: vec![],
+                });
+            }
+        }
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let status = catalog_manager
             .get_table_or_view(table.parts())
