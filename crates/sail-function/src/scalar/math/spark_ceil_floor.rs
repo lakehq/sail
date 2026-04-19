@@ -352,6 +352,28 @@ const PROPAGATE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 /// Over-approximating is sound: the final filter re-evaluates `ceil/floor(x)` so the extra
 /// rows are discarded; missing rows would be a correctness bug. The result is intersected
 /// with the current child interval to keep any tighter pre-existing bounds.
+///
+/// # DataFusion v53 observable effect
+///
+/// The only external consumer of this hook in DF v53 is
+/// `FilterExec::statistics_by_expr()` (via `physical_expr::analysis::analyze`
+/// → `ExprIntervalGraph::update_ranges` → `cp_solver`), used for cardinality
+/// estimates. **On typical scalar plans this produces no observable effect**:
+/// the column statistics emitted by `FilterExec` for `WHERE ceil(col) > 2`
+/// keep the unnarrowed `Min`/`Max` of the input — the refined interval does
+/// not flow back. Likely `ExprIntervalGraph::gather_node_indices` does not
+/// thread ScalarUDF children into propagation, or the solver returns
+/// `CannotPropagate` at the UDF node.
+///
+/// Nor is this hook plumbed into `PruningPredicate` (Parquet row-group
+/// pruning): that path uses `LiteralGuarantee` which only inspects
+/// literal-based predicates — `WHERE ceil(col) > 2` is not rewritten to
+/// `WHERE col > 1` before pruning, so `row_groups_pruned_statistics` stays 0.
+///
+/// Why keep it, then? The math is correct and the impl is forward-compatible:
+/// when DataFusion upstream plumbs either path (UDFs through the interval
+/// graph, or a preimage rewrite before `PruningPredicate`), `ceil`/`floor`
+/// filter pushdown becomes automatic with no code changes here.
 fn propagate_ceil_floor(
     kind: CeilFloor,
     interval: &Interval,

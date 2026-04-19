@@ -923,6 +923,224 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       Then query plan matches snapshot
 
   Rule: Plan snapshot — filter pushdown on Parquet (propagate_constraints)
+    # DataFusion v53 observable effect: `propagate_constraints` is implemented
+    # on SparkCeil/SparkFloor (mathematically correct, returns widened intervals).
+    # The only DF v53 consumer is `FilterExec::statistics_by_expr()` via
+    # `physical_expr::analysis::analyze` — but for scalar UDF plans this does
+    # NOT produce observable effects. Direct evidence in the snapshots:
+    #
+    # Literal filter `WHERE v > 2.0` on Parquet (see baseline scenario):
+    #   DataSourceExec:
+    #     predicate=CAST(v@0 AS Decimal128...) > Some(...)
+    #     pruning_predicate=v_max > ...       ← DF built a min/max-based rewrite
+    #     required_guarantees=[]              ← DF can reason about bounds
+    #
+    # UDF filter `WHERE ceil(v) > 2` on Parquet (see pushdown + analyze scenarios):
+    #   DataSourceExec:
+    #     predicate=spark_ceil(v@0) > 2       ← per-row eval only
+    #     <no pruning_predicate>              ← DF gave up; did NOT invoke
+    #     <no required_guarantees>            ← our hook to derive bounds
+    #
+    # Additionally, FilterExec.statistics after `WHERE ceil(v) > 2` still
+    # shows `Min=0.5 Max=10.5` — the refined interval never flows back.
+    # And `row_groups_pruned_statistics` stays 0.
+    #
+    # Root cause: in DF v53 `PruningPredicate` builds its pruning expr from
+    # `LiteralGuarantee::analyze`, which inspects only literal-based predicates
+    # and never walks into ScalarUDFs. Our `propagate_constraints` would be
+    # the right hook to call but the pruning path does not reach it.
+    #
+    # Why keep the hook: forward-compat. When DF upstream either threads UDFs
+    # through `ExprIntervalGraph` or adds a preimage rewrite before
+    # `PruningPredicate`, `ceil`/`floor` filter pushdown becomes automatic.
+    # These snapshots serve as regression fixtures: the literal-vs-UDF diff
+    # disappears when the wiring arrives, and the test forces us to update
+    # the narrative.
+
+    @sail-only
+    Scenario: EXPLAIN GROUP BY ceil(v) on Parquet — aggregation plan
+      # Practical use case: grouping by a monotonic UDF. `output_ordering`
+      # SHOULD let DF skip a Sort before the aggregate if the input was
+      # already sorted by v. The snapshot documents the current plan —
+      # diff vs future versions reveals when / if the optimization kicks in.
+      Given variable location for temporary directory explain_groupby_ceil
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_groupby_ceil_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_groupby_ceil_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)),
+          (CAST(10.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN SELECT ceil(v) AS c, count(*) AS n FROM explain_groupby_ceil_parquet GROUP BY ceil(v)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN combined literal + UDF filter — DF predicate splitting visible
+      # `WHERE v > 2.0 AND ceil(v) > 2` mixes a literal predicate (DF can
+      # push/prune) with a UDF predicate (DF cannot, see Rule comment). The
+      # snapshot shows how DF splits: we expect `pruning_predicate` derived
+      # from the literal part only, and the UDF part as a per-row filter.
+      Given variable location for temporary directory explain_combined_filter
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_combined_filter_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_combined_filter_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)),
+          (CAST(10.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN ANALYZE SELECT v FROM explain_combined_filter_parquet WHERE v > 2.0 AND ceil(v) > 2
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN equality filter on UDF output — WHERE ceil(v) = 2
+      # Equality predicate on UDF output. Semantically equivalent to
+      # `v IN (1.0+ε, 2.0]` but DF v53 does not derive that preimage.
+      # Snapshot documents current behavior; test fails when upstream
+      # improves equality handling for UDFs.
+      Given variable location for temporary directory explain_eq_ceil
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_eq_ceil_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_eq_ceil_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN SELECT v FROM explain_eq_ceil_parquet WHERE ceil(v) = 2
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN 2-arg ceil(v, 2) with range filter
+      # Tests propagate_constraints on the 2-arg form (returns Decimal128).
+      # Same DF v53 behavior expected: no pruning_predicate despite the hook
+      # being wired.
+      Given variable location for temporary directory explain_ceil_2arg
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_ceil_2arg_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_ceil_2arg_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(1.234 AS DOUBLE)),
+          (CAST(2.345 AS DOUBLE)),
+          (CAST(3.456 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN SELECT v FROM explain_ceil_2arg_parquet WHERE ceil(v, 2) > 1.5
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN SELECT from Parquet with literal filter — baseline for compare
+      # Baseline for the next two scenarios: a pure literal predicate
+      # (`WHERE v > 2.0`) that `PruningPredicate` + `LiteralGuarantee` CAN
+      # reason about. Row-group-level stats influence selectivity and
+      # potentially pruning here. Captured so the UDF cases below can be
+      # diffed against it — any divergence in `statistics=[Rows=Inexact(...)]`
+      # or metric values reveals what DF v53 actually uses our hook for.
+      Given variable location for temporary directory explain_literal_filter
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_literal_filter_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_literal_filter_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)),
+          (CAST(10.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN ANALYZE SELECT v FROM explain_literal_filter_parquet WHERE v > 2.0
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN ANALYZE records row_groups_pruned_statistics metric
+      # Regression fixture for DF v53 observable state (see Rule comment).
+      # The snapshot captures:
+      #   - DataSourceExec.metrics includes `row_groups_pruned_statistics=<metric>`
+      #     — metric entry is present, actual value today is 0 (no pruning via
+      #     preimage rewrite; see Rule comment for why).
+      #   - FilterExec.statistics shows column Min/Max *unchanged* from the
+      #     input — DF v53's `analyze` path is not narrowing our UDF output.
+      # Both observations confirm `propagate_constraints` currently has no
+      # observable effect in scalar filter plans, matching the doc comment in
+      # `propagate_ceil_floor()`. When DF upstream plumbs the wiring, this
+      # snapshot changes — forcing us to revisit and update the narrative.
+      Given variable location for temporary directory explain_analyze_ceil
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_analyze_ceil_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_analyze_ceil_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)),
+          (CAST(10.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN ANALYZE SELECT v FROM explain_analyze_ceil_parquet WHERE ceil(v) > 2
+        """
+      Then query plan matches snapshot
 
     @sail-only
     Scenario: EXPLAIN SELECT from Parquet with ceil filter shows pushdown
