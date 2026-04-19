@@ -200,10 +200,12 @@ impl<T: SketchValue> CompactSketch<T> {
         usize::from(self.k) * MAX_LEVEL_SIZE_FACTOR
     }
 
-    fn update(&mut self, value: T) -> Result<()> {
-        self.n = self.n.saturating_add(1);
-        self.levels[0].push(value);
-        self.compact_from(0)
+    fn update_all(&mut self, values: impl Iterator<Item = T>) {
+        for value in values {
+            self.n = self.n.saturating_add(1);
+            self.levels[0].push(value);
+        }
+        self.compact_from(0);
     }
 
     fn merge(&mut self, other: Self) -> Result<()> {
@@ -219,12 +221,12 @@ impl<T: SketchValue> CompactSketch<T> {
         }
         for (level, incoming) in other.levels.into_iter().enumerate() {
             self.levels[level].extend(incoming);
-            self.compact_from(level)?;
+            self.compact_from(level);
         }
         Ok(())
     }
 
-    fn compact_from(&mut self, start_level: usize) -> Result<()> {
+    fn compact_from(&mut self, start_level: usize) {
         let max_level_size = self.max_level_size();
         for level in start_level.. {
             if self.levels[level].len() <= max_level_size {
@@ -236,7 +238,6 @@ impl<T: SketchValue> CompactSketch<T> {
             let promoted = self.compact_level(level);
             self.levels[level + 1].extend(promoted);
         }
-        Ok(())
     }
 
     fn compact_level(&mut self, level: usize) -> Vec<T> {
@@ -273,7 +274,11 @@ impl<T: SketchValue> CompactSketch<T> {
                 "kll_sketch_agg: level count exceeds u32::MAX during serialization".to_string(),
             )
         })?;
-        let mut buffer = Vec::new();
+        let mut buffer = {
+            let total_items: usize = self.levels.iter().map(|l| l.len()).sum();
+            let capacity = 14 + self.levels.len() * 4 + total_items * T::WIDTH;
+            Vec::with_capacity(capacity)
+        };
         buffer.extend_from_slice(&self.k.to_le_bytes());
         buffer.extend_from_slice(&self.n.to_le_bytes());
         buffer.extend_from_slice(&level_count.to_le_bytes());
@@ -465,9 +470,7 @@ impl KllSketchAggBigintAccumulator {
 impl Accumulator for KllSketchAggBigintAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = as_int64_array(&values[0])?;
-        for value in array.iter().flatten() {
-            self.inner.sketch.update(value)?;
-        }
+        self.inner.sketch.update_all(array.iter().flatten());
         Ok(())
     }
 
@@ -477,6 +480,12 @@ impl Accumulator for KllSketchAggBigintAccumulator {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+            + self
+                .inner
+                .sketch
+                .levels
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Vec<i64>>())
             + self
                 .inner
                 .sketch
@@ -574,9 +583,7 @@ impl Accumulator for KllSketchAggFloatAccumulator {
             .ok_or_else(|| {
                 DataFusionError::Internal("kll_sketch_agg_float expected Float32Array".to_string())
             })?;
-        for value in array.iter().flatten() {
-            self.inner.sketch.update(value)?;
-        }
+        self.inner.sketch.update_all(array.iter().flatten());
         Ok(())
     }
 
@@ -586,6 +593,12 @@ impl Accumulator for KllSketchAggFloatAccumulator {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+            + self
+                .inner
+                .sketch
+                .levels
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Vec<f32>>())
             + self
                 .inner
                 .sketch
@@ -683,9 +696,7 @@ impl Accumulator for KllSketchAggDoubleAccumulator {
             .ok_or_else(|| {
                 DataFusionError::Internal("kll_sketch_agg_double expected Float64Array".to_string())
             })?;
-        for value in array.iter().flatten() {
-            self.inner.sketch.update(value)?;
-        }
+        self.inner.sketch.update_all(array.iter().flatten());
         Ok(())
     }
 
@@ -695,6 +706,12 @@ impl Accumulator for KllSketchAggDoubleAccumulator {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self)
+            + self
+                .inner
+                .sketch
+                .levels
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Vec<f64>>())
             + self
                 .inner
                 .sketch
@@ -719,19 +736,28 @@ mod tests {
 
     fn build_i64_sketch(k: u16, values: &[i64]) -> Result<CompactSketch<i64>> {
         let mut sketch = CompactSketch::new(k);
-        for value in values {
-            sketch.update(*value)?;
-        }
+        sketch.update_all(values.iter().copied());
         Ok(sketch)
+    }
+
+    fn build_f32_sketch(k: u16, values: &[f32]) -> CompactSketch<f32> {
+        let mut sketch = CompactSketch::new(k);
+        sketch.update_all(values.iter().copied());
+        sketch
+    }
+
+    fn build_f64_sketch(k: u16, values: &[f64]) -> CompactSketch<f64> {
+        let mut sketch = CompactSketch::new(k);
+        sketch.update_all(values.iter().copied());
+        sketch
     }
 
     #[test]
     fn test_compact_sketch_compacts_and_bounds_level_zero() -> Result<()> {
         let k = 8;
         let mut sketch = CompactSketch::new(k);
-        for value in 0..=(usize::from(k) * MAX_LEVEL_SIZE_FACTOR) {
-            sketch.update(value as i64)?;
-        }
+        let count = usize::from(k) * MAX_LEVEL_SIZE_FACTOR + 1;
+        sketch.update_all(0..count as i64);
 
         assert_eq!(sketch.n, 17);
         assert!(sketch.levels.len() > 1);
@@ -750,6 +776,61 @@ mod tests {
         assert_eq!(decoded.k, original.k);
         assert_eq!(decoded.n, original.n);
         assert_eq!(decoded.levels, original.levels);
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_sketch_f32_serialize_roundtrip() -> Result<()> {
+        let values: Vec<f32> = (0..64).map(|i| i as f32 * 0.5).collect();
+        let original = build_f32_sketch(16, &values);
+        let encoded = original.serialize()?;
+        let decoded = CompactSketch::<f32>::deserialize(&encoded, "kll_sketch_agg_float")?;
+
+        assert_eq!(decoded.k, original.k);
+        assert_eq!(decoded.n, original.n);
+        assert_eq!(decoded.levels, original.levels);
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_sketch_f64_serialize_roundtrip() -> Result<()> {
+        let values: Vec<f64> = (0..64).map(|i| i as f64 * 0.5).collect();
+        let original = build_f64_sketch(16, &values);
+        let encoded = original.serialize()?;
+        let decoded = CompactSketch::<f64>::deserialize(&encoded, "kll_sketch_agg_double")?;
+
+        assert_eq!(decoded.k, original.k);
+        assert_eq!(decoded.n, original.n);
+        assert_eq!(decoded.levels, original.levels);
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_sketch_empty_roundtrip() -> Result<()> {
+        let original: CompactSketch<i64> = CompactSketch::new(16);
+        let encoded = original.serialize()?;
+        let decoded = CompactSketch::<i64>::deserialize(&encoded, "kll_sketch_agg_bigint")?;
+
+        assert_eq!(decoded.k, original.k);
+        assert_eq!(decoded.n, 0);
+        assert_eq!(decoded.levels.len(), 1);
+        assert!(decoded.levels[0].is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_sketch_merge_correctness() -> Result<()> {
+        let k = 16;
+        let mut left = build_i64_sketch(k, &(0..50).collect::<Vec<_>>())?;
+        let right = build_i64_sketch(k, &(50..100).collect::<Vec<_>>())?;
+
+        let n_total = left.n + right.n;
+        left.merge(right)?;
+
+        assert_eq!(left.n, n_total);
+        for level in &left.levels {
+            assert!(level.len() <= left.max_level_size());
+        }
         Ok(())
     }
 
