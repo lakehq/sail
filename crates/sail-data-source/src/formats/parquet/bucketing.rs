@@ -1,7 +1,34 @@
+use arrow::array::ArrayRef;
 use arrow_schema::{ArrowError, Schema};
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::Result;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
+
+/// Compute per-row hash values for bucket assignment.
+///
+/// The same function MUST be used on both the write side (bucket routing in the sink)
+/// and the read side (bucket pruning), otherwise a value hashed on write into bucket X
+/// will be looked up on read in bucket Y and miss. The unit test
+/// `test_hash_consistency_write_vs_read` guards against this.
+///
+/// Current implementation: ahash with zero-seed (`RandomState::with_seeds(0,0,0,0)`).
+///
+/// TODO(spark-compat): migrate to **Murmur3 with seed 42** to match Spark's
+/// `HashPartitioning.partitionIdExpression` (`Pmod(Hash(cols, 42), numPartitions)`).
+/// Once migrated, Sail-written bucketed Parquet files become bit-compatible with
+/// Spark: Spark can read them, apply bucket pruning cross-engine, and co-located
+/// bucket joins work Sail↔Spark. Until then Sail-written files are readable by
+/// Spark (the filename convention is Spark-standard) but Spark's bucket pruning
+/// will place rows in different buckets and fall back to a full scan.
+///
+/// Reference: `org.apache.spark.sql.catalyst.expressions.HashPartitioning`.
+pub fn hash_for_bucketing(arrays: &[ArrayRef]) -> Result<Vec<u64>> {
+    let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+    let mut hashes = vec![0u64; arrays.first().map(|a| a.len()).unwrap_or(0)];
+    create_hashes(arrays, &random_state, &mut hashes)?;
+    Ok(hashes)
+}
 
 /// Configuration for a bucketed write operation.
 ///

@@ -23,8 +23,8 @@ use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
 use super::bucketing::{
-    bucket_file_name, create_bucketed_writer_properties, resolve_bucket_column_indices,
-    BucketingConfig,
+    bucket_file_name, create_bucketed_writer_properties, hash_for_bucketing,
+    resolve_bucket_column_indices, BucketingConfig,
 };
 
 /// Physical plan node that writes data into bucketed Parquet files.
@@ -227,9 +227,7 @@ async fn write_bucketed(
 
     let num_rows = combined.num_rows();
     let num_buckets = config.num_buckets;
-    let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-    let mut hashes = vec![0u64; num_rows];
-    create_hashes(&bucket_arrays, &random_state, &mut hashes)?;
+    let hashes = hash_for_bucketing(&bucket_arrays)?;
 
     let avg_per_bucket = num_rows / num_buckets + 1;
     let mut bucket_indices: Vec<Vec<u32>> = (0..num_buckets)
