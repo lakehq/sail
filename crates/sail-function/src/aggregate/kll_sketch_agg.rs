@@ -226,15 +226,26 @@ impl<T: SketchValue> CompactSketch<T> {
     fn compact_level(&mut self, level: usize) -> Vec<T> {
         let values = &mut self.levels[level];
         T::sort(values);
+        let len = values.len();
         let offset = usize::from(self.rng.next_f64() >= 0.5);
-        let mut promoted = Vec::with_capacity(values.len() / 2);
-        let mut retained = Vec::with_capacity(values.len() % 2);
-        for (index, value) in values.iter().copied().enumerate() {
-            if index % 2 == offset {
-                promoted.push(value);
-            } else if values.len() % 2 == 1 && retained.is_empty() {
-                retained.push(value);
+        let mut promoted = Vec::with_capacity(len / 2);
+        let mut retained = Vec::with_capacity(usize::from(len % 2 == 1));
+
+        let slice = values.as_slice();
+        let compacted = if len % 2 == 1 {
+            if offset == 0 {
+                retained.push(slice[len - 1]);
+                &slice[..len - 1]
+            } else {
+                retained.push(slice[0]);
+                &slice[1..]
             }
+        } else {
+            slice
+        };
+
+        for value in compacted.iter().copied().skip(offset).step_by(2) {
+            promoted.push(value);
         }
         *values = retained;
         promoted
