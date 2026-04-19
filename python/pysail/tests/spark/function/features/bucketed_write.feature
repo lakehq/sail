@@ -569,8 +569,52 @@ Feature: Bucketed Parquet Writing
       Then query plan contains WindowAggExec
       And query plan does not contain RepartitionExec
 
+  Rule: Spark-compatibility guarantees (cross-engine)
+    # The bucketing implementation uses Spark-compatible Murmur3 (seed 42) + pmod,
+    # plus Spark-convention file naming (part-00000-<uuid>_<bucketId>.c000.snappy.parquet)
+    # and no proprietary schema metadata. This means Sail-written bucketed tables
+    # can be read by Spark JVM with bucket pruning and co-located bucket joins.
+
+    Scenario: hash() function produces same values on Sail and Spark JVM (Murmur3 seed=42)
+      When query
+        """
+        SELECT hash(1) AS h1, hash(42) AS h42, hash('hello') AS hs
+        """
+      Then query result
+        | h1         | h42      | hs          |
+        | -559580957 | 29417773 | -1008564952 |
+
+    Scenario: bucket assignment is deterministic and matches Spark semantics
+      Given variable location for temporary directory test_bucket_determ
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_determ
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_determ USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1), (2), (3), (4), (5), (6), (7), (8) AS t(id)
+        """
+      When query
+        """
+        SELECT id, pmod(hash(id), 4) AS bucket FROM test_bucket_determ ORDER BY id
+        """
+      Then query result ordered
+        | id | bucket |
+        | 1  | 3      |
+        | 2  | 2      |
+        | 3  | 3      |
+        | 4  | 2      |
+        | 5  | 2      |
+        | 6  | 1      |
+        | 7  | 3      |
+        | 8  | 3      |
+
   Rule: Spark-compatible file naming
 
+    @sail-only
     Scenario: bucketed files follow Spark naming convention
       Given variable location for temporary directory test_bucket_naming
       Given final statement
@@ -598,6 +642,7 @@ Feature: Bucketed Parquet Writing
         📄 part-<id>.<codec>.parquet
         """
 
+    @sail-only
     Scenario: bucketed scan appears in simple read plan
       Given variable location for temporary directory test_bucket_plan_read
       Given final statement
@@ -617,6 +662,7 @@ Feature: Bucketed Parquet Writing
         """
       Then query plan contains BucketedParquetScanExec
 
+    @sail-only
     Scenario: bucketed aggregation uses SinglePartitioned mode (no shuffle)
       Given variable location for temporary directory test_bucket_plan_agg
       Given final statement
@@ -638,6 +684,7 @@ Feature: Bucketed Parquet Writing
       And query plan contains SinglePartitioned
       And query plan does not contain RepartitionExec
 
+    @sail-only
     Scenario: bucketed files distribute data correctly across buckets
       Given variable location for temporary directory test_bucket_dist
       Given final statement

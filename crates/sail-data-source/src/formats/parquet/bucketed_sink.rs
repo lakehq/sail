@@ -14,7 +14,6 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::hash_utils::create_hashes;
 use futures::StreamExt;
 use log::info;
 use object_store::path::Path;
@@ -23,7 +22,7 @@ use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
 use super::bucketing::{
-    bucket_file_name, create_bucketed_writer_properties, hash_for_bucketing,
+    bucket_file_name, bucket_id_for_hash, create_bucketed_writer_properties, hash_for_bucketing,
     resolve_bucket_column_indices, BucketingConfig,
 };
 
@@ -234,7 +233,7 @@ async fn write_bucketed(
         .map(|_| Vec::with_capacity(avg_per_bucket))
         .collect();
     for (row, hash) in hashes.iter().enumerate() {
-        let bucket = (*hash as usize) % num_buckets;
+        let bucket = bucket_id_for_hash(*hash, num_buckets);
         bucket_indices[bucket].push(row as u32);
     }
 

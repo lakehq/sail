@@ -6871,6 +6871,7 @@ dependencies = [
  "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
+ "sail-function",
  "sail-sql-analyzer",
  "serde",
  "thiserror",

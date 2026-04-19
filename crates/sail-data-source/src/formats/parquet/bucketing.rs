@@ -1,33 +1,41 @@
 use arrow::array::ArrayRef;
 use arrow_schema::{ArrowError, Schema};
-use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::Result;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::schema::types::ColumnPath;
+use sail_function::scalar::hash::utils::create_murmur3_hashes;
 
-/// Compute per-row hash values for bucket assignment.
+/// Seed used by Spark's default `HashPartitioning` — `Pmod(Hash(cols, 42), numPartitions)`.
+///
+/// Bucketed Parquet files written by Sail are bit-compatible with Spark thanks to
+/// using the same Murmur3_x86_32 algorithm + seed. Spark can read them with full
+/// bucket pruning / bucket-join elimination semantics.
+const SPARK_BUCKETING_SEED: u32 = 42;
+
+/// Compute per-row hash values for bucket assignment (Spark-compatible).
 ///
 /// The same function MUST be used on both the write side (bucket routing in the sink)
 /// and the read side (bucket pruning), otherwise a value hashed on write into bucket X
-/// will be looked up on read in bucket Y and miss. The unit test
-/// `test_hash_consistency_write_vs_read` guards against this.
+/// will be looked up on read in bucket Y and miss. Consistency is guarded by the
+/// `test_hash_consistency_write_vs_read` unit test.
 ///
-/// Current implementation: ahash with zero-seed (`RandomState::with_seeds(0,0,0,0)`).
-///
-/// TODO(spark-compat): migrate to **Murmur3 with seed 42** to match Spark's
-/// `HashPartitioning.partitionIdExpression` (`Pmod(Hash(cols, 42), numPartitions)`).
-/// Once migrated, Sail-written bucketed Parquet files become bit-compatible with
-/// Spark: Spark can read them, apply bucket pruning cross-engine, and co-located
-/// bucket joins work Sail↔Spark. Until then Sail-written files are readable by
-/// Spark (the filename convention is Spark-standard) but Spark's bucket pruning
-/// will place rows in different buckets and fall back to a full scan.
-///
-/// Reference: `org.apache.spark.sql.catalyst.expressions.HashPartitioning`.
-pub fn hash_for_bucketing(arrays: &[ArrayRef]) -> Result<Vec<u64>> {
-    let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-    let mut hashes = vec![0u64; arrays.first().map(|a| a.len()).unwrap_or(0)];
-    create_hashes(arrays, &random_state, &mut hashes)?;
+/// Matches `org.apache.spark.sql.catalyst.expressions.HashPartitioning`:
+/// `Pmod(Hash(cols, 42), numPartitions)` → bucket id.
+pub fn hash_for_bucketing(arrays: &[ArrayRef]) -> Result<Vec<u32>> {
+    let num_rows = arrays.first().map(|a| a.len()).unwrap_or(0);
+    let mut hashes = vec![SPARK_BUCKETING_SEED; num_rows];
+    create_murmur3_hashes(arrays, &mut hashes)?;
     Ok(hashes)
+}
+
+/// Map a Spark Murmur3 hash value to a bucket id using positive modulo.
+///
+/// Spark uses `Pmod` (`((h % n) + n) % n`) — `Int.rem_euclid` in Rust.
+/// Negative hash values (Murmur3 returns `i32`) otherwise produce negative
+/// buckets which mismatch Spark.
+#[inline]
+pub fn bucket_id_for_hash(hash: u32, num_buckets: usize) -> usize {
+    (hash as i32).rem_euclid(num_buckets as i32) as usize
 }
 
 /// Configuration for a bucketed write operation.
@@ -174,32 +182,27 @@ mod tests {
     /// Verify that the hash used for bucket pruning (read side) matches
     /// the hash used for bucket assignment (write side).
     ///
-    /// Both use `ahash::RandomState::with_seeds(0,0,0,0)` + `create_hashes`.
-    /// This test catches regressions if ahash changes algorithm across versions.
+    /// Both use `create_murmur3_hashes` with Spark's seed (42). This test catches
+    /// regressions if the underlying Murmur3 implementation changes output.
     #[test]
     fn test_hash_consistency_write_vs_read() {
         use arrow::array::{ArrayRef, Int32Array};
-        use datafusion_common::hash_utils::create_hashes;
 
         let num_buckets = 8;
-        let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
 
-        // Simulate write side: hash a column of values and assign to buckets
+        // Simulate write side: hash a column of values and assign to buckets.
         let values = Int32Array::from(vec![1, 2, 3, 42, 100, -5]);
         let arrays: Vec<ArrayRef> = vec![Arc::new(values.clone())];
-        let mut write_hashes = vec![0u64; 6];
-        create_hashes(&arrays, &random_state, &mut write_hashes).expect("write hash");
+        let write_hashes = hash_for_bucketing(&arrays).expect("write hash");
 
-        // Simulate read side: hash each value individually (as bucket pruning does)
+        // Simulate read side: hash each value individually (as bucket pruning does).
         for (i, val) in [1i32, 2, 3, 42, 100, -5].iter().enumerate() {
             let single = Int32Array::from(vec![*val]);
             let single_arrays: Vec<ArrayRef> = vec![Arc::new(single)];
-            let read_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-            let mut read_hashes = vec![0u64; 1];
-            create_hashes(&single_arrays, &read_state, &mut read_hashes).expect("read hash");
+            let read_hashes = hash_for_bucketing(&single_arrays).expect("read hash");
 
-            let write_bucket = (write_hashes[i] as usize) % num_buckets;
-            let read_bucket = (read_hashes[0] as usize) % num_buckets;
+            let write_bucket = bucket_id_for_hash(write_hashes[i], num_buckets);
+            let read_bucket = bucket_id_for_hash(read_hashes[0], num_buckets);
             assert_eq!(
                 write_bucket, read_bucket,
                 "hash mismatch for value {val}: write bucket {write_bucket} != read bucket {read_bucket}"

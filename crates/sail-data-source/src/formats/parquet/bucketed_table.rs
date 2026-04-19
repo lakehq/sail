@@ -11,10 +11,10 @@ use datafusion::datasource::listing::ListingTable;
 use datafusion::logical_expr::{Expr, Operator, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
-use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::Result;
 
 use super::bucketed_scan::BucketedParquetScanExec;
+use super::bucketing::{bucket_id_for_hash, hash_for_bucketing};
 
 /// A `TableProvider` wrapper around `ListingTable` that adds Hash partitioning.
 ///
@@ -155,7 +155,7 @@ impl TableProvider for BucketedListingTable {
 }
 
 /// Compute the bucket ID for a combination of column values using the same
-/// hash as the writer (`ahash::RandomState::with_seeds(0,0,0,0)` + `create_hashes`).
+/// Spark-compatible Murmur3 hash (seed 42) as the writer.
 ///
 /// Values must be in the same order as the bucket columns used during writing.
 fn compute_multi_bucket_id(values: &[&ScalarValue], num_buckets: usize) -> Option<usize> {
@@ -163,10 +163,8 @@ fn compute_multi_bucket_id(values: &[&ScalarValue], num_buckets: usize) -> Optio
         .iter()
         .map(|v| v.to_array_of_size(1).ok())
         .collect::<Option<Vec<_>>>()?;
-    let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
-    let mut hashes = vec![0u64; 1];
-    create_hashes(&arrays, &random_state, &mut hashes).ok()?;
-    Some((hashes[0] as usize) % num_buckets)
+    let hashes = hash_for_bucketing(&arrays).ok()?;
+    Some(bucket_id_for_hash(*hashes.first()?, num_buckets))
 }
 
 /// Analyze filter expressions to determine which bucket IDs need to be read.
