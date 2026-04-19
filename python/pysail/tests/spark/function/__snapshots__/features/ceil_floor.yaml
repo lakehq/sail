@@ -1,0 +1,49 @@
+# serializer version: 1
+---
+name: "test_explain_select_from_parquet_with_ceil_filter_shows_pushdown"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as v]
+      ProjectionExec: expr=[v@0 as #1]
+        FilterExec: spark_ceil(v@0) > 2
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_ceil_pushdown/VeyoHekXjTqurxPD_0.zst.parquet]]}, projection=[v], file_type=parquet, predicate=spark_ceil(v@0) > 2
+---
+name: "test_explain_select_from_parquet_with_floor_filter_shows_pushdown"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as v]
+      ProjectionExec: expr=[v@0 as #1]
+        FilterExec: spark_floor(v@0) <= 1
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_floor_pushdown/fjamL2fm8Dvs6uLu_0.zst.parquet]]}, projection=[v], file_type=parquet, predicate=spark_floor(v@0) <= 1
+---
+name: "test_explain_where_ceilcol__n"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as v]
+      ProjectionExec: expr=[column1@0 as #2]
+        FilterExec: spark_ceil(column1@0) > 2
+          DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_where_ceilcol_between"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as v]
+      ProjectionExec: expr=[column1@0 as #2]
+        FilterExec: __common_expr_3@0 >= 2 AND __common_expr_3@0 <= 3, projection=[column1@1]
+          ProjectionExec: expr=[spark_ceil(column1@0) as __common_expr_3, column1@0 as column1]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_where_floorcol__n"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as v]
+      ProjectionExec: expr=[column1@0 as #2]
+        FilterExec: spark_floor(column1@0) <= 1
+          DataSourceExec: partitions=1, partition_sizes=[1]

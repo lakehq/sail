@@ -2,12 +2,15 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, Float32Array, Float64Array};
+use datafusion::arrow::compute::CastOptions;
 use datafusion::arrow::datatypes::{
     DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type, Int16Type, Int32Type,
     Int64Type, Int8Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
+use datafusion::arrow::util::display::FormatOptions;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr_fn::cast;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -249,6 +252,14 @@ impl ScalarUDFImpl for SparkCeil {
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         simplify_ceil_floor("spark_ceil", args, info)
     }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        propagate_ceil_floor(CeilFloor::Ceil, interval, inputs)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -312,6 +323,55 @@ impl ScalarUDFImpl for SparkFloor {
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         simplify_ceil_floor("spark_floor", args, info)
     }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        propagate_ceil_floor(CeilFloor::Floor, interval, inputs)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CeilFloor {
+    Ceil,
+    Floor,
+}
+
+const PROPAGATE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
+    safe: true,
+    format_options: FormatOptions::new(),
+};
+
+/// Constraint propagation for `ceil` / `floor` (Rule 17): given a known output `interval`
+/// (e.g. from `WHERE ceil(col) > 5`), derive the widest safe interval on the input that can
+/// still produce that output. Enables filter pushdown past the function.
+///
+/// Math (both functions are monotonic non-decreasing):
+/// - `ceil(x) ∈ [a, b]`  ⇔  `x ∈ (a - 1, b]`   → safe over-approximation: `[a - 1, b]`
+/// - `floor(x) ∈ [a, b]` ⇔  `x ∈ [a, b + 1)`  → safe over-approximation: `[a, b + 1]`
+///
+/// Over-approximating is sound: the final filter re-evaluates `ceil/floor(x)` so the extra
+/// rows are discarded; missing rows would be a correctness bug. The result is intersected
+/// with the current child interval to keep any tighter pre-existing bounds.
+fn propagate_ceil_floor(
+    kind: CeilFloor,
+    interval: &Interval,
+    inputs: &[&Interval],
+) -> Result<Option<Vec<Interval>>> {
+    let Some(child) = inputs.first() else {
+        return Ok(Some(vec![]));
+    };
+    let child_type = child.data_type();
+    let cast_output = interval.cast_to(&child_type, &PROPAGATE_CAST_OPTIONS)?;
+    let one = ScalarValue::new_one(&child_type)?;
+    let (lower, upper) = match kind {
+        CeilFloor::Ceil => (cast_output.lower().sub(&one)?, cast_output.upper().clone()),
+        CeilFloor::Floor => (cast_output.lower().clone(), cast_output.upper().add(&one)?),
+    };
+    let widened = Interval::try_new(lower, upper)?;
+    Ok(child.intersect(widened)?.map(|refined| vec![refined]))
 }
 
 /// Algebraic simplifications for `ceil` and `floor`:

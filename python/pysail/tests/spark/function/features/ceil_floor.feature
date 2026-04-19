@@ -732,6 +732,199 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | -42    |
 
+  Rule: Filter pushdown — WHERE ceil/floor(col) OP constant
+
+    Scenario: WHERE ceil(col) > N keeps correct rows
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW vals AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.1 AS DOUBLE)),
+          (CAST(1.9 AS DOUBLE)),
+          (CAST(2.1 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)),
+          (CAST(NULL AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        SELECT v FROM vals WHERE ceil(v) > 2 ORDER BY v
+        """
+      Then query result ordered
+        | v   |
+        | 2.1 |
+        | 5.5 |
+
+    Scenario: WHERE floor(col) <= N keeps correct rows
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW vals AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.1 AS DOUBLE)),
+          (CAST(1.9 AS DOUBLE)),
+          (CAST(2.1 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)),
+          (CAST(NULL AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        SELECT v FROM vals WHERE floor(v) <= 1 ORDER BY v
+        """
+      Then query result ordered
+        | v   |
+        | 0.5 |
+        | 1.1 |
+        | 1.9 |
+
+    Scenario: WHERE ceil(col) BETWEEN
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW vals AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.1 AS DOUBLE)),
+          (CAST(1.9 AS DOUBLE)),
+          (CAST(2.1 AS DOUBLE)),
+          (CAST(3.0 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        SELECT v FROM vals WHERE ceil(v) BETWEEN 2 AND 3 ORDER BY v
+        """
+      Then query result ordered
+        | v   |
+        | 1.1 |
+        | 1.9 |
+        | 2.1 |
+        | 3.0 |
+
+    Scenario: WHERE ceil on integer column (identity after simplify)
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW vals AS SELECT * FROM VALUES
+          (1), (5), (10), (CAST(NULL AS INT)) AS t(v)
+        """
+      When query
+        """
+        SELECT v FROM vals WHERE ceil(v) > 3 ORDER BY v
+        """
+      Then query result ordered
+        | v  |
+        | 5  |
+        | 10 |
+
+    Scenario: WHERE floor(col) returns NULL excludes NULL rows
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW vals AS SELECT * FROM VALUES
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(NULL AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        SELECT count(*) AS c FROM vals WHERE floor(v) IS NOT NULL
+        """
+      Then query result
+        | c |
+        | 2 |
+
+  Rule: Plan snapshot — filter pushdown on Parquet (propagate_constraints)
+
+    @sail-only
+    Scenario: EXPLAIN SELECT from Parquet with ceil filter shows pushdown
+      Given variable location for temporary directory explain_ceil_pushdown
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_ceil_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_ceil_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN SELECT v FROM explain_ceil_parquet WHERE ceil(v) > 2
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN SELECT from Parquet with floor filter shows pushdown
+      Given variable location for temporary directory explain_floor_pushdown
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_floor_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_floor_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN SELECT v FROM explain_floor_parquet WHERE floor(v) <= 1
+        """
+      Then query plan matches snapshot
+
+  Rule: Plan snapshot — filter pushdown
+
+    @sail-only
+    Scenario: EXPLAIN WHERE ceil(col) > N
+      When query
+        """
+        EXPLAIN SELECT v FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)) AS t(v)
+        WHERE ceil(v) > 2
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN WHERE floor(col) <= N
+      When query
+        """
+        EXPLAIN SELECT v FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)) AS t(v)
+        WHERE floor(v) <= 1
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN WHERE ceil(col) BETWEEN
+      When query
+        """
+        EXPLAIN SELECT v FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)) AS t(v)
+        WHERE ceil(v) BETWEEN 2 AND 3
+        """
+      Then query plan matches snapshot
+
   Rule: Error conditions
 
     Scenario: non-foldable scale errors
