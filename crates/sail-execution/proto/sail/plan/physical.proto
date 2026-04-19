@@ -55,6 +55,8 @@ message ExtendedPhysicalPlanNode {
     CatalogCommandExecNode catalog_command = 40;
     BarrierExecNode barrier = 41;
     RelaxedTzCastExecNode relaxed_tz_cast = 42;
+    BucketedParquetSinkExecNode bucketed_parquet_sink = 43;
+    BucketedParquetScanExecNode bucketed_parquet_scan = 44;
   }
 }
 
@@ -645,6 +647,31 @@ message IcebergWriterExecNode {
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+}
+
+message BucketSortColumn {
+  string name = 1;
+  bool ascending = 2;
+}
+
+message BucketedParquetSinkExecNode {
+  bytes input = 1;
+  string output_path = 2;
+  repeated string bucket_columns = 3;
+  uint32 num_buckets = 4;
+  string hash_function = 5;
+  repeated BucketSortColumn sort_columns = 6;
+  bytes file_schema = 7;
+  bytes writer_properties = 8;
+}
+
+message BucketedParquetScanExecNode {
+  bytes inner = 1;
+  repeated string bucket_columns = 2;
+  uint32 num_buckets = 3;
+  repeated BucketSortColumn sort_columns = 4;
+  repeated uint32 target_buckets = 5;
+  bool has_target_buckets = 6;
 }
 
 message DeltaLogReplayExecNode {

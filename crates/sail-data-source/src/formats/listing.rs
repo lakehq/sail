@@ -13,11 +13,15 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo, TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
+use crate::formats::parquet::bucketed_sink::BucketedParquetSinkExec;
+use crate::formats::parquet::bucketed_table::BucketedListingTable;
+use crate::formats::parquet::bucketing::BucketingConfig;
 use crate::utils::split_parquet_compression_string;
 
 /// Trait for schema inference logic
@@ -115,7 +119,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             schema,
             constraints,
             partition_by,
-            bucket_by: _,
+            bucket_by,
             sort_order,
             options,
         } = info;
@@ -132,8 +136,19 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             });
 
         let config = ctx.config();
+        // For bucketed tables, target_partitions must equal num_buckets so that
+        // ListingTable produces exactly one file group per bucket.  Without this,
+        // DataFusion groups files into CPU-count partitions, which breaks the 1:1
+        // bucket-to-partition mapping required by BucketedParquetScanExec.
+        let target_partitions = match bucket_by.as_ref() {
+            Some(b) if b.num_buckets > 0 => b.num_buckets,
+            Some(b) => {
+                return plan_err!("num_buckets must be greater than 0, got {}", b.num_buckets);
+            }
+            None => config.target_partitions(),
+        };
         let mut listing_options = ListingOptions::new(file_format)
-            .with_target_partitions(config.target_partitions())
+            .with_target_partitions(target_partitions)
             .with_collect_stat(config.collect_statistics());
 
         let (schema, partition_by) = match schema {
@@ -179,9 +194,29 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
         let config = crate::listing::rewrite_listing_partitions(config)?;
-        Ok(Arc::new(
-            ListingTable::try_new(config)?.with_constraints(constraints),
-        ))
+        let table = ListingTable::try_new(config)?.with_constraints(constraints);
+
+        // Detect bucketing from catalog metadata. Bucketed Parquet files written
+        // by Sail carry no proprietary schema metadata — the catalog is the single
+        // source of truth (matches Spark / Hive bucketing convention).
+        // TODO: use a type-level check instead of string comparison
+        if self.inner.name() == "parquet" {
+            if let Some(ref bucket_info) = bucket_by {
+                log::debug!(
+                    "Wrapping bucketed table from catalog: columns={:?}, num_buckets={}",
+                    bucket_info.columns,
+                    bucket_info.num_buckets,
+                );
+                return Ok(Arc::new(BucketedListingTable::new(
+                    table,
+                    bucket_info.columns.clone(),
+                    bucket_info.num_buckets,
+                    Vec::new(),
+                )));
+            }
+        }
+
+        Ok(Arc::new(table))
     }
 
     async fn create_writer(
@@ -211,8 +246,66 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
         }
-        if bucket_by.is_some() {
-            return not_impl_err!("bucketing for writing listing table format");
+        if let Some(bucket_by) = bucket_by {
+            // TODO: use a type-level check instead of string comparison
+            if self.inner.name() != "parquet" {
+                return not_impl_err!("bucketing is only supported for parquet format");
+            }
+            // Build bucketing config from BucketBy metadata
+            let config = BucketingConfig {
+                columns: bucket_by.columns,
+                num_buckets: bucket_by.num_buckets,
+                sort_columns: sort_order
+                    .as_ref()
+                    .map(|req| {
+                        req.iter()
+                            .map(|r| {
+                                let name = r.expr.to_string();
+                                let ascending = r.options.is_none_or(|o| !o.descending);
+                                (name, ascending)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            let output_path = if path.ends_with(object_store::path::DELIMITER) {
+                path
+            } else {
+                format!("{path}{}", object_store::path::DELIMITER)
+            };
+            let merged: std::collections::HashMap<String, String> = options
+                .into_iter()
+                .flat_map(|layer| layer.into_opaque_options())
+                .collect();
+            let compression = merged
+                .get("compression")
+                .map(|v| v.to_ascii_lowercase())
+                .unwrap_or_default();
+            let parquet_compression = match compression.as_str() {
+                "uncompressed" | "none" => parquet::basic::Compression::UNCOMPRESSED,
+                "gzip" | "gz" => {
+                    parquet::basic::Compression::GZIP(parquet::basic::GzipLevel::default())
+                }
+                "lz4" => parquet::basic::Compression::LZ4,
+                "lz4_raw" => parquet::basic::Compression::LZ4_RAW,
+                "zstd" => parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default()),
+                "brotli" | "br" => {
+                    parquet::basic::Compression::BROTLI(parquet::basic::BrotliLevel::default())
+                }
+                _ => parquet::basic::Compression::SNAPPY,
+            };
+            let writer_props = WriterProperties::builder()
+                .set_compression(parquet_compression)
+                .build();
+            let file_schema = input.schema();
+            return BucketedParquetSinkExec::new(
+                input,
+                config,
+                output_path,
+                file_schema,
+                writer_props,
+            )
+            .map(|exec| Arc::new(exec) as Arc<dyn ExecutionPlan>);
         }
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for writing listing table format");

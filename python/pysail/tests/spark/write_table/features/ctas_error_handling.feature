@@ -53,41 +53,31 @@ Feature: CREATE TABLE AS SELECT error handling
       AS t(id, name)
       """
 
-  Scenario: CREATE TABLE AS SELECT fails with SORT BY clause
-    Given variable location for temporary directory ctas_error_sort_by
+  Scenario: CREATE TABLE AS SELECT with TBLPROPERTIES persists data
+    Given variable location for temporary directory ctas_properties_table
     Given final statement
       """
-      DROP TABLE IF EXISTS ctas_error_sort_by
+      DROP TABLE IF EXISTS ctas_properties_table
       """
-    Given statement template with error SORT_BY in CREATE TABLE AS SELECT statement
+    Given statement template
       """
-      CREATE TABLE ctas_error_sort_by
+      CREATE TABLE ctas_properties_table
       USING PARQUET
       LOCATION {{ location.sql }}
-      CLUSTERED BY (id) SORTED BY (id) INTO 4 BUCKETS
+      TBLPROPERTIES ('p1'='v1', 'p2'='v2')
       AS SELECT * FROM VALUES
         (1, 'Alice'),
         (2, 'Bob')
       AS t(id, name)
       """
-
-  Scenario: CREATE TABLE AS SELECT fails with BUCKET BY clause
-    Given variable location for temporary directory ctas_error_bucket_by
-    Given final statement
+    When query
       """
-      DROP TABLE IF EXISTS ctas_error_bucket_by
+      SELECT * FROM ctas_properties_table ORDER BY id
       """
-    Given statement template with error BUCKET_BY in CREATE TABLE AS SELECT statement
-      """
-      CREATE TABLE ctas_error_bucket_by
-      USING PARQUET
-      LOCATION {{ location.sql }}
-      CLUSTERED BY (id) INTO 4 BUCKETS
-      AS SELECT * FROM VALUES
-        (1, 'Alice'),
-        (2, 'Bob')
-      AS t(id, name)
-      """
+    Then query result ordered
+      | id | name  |
+      | 1  | Alice |
+      | 2  | Bob   |
 
   Scenario: CREATE TABLE AS SELECT fails with CLUSTER BY clause
     Given variable location for temporary directory ctas_error_cluster_by

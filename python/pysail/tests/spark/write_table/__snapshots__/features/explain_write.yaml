@@ -1,5 +1,16 @@
 # serializer version: 1
 ---
+name: "test_explain_aggregation_on_bucketed_table_shows_no_repartitionexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as id, #3@1 as sum(val)]
+      ProjectionExec: expr=[#0@0 as #2, sum(explain_bucketed_agg_table.#1)@1 as #3]
+        AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #0], aggr=[sum(explain_bucketed_agg_table.#1)]
+          ProjectionExec: expr=[id@0 as #0, val@1 as #1]
+            BucketedParquetScanExec: columns=[id], num_buckets=4
+              DataSourceExec: file_groups={4 groups: [[<tmp>/explain_bucketed_agg/part-<id>.<codec>.parquet], [<tmp>/explain_bucketed_agg/part-<id>.<codec>.parquet], [<tmp>/explain_bucketed_agg/part-<id>.<codec>.parquet], [<tmp>/explain_bucketed_agg/part-<id>.<codec>.parquet]]}, projection=[id, val], file_type=parquet
+---
 name: "test_explain_create_table_as_select_shows_physical_plan_with_catalog_command"
 data:
   |-
@@ -10,6 +21,17 @@ data:
         ProjectionExec: expr=[column1@0 as id, column2@1 as name]
           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
+name: "test_explain_create_table_as_select_with_bucketing_shows_bucketedparquetsinkexec"
+data:
+  |-
+    == Physical Plan ==
+    BarrierExec
+      CooperativeExec
+        CatalogCommandExec: CreateTable
+      BucketedParquetSinkExec: columns=[id], num_buckets=4, path=<tmp>/explain_bucketed/
+        ProjectionExec: expr=[column1@0 as id, column2@1 as name]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+---
 name: "test_explain_insert_into_shows_physical_plan_with_catalog_command"
 data:
   |-
@@ -17,3 +39,12 @@ data:
     DataSinkExec: sink=ParquetSink(file_groups=[])
       ProjectionExec: expr=[column1@0 as id, column2@1 as name]
         DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_select_from_bucketed_table_shows_bucketedparquetscanexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as id, #3@1 as name]
+      ProjectionExec: expr=[id@0 as #2, name@1 as #3]
+        BucketedParquetScanExec: columns=[id], num_buckets=4
+          DataSourceExec: file_groups={4 groups: [[<tmp>/explain_bucketed_read/part-<id>.<codec>.parquet], [<tmp>/explain_bucketed_read/part-<id>.<codec>.parquet], [<tmp>/explain_bucketed_read/part-<id>.<codec>.parquet], [<tmp>/explain_bucketed_read/part-<id>.<codec>.parquet]]}, projection=[id, name], file_type=parquet

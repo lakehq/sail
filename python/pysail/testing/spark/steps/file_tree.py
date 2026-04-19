@@ -11,7 +11,8 @@ from pysail.testing.spark.utils.files import assert_file_lifecycle, get_data_fil
 _SPARK_PART_FILE_RE = re.compile(
     r"^part-\d+-"
     r"(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
-    r"-c\d+\.(?P<codec>[A-Za-z0-9]+)\.parquet$"
+    r"(?:_\d+)?"  # optional bucket ID suffix (Spark bucketed files)
+    r"[.-]c\d+\.(?P<codec>[A-Za-z0-9]+)\.parquet$"
 )
 
 # Iceberg-specific patterns

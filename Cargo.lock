@@ -6857,6 +6857,7 @@ dependencies = [
 name = "sail-data-source"
 version = "0.6.0"
 dependencies = [
+ "ahash 0.8.12",
  "arrow",
  "arrow-pyarrow",
  "arrow-schema",
@@ -6874,18 +6875,21 @@ dependencies = [
  "log",
  "object_store",
  "once_cell",
+ "parquet",
  "percent-encoding",
  "pyo3",
  "regex",
  "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
+ "sail-function",
  "sail-sql-analyzer",
  "serde",
  "thiserror",
  "tokio",
  "tokio-stream",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -6939,6 +6943,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "log",
+ "parquet",
  "prost",
  "prost-build",
  "rand 0.10.1",

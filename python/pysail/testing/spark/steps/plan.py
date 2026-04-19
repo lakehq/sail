@@ -4,7 +4,7 @@ import re
 import textwrap
 from typing import TYPE_CHECKING
 
-from pytest_bdd import then
+from pytest_bdd import parsers, then
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -41,6 +41,13 @@ def normalize_plan_text(plan_text: str) -> str:
     def normalize_path(path: str) -> str:
         path = path.replace("\\", "/")
         path = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", path)
+        # Normalize bucketed parquet files: part-00000-<UUID>_<bucketId>.c000.snappy.parquet
+        path = re.sub(
+            r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_\d+\.c\d+\.snappy\.parquet",
+            "part-<id>.<codec>.parquet",
+            path,
+            flags=re.IGNORECASE,
+        )
         # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
         path = re.sub(
             r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
@@ -68,6 +75,13 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
     text = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", text)
+    # Normalize bucketed parquet files: part-00000-<UUID>_<bucketId>.c000.snappy.parquet
+    text = re.sub(
+        r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_\d+\.c\d+\.snappy\.parquet",
+        "part-<id>.<codec>.parquet",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
     text = re.sub(
         r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
@@ -181,3 +195,17 @@ def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and only asserts against the stored snapshot."""
     plan = _collect_plan(query, spark)
     assert snapshot == normalize_plan_text(plan)
+
+
+@then(parsers.parse("query plan contains {text}"))
+def query_plan_contains(text, query, spark):
+    """Executes EXPLAIN on the query and asserts the plan contains the given text."""
+    plan = _collect_plan(f"EXPLAIN {query}", spark)
+    assert text in plan, f"expected '{text}' in plan:\n{plan}"
+
+
+@then(parsers.parse("query plan does not contain {text}"))
+def query_plan_does_not_contain(text, query, spark):
+    """Executes EXPLAIN on the query and asserts the plan does NOT contain the given text."""
+    plan = _collect_plan(f"EXPLAIN {query}", spark)
+    assert text not in plan, f"unexpected '{text}' found in plan:\n{plan}"

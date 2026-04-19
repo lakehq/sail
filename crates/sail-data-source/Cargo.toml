@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-function = { path = "../sail-function" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 async-trait = { workspace = true }
@@ -32,10 +33,13 @@ chrono = { workspace = true }
 pyo3 = { workspace = true }
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
+ahash = { workspace = true }
+parquet = { workspace = true }
 arrow-pyarrow = { workspace = true }
 dashmap = { workspace = true }
 once_cell = { workspace = true }
 thiserror = { workspace = true }
+uuid = { workspace = true }
 
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
