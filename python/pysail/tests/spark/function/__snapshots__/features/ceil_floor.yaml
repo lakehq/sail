@@ -1,5 +1,13 @@
 # serializer version: 1
 ---
+name: "test_explain_ceil_of_floor_cascades_to_floor_only"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as CEIL(FLOOR(v))]
+      ProjectionExec: expr=[spark_floor(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
 name: "test_explain_ceilceilcol_collapses_to_ceilcol"
 data:
   |-

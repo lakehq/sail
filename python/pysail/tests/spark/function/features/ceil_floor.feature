@@ -714,6 +714,24 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | 2      |
 
+    Scenario: ceil of floor cascades (floor returns integer, ceil identity)
+      When query
+        """
+        SELECT ceil(floor(1.9)) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: floor of ceil cascades
+      When query
+        """
+        SELECT floor(ceil(1.1)) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
     Scenario: ceil of integer is integer (no rounding)
       When query
         """
@@ -855,6 +873,14 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       When query
         """
         EXPLAIN SELECT ceil(ceil(ceil(v))) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN ceil of floor cascades to floor only
+      When query
+        """
+        EXPLAIN SELECT ceil(floor(v)) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
         """
       Then query plan matches snapshot
 

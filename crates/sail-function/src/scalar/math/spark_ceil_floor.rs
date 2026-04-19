@@ -628,7 +628,7 @@ fn spark_ceil_floor(
                             as ArrayRef)),
                         _ => Err(unsupported_data_type_exec_err(
                             name,
-                            format!("{}", DataType::Float32).as_str(),
+                            format!("{}", DataType::Float64).as_str(),
                             &arg.data_type(),
                         )),
                     }
