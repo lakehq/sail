@@ -44,6 +44,24 @@ Feature: kll_sketch_agg_bigint builds a KLL sketch from bigint values
         | result |
         | binary |
 
+  Rule: kll_sketch_agg_bigint validates k
+
+    Scenario: kll_sketch_agg_bigint rejects out-of-range k
+      When query
+        """
+        SELECT hex(kll_sketch_agg_bigint(col, 7)) AS result
+        FROM VALUES (1), (2), (3) AS tab(col)
+        """
+      Then query error kll_sketch_agg requires k to be in the range 8 to 65535, got 7
+
+    Scenario: kll_sketch_agg_bigint rejects non-literal k
+      When query
+        """
+        SELECT hex(kll_sketch_agg_bigint(col, k)) AS result
+        FROM VALUES (1, 200), (2, 200), (3, 200) AS tab(col, k)
+        """
+      Then query error kll_sketch_agg requires a non-null integer literal for k
+
   Rule: kll_sketch_agg_bigint handles null values
 
     Scenario: kll_sketch_agg_bigint ignores null input values
