@@ -7,6 +7,7 @@ use datafusion::arrow::datatypes::{
     Int64Type, Int8Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -20,21 +21,11 @@ use crate::scalar::math::utils::decimal::round_decimal_base;
 
 fn ceil_floor_coerce_types(name: &str, arg_types: &[DataType]) -> Result<Vec<DataType>> {
     if arg_types.len() == 1 {
-        if arg_types[0].is_numeric() {
-            Ok(vec![ceil_floor_coerce_first_arg(name, &arg_types[0])?])
-        } else {
-            Err(unsupported_data_types_exec_err(
-                name,
-                "Numeric Type",
-                arg_types,
-            ))
-        }
+        Ok(vec![ceil_floor_coerce_first_arg(name, &arg_types[0])?])
     } else if arg_types.len() == 2 {
-        if arg_types[0].is_numeric() && arg_types[1].is_integer() {
-            Ok(vec![
-                ceil_floor_coerce_first_arg(name, &arg_types[0])?,
-                DataType::Int32,
-            ])
+        let first = ceil_floor_coerce_first_arg(name, &arg_types[0])?;
+        if arg_types[1].is_integer() {
+            Ok(vec![first, DataType::Int32])
         } else {
             Err(unsupported_data_types_exec_err(
                 name,
@@ -135,30 +126,28 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnFieldArgs) -> Result
 }
 
 fn ceil_floor_coerce_first_arg(name: &str, arg_type: &DataType) -> Result<DataType> {
-    if arg_type.is_numeric() {
-        match arg_type {
-            DataType::UInt8 => Ok(DataType::Int16),
-            DataType::UInt16 => Ok(DataType::Int32),
-            DataType::UInt32 | DataType::UInt64 => Ok(DataType::Int64),
-            DataType::Decimal256(precision, scale) => {
-                if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
-                    Ok(DataType::Decimal128(*precision, *scale))
-                } else {
-                    Err(unsupported_data_type_exec_err(
-                        name,
-                        format!("Decimal Type must have precision <= {DECIMAL128_MAX_PRECISION} and scale <= {DECIMAL128_MAX_SCALE}").as_str(),
-                        arg_type,
-                    ))
-                }
+    match arg_type {
+        DataType::Null => Ok(DataType::Float64),
+        DataType::UInt8 => Ok(DataType::Int16),
+        DataType::UInt16 => Ok(DataType::Int32),
+        DataType::UInt32 | DataType::UInt64 => Ok(DataType::Int64),
+        DataType::Decimal256(precision, scale) => {
+            if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
+                Ok(DataType::Decimal128(*precision, *scale))
+            } else {
+                Err(unsupported_data_type_exec_err(
+                    name,
+                    format!("Decimal Type must have precision <= {DECIMAL128_MAX_PRECISION} and scale <= {DECIMAL128_MAX_SCALE}").as_str(),
+                    arg_type,
+                ))
             }
-            other => Ok(other.clone()),
         }
-    } else {
-        Err(unsupported_data_type_exec_err(
+        other if other.is_numeric() => Ok(other.clone()),
+        other => Err(unsupported_data_type_exec_err(
             name,
             "First arg must be Numeric Type",
-            arg_type,
-        ))
+            other,
+        )),
     }
 }
 
@@ -240,6 +229,10 @@ impl ScalarUDFImpl for SparkCeil {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         ceil_floor_coerce_types("ceil", arg_types)
     }
+
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(input[0].sort_properties)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -308,6 +301,10 @@ impl ScalarUDFImpl for SparkFloor {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         ceil_floor_coerce_types("floor", arg_types)
+    }
+
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        Ok(input[0].sort_properties)
     }
 }
 
@@ -643,7 +640,10 @@ fn ceil_floor_with_target_scale(name: &str, decimal: i128, scale: i8, target_sca
     } else {
         let scale_diff = target_scale - (scale as i32);
         if scale_diff >= 0 {
-            decimal * 10_i128.pow_wrapping(scale_diff as u32)
+            // target_scale >= input scale: no rounding needed. `round_decimal_base`
+            // keeps the return scale equal to the input scale, so the stored value
+            // is unchanged.
+            decimal
         } else {
             let abs_diff = (-scale_diff) as u32;
             if matches!(name, "ceil") {
