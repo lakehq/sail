@@ -1268,7 +1268,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: spark_partition_id"
+        "success": "ok"
       }
     },
     {
