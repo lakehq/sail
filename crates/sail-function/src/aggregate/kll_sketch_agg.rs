@@ -758,10 +758,12 @@ mod tests {
         let mut left = build_i64_sketch(16, &[1, 2, 3])?;
         let right = build_i64_sketch(32, &[4, 5, 6])?;
 
-        let error = left.merge(right).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("kll_sketch_agg: incompatible sketch state k=32, expected 16"));
+        let result = left.merge(right);
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains(
+                "kll_sketch_agg: incompatible sketch state k=32, expected 16"
+            ))
+        );
         Ok(())
     }
 
