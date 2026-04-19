@@ -229,7 +229,7 @@ impl<T: SketchValue> CompactSketch<T> {
         let len = values.len();
         let offset = usize::from(self.rng.next_f64() >= 0.5);
         let mut promoted = Vec::with_capacity(len / 2);
-        let mut retained = Vec::with_capacity(usize::from(len % 2 == 1));
+        let mut retained = Vec::with_capacity(if len % 2 == 1 { 1 } else { 0 });
 
         let slice = values.as_slice();
         let compacted = if len % 2 == 1 {
@@ -372,12 +372,6 @@ impl<T: SketchValue> KllSketchAccumulator<T> {
                 continue;
             }
             let state = CompactSketch::<T>::deserialize(binary_array.value(i), self.label)?;
-            if state.k != self.sketch.k {
-                return Err(DataFusionError::Internal(format!(
-                    "{}: incompatible sketch state k={}, expected {}",
-                    self.label, state.k, self.sketch.k
-                )));
-            }
             self.sketch.merge(state)?;
         }
         Ok(())
