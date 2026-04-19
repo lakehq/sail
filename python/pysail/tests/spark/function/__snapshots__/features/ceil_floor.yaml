@@ -28,14 +28,6 @@ data:
       ProjectionExec: expr=[spark_floor(column1@0) as #2]
         DataSourceExec: partitions=1, partition_sizes=[1]
 ---
-name: "test_explain_ceilceilcol_collapses_to_ceilcol"
-data:
-  |-
-    == Physical Plan ==
-    ProjectionExec: expr=[#2@0 as CEIL(CEIL(v))]
-      ProjectionExec: expr=[spark_ceil(column1@0) as #2]
-        DataSourceExec: partitions=1, partition_sizes=[1]
----
 name: "test_explain_ceilint_col_rewrites_to_cast"
 data:
   |-

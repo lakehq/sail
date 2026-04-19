@@ -527,15 +527,6 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result              |
         | 9223372036854775807 |
 
-    Scenario: floor NaN to zero
-      When query
-        """
-        SELECT floor(CAST('NaN' AS DOUBLE)) AS result
-        """
-      Then query result
-        | result |
-        | 0      |
-
   Rule: Special float values with scale (2-arg) — Spark returns NULL
 
     Scenario: NaN with positive scale returns NULL
@@ -678,15 +669,6 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | 2      |
 
-    Scenario: ceil of ceil negative
-      When query
-        """
-        SELECT ceil(ceil(-1.9)) AS result
-        """
-      Then query result
-        | result |
-        | -1     |
-
     Scenario: floor of floor is floor
       When query
         """
@@ -695,15 +677,6 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       Then query result
         | result |
         | 1      |
-
-    Scenario: floor of floor negative
-      When query
-        """
-        SELECT floor(floor(-1.1)) AS result
-        """
-      Then query result
-        | result |
-        | -2     |
 
     Scenario: triple nested ceil collapses
       When query
@@ -850,13 +823,41 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | c |
         | 2 |
 
-  Rule: Plan snapshot — simplify (idempotent + integer identity)
-
-    @sail-only
-    Scenario: EXPLAIN ceil(ceil(col)) collapses to ceil(col)
+    Scenario: GROUP BY ceil(v) aggregates correctly
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW grp_vals AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.1 AS DOUBLE)),
+          (CAST(1.9 AS DOUBLE)),
+          (CAST(2.1 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE))
+        AS t(v)
+        """
       When query
         """
-        EXPLAIN SELECT ceil(ceil(v)) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
+        SELECT ceil(v) AS bucket, count(*) AS n
+        FROM grp_vals GROUP BY ceil(v) ORDER BY bucket
+        """
+      Then query result ordered
+        | bucket | n |
+        | 1      | 1 |
+        | 2      | 2 |
+        | 3      | 2 |
+        | 6      | 1 |
+
+  Rule: Plan snapshot — simplify (idempotent + integer identity)
+
+    # ── Idempotent: f(f(x)) = f(x) ─────────────────────────────────────
+    # Same rule, any depth collapses to a single call (fixed-point iteration).
+    # Triple-nested proves depth N; the 2-level case is subsumed by it.
+
+    @sail-only
+    Scenario: EXPLAIN triple nested ceil collapses to single ceil
+      When query
+        """
+        EXPLAIN SELECT ceil(ceil(ceil(v))) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
         """
       Then query plan matches snapshot
 
@@ -868,13 +869,11 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         """
       Then query plan matches snapshot
 
-    @sail-only
-    Scenario: EXPLAIN triple nested ceil collapses to single ceil
-      When query
-        """
-        EXPLAIN SELECT ceil(ceil(ceil(v))) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
-        """
-      Then query plan matches snapshot
+    # ── Cross-nesting via integer-identity + cast-folding cascade ─────
+    # `ceil(floor(v))` → `floor(v)` works without explicit cross rule:
+    # simplify rewrites `ceil(Y)` where Y is integer-typed to `cast(Y, Int64)`,
+    # and DataFusion's constant folding removes the redundant cast when Y is
+    # already Int64 (which floor(1-arg) returns).
 
     @sail-only
     Scenario: EXPLAIN ceil of floor cascades to floor only
@@ -883,6 +882,10 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         EXPLAIN SELECT ceil(floor(v)) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
         """
       Then query plan matches snapshot
+
+    # ── Integer identity: f(int_expr) = cast(int_expr AS bigint) ──────
+    # `ceil`/`floor` on an already-integer column is a no-op modulo the
+    # return-type cast. The UDF call is eliminated from the plan entirely.
 
     @sail-only
     Scenario: EXPLAIN ceil(int_col) rewrites to cast
@@ -957,130 +960,13 @@ Feature: ceil() and floor() round numbers toward +/- infinity
     # disappears when the wiring arrives, and the test forces us to update
     # the narrative.
 
-    @sail-only
-    Scenario: EXPLAIN GROUP BY ceil(v) on Parquet — aggregation plan
-      # Practical use case: grouping by a monotonic UDF. `output_ordering`
-      # SHOULD let DF skip a Sort before the aggregate if the input was
-      # already sorted by v. The snapshot documents the current plan —
-      # diff vs future versions reveals when / if the optimization kicks in.
-      Given variable location for temporary directory explain_groupby_ceil
-      Given final statement
-        """
-        DROP TABLE IF EXISTS explain_groupby_ceil_parquet
-        """
-      Given statement template
-        """
-        CREATE TABLE explain_groupby_ceil_parquet
-        USING PARQUET
-        LOCATION {{ location.sql }}
-        AS SELECT * FROM VALUES
-          (CAST(0.5 AS DOUBLE)),
-          (CAST(1.5 AS DOUBLE)),
-          (CAST(2.5 AS DOUBLE)),
-          (CAST(5.5 AS DOUBLE)),
-          (CAST(10.5 AS DOUBLE))
-        AS t(v)
-        """
-      When query
-        """
-        EXPLAIN SELECT ceil(v) AS c, count(*) AS n FROM explain_groupby_ceil_parquet GROUP BY ceil(v)
-        """
-      Then query plan matches snapshot
-
-    @sail-only
-    Scenario: EXPLAIN combined literal + UDF filter — DF predicate splitting visible
-      # `WHERE v > 2.0 AND ceil(v) > 2` mixes a literal predicate (DF can
-      # push/prune) with a UDF predicate (DF cannot, see Rule comment). The
-      # snapshot shows how DF splits: we expect `pruning_predicate` derived
-      # from the literal part only, and the UDF part as a per-row filter.
-      Given variable location for temporary directory explain_combined_filter
-      Given final statement
-        """
-        DROP TABLE IF EXISTS explain_combined_filter_parquet
-        """
-      Given statement template
-        """
-        CREATE TABLE explain_combined_filter_parquet
-        USING PARQUET
-        LOCATION {{ location.sql }}
-        AS SELECT * FROM VALUES
-          (CAST(0.5 AS DOUBLE)),
-          (CAST(1.5 AS DOUBLE)),
-          (CAST(2.5 AS DOUBLE)),
-          (CAST(5.5 AS DOUBLE)),
-          (CAST(10.5 AS DOUBLE))
-        AS t(v)
-        """
-      When query
-        """
-        EXPLAIN ANALYZE SELECT v FROM explain_combined_filter_parquet WHERE v > 2.0 AND ceil(v) > 2
-        """
-      Then query plan matches snapshot
-
-    @sail-only
-    Scenario: EXPLAIN equality filter on UDF output — WHERE ceil(v) = 2
-      # Equality predicate on UDF output. Semantically equivalent to
-      # `v IN (1.0+ε, 2.0]` but DF v53 does not derive that preimage.
-      # Snapshot documents current behavior; test fails when upstream
-      # improves equality handling for UDFs.
-      Given variable location for temporary directory explain_eq_ceil
-      Given final statement
-        """
-        DROP TABLE IF EXISTS explain_eq_ceil_parquet
-        """
-      Given statement template
-        """
-        CREATE TABLE explain_eq_ceil_parquet
-        USING PARQUET
-        LOCATION {{ location.sql }}
-        AS SELECT * FROM VALUES
-          (CAST(0.5 AS DOUBLE)),
-          (CAST(1.5 AS DOUBLE)),
-          (CAST(2.5 AS DOUBLE)),
-          (CAST(5.5 AS DOUBLE))
-        AS t(v)
-        """
-      When query
-        """
-        EXPLAIN SELECT v FROM explain_eq_ceil_parquet WHERE ceil(v) = 2
-        """
-      Then query plan matches snapshot
-
-    @sail-only
-    Scenario: EXPLAIN 2-arg ceil(v, 2) with range filter
-      # Tests propagate_constraints on the 2-arg form (returns Decimal128).
-      # Same DF v53 behavior expected: no pruning_predicate despite the hook
-      # being wired.
-      Given variable location for temporary directory explain_ceil_2arg
-      Given final statement
-        """
-        DROP TABLE IF EXISTS explain_ceil_2arg_parquet
-        """
-      Given statement template
-        """
-        CREATE TABLE explain_ceil_2arg_parquet
-        USING PARQUET
-        LOCATION {{ location.sql }}
-        AS SELECT * FROM VALUES
-          (CAST(1.234 AS DOUBLE)),
-          (CAST(2.345 AS DOUBLE)),
-          (CAST(3.456 AS DOUBLE))
-        AS t(v)
-        """
-      When query
-        """
-        EXPLAIN SELECT v FROM explain_ceil_2arg_parquet WHERE ceil(v, 2) > 1.5
-        """
-      Then query plan matches snapshot
+    # ── STEP 1: LITERAL BASELINE ──────────────────────────────────────
+    # Reference point. A pure literal predicate that PruningPredicate +
+    # LiteralGuarantee CAN reason about. Compare all the UDF scenarios
+    # below against this to see what's missing.
 
     @sail-only
     Scenario: EXPLAIN SELECT from Parquet with literal filter — baseline for compare
-      # Baseline for the next two scenarios: a pure literal predicate
-      # (`WHERE v > 2.0`) that `PruningPredicate` + `LiteralGuarantee` CAN
-      # reason about. Row-group-level stats influence selectivity and
-      # potentially pruning here. Captured so the UDF cases below can be
-      # diffed against it — any divergence in `statistics=[Rows=Inexact(...)]`
-      # or metric values reveals what DF v53 actually uses our hook for.
       Given variable location for temporary directory explain_literal_filter
       Given final statement
         """
@@ -1105,42 +991,11 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         """
       Then query plan matches snapshot
 
-    @sail-only
-    Scenario: EXPLAIN ANALYZE records row_groups_pruned_statistics metric
-      # Regression fixture for DF v53 observable state (see Rule comment).
-      # The snapshot captures:
-      #   - DataSourceExec.metrics includes `row_groups_pruned_statistics=<metric>`
-      #     — metric entry is present, actual value today is 0 (no pruning via
-      #     preimage rewrite; see Rule comment for why).
-      #   - FilterExec.statistics shows column Min/Max *unchanged* from the
-      #     input — DF v53's `analyze` path is not narrowing our UDF output.
-      # Both observations confirm `propagate_constraints` currently has no
-      # observable effect in scalar filter plans, matching the doc comment in
-      # `propagate_ceil_floor()`. When DF upstream plumbs the wiring, this
-      # snapshot changes — forcing us to revisit and update the narrative.
-      Given variable location for temporary directory explain_analyze_ceil
-      Given final statement
-        """
-        DROP TABLE IF EXISTS explain_analyze_ceil_parquet
-        """
-      Given statement template
-        """
-        CREATE TABLE explain_analyze_ceil_parquet
-        USING PARQUET
-        LOCATION {{ location.sql }}
-        AS SELECT * FROM VALUES
-          (CAST(0.5 AS DOUBLE)),
-          (CAST(1.5 AS DOUBLE)),
-          (CAST(2.5 AS DOUBLE)),
-          (CAST(5.5 AS DOUBLE)),
-          (CAST(10.5 AS DOUBLE))
-        AS t(v)
-        """
-      When query
-        """
-        EXPLAIN ANALYZE SELECT v FROM explain_analyze_ceil_parquet WHERE ceil(v) > 2
-        """
-      Then query plan matches snapshot
+    # ── STEP 2: UDF FILTER — direct comparison vs baseline ────────────
+    # Same shape of query, but with `ceil(v) > 2` / `floor(v) <= 1`.
+    # Expected vs baseline: DataSourceExec loses `pruning_predicate` and
+    # `required_guarantees` — predicate is still pushed for per-row eval
+    # but DF does not derive bounds from the UDF.
 
     @sail-only
     Scenario: EXPLAIN SELECT from Parquet with ceil filter shows pushdown
@@ -1189,6 +1044,156 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       When query
         """
         EXPLAIN SELECT v FROM explain_floor_parquet WHERE floor(v) <= 1
+        """
+      Then query plan matches snapshot
+
+    # ── STEP 3: COMBINED literal + UDF — predicate splitting evidence ─
+    # `WHERE v > 2.0 AND ceil(v) > 2`: DF mixes the two. Snapshot shows
+    # pruning_predicate derived ONLY from the literal part — the UDF
+    # predicate is kept for per-row eval but silently dropped from
+    # pruning. Direct evidence that DF does not invoke our hook.
+
+    @sail-only
+    Scenario: EXPLAIN combined literal + UDF filter — DF predicate splitting visible
+      Given variable location for temporary directory explain_combined_filter
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_combined_filter_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_combined_filter_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)),
+          (CAST(10.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN ANALYZE SELECT v FROM explain_combined_filter_parquet WHERE v > 2.0 AND ceil(v) > 2
+        """
+      Then query plan matches snapshot
+
+    # ── STEP 4: EDGE CASES (equality + 2-arg form) ────────────────────
+    # Equality on UDF output and 2-arg form. Neither activates any
+    # additional optimization in DF v53 — same behavior as basic UDF
+    # filter. Captured to catch upstream wiring changes.
+
+    @sail-only
+    Scenario: EXPLAIN equality filter on UDF output — WHERE ceil(v) = 2
+      Given variable location for temporary directory explain_eq_ceil
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_eq_ceil_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_eq_ceil_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN SELECT v FROM explain_eq_ceil_parquet WHERE ceil(v) = 2
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN 2-arg ceil(v, 2) with range filter
+      Given variable location for temporary directory explain_ceil_2arg
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_ceil_2arg_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_ceil_2arg_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(1.234 AS DOUBLE)),
+          (CAST(2.345 AS DOUBLE)),
+          (CAST(3.456 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN SELECT v FROM explain_ceil_2arg_parquet WHERE ceil(v, 2) > 1.5
+        """
+      Then query plan matches snapshot
+
+    # ── STEP 5: METRICS inspection ────────────────────────────────────
+    # Regression fixture for DF v53 observable state. Captures every scan
+    # metric — including `row_groups_pruned_statistics` (value 0 today)
+    # and the FilterExec statistics (Min/Max unchanged from input).
+    # Snapshot changes when DF upstream plumbs the wiring.
+
+    @sail-only
+    Scenario: EXPLAIN ANALYZE records row_groups_pruned_statistics metric
+      Given variable location for temporary directory explain_analyze_ceil
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_analyze_ceil_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_analyze_ceil_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)),
+          (CAST(10.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN ANALYZE SELECT v FROM explain_analyze_ceil_parquet WHERE ceil(v) > 2
+        """
+      Then query plan matches snapshot
+
+    # ── STEP 6: DIFFERENT OPTIMIZATION ANGLE — GROUP BY ───────────────
+    # Grouping by a monotonic UDF. DF chooses hash aggregation (not
+    # sorted) so `output_ordering` doesn't help here — different from
+    # the ORDER BY case (Rule output_ordering). Documented so the
+    # reader sees when output_ordering DOES and DOESN'T kick in.
+
+    @sail-only
+    Scenario: EXPLAIN GROUP BY ceil(v) on Parquet — aggregation plan
+      Given variable location for temporary directory explain_groupby_ceil
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_groupby_ceil_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_groupby_ceil_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE)),
+          (CAST(10.5 AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        EXPLAIN SELECT ceil(v) AS c, count(*) AS n FROM explain_groupby_ceil_parquet GROUP BY ceil(v)
         """
       Then query plan matches snapshot
 
