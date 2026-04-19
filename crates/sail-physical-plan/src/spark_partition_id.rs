@@ -174,8 +174,7 @@ impl SparkPartitionIdStream {
     }
 
     fn make_ids(&self, len: usize) -> ArrayRef {
-        let values = vec![self.partition; len];
-        Arc::new(Int32Array::from(values)) as ArrayRef
+        Arc::new(Int32Array::from_value(self.partition, len)) as ArrayRef
     }
 }
 
