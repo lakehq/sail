@@ -1111,7 +1111,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_path,
                 bucket_columns,
                 num_buckets,
-                hash_function,
+                hash_function: _,
                 sort_columns,
                 file_schema,
                 writer_properties,
@@ -1125,7 +1125,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let config = BucketingConfig {
                     columns: bucket_columns,
                     num_buckets: num_buckets as usize,
-                    hash_function,
                     sort_columns,
                 };
                 let compression_str =
@@ -1819,7 +1818,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_path: bucketed_sink.output_path().to_string(),
                 bucket_columns: config.columns.clone(),
                 num_buckets: config.num_buckets as u32,
-                hash_function: config.hash_function.clone(),
+                hash_function: String::new(),
                 sort_columns,
                 file_schema,
                 writer_properties: compression_str.as_bytes().to_vec(),

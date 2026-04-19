@@ -21,7 +21,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::formats::parquet::bucketed_sink::BucketedParquetSinkExec;
 use crate::formats::parquet::bucketed_table::BucketedListingTable;
-use crate::formats::parquet::bucketing::{parse_schema_metadata, BucketingConfig, HASH_DATAFUSION};
+use crate::formats::parquet::bucketing::BucketingConfig;
 use crate::utils::split_parquet_compression_string;
 
 /// Trait for schema inference logic
@@ -175,22 +175,6 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             }
         };
 
-        // If no catalog-level bucketing but schema metadata has bucketing info,
-        // adjust target_partitions to match num_buckets before creating the ListingTable.
-        // Without this, the ListingTable groups files into CPU-count partitions,
-        // and BucketedParquetScanExec::new fails the partition count check.
-        if bucket_by.is_none() && self.inner.name() == "parquet" {
-            if let Some(bucket_meta) = parse_schema_metadata(&schema) {
-                if bucket_meta.hash_function == HASH_DATAFUSION
-                    && !bucket_meta.columns.is_empty()
-                    && bucket_meta.num_buckets > 0
-                {
-                    listing_options =
-                        listing_options.with_target_partitions(bucket_meta.num_buckets);
-                }
-            }
-        }
-
         let listing_options = listing_options
             .with_file_sort_order(vec![sort_order])
             .with_table_partition_cols(partition_by);
@@ -212,58 +196,23 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         let config = crate::listing::rewrite_listing_partitions(config)?;
         let table = ListingTable::try_new(config)?.with_constraints(constraints);
 
-        // Detect bucketing: prefer catalog metadata, fall back to schema metadata.
+        // Detect bucketing from catalog metadata. Bucketed Parquet files written
+        // by Sail carry no proprietary schema metadata — the catalog is the single
+        // source of truth (matches Spark / Hive bucketing convention).
         // TODO: use a type-level check instead of string comparison
         if self.inner.name() == "parquet" {
-            // 1. Check catalog-level bucket_by (from CREATE TABLE ... CLUSTERED BY)
             if let Some(ref bucket_info) = bucket_by {
-                let sort_columns = parse_schema_metadata(&table.schema())
-                    .map(|m| m.sort_columns)
-                    .unwrap_or_default();
                 log::debug!(
-                    "Wrapping bucketed table from catalog: columns={:?}, num_buckets={}, sort_columns={:?}",
+                    "Wrapping bucketed table from catalog: columns={:?}, num_buckets={}",
                     bucket_info.columns,
                     bucket_info.num_buckets,
-                    sort_columns,
                 );
                 return Ok(Arc::new(BucketedListingTable::new(
                     table,
                     bucket_info.columns.clone(),
                     bucket_info.num_buckets,
-                    sort_columns,
+                    Vec::new(),
                 )));
-            }
-
-            // 2. Check schema-level metadata (embedded in Parquet files by Phase 1 writer)
-            if let Some(bucket_meta) = parse_schema_metadata(&table.schema()) {
-                if bucket_meta.hash_function != HASH_DATAFUSION {
-                    log::warn!(
-                        "Bucketed table uses unsupported hash function '{}', \
-                         skipping shuffle elimination",
-                        bucket_meta.hash_function,
-                    );
-                } else if bucket_meta.columns.is_empty() || bucket_meta.num_buckets == 0 {
-                    log::warn!(
-                        "Bucketed table has invalid metadata: columns={:?}, num_buckets={}, \
-                         skipping shuffle elimination",
-                        bucket_meta.columns,
-                        bucket_meta.num_buckets,
-                    );
-                } else {
-                    let sort_columns = bucket_meta.sort_columns.clone();
-                    log::debug!(
-                        "Wrapping bucketed table from schema metadata: columns={:?}, num_buckets={}, sort_columns={:?}",
-                        bucket_meta.columns,
-                        bucket_meta.num_buckets,
-                        sort_columns,
-                    );
-                    return Ok(Arc::new(BucketedListingTable::new(
-                        table,
-                        bucket_meta.columns,
-                        bucket_meta.num_buckets,
-                        sort_columns,
-                    )));
-                }
             }
         }
 
@@ -318,7 +267,6 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                             .collect()
                     })
                     .unwrap_or_default(),
-                hash_function: HASH_DATAFUSION.to_string(),
             };
             let output_path = if path.ends_with(object_store::path::DELIMITER) {
                 path

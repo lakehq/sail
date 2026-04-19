@@ -23,8 +23,8 @@ use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
 use super::bucketing::{
-    bucket_file_name, create_bucketed_writer_properties, inject_schema_metadata,
-    resolve_bucket_column_indices, BucketingConfig,
+    bucket_file_name, create_bucketed_writer_properties, resolve_bucket_column_indices,
+    BucketingConfig,
 };
 
 /// Physical plan node that writes data into bucketed Parquet files.
@@ -240,10 +240,7 @@ async fn write_bucketed(
         bucket_indices[bucket].push(row as u32);
     }
 
-    // 5. Inject schema metadata
-    let enriched_schema = inject_schema_metadata(file_schema, config);
-
-    // 6. Get object store and derive the store-relative base path from the URL
+    // 5. Get object store and derive the store-relative base path from the URL
     let glob_urls = crate::url::GlobUrl::parse(output_path)?;
     let glob_url = glob_urls
         .into_iter()
@@ -253,13 +250,13 @@ async fn write_bucketed(
     let base_path = Path::from_url_path(glob_url.base.path())
         .map_err(|e| exec_datafusion_err!("invalid output path '{output_path}': {e}"))?;
 
-    // 7. Build bucket batches (empty buckets get empty files to maintain 1:1 mapping)
+    // 6. Build bucket batches (empty buckets get empty files to maintain 1:1 mapping)
     let mut bucket_batches: Vec<(usize, RecordBatch)> = Vec::with_capacity(num_buckets);
     let mut total_written = 0u64;
 
     for (bucket_id, indices) in bucket_indices.iter().enumerate() {
         if indices.is_empty() {
-            bucket_batches.push((bucket_id, RecordBatch::new_empty(enriched_schema.clone())));
+            bucket_batches.push((bucket_id, RecordBatch::new_empty(file_schema.clone())));
             continue;
         }
 
@@ -271,7 +268,7 @@ async fn write_bucketed(
             .map(|col| take(col.as_ref(), &indices_array, None))
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        let mut bucket_batch = RecordBatch::try_new(enriched_schema.clone(), bucket_columns)?;
+        let mut bucket_batch = RecordBatch::try_new(file_schema.clone(), bucket_columns)?;
 
         // Sort within bucket if requested
         if !config.sort_columns.is_empty() {
@@ -282,7 +279,7 @@ async fn write_bucketed(
         bucket_batches.push((bucket_id, bucket_batch));
     }
 
-    // 8. Write bucket files in parallel (shared UUID per Spark convention)
+    // 7. Write bucket files in parallel (shared UUID per Spark convention)
     let task_uuid = uuid::Uuid::new_v4().as_hyphenated().to_string();
     let write_futures: Vec<_> = bucket_batches
         .iter()
@@ -295,7 +292,7 @@ async fn write_bucketed(
                 batch,
                 config,
                 writer_props,
-                &enriched_schema,
+                file_schema,
             )
         })
         .collect();
@@ -345,8 +342,7 @@ async fn write_bucket_file(
     base_props: &WriterProperties,
     schema: &SchemaRef,
 ) -> Result<()> {
-    let row_count = batch.num_rows() as u64;
-    let props = create_bucketed_writer_properties(base_props, config, bucket_id, row_count);
+    let props = create_bucketed_writer_properties(base_props, config);
     let file_name = bucket_file_name(task_uuid, bucket_id);
     let file_path = base_path.clone().join(file_name);
 
