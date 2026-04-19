@@ -1630,11 +1630,13 @@ fn recover_field_names(plan: &LogicalPlan, path_column: &str) -> Option<Vec<Stri
 // The need to work with the original schema in this file indicates limitations in the current plan resolver design.
 // The merge operation would become a good example for future improvements on the plan resolver.
 fn all_placeholder_schema(schema: &DFSchemaRef, path_column: &str) -> bool {
-    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-    let non_path: Vec<&str> = names
+    let non_path: Vec<&str> = schema
+        .fields()
         .iter()
-        .copied()
+        .map(|f| f.name().as_str())
         .filter(|name| *name != path_column)
         .collect();
-    !non_path.is_empty() && non_path.iter().all(|name| name.starts_with('#'))
+    // An empty schema (e.g. EmptyRelation with 0 fields) has no real names, so
+    // treat it as "all placeholders" and keep walking up the plan tree.
+    non_path.is_empty() || non_path.iter().all(|name| name.starts_with('#'))
 }
