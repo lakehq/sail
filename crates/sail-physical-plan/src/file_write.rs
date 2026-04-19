@@ -6,7 +6,7 @@ use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 use sail_common_datafusion::datasource::{
-    create_sort_order, PhysicalSinkMode, SinkInfo, SinkMode, TableFormatRegistry,
+    create_sort_order, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::file_write::FileWriteOptions;
@@ -19,7 +19,6 @@ pub async fn create_file_write_physical_plan(
     options: FileWriteOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let FileWriteOptions {
-        path,
         format,
         mode,
         partition_by,
@@ -45,7 +44,6 @@ pub async fn create_file_write_physical_plan(
     let sort_order = create_sort_order(ctx, sort_by, logical_input.schema())?;
     let info = SinkInfo {
         input: physical_input,
-        path,
         mode,
         partition_by,
         bucket_by,
@@ -54,7 +52,7 @@ pub async fn create_file_write_physical_plan(
         // TODO: detect duplicated keys in each set of options
         options: options
             .into_iter()
-            .map(|x| x.into_iter().collect())
+            .map(|x| OptionLayer::OptionList { items: x })
             .collect(),
     };
     let registry = ctx.extension::<TableFormatRegistry>()?;

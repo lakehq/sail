@@ -54,13 +54,193 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "a",
-                "bucket ( 16 , b )",
-                "years ( ts )",
-                "months ( ts )",
-                "days ( ts )",
-                "hours ( ts )",
-                "foo ( a , \"bar\" , 34 )"
+                {
+                  "variant": "expression",
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "variant": "expression",
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "bucket"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 16
+                          }
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "b"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "variant": "expression",
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "years"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "ts"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "variant": "expression",
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "months"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "ts"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "variant": "expression",
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "days"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "ts"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "variant": "expression",
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "hours"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "ts"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                {
+                  "variant": "expression",
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "foo"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "literal": {
+                          "utf8": {
+                            "value": "bar"
+                          }
+                        }
+                      },
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 34
+                          }
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -429,7 +609,19 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -479,7 +671,19 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -533,7 +737,19 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -588,7 +804,19 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -632,7 +860,19 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -686,7 +926,19 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -740,7 +992,19 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -793,7 +1057,19 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -847,7 +1123,19 @@
                 }
               },
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -887,7 +1175,19 @@
               "fileFormat": null,
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -938,7 +1238,19 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -998,8 +1310,29 @@
               "fileFormat": null,
               "rowFormat": null,
               "partitionBy": [
-                "p1",
-                "p2"
+                {
+                  "variant": "expression",
+                  "unresolvedAttribute": {
+                    "name": [
+                      "p1"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "variant": "definition",
+                  "name": "p2",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -1052,8 +1385,52 @@
               "fileFormat": null,
               "rowFormat": null,
               "partitionBy": [
-                "p2",
-                "truncate ( p1 , 16 )"
+                {
+                  "variant": "definition",
+                  "name": "p2",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "variant": "expression",
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "truncate"
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "p1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 16
+                          }
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -1215,7 +1592,19 @@
               "fileFormat": null,
               "rowFormat": null,
               "partitionBy": [
-                "part"
+                {
+                  "variant": "definition",
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -1325,7 +1714,16 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "a"
+                {
+                  "variant": "expression",
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,
@@ -1556,7 +1954,16 @@
               },
               "rowFormat": null,
               "partitionBy": [
-                "a"
+                {
+                  "variant": "expression",
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
               ],
               "sortBy": [],
               "bucketBy": null,

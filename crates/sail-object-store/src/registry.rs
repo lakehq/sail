@@ -75,15 +75,11 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
         let store = self
             .stores
             .entry(key)
-            .or_try_insert_with(|| {
-                if self.runtime.io_runtime_for_object_store() {
-                    Ok(Arc::new(RuntimeAwareObjectStore::try_new(
-                        || get_dynamic_object_store(url),
-                        self.runtime.io().clone(),
-                    )?))
-                } else {
-                    get_dynamic_object_store(url)
-                }
+            .or_try_insert_with(|| -> object_store::Result<Arc<dyn ObjectStore>> {
+                Ok(Arc::new(RuntimeAwareObjectStore::try_new(
+                    || get_dynamic_object_store(url),
+                    self.runtime.io().clone(),
+                )?))
             })?
             .clone();
 

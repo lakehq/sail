@@ -52,13 +52,15 @@ use crate::conversion::DeltaTypeConverter;
 use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
-use crate::options::TableDeltaOptions;
+use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
-use crate::spec::{contains_timestampntz_arrow, Action, ColumnMappingMode, StructType};
+use crate::spec::{
+    contains_timestampntz_arrow, Action, ColumnMappingMode, StructType, TableProperties,
+};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
 
@@ -76,7 +78,7 @@ enum SchemaMode {
 pub struct DeltaWriterExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
-    options: TableDeltaOptions,
+    options: DeltaWriterExecOptions,
     metadata_configuration: HashMap<String, String>,
     partition_columns: Vec<String>,
     sink_mode: PhysicalSinkMode,
@@ -85,7 +87,7 @@ pub struct DeltaWriterExec {
     /// Optional override for commit operation metadata.
     operation_override: Option<DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaWriterExec {
@@ -107,7 +109,7 @@ impl DeltaWriterExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
-        options: TableDeltaOptions,
+        options: DeltaWriterExecOptions,
         metadata_configuration: HashMap<String, String>,
         partition_columns: Vec<String>,
         sink_mode: PhysicalSinkMode,
@@ -133,20 +135,20 @@ impl DeltaWriterExec {
         })
     }
 
-    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef, output_partitions: usize) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(output_partitions.max(1)),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     pub fn table_url(&self) -> &Url {
         &self.table_url
     }
 
-    pub fn options(&self) -> &TableDeltaOptions {
+    pub fn options(&self) -> &DeltaWriterExecOptions {
         &self.options
     }
 
@@ -189,7 +191,7 @@ impl ExecutionPlan for DeltaWriterExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -327,7 +329,7 @@ impl DeltaWriterExec {
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let exec_start = Instant::now();
-            let TableDeltaOptions {
+            let DeltaWriterExecOptions {
                 target_file_size,
                 write_batch_size,
                 ..
@@ -479,6 +481,8 @@ impl DeltaWriterExec {
                 let protocol = protocol_for_create(
                     !matches!(effective_mode, ColumnMappingMode::None),
                     has_timestamp_ntz,
+                    TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
+                    &configuration,
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let metadata = metadata_for_create_with_struct_type(
@@ -587,7 +591,7 @@ impl DeltaWriterExec {
                 physical_partition_columns.clone(),
                 None,
                 *target_file_size,
-                *write_batch_size,
+                write_batch_size.get(),
                 32,
                 None,
             );
@@ -734,7 +738,7 @@ impl DeltaWriterExec {
 impl DeltaWriterExec {
     /// Determine the schema mode based on options and save mode
     fn get_schema_mode(
-        options: &TableDeltaOptions,
+        options: &DeltaWriterExecOptions,
         save_mode: SaveMode,
     ) -> Result<Option<SchemaMode>> {
         match (options.merge_schema, options.overwrite_schema) {

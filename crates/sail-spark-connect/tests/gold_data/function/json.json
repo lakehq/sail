@@ -385,7 +385,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_json"
+        "failure": "error in DataFusion: This feature is not implemented: `schema_of_json` currently doesn't support option allowNumericLeadingZeros"
       }
     },
     {
@@ -407,7 +407,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_json"
+        "success": "ok"
       }
     },
     {

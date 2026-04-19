@@ -400,7 +400,17 @@ fn from_ast_table(
         if !joins.is_empty() {
             return Err(SqlError::unsupported("lateral table with join"));
         }
-        query_plan_with_lateral_table_factor(input, table, true)
+        match &table {
+            TableFactor::TableFunction { .. } => {
+                query_plan_with_lateral_table_factor(input, table, true)
+            }
+            TableFactor::Query { .. } => {
+                query_plan_with_lateral_subquery(input, table, None, spec::JoinType::Cross)
+            }
+            _ => Err(SqlError::invalid(
+                "expected function or subquery for lateral table factor",
+            )),
+        }
     } else {
         query_plan_with_table_factor(input, table, joins)
     }
@@ -855,17 +865,37 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
         criteria,
     } = join;
     if lateral.is_some() {
-        if criteria.is_some() {
-            return Err(SqlError::unsupported("LATERAL JOIN with criteria"));
-        }
-        let outer = match operator {
-            None | Some(JoinOperator::Inner(_)) => false,
-            Some(JoinOperator::LeftOuter(_, _))
-            | Some(JoinOperator::Left(_))
-            | Some(JoinOperator::Cross(_)) => true,
-            _ => return Err(SqlError::invalid("LATERAL JOIN operator")),
+        return match &right {
+            TableFactor::TableFunction { .. } => {
+                if criteria.is_some() {
+                    return Err(SqlError::unsupported(
+                        "LATERAL table function with criteria",
+                    ));
+                }
+                let outer = match operator {
+                    None | Some(JoinOperator::Inner(_)) => false,
+                    Some(JoinOperator::LeftOuter(_, _))
+                    | Some(JoinOperator::Left(_))
+                    | Some(JoinOperator::Cross(_)) => true,
+                    _ => return Err(SqlError::invalid("LATERAL JOIN operator")),
+                };
+                query_plan_with_lateral_table_factor(Some(left), right, outer)
+            }
+            TableFactor::Query { .. } => {
+                let join_type = match operator {
+                    None | Some(JoinOperator::Inner(_)) => spec::JoinType::Inner,
+                    Some(JoinOperator::LeftOuter(_, _)) | Some(JoinOperator::Left(_)) => {
+                        spec::JoinType::LeftOuter
+                    }
+                    Some(JoinOperator::Cross(_)) => spec::JoinType::Cross,
+                    _ => return Err(SqlError::invalid("LATERAL JOIN operator")),
+                };
+                query_plan_with_lateral_subquery(Some(left), right, criteria, join_type)
+            }
+            _ => Err(SqlError::invalid(
+                "expected function or subquery for lateral join",
+            )),
         };
-        return query_plan_with_lateral_table_factor(Some(left), right, outer);
     }
     let right = from_ast_table_factor(right)?;
     let join_type = match operator {
@@ -997,4 +1027,46 @@ fn query_plan_with_lateral_views(
                 outer: outer.is_some(),
             }))
         })
+}
+
+fn query_plan_with_lateral_subquery(
+    input: Option<spec::QueryPlan>,
+    table: TableFactor,
+    criteria: Option<JoinCriteria>,
+    join_type: spec::JoinType,
+) -> SqlResult<spec::QueryPlan> {
+    let TableFactor::Query {
+        left: _,
+        query,
+        right: _,
+        sample: _sample,
+        modifiers: _modifiers,
+        alias,
+    } = table
+    else {
+        return Err(SqlError::invalid("expected subquery for lateral join"));
+    };
+
+    let right = from_ast_query(query)?;
+    let right = query_plan_with_table_alias(right, alias)?;
+    let left = input.unwrap_or_else(|| {
+        spec::QueryPlan::new(spec::QueryNode::Empty {
+            produce_one_row: true,
+        })
+    });
+
+    let join_condition = match criteria {
+        Some(JoinCriteria::On(_, expr)) => Some(from_ast_expression(expr)?),
+        Some(JoinCriteria::Using(_, _)) => {
+            return Err(SqlError::unsupported("LATERAL JOIN with USING"));
+        }
+        None => None,
+    };
+
+    Ok(spec::QueryPlan::new(spec::QueryNode::LateralJoin {
+        left: Box::new(left),
+        right: Box::new(right),
+        join_condition,
+        join_type,
+    }))
 }

@@ -15,13 +15,15 @@ use std::str::FromStr;
 
 use arrow::datatypes::DataType;
 use reqwest::header::HeaderValue;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
 use secrecy::SecretString;
 use tokio::sync::OnceCell;
 
@@ -325,7 +327,7 @@ impl UnityCatalogProvider {
                 constraints: vec![],
                 location: storage_location,
                 format,
-                partition_by,
+                partition_by: identity_partition_fields(&partition_by),
                 sort_by: vec![],
                 bucket_by: None,
                 options,
@@ -423,7 +425,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("schema", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Schema, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get schema: {e}"))),
         }
@@ -691,7 +693,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("table", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Table, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get table: {e}"))),
         }

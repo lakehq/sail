@@ -4,6 +4,7 @@ mod json_as_text;
 mod json_length;
 mod json_object_keys;
 mod sail_dtype_to_arrow;
+mod schema_of_json;
 mod to_json;
 
 mod common;
@@ -15,4 +16,5 @@ pub use json_as_text::{json_as_text_udf, JsonAsText};
 pub use json_length::{json_length_udf, JsonLength};
 pub use json_object_keys::{json_object_keys_udf, JsonObjectKeys};
 pub(crate) use sail_dtype_to_arrow::SailToArrayDataType;
+pub use schema_of_json::SparkSchemaOfJson;
 pub use to_json::{to_json_udf, SparkToJson};

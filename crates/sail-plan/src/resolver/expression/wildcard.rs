@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 
 use arrow::datatypes::DataType;
-use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{col, expr, lit, ScalarUDF};
@@ -58,19 +57,25 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         for (q, remaining) in Self::generate_qualified_wildcard_candidates(name.parts()) {
-            if remaining.is_empty()
-                && schema
+            if remaining.is_empty() {
+                let in_input = schema
                     .iter()
-                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
-            {
-                return Ok(NamedExpr::new(
-                    vec!["*".to_string()],
-                    #[expect(deprecated)]
-                    expr::Expr::Wildcard {
-                        qualifier: q,
-                        options: Default::default(),
-                    },
-                ));
+                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier));
+                let in_outer = state.get_outer_query_schema().is_some_and(|outer_schema| {
+                    outer_schema
+                        .iter()
+                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
+                });
+                if in_input || in_outer {
+                    return Ok(NamedExpr::new(
+                        vec!["*".to_string()],
+                        #[expect(deprecated)]
+                        expr::Expr::Wildcard {
+                            qualifier: q,
+                            options: Default::default(),
+                        },
+                    ));
+                }
             }
         }
 
@@ -148,18 +153,24 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::WildcardOptions> {
-        use datafusion::sql::sqlparser::ast;
+        fn make_ident(value: impl Into<String>) -> expr::Ident {
+            expr::Ident {
+                value: value.into(),
+                quote_style: None,
+                span: String::new(),
+            }
+        }
 
         let ilike = wildcard_options
             .ilike_pattern
-            .map(|x| ast::IlikeSelectItem { pattern: x });
+            .map(|x| expr::IlikeSelectItem { pattern: x });
         let exclude = wildcard_options
             .exclude_columns
             .map(|x| {
                 let exclude = if x.len() > 1 {
-                    ast::ExcludeSelectItem::Multiple(x.into_iter().map(ast::Ident::new).collect())
+                    expr::ExcludeSelectItem::Multiple(x.into_iter().map(make_ident).collect())
                 } else if let Some(x) = x.into_iter().next() {
-                    ast::ExcludeSelectItem::Single(ast::Ident::new(x))
+                    expr::ExcludeSelectItem::Single(make_ident(x))
                 } else {
                     return Err(PlanError::invalid(
                         "exclude columns must have at least one column",
@@ -176,14 +187,14 @@ impl PlanResolver<'_> {
                     let first_element = deque.pop_front().ok_or_else(|| {
                         PlanError::invalid("except columns must have at least one column")
                     })?;
-                    let additional_elements = deque.into_iter().map(ast::Ident::new).collect();
-                    ast::ExceptSelectItem {
-                        first_element: ast::Ident::new(first_element),
+                    let additional_elements = deque.into_iter().map(make_ident).collect();
+                    expr::ExceptSelectItem {
+                        first_element: make_ident(first_element),
                         additional_elements,
                     }
                 } else if let Some(x) = x.into_iter().next() {
-                    ast::ExceptSelectItem {
-                        first_element: ast::Ident::new(x),
+                    expr::ExceptSelectItem {
+                        first_element: make_ident(x),
                         additional_elements: vec![],
                     }
                 } else {
@@ -202,9 +213,9 @@ impl PlanResolver<'_> {
                     let expression = self
                         .resolve_expression(*elem.expression, schema, state)
                         .await?;
-                    let item = ast::ReplaceSelectElement {
-                        expr: expr_to_sql(&expression)?,
-                        column_name: ast::Ident::new(elem.column_name),
+                    let item = expr::ReplaceSelectElement {
+                        expr: expression.to_string(),
+                        column_name: make_ident(elem.column_name),
                         as_keyword: elem.as_keyword,
                     };
                     items.push(item);
@@ -220,26 +231,30 @@ impl PlanResolver<'_> {
         let rename = wildcard_options
             .rename_columns
             .map(|x| {
-                let exclude = if x.len() > 1 {
-                    ast::RenameSelectItem::Multiple(
+                let rename = if x.len() > 1 {
+                    expr::RenameSelectItem::Multiple(
                         x.into_iter()
-                            .map(|x| ast::IdentWithAlias {
-                                ident: ast::Ident::new(x.identifier),
-                                alias: ast::Ident::new(x.alias),
+                            .map(|x| {
+                                format!(
+                                    "{} AS {}",
+                                    String::from(x.identifier),
+                                    String::from(x.alias)
+                                )
                             })
                             .collect(),
                     )
                 } else if let Some(x) = x.into_iter().next() {
-                    ast::RenameSelectItem::Single(ast::IdentWithAlias {
-                        ident: ast::Ident::new(x.identifier),
-                        alias: ast::Ident::new(x.alias),
-                    })
+                    expr::RenameSelectItem::Single(format!(
+                        "{} AS {}",
+                        String::from(x.identifier),
+                        String::from(x.alias)
+                    ))
                 } else {
                     return Err(PlanError::invalid(
                         "exclude columns must have at least one column",
                     ));
                 };
-                Ok(exclude)
+                Ok(rename)
             })
             .transpose()?;
         Ok(expr::WildcardOptions {

@@ -34,7 +34,7 @@ use super::utils::{
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec, DeltaWriterExecOptions,
 };
 use crate::table::DeltaSnapshot;
 
@@ -88,7 +88,7 @@ async fn build_full_overwrite_plan(
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
-        ctx.options().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::Overwrite,
@@ -198,7 +198,7 @@ async fn build_overwrite_if_plan(
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&union_plan),
         ctx.table_url().clone(),
-        ctx.options().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::OverwriteIf {

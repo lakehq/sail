@@ -44,7 +44,7 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
         }
-        let columns = self.resolve_table_columns(columns, state)?;
+        let mut columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
         let location = if let Some(location) = location {
             location
@@ -52,13 +52,8 @@ impl PlanResolver<'_> {
             self.resolve_default_table_location(&table).await?
         };
         let format = self.resolve_catalog_table_format(file_format)?;
-        let partition_by = partition_by
-            .into_iter()
-            .map(|x| CatalogPartitionField {
-                column: x.into(),
-                transform: None,
-            })
-            .collect();
+        let partition_by =
+            self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
 
@@ -89,7 +84,7 @@ impl PlanResolver<'_> {
         query: spec::QueryPlan,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use super::super::write::{WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget};
+        use super::super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
         let spec::TableDefinition {
             columns,
             comment,
@@ -114,11 +109,6 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo(
                 "CLUSTER BY in CREATE TABLE AS SELECT statement",
-            ));
-        }
-        if replace {
-            return Err(PlanError::todo(
-                "REPLACE in CREATE TABLE AS SELECT statement",
             ));
         }
         if !sort_by.is_empty() {
@@ -150,37 +140,44 @@ impl PlanResolver<'_> {
             ));
         }
 
+        // Column definitions are not allowed in PARTITIONED BY for CTAS.
+        let partition_by_exprs = partition_by
+            .into_iter()
+            .map(|item| match item {
+                spec::PartitionColumn::Definition(_) => Err(PlanError::invalid(
+                    "column definitions are not allowed in PARTITIONED BY \
+                     for CREATE TABLE AS SELECT statement",
+                )),
+                spec::PartitionColumn::Expression(expr) => Ok(expr),
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+
         // Rename the input using names in the PlanResolverState, opaque field ID -> fieldInfo.name
         let input = self.resolve_query_plan(query, state).await?;
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
         let input = rename_logical_plan(input, &column_names)?;
         let format = self.resolve_catalog_table_format(file_format)?;
-        // Handle location: add to options if specified
         let mut write_options = options;
         if let Some(location) = location {
-            write_options.push(("location".to_string(), location));
+            write_options.push(("path".to_string(), location));
         }
 
-        // Set write mode and action based on if_not_exists
-        let write_mode = if if_not_exists {
+        // Set write mode based on create-or-replace / if-not-exists semantics.
+        let write_mode = if replace {
+            WriteMode::Replace {
+                error_if_absent: false,
+            }
+        } else if if_not_exists {
             WriteMode::IgnoreIfExists
         } else {
             WriteMode::ErrorIfExists
         };
-        let action = if if_not_exists {
-            WriteTableAction::CreateIfNotExists
-        } else {
-            WriteTableAction::Create
-        };
-        let partition_by = partition_by
-            .into_iter()
-            .map(|c| CatalogPartitionField {
-                column: c.into(),
-                transform: None,
-            })
-            .collect();
+        let partition_by = self.resolve_write_partition_by_expressions(partition_by_exprs)?;
         let builder = WritePlanBuilder::new()
-            .with_target(WriteTarget::NewTable { table, action })
+            .with_target(WriteTarget::Table {
+                table,
+                column_match: WriteColumnMatch::ByName,
+            })
             .with_mode(write_mode)
             .with_format(format)
             .with_partition_by(partition_by)
@@ -246,6 +243,45 @@ impl PlanResolver<'_> {
         ))
     }
 
+    fn resolve_catalog_table_partition_by(
+        &self,
+        partition_by: Vec<spec::PartitionColumn>,
+        columns: &mut Vec<CreateTableColumnOptions>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<CatalogPartitionField>> {
+        let mut result = Vec::with_capacity(partition_by.len());
+        for item in partition_by {
+            match item {
+                spec::PartitionColumn::Expression(expr) => {
+                    result.push(self.resolve_partition_by_expression(expr)?);
+                }
+                spec::PartitionColumn::Definition(column) => {
+                    let resolved = self.resolve_table_columns(vec![column], state)?.one()?;
+                    if let Some(existing) = columns
+                        .iter()
+                        .find(|c| c.name.eq_ignore_ascii_case(&resolved.name))
+                    {
+                        if existing.data_type != resolved.data_type {
+                            return Err(PlanError::invalid(format!(
+                                "partition column '{}' has incompatible type: \
+                                 column definition has {:?} but PARTITIONED BY clause has {:?}",
+                                resolved.name, existing.data_type, resolved.data_type
+                            )));
+                        }
+                    } else {
+                        columns.push(resolved.clone());
+                    }
+                    result.push(CatalogPartitionField {
+                        column: resolved.name,
+                        transform: None,
+                    });
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Resolves a table file format clause to the concrete format name to write.
     fn resolve_catalog_table_format(
         &self,
         file_format: Option<spec::TableFileFormat>,

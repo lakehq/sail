@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
+import time
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -43,6 +46,11 @@ class PathWrapper:
     def uri(self):
         """The file URI representation of the path."""
         return f"'{self.path.absolute().as_uri()}'"
+
+    @property
+    def file_uri(self):
+        """The unquoted file URI representation of the path."""
+        return self.path.absolute().as_uri()
 
 
 @given(parsers.parse("variable {name} for temporary directory {directory}"), target_fixture="variables")
@@ -103,6 +111,11 @@ def final_statement(template, docstring, spark, variables):
     spark.sql(s)
 
 
+@given(parsers.parse("sleep for {seconds:d} seconds"))
+def sleep_for_seconds(seconds: int) -> None:
+    time.sleep(seconds)
+
+
 @when(parsers.re("query(?P<template>( template)?)"), target_fixture="query")
 def query(template, docstring, variables):
     """Defines a SQL query (not executed here)."""
@@ -113,7 +126,15 @@ def query(template, docstring, variables):
 def query_schema(docstring, query, spark):
     """Analyze the SQL query and compare schema with expected schema tree string."""
     df = spark.sql(query)
-    assert docstring.strip() == df.schema.treeString().strip()
+    if hasattr(df.schema, "treeString"):
+        actual = df.schema.treeString()
+    else:
+        # PySpark < 4.x has no StructType.treeString(); capture printSchema() output instead.
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            df.printSchema()
+        actual = buf.getvalue()
+    assert docstring.strip() == actual.strip()
 
 
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))

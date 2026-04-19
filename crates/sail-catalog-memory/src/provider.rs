@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use dashmap::{DashMap, Entry};
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
     CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
@@ -71,7 +71,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     Ok(entry.get().status.clone())
                 } else {
                     Err(CatalogError::AlreadyExists(
-                        "database",
+                        CatalogObject::Database,
                         quote_namespace_if_needed(database),
                     ))
                 }
@@ -100,7 +100,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             Ok(db.status.clone())
         } else {
             Err(CatalogError::NotFound(
-                "database",
+                CatalogObject::Database,
                 quote_namespace_if_needed(database),
             ))
         }
@@ -138,7 +138,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                 Ok(())
             } else {
                 Err(CatalogError::NotFound(
-                    "database",
+                    CatalogObject::Database,
                     quote_namespace_if_needed(database),
                 ))
             }
@@ -167,13 +167,15 @@ impl CatalogProvider for MemoryCatalogProvider {
             options,
             properties,
         } = options;
-        if partition_by.iter().any(|f| f.transform.is_some()) {
+        if !format.eq_ignore_ascii_case("iceberg")
+            && partition_by.iter().any(|f| f.transform.is_some())
+        {
             return Err(CatalogError::NotSupported(
                 "partition transforms are not supported by memory catalog".to_string(),
             ));
         }
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
-            CatalogError::NotFound("database", quote_namespace_if_needed(database))
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
         if let Some(status) = db.tables.get(table) {
             if if_not_exists {
@@ -181,7 +183,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             } else if replace {
                 db.tables.remove(table);
             } else {
-                return Err(CatalogError::AlreadyExists("table", table.to_string()));
+                return Err(CatalogError::AlreadyExists(
+                    CatalogObject::Table,
+                    table.to_string(),
+                ));
             }
         }
         let columns = columns
@@ -224,7 +229,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                 constraints,
                 location,
                 format,
-                partition_by: partition_by.into_iter().map(|f| f.column).collect(),
+                partition_by,
                 sort_by,
                 bucket_by,
                 options,
@@ -241,7 +246,10 @@ impl CatalogProvider for MemoryCatalogProvider {
                 return Ok(status.clone());
             }
         }
-        Err(CatalogError::NotFound("table", table.to_string()))
+        Err(CatalogError::NotFound(
+            CatalogObject::Table,
+            table.to_string(),
+        ))
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
@@ -249,7 +257,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             Ok(db.tables.values().cloned().collect())
         } else {
             Err(CatalogError::NotFound(
-                "database",
+                CatalogObject::Database,
                 quote_namespace_if_needed(database),
             ))
         }
@@ -272,13 +280,16 @@ impl CatalogProvider for MemoryCatalogProvider {
             if db.tables.remove(table).is_some() || if_exists {
                 Ok(())
             } else {
-                Err(CatalogError::NotFound("table", table.to_string()))
+                Err(CatalogError::NotFound(
+                    CatalogObject::Table,
+                    table.to_string(),
+                ))
             }
         } else if if_exists {
             Ok(())
         } else {
             Err(CatalogError::NotFound(
-                "database",
+                CatalogObject::Database,
                 quote_namespace_if_needed(database),
             ))
         }
@@ -299,7 +310,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             properties,
         } = options;
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
-            CatalogError::NotFound("database", quote_namespace_if_needed(database))
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
         if let Some(status) = db.views.get(view) {
             if if_not_exists {
@@ -307,7 +318,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             } else if replace {
                 db.views.remove(view);
             } else {
-                return Err(CatalogError::AlreadyExists("view", view.to_string()));
+                return Err(CatalogError::AlreadyExists(
+                    CatalogObject::View,
+                    view.to_string(),
+                ));
             }
         }
         let columns = columns
@@ -353,7 +367,10 @@ impl CatalogProvider for MemoryCatalogProvider {
                 return Ok(status.clone());
             }
         }
-        Err(CatalogError::NotFound("view", view.to_string()))
+        Err(CatalogError::NotFound(
+            CatalogObject::View,
+            view.to_string(),
+        ))
     }
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
@@ -361,7 +378,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             Ok(db.views.values().cloned().collect())
         } else {
             Err(CatalogError::NotFound(
-                "database",
+                CatalogObject::Database,
                 quote_namespace_if_needed(database),
             ))
         }
@@ -378,13 +395,16 @@ impl CatalogProvider for MemoryCatalogProvider {
             if db.views.remove(view).is_some() || if_exists {
                 Ok(())
             } else {
-                Err(CatalogError::NotFound("view", view.to_string()))
+                Err(CatalogError::NotFound(
+                    CatalogObject::View,
+                    view.to_string(),
+                ))
             }
         } else if if_exists {
             Ok(())
         } else {
             Err(CatalogError::NotFound(
-                "database",
+                CatalogObject::Database,
                 quote_namespace_if_needed(database),
             ))
         }

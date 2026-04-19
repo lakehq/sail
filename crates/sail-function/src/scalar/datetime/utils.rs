@@ -1,5 +1,5 @@
 use datafusion::arrow::array::types::{
-    Date32Type, Float64Type, Int32Type, Time64MicrosecondType, UInt32Type,
+    Date32Type, Decimal128Type, Float64Type, Int32Type, Time64MicrosecondType, UInt32Type,
 };
 use datafusion::arrow::array::{AsArray, Float64Array, Int32Array, PrimitiveArray, UInt32Array};
 use datafusion::arrow::datatypes::DataType;
@@ -156,6 +156,27 @@ pub(crate) fn to_time64_array(
         ColumnarValue::Array(array) => Ok(array.as_primitive::<Time64MicrosecondType>().to_owned()),
         ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(value))) => {
             Ok(PrimitiveArray::<Time64MicrosecondType>::from_value(
+                *value,
+                number_rows,
+            ))
+        }
+        other => {
+            exec_err!("Unsupported {arg_name} arg {other:?} for Spark function `{fn_name}`")
+        }
+    }
+}
+
+/// Reads a `Decimal128` column as its raw unscaled `i128` values.
+pub(crate) fn to_decimal128_array(
+    col: &ColumnarValue,
+    arg_name: &str,
+    fn_name: &str,
+    number_rows: usize,
+) -> Result<PrimitiveArray<Decimal128Type>> {
+    match col {
+        ColumnarValue::Array(array) => Ok(array.as_primitive::<Decimal128Type>().to_owned()),
+        ColumnarValue::Scalar(ScalarValue::Decimal128(Some(value), _, _)) => {
+            Ok(PrimitiveArray::<Decimal128Type>::from_value(
                 *value,
                 number_rows,
             ))

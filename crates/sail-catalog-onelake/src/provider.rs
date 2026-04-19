@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use reqwest::Client;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
@@ -365,7 +365,7 @@ impl CatalogProvider for OneLakeCatalogProvider {
                 properties: vec![],
             })
         } else if response.status().as_u16() == 404 {
-            Err(CatalogError::NotFound("schema", schema_name))
+            Err(CatalogError::NotFound(CatalogObject::Schema, schema_name))
         } else {
             Err(CatalogError::External(format!(
                 "Failed to get schema: HTTP {}",
@@ -450,7 +450,10 @@ impl CatalogProvider for OneLakeCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to get table: {e}")))?;
 
         if response.status().as_u16() == 404 {
-            return Err(CatalogError::NotFound("table", table.to_string()));
+            return Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                table.to_string(),
+            ));
         }
 
         if !response.status().is_success() {
