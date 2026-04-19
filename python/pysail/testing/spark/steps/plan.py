@@ -98,9 +98,10 @@ def normalize_plan_text(plan_text: str) -> str:
         flags=re.IGNORECASE,
     )
     # Normalize Sail default CTAS parquet filenames: <16-char random>_<partition>.<codec>.parquet
+    # Preserve partition number so multi-file plans stay distinguishable.
     text = re.sub(
-        r"[A-Za-z0-9]{16}_\d+\.(zst|snappy|gzip|lz4|brotli)\.parquet",
-        r"<id>.\1.parquet",
+        r"[A-Za-z0-9]{16}_(\d+)\.(zst|snappy|gzip|lz4|brotli)\.parquet",
+        r"<id>_\1.\2.parquet",
         text,
     )
 

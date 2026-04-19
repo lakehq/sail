@@ -24,20 +24,26 @@ use crate::error::{
 };
 use crate::scalar::math::utils::decimal::round_decimal_base;
 
-/// Extract the `target_scale` for the optional 2nd argument of `ceil` / `floor`.
-/// Arity and integer type are already enforced by `coerce_types`; this only verifies
-/// the scalar Int32 literal shape.
-fn extract_target_scale<'a>(name: &str, args: &'a [ColumnarValue]) -> Result<&'a Option<i32>> {
-    if args.len() < 2 {
-        return Ok(&None);
-    }
-    match &args[1] {
-        ColumnarValue::Scalar(ScalarValue::Int32(value)) => Ok(value),
-        other => Err(unsupported_data_type_exec_err(
-            name,
-            "Target scale must be Integer literal",
-            &other.data_type(),
-        )),
+/// Extract the first argument and optional `target_scale`.
+///
+/// Arity is typically enforced by `coerce_types` (1 or 2 args), but this helper still
+/// validates defensively to avoid a panic on `args[0]` if the UDF is invoked through a
+/// code path that bypasses `coerce_types` (e.g. API misuse, error paths).
+fn extract_call_args<'a>(
+    name: &str,
+    args: &'a [ColumnarValue],
+) -> Result<(&'a ColumnarValue, &'a Option<i32>)> {
+    match args.len() {
+        1 => Ok((&args[0], &None)),
+        2 => match &args[1] {
+            ColumnarValue::Scalar(ScalarValue::Int32(value)) => Ok((&args[0], value)),
+            other => Err(unsupported_data_type_exec_err(
+                name,
+                "Target scale must be Integer literal",
+                &other.data_type(),
+            )),
+        },
+        n => Err(invalid_arg_count_exec_err(name, (1, 2), n)),
     }
 }
 
@@ -145,8 +151,9 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnFieldArgs) -> Result
             ))
         }
     } else {
-        // Unreachable: `coerce_types` enforces 1 or 2 args.
-        Err(generic_exec_err(name, "unexpected arg count"))
+        // Defensive: DataFusion may call `return_field_from_args` in paths
+        // that bypass `coerce_types`. Surface a precise arity error.
+        Err(invalid_arg_count_exec_err(name, (1, 2), arg_fields.len()))
     }?;
     Ok(Arc::new(Field::new(name.to_string(), return_type, true)))
 }
@@ -231,9 +238,7 @@ impl ScalarUDFImpl for SparkCeil {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // Arity is enforced by `coerce_types` (1 or 2 args).
-        let target_scale = extract_target_scale("ceil", &args.args)?;
-        let arg = &args.args[0];
+        let (arg, target_scale) = extract_call_args("ceil", &args.args)?;
         let return_type = args.return_field.data_type();
         spark_ceil_floor("ceil", arg, target_scale, return_type)
     }
@@ -243,7 +248,10 @@ impl ScalarUDFImpl for SparkCeil {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        Ok(input[0].sort_properties)
+        Ok(input
+            .first()
+            .map(|expr| expr.sort_properties)
+            .unwrap_or(SortProperties::Unordered))
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
@@ -302,9 +310,7 @@ impl ScalarUDFImpl for SparkFloor {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // Arity is enforced by `coerce_types` (1 or 2 args).
-        let target_scale = extract_target_scale("floor", &args.args)?;
-        let arg = &args.args[0];
+        let (arg, target_scale) = extract_call_args("floor", &args.args)?;
         let return_type = args.return_field.data_type();
         spark_ceil_floor("floor", arg, target_scale, return_type)
     }
@@ -314,7 +320,10 @@ impl ScalarUDFImpl for SparkFloor {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        Ok(input[0].sort_properties)
+        Ok(input
+            .first()
+            .map(|expr| expr.sort_properties)
+            .unwrap_or(SortProperties::Unordered))
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
@@ -390,7 +399,22 @@ fn propagate_ceil_floor(
         CeilFloor::Floor => (cast_output.lower().clone(), cast_output.upper().add(&one)?),
     };
     let widened = Interval::try_new(lower, upper)?;
-    Ok(child.intersect(widened)?.map(|refined| vec![refined]))
+    // DataFusion contract: returned Vec MUST have `len() == inputs.len()` — one
+    // interval per child in order. The consumer in `cp_solver.rs` uses `zip`
+    // which silently truncates on mismatch, so a shorter Vec doesn't panic but
+    // leaves config args unrefined (silent bug).
+    //
+    // For the 2-arg form `ceil(v, scale)`:
+    //   - `inputs[0] = v` (data arg)    → refined via preimage
+    //   - `inputs[1] = scale` (literal) → passed through unchanged; its interval
+    //                                     is a singleton `[k, k]` that can't be
+    //                                     narrowed further by constraints.
+    Ok(child.intersect(widened)?.map(|refined| {
+        let mut out = Vec::with_capacity(inputs.len());
+        out.push(refined);
+        out.extend(inputs.iter().skip(1).map(|i| (*i).clone()));
+        out
+    }))
 }
 
 /// Algebraic simplifications for `ceil` and `floor`:
