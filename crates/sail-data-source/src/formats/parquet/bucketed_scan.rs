@@ -30,7 +30,7 @@ pub struct BucketedParquetScanExec {
     sort_columns: Vec<(String, bool)>,
     /// When set, only these bucket IDs will be read; other partitions return empty streams.
     target_buckets: Option<HashSet<usize>>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl BucketedParquetScanExec {
@@ -97,7 +97,7 @@ impl BucketedParquetScanExec {
             num_buckets,
             sort_columns,
             target_buckets: None,
-            properties,
+            properties: Arc::new(properties),
         })
     }
 
@@ -169,7 +169,7 @@ impl ExecutionPlan for BucketedParquetScanExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

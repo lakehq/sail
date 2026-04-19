@@ -457,6 +457,103 @@ Feature: Bucketed Parquet Writing
       Then query plan contains WindowAggExec
       And query plan does not contain RepartitionExec
 
+  Rule: Spark-compatible file naming
+
+    Scenario: bucketed files follow Spark naming convention
+      Given variable location for temporary directory test_bucket_naming
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_naming
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_naming USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 3 BUCKETS
+        AS SELECT * FROM VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'), (5,'e'), (6,'f') AS t(id, name)
+        """
+      When query
+        """
+        SELECT count(*) as cnt FROM test_bucket_naming
+        """
+      Then query result
+        | cnt |
+        | 6   |
+      And file tree in location matches
+        """
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
+
+    Scenario: bucketed scan appears in simple read plan
+      Given variable location for temporary directory test_bucket_plan_read
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_plan_read
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_plan_read USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1,10), (2,20), (3,30), (4,40) AS t(id, val)
+        """
+      When query
+        """
+        SELECT * FROM test_bucket_plan_read
+        """
+      Then query plan contains BucketedParquetScanExec
+
+    Scenario: bucketed aggregation uses SinglePartitioned mode (no shuffle)
+      Given variable location for temporary directory test_bucket_plan_agg
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_plan_agg
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_plan_agg USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1,10), (2,20), (3,30), (4,40), (5,50) AS t(id, val)
+        """
+      When query
+        """
+        SELECT id, sum(val) FROM test_bucket_plan_agg GROUP BY id
+        """
+      Then query plan contains BucketedParquetScanExec
+      And query plan contains SinglePartitioned
+      And query plan does not contain RepartitionExec
+
+    Scenario: bucketed files distribute data correctly across buckets
+      Given variable location for temporary directory test_bucket_dist
+      Given final statement
+        """
+        DROP TABLE IF EXISTS test_bucket_dist
+        """
+      Given statement template
+        """
+        CREATE TABLE test_bucket_dist USING parquet
+        LOCATION {{ location.sql }}
+        CLUSTERED BY (id) INTO 4 BUCKETS
+        AS SELECT * FROM VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'), (5,'e'), (6,'f'), (7,'g'), (8,'h') AS t(id, name)
+        """
+      When query
+        """
+        SELECT count(*) as cnt FROM test_bucket_dist
+        """
+      Then query result
+        | cnt |
+        | 8   |
+      And file tree in location matches
+        """
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
+
     @sail-only
     Scenario: window PARTITION BY non-bucket column plan has RepartitionExec
       Given variable location for temporary directory test_bucket_window_plan_shuffle

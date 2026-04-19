@@ -8,6 +8,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::{exec_datafusion_err, plan_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -17,10 +18,9 @@ use datafusion_common::hash_utils::create_hashes;
 use futures::StreamExt;
 use log::info;
 use object_store::path::Path;
+use object_store::ObjectStoreExt;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
 use super::bucketing::{
     bucket_file_name, create_bucketed_writer_properties, inject_schema_metadata,
@@ -42,7 +42,7 @@ pub struct BucketedParquetSinkExec {
     output_path: String,
     file_schema: SchemaRef,
     writer_props: WriterProperties,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl BucketedParquetSinkExec {
@@ -79,7 +79,7 @@ impl BucketedParquetSinkExec {
             output_path,
             file_schema,
             writer_props,
-            properties,
+            properties: Arc::new(properties),
         })
     }
 
@@ -121,7 +121,7 @@ impl ExecutionPlan for BucketedParquetSinkExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -282,13 +282,15 @@ async fn write_bucketed(
         bucket_batches.push((bucket_id, bucket_batch));
     }
 
-    // 8. Write bucket files in parallel
+    // 8. Write bucket files in parallel (shared UUID per Spark convention)
+    let task_uuid = uuid::Uuid::new_v4().as_hyphenated().to_string();
     let write_futures: Vec<_> = bucket_batches
         .iter()
         .map(|(bucket_id, batch)| {
             write_bucket_file(
                 &store,
                 &base_path,
+                &task_uuid,
                 *bucket_id,
                 batch,
                 config,
@@ -336,6 +338,7 @@ fn sort_batch(batch: &RecordBatch, sort_columns: &[(String, bool)]) -> Result<Re
 async fn write_bucket_file(
     store: &Arc<dyn object_store::ObjectStore>,
     base_path: &Path,
+    task_uuid: &str,
     bucket_id: usize,
     batch: &RecordBatch,
     config: &BucketingConfig,
@@ -344,8 +347,8 @@ async fn write_bucket_file(
 ) -> Result<()> {
     let row_count = batch.num_rows() as u64;
     let props = create_bucketed_writer_properties(base_props, config, bucket_id, row_count);
-    let file_name = bucket_file_name(bucket_id);
-    let file_path = base_path.child(file_name);
+    let file_name = bucket_file_name(task_uuid, bucket_id);
+    let file_path = base_path.clone().join(file_name);
 
     // Write to in-memory buffer, then put to object store
     let mut buf = Vec::new();

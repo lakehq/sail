@@ -155,9 +155,15 @@ pub fn create_file_kv_metadata(bucket_id: usize, row_count: u64) -> Vec<KeyValue
     ]
 }
 
-/// Generate the file name for a bucket.
-pub fn bucket_file_name(bucket_id: usize) -> String {
-    format!("bucket_{bucket_id:05}.parquet")
+/// Generate the file name for a bucket, following Spark's naming convention.
+///
+/// Spark uses: `part-{taskAttemptId}-{uuid}_{bucketId}.c000.snappy.parquet`
+/// where taskAttemptId is 00000 (single writer task) and the UUID is shared
+/// across all bucket files from the same write operation.
+///
+/// Reference: `org.apache.spark.sql.execution.datasources.BucketingUtils`
+pub fn bucket_file_name(task_uuid: &str, bucket_id: usize) -> String {
+    format!("part-00000-{task_uuid}_{bucket_id:05}.c000.snappy.parquet")
 }
 
 /// Build `WriterProperties` for a bucketed Parquet file.
@@ -302,9 +308,27 @@ mod tests {
 
     #[test]
     fn test_bucket_file_name() {
-        assert_eq!(bucket_file_name(0), "bucket_00000.parquet");
-        assert_eq!(bucket_file_name(42), "bucket_00042.parquet");
-        assert_eq!(bucket_file_name(99999), "bucket_99999.parquet");
+        let uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+        // Spark convention: part-00000-{uuid}_{bucketId:05}.c000.snappy.parquet
+        let name = bucket_file_name(uuid, 0);
+        assert_eq!(
+            name,
+            "part-00000-a1b2c3d4-e5f6-7890-abcd-ef1234567890_00000.c000.snappy.parquet"
+        );
+
+        let name = bucket_file_name(uuid, 42);
+        assert_eq!(
+            name,
+            "part-00000-a1b2c3d4-e5f6-7890-abcd-ef1234567890_00042.c000.snappy.parquet"
+        );
+
+        // All buckets share same taskId (00000) and UUID
+        let n0 = bucket_file_name(uuid, 0);
+        let n1 = bucket_file_name(uuid, 1);
+        assert!(n0.starts_with("part-00000-a1b2c3d4"), "got: {n0}");
+        assert!(n1.starts_with("part-00000-a1b2c3d4"), "got: {n1}");
+        assert_ne!(n0, n1); // different bucket IDs
     }
 
     #[test]

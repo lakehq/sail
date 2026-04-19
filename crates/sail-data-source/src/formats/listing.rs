@@ -143,10 +143,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         let target_partitions = match bucket_by.as_ref() {
             Some(b) if b.num_buckets > 0 => b.num_buckets,
             Some(b) => {
-                return plan_err!(
-                    "num_buckets must be greater than 0, got {}",
-                    b.num_buckets
-                );
+                return plan_err!("num_buckets must be greater than 0, got {}", b.num_buckets);
             }
             None => config.target_partitions(),
         };
@@ -328,7 +325,10 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             } else {
                 format!("{path}{}", object_store::path::DELIMITER)
             };
-            let merged = crate::options::merge_options(options);
+            let merged: std::collections::HashMap<String, String> = options
+                .into_iter()
+                .flat_map(|layer| layer.into_opaque_options())
+                .collect();
             let compression = merged
                 .get("compression")
                 .map(|v| v.to_ascii_lowercase())
@@ -340,9 +340,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 }
                 "lz4" => parquet::basic::Compression::LZ4,
                 "lz4_raw" => parquet::basic::Compression::LZ4_RAW,
-                "zstd" => {
-                    parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default())
-                }
+                "zstd" => parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default()),
                 "brotli" | "br" => {
                     parquet::basic::Compression::BROTLI(parquet::basic::BrotliLevel::default())
                 }

@@ -5,7 +5,6 @@ import textwrap
 from typing import TYPE_CHECKING
 
 from pytest_bdd import parsers, then
-from syrupy.extensions.single_file import SingleFileSnapshotExtension
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -42,6 +41,13 @@ def normalize_plan_text(plan_text: str) -> str:
     def normalize_path(path: str) -> str:
         path = path.replace("\\", "/")
         path = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", path)
+        # Normalize bucketed parquet files: part-00000-<UUID>_<bucketId>.c000.snappy.parquet
+        path = re.sub(
+            r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_\d+\.c\d+\.snappy\.parquet",
+            "part-<id>.<codec>.parquet",
+            path,
+            flags=re.IGNORECASE,
+        )
         # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
         path = re.sub(
             r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
@@ -69,6 +75,13 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
     text = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", text)
+    # Normalize bucketed parquet files: part-00000-<UUID>_<bucketId>.c000.snappy.parquet
+    text = re.sub(
+        r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_\d+\.c\d+\.snappy\.parquet",
+        "part-<id>.<codec>.parquet",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
     text = re.sub(
         r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
@@ -181,8 +194,7 @@ def _collect_plan(query: str, spark) -> str:
 def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and only asserts against the stored snapshot."""
     plan = _collect_plan(query, spark)
-<<<<<<< HEAD
-    assert snapshot(extension_class=PlanSnapshotExtension) == plan
+    assert snapshot == normalize_plan_text(plan)
 
 
 @then(parsers.parse("query plan contains {text}"))
