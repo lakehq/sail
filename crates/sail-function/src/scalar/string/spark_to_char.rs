@@ -164,9 +164,13 @@ impl ScalarUDFImpl for SparkToChar {
             && (args[0].data_type().is_integer()
                 || matches!(args[0].data_type(), DataType::Decimal128(_, 0)));
 
-        // Decimal overflow: Spark checks input type's scale vs format's scale
+        // Decimal overflow: Spark checks input type's scale vs format's scale.
+        // Negative decimal scale (legal in Arrow: value is a multiple of 10^|s|)
+        // means the input has no fractional part — treat as 0 to avoid
+        // `i8 as usize` wrapping to a huge number that would spuriously
+        // trigger the overflow path.
         let input_scale = match args[0].data_type() {
-            DataType::Decimal128(_, s) | DataType::Decimal256(_, s) => Some(s as usize),
+            DataType::Decimal128(_, s) | DataType::Decimal256(_, s) => Some(s.max(0) as usize),
             _ => None,
         };
         let format_scale = components.scale as usize;
@@ -367,58 +371,57 @@ fn split_number(abs_value: f64, scale: usize) -> (String, String) {
 }
 
 /// Format the integer part according to 0/9 slots.
+/// Inputs are ASCII-only (digits and `0`/`9` slot markers), so we operate
+/// directly on bytes to avoid the `Vec<char>` detour that was allocating
+/// twice per row.
 fn format_integer_part(int_str: &str, format_numbers: &str) -> String {
-    let slots: Vec<char> = format_numbers.chars().collect();
-    let digits: Vec<char> = int_str.chars().collect();
-    let mut result = Vec::with_capacity(slots.len());
+    let slots = format_numbers.as_bytes();
+    let digits = int_str.as_bytes();
+    let mut out = vec![0u8; slots.len()];
 
     let mut digit_idx = digits.len() as isize - 1;
     for i in (0..slots.len()).rev() {
-        let slot = slots[i];
         if digit_idx >= 0 {
-            result.push(digits[digit_idx as usize]);
+            out[i] = digits[digit_idx as usize];
             digit_idx -= 1;
         } else {
-            match slot {
-                '0' => result.push('0'),
-                _ => result.push(' '), // '9' → space
-            }
+            out[i] = match slots[i] {
+                b'0' => b'0',
+                _ => b' ', // `9` slot → space padding
+            };
         }
     }
-
-    result.reverse();
-    result.into_iter().collect()
+    // All bytes come from ASCII sources (digits or `'0'`/`' '`).
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// Insert grouping separators based on the original format string positions.
+/// Byte-level implementation: all inputs are ASCII (digits, spaces, `,`/`G`
+/// markers), so iterating on `&[u8]` avoids the `Vec<char>` allocations per row.
 fn insert_grouping_separators(formatted_int: &str, format_with_seps: &str) -> String {
     if !format_with_seps.contains(',') && !format_with_seps.contains('G') {
         return formatted_int.to_string();
     }
 
-    let format_chars: Vec<char> = format_with_seps.chars().collect();
-    let int_chars: Vec<char> = formatted_int.chars().collect();
-    let mut result = Vec::with_capacity(format_chars.len());
+    let fmt = format_with_seps.as_bytes();
+    let digits = formatted_int.as_bytes();
+    let mut out = Vec::with_capacity(fmt.len());
 
-    let mut int_idx = 0;
+    let mut int_idx = 0usize;
     let mut seen_digit = false;
-    for &fc in &format_chars {
-        if fc == ',' || fc == 'G' {
-            if seen_digit {
-                result.push(',');
-            } else {
-                result.push(' ');
-            }
-        } else if int_idx < int_chars.len() {
-            if int_chars[int_idx].is_ascii_digit() {
+    for &fc in fmt {
+        if fc == b',' || fc == b'G' {
+            out.push(if seen_digit { b',' } else { b' ' });
+        } else if int_idx < digits.len() {
+            let d = digits[int_idx];
+            if d.is_ascii_digit() {
                 seen_digit = true;
             }
-            result.push(int_chars[int_idx]);
+            out.push(d);
             int_idx += 1;
         }
     }
-
-    result.into_iter().collect()
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// Apply sign to the formatted number string.
@@ -454,18 +457,24 @@ fn apply_sign(number: &str, is_negative: bool, spec: &RegexSpec) -> String {
 
 /// Insert sign character on the left side of the number.
 /// Spark places the sign just before the first digit, after any leading spaces.
+/// `sign_char` is one of `'+'`, `'-'`, `' '` — all ASCII, so byte-level
+/// manipulation is safe and skips the `Vec<char>` roundtrip.
 fn insert_sign_left(number: &str, sign_char: char) -> String {
-    let chars: Vec<char> = number.chars().collect();
-    match chars.iter().position(|c| *c != ' ') {
+    let bytes = number.as_bytes();
+    let first_non_space = bytes.iter().position(|b| *b != b' ');
+    match first_non_space {
         Some(pos) if pos > 0 => {
-            // Replace the space just before first digit with the sign
-            let mut result = chars;
-            result[pos - 1] = sign_char;
-            result.into_iter().collect()
+            // Replace the space just before the first digit with the sign.
+            let mut out = bytes.to_vec();
+            out[pos - 1] = sign_char as u8;
+            String::from_utf8(out).unwrap_or_default()
         }
         _ => {
-            // No leading space or all spaces — prepend sign
-            format!("{sign_char}{number}")
+            // No leading space or all-spaces — prepend the sign.
+            let mut out = String::with_capacity(number.len() + 1);
+            out.push(sign_char);
+            out.push_str(number);
+            out
         }
     }
 }
@@ -642,5 +651,19 @@ fn binary_to_base64(bytes: &[u8]) -> String {
 }
 
 fn binary_to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02X}")).collect()
+    // Avoid per-byte `format!` + collect (N+1 allocations). Write directly
+    // into a pre-sized byte buffer using a hex lookup table, then reuse the
+    // buffer as the String body (all chars are ASCII, so the conversion is
+    // zero-cost via the invariant that `HEX` contains only ASCII hex digits).
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = Vec::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize]);
+        out.push(HEX[(b & 0x0F) as usize]);
+    }
+    // All bytes written are ASCII (`0-9`, `A-F`), so UTF-8 validity is
+    // guaranteed by construction. `from_utf8` performs the check anyway;
+    // `unwrap_or_default` avoids the forbidden `.unwrap()` but the default
+    // branch is unreachable.
+    String::from_utf8(out).unwrap_or_default()
 }

@@ -1645,3 +1645,368 @@ Feature: to_char and to_varchar comprehensive tests
         SELECT to_char(1234, 'L9,999') AS result
         """
       Then query error .*
+
+  Rule: MI suffix (bug-hunt additions)
+    # The existing feature covered MI prefix only; MI in suffix position
+    # is the canonical Oracle/PostgreSQL placement. Values validated against
+    # Spark JVM (Spark 4.0 local).
+
+    Scenario: MI suffix on negative
+      When query
+        """
+        SELECT to_char(-5, '99MI') AS result
+        """
+      Then query result
+        | result |
+        |  5-    |
+
+    Scenario: MI suffix on positive shows trailing space
+      When query
+        """
+        SELECT to_char(5, '99MI') AS result
+        """
+      Then query result
+        | result |
+        |  5     |
+
+    Scenario: MI suffix on zero collapses to all spaces
+      # Spark: zero with all-9 format yields spaces for the digits,
+      # and MI for positive (zero treated as positive) is a trailing space.
+      When query
+        """
+        SELECT to_char(0, '99MI') AS result
+        """
+      Then query result
+        | result |
+        |        |
+
+  Rule: PR on decimals and positive (bug-hunt additions)
+    # Existing coverage has PR on integers; decimal + PR combinations were
+    # missing. Validated against Spark JVM.
+
+    Scenario: PR on negative decimal wraps the whole number
+      When query
+        """
+        SELECT to_char(-1.5, '9.9PR') AS result
+        """
+      Then query result
+        | result |
+        | <1.5>  |
+
+    @sail-bug
+    Scenario: PR on negative decimal without leading int slot
+      # Sail bug: format parser regex rejects leading '.' (no-integer-slot
+      # forms). Spark accepts and returns '<.5>'.
+      When query
+        """
+        SELECT to_char(-0.5, '.9PR') AS result
+        """
+      Then query result
+        | result |
+        | <.5>   |
+
+    Scenario: PR positive wider format pads right with spaces
+      When query
+        """
+        SELECT to_char(1234, '9999PR') AS result
+        """
+      Then query result
+        | result |
+        | 1234   |
+
+  Rule: Non-thousand grouping positions (bug-hunt additions)
+    # Spark supports arbitrary comma/G positions, not just every 3 digits.
+    # This mirrors Oracle's behavior and e.g. Indian-style 2,2,3 lakh
+    # grouping. Validated against Spark JVM.
+
+    Scenario: Indian-style 2,2,3 grouping (lakh)
+      When query
+        """
+        SELECT to_char(12345, '9,99,99') AS result
+        """
+      Then query result
+        | result  |
+        | 1,23,45 |
+
+    Scenario: Comma between every single digit
+      When query
+        """
+        SELECT to_char(1234567, '9,9,9,9,9,9,9') AS result
+        """
+      Then query result
+        | result        |
+        | 1,2,3,4,5,6,7 |
+
+    Scenario: Short 2-digit grouping
+      When query
+        """
+        SELECT to_char(12, '9,9') AS result
+        """
+      Then query result
+        | result |
+        | 1,2    |
+
+    Scenario: 4-digit grouping (non-standard but allowed)
+      When query
+        """
+        SELECT to_char(12345678, '9,9999,9999') AS result
+        """
+      Then query result
+        | result      |
+        |   1234,5678 |
+
+  Rule: Format without integer slots (bug-hunt additions)
+    # Formats starting with "." (no 9/0 before the decimal) are legal for
+    # magnitudes < 1. Validated against Spark JVM.
+
+    @sail-bug
+    Scenario: No-integer format on sub-one positive
+      # Sail bug: RegexSpec rejects formats with leading '.' (no integer
+      # slot). Spark accepts `.99` as "only fractional part".
+      When query
+        """
+        SELECT to_char(0.5, '.99') AS result
+        """
+      Then query result
+        | result |
+        | .50    |
+
+    @sail-bug
+    Scenario: No-integer format on very small positive
+      When query
+        """
+        SELECT to_char(0.05, '.99') AS result
+        """
+      Then query result
+        | result |
+        | .05    |
+
+    @sail-bug
+    Scenario: No-integer format on negative drops sign without sign spec
+      When query
+        """
+        SELECT to_char(-0.5, '.99') AS result
+        """
+      Then query result
+        | result |
+        | .50    |
+
+  Rule: Lowercase grouping and decimal markers (bug-hunt additions)
+    # Spark accepts both G/D (Oracle-style) and g/d (lowercase). Existing
+    # coverage only tested uppercase.
+
+    @sail-bug
+    Scenario: Lowercase g acts as thousands separator
+      # Sail bug: RegexSpec regex only accepts uppercase G. Spark is
+      # case-insensitive for grouping / decimal markers.
+      When query
+        """
+        SELECT to_char(1234, '9g999') AS result
+        """
+      Then query result
+        | result |
+        | 1,234  |
+
+    @sail-bug
+    Scenario: Lowercase d acts as decimal point
+      # Sail bug: RegexSpec regex only accepts uppercase D. Spark is
+      # case-insensitive for grouping / decimal markers.
+      When query
+        """
+        SELECT to_char(1.5, '9d9') AS result
+        """
+      Then query result
+        | result |
+        | 1.5    |
+
+  Rule: Negative zero with sign specs (bug-hunt additions)
+    # Spark treats -0.0 as non-negative for sign placement (matches IEEE
+    # semantics where -0.0 == 0.0 numerically). Sail's impl already checks
+    # bits to distinguish, but this is the only explicit coverage.
+
+    Scenario: Negative zero DOUBLE with S treated as positive
+      When query
+        """
+        SELECT to_char(CAST(-0.0 AS DOUBLE), 'S99') AS result
+        """
+      Then query result
+        | result |
+        |   +    |
+
+    Scenario: Negative zero DOUBLE with MI shows space
+      When query
+        """
+        SELECT to_char(CAST(-0.0 AS DOUBLE), '99MI') AS result
+        """
+      Then query result
+        | result |
+        |        |
+
+    Scenario: Negative zero DOUBLE with PR shows spaces
+      When query
+        """
+        SELECT to_char(CAST(-0.0 AS DOUBLE), '99PR') AS result
+        """
+      Then query result
+        | result |
+        |        |
+
+    @sail-bug
+    Scenario: Negative zero DECIMAL with S treated as positive
+      # Sail bug: for decimal values with integer part == 0, Spark omits the
+      # leading '0' slot (format `S9.99` on 0.00 produces ' +.00'), but Sail
+      # emits '+0.00'. The decimal path doesn't apply the "drop leading zero"
+      # rule that the f64 path does.
+      When query
+        """
+        SELECT to_char(CAST(-0.0 AS DECIMAL(10,2)), 'S9.99') AS result
+        """
+      Then query result
+        | result |
+        |  +.00  |
+
+  Rule: Decimal scale vs format scale interactions (bug-hunt additions)
+    # The scale overflow path (input scale > format scale) is tested once
+    # already but not combined with format features like currency or
+    # grouping. Validated against Spark JVM.
+
+    Scenario: Decimal input scale > format scale produces overflow markers
+      When query
+        """
+        SELECT to_char(CAST(1.234 AS DECIMAL(10,3)), '9.9') AS result
+        """
+      Then query result
+        | result |
+        | #.#    |
+
+    Scenario: Decimal input scale < format scale pads with zeros
+      When query
+        """
+        SELECT to_char(CAST(1.23 AS DECIMAL(10,2)), '9.999') AS result
+        """
+      Then query result
+        | result |
+        | 1.230  |
+
+    Scenario: Integer value as decimal with fractional format pads zeros
+      When query
+        """
+        SELECT to_char(CAST(1.5 AS DECIMAL(10,1)), 'S9.9') AS result
+        """
+      Then query result
+        | result |
+        | +1.5   |
+
+  Rule: Trailing S on decimal (bug-hunt additions)
+    # Existing coverage has S prefix (numeric) and S suffix with integers
+    # only. Trailing S combined with decimal format is the natural
+    # extension.
+
+    Scenario: Trailing S on negative decimal
+      When query
+        """
+        SELECT to_char(-1.5, '9.9S') AS result
+        """
+      Then query result
+        | result |
+        | 1.5-   |
+
+    Scenario: Trailing S on positive decimal
+      When query
+        """
+        SELECT to_char(1.5, '9.9S') AS result
+        """
+      Then query result
+        | result |
+        | 1.5+   |
+
+  Rule: Multi-row with mixed overflow and NULL (bug-hunt additions)
+    # Combines null-propagation, overflow markers, and non-overflow
+    # formatting in a single column. Exercises the null-aware path in the
+    # overflow return branch.
+
+    Scenario: Multi-row INT mixing normal, overflow, NULL
+      When query
+        """
+        SELECT to_char(v, '99') AS result FROM VALUES
+          (1),
+          (50),
+          (100),
+          (CAST(NULL AS INT)) AS t(v)
+        """
+      Then query result ordered
+        | result |
+        |  1     |
+        | 50     |
+        | ##     |
+        | NULL   |
+
+  Rule: Complex sign + currency + grouping (bug-hunt additions)
+    # Combination of all format features in one query — highest
+    # interaction-risk scenario for regression.
+
+    @sail-bug
+    Scenario: S prefix + dollar + thousands + decimals on negative
+      # Sail bug: emits '$-1,234.56' (currency before sign). Spark places
+      # the sign BEFORE the currency symbol: '-$1,234.56'. The order is
+      # derived from the format string: 'S' appears before '$', so sign
+      # should apply to the outside. `apply_sign` + `apply_currency`
+      # composition in Sail is reversed for this ordering.
+      When query
+        """
+        SELECT to_char(-1234.56, 'S$9,999.99') AS result
+        """
+      Then query result
+        | result      |
+        | -$1,234.56  |
+
+  Rule: Error conditions (bug-hunt additions)
+
+    Scenario: Double S in format errors
+      When query
+        """
+        SELECT to_char(5, 'SS99') AS result
+        """
+      Then query error .*
+
+    @sail-bug
+    Scenario: Comma at start of format errors
+      # Sail bug: accepts ',999' silently. Spark raises
+      # INVALID_FORMAT.CONT_THOUSANDS_SEPS: "separators must have digits
+      # between them".
+      When query
+        """
+        SELECT to_char(1, ',999') AS result
+        """
+      Then query error .*
+
+    @sail-bug
+    Scenario: Comma at end of format errors
+      # Sail bug: accepts '999,' silently. Spark raises
+      # INVALID_FORMAT.CONT_THOUSANDS_SEPS.
+      When query
+        """
+        SELECT to_char(1, '999,') AS result
+        """
+      Then query error .*
+
+    Scenario: S alone with no digits errors
+      When query
+        """
+        SELECT to_char(-5, 'S') AS result
+        """
+      Then query error .*
+
+    Scenario: Dot alone with no digits errors
+      When query
+        """
+        SELECT to_char(1.5, '.') AS result
+        """
+      Then query error .*
+
+    Scenario: Space inside format errors
+      When query
+        """
+        SELECT to_char(5, '9 9') AS result
+        """
+      Then query error .*
