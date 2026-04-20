@@ -8,6 +8,7 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoNode, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
@@ -51,19 +52,41 @@ impl PlanResolver<'_> {
         let target_alias_string = target_alias
             .as_ref()
             .map(|alias| alias.as_ref().to_string());
-        let mut target_plan = self.resolve_merge_table_plan(target.clone(), state).await?;
 
-        if let Some(alias) = target_alias_string.as_ref() {
-            target_plan = self.apply_table_alias(target_plan, alias)?;
-        }
+        // Resolve the raw target plan. Field names in the plan schema are opaque IDs
+        // ("#N") produced by the plan resolver. Capture the real names now while the
+        // state still holds the #N → real-name mapping.
+        let target_plan_raw = self.resolve_merge_table_plan(target.clone(), state).await?;
+        let target_real_names = Self::get_field_names(target_plan_raw.schema(), state)?;
 
-        let (source_plan, source_alias_string) = self.resolve_merge_source(source, state).await?;
+        // Build an aliased copy for expression-resolution: alias is needed so that
+        // qualified references like `t.id` resolve against the correct schema qualifier.
+        // The raw copy is kept so we can rename it to real names at the end.
+        let target_plan_aliased = if let Some(alias) = target_alias_string.as_ref() {
+            self.apply_table_alias(target_plan_raw.clone(), alias)?
+        } else {
+            target_plan_raw.clone()
+        };
 
-        let target_schema = target_plan.schema();
-        let source_schema = source_plan.schema();
+        // resolve_merge_source no longer applies the alias internally; we do it here
+        // for the same reason as target: keep a raw copy for later rename.
+        let (source_plan_raw, source_alias_string) =
+            self.resolve_merge_source(source, state).await?;
+        let source_real_names = Self::get_field_names(source_plan_raw.schema(), state)?;
+
+        let source_plan_aliased = if let Some(alias) = source_alias_string.as_ref() {
+            self.apply_table_alias(source_plan_raw.clone(), alias)?
+        } else {
+            source_plan_raw.clone()
+        };
+
+        let target_schema = target_plan_aliased.schema();
+        let source_schema = source_plan_aliased.schema();
 
         // Register synthetic plan ids for both sides. These are only used to disambiguate
         // unqualified attributes when the Connect proto omits `plan_id`.
+        // Must use the aliased (still #N-named) schemas so that register_plan_id_for_field
+        // can look up the opaque keys it registered earlier.
         for field in target_schema.fields() {
             state.register_plan_id_for_field(field.name(), MERGE_TARGET_DEFAULT_PLAN_ID)?;
         }
@@ -100,13 +123,32 @@ impl PlanResolver<'_> {
             )
             .await?;
 
+        // Rename raw plans: wrap each in a Projection that maps #N → real field name,
+        // then re-apply the alias so the stored plan carries the correct qualifier.
+        // This ensures expand_merge can read real column names directly from the plan
+        // schema without having to walk the tree looking for non-placeholder names.
+        let target_plan_renamed = rename_logical_plan(target_plan_raw, &target_real_names)?;
+        let target_plan = if let Some(alias) = target_alias_string.as_ref() {
+            self.apply_table_alias(target_plan_renamed, alias)?
+        } else {
+            target_plan_renamed
+        };
+
+        let source_plan_renamed = rename_logical_plan(source_plan_raw, &source_real_names)?;
+        let source_plan = if let Some(alias) = source_alias_string.as_ref() {
+            self.apply_table_alias(source_plan_renamed, alias)?
+        } else {
+            source_plan_renamed
+        };
+
         let options = MergeIntoOptions {
             target_alias: target_alias_string,
             source_alias: source_alias_string,
             target: target_metadata,
             with_schema_evolution,
-            resolved_target_schema: target_schema.clone(),
-            resolved_source_schema: source_schema.clone(),
+            // Store real-name schemas so that expand_merge can use them directly.
+            resolved_target_schema: target_plan.schema().clone(),
+            resolved_source_schema: source_plan.schema().clone(),
             on_condition: ExprWithSource::new(on_condition, on_condition_source),
             matched_clauses,
             not_matched_by_source_clauses: not_matched_by_source,
@@ -134,18 +176,12 @@ impl PlanResolver<'_> {
         match source {
             spec::MergeSource::Table { name, alias } => {
                 let alias_string = alias.as_ref().map(|a| a.as_ref().to_string());
-                let mut plan = self.resolve_merge_table_plan(name, state).await?;
-                if let Some(alias) = alias_string.as_ref() {
-                    plan = self.apply_table_alias(plan, alias)?;
-                }
+                let plan = self.resolve_merge_table_plan(name, state).await?;
                 Ok((plan, alias_string))
             }
             spec::MergeSource::Query { input, alias } => {
-                let mut plan = self.resolve_query_plan(*input, state).await?;
+                let plan = self.resolve_query_plan(*input, state).await?;
                 let alias_string = alias.as_ref().map(|a| a.as_ref().to_string());
-                if let Some(alias) = alias_string.as_ref() {
-                    plan = self.apply_table_alias(plan, alias)?;
-                }
                 Ok((plan, alias_string))
             }
         }
