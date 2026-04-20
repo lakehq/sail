@@ -1343,7 +1343,7 @@ fn build_merge_projection(
         .iter()
         .map(|f| {
             (
-                f.name().clone(),
+                f.name().to_ascii_lowercase(),
                 Expr::Column(Column::from_name(f.name().clone())),
             )
         })
@@ -1351,9 +1351,10 @@ fn build_merge_projection(
 
     // Find the source expression that corresponds to a target field by name.
     // Source columns are prefixed with `__sail_src_`, so target field "id"
-    // maps to source column "__sail_src_id".
+    // maps to source column "__sail_src_id". Keys are lowercased for
+    // case-insensitive resolution (Spark's default).
     let source_expr_for_target = |target_name: &str| -> Expr {
-        let prefixed = format!("__sail_src_{target_name}");
+        let prefixed = format!("__sail_src_{}", target_name.to_ascii_lowercase());
         source_exprs_by_name
             .get(&prefixed)
             .cloned()
