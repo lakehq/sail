@@ -262,8 +262,9 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
         DataFusionError::Execution("`arrays_zip`: zero offset should always exist".to_string())
     })?;
 
-    let mut struct_arrays = vec![];
-    let mut offsets = vec![zero_offset];
+    let mut struct_arrays = Vec::with_capacity(num_rows);
+    let mut offsets = Vec::with_capacity(num_rows + 1);
+    offsets.push(zero_offset);
     let mut last_offset = zero_offset;
 
     for row_idx in 0..num_rows {
@@ -275,31 +276,40 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
             continue;
         }
 
-        let arrays_one_row = lists
-            .iter()
-            .map(|arg| arg.value(row_idx))
-            .collect::<Vec<_>>();
+        let mut arrays_one_row: Vec<ArrayRef> = Vec::with_capacity(lists.len());
+        let mut lens_one_row: Vec<O> = Vec::with_capacity(lists.len());
+        let mut max_len_one_row = zero_offset;
+        let mut all_uniform = true;
+        for arg in &lists {
+            let arr = arg.value(row_idx);
+            let len = arg.value_length(row_idx);
+            if !lens_one_row.is_empty() && len != lens_one_row[0] {
+                all_uniform = false;
+            }
+            if len > max_len_one_row {
+                max_len_one_row = len;
+            }
+            arrays_one_row.push(arr);
+            lens_one_row.push(len);
+        }
 
-        let lens_one_row = lists
-            .iter()
-            .map(|arg| arg.value_length(row_idx))
-            .collect::<Vec<_>>();
-
-        let max_len_one_row = lens_one_row.iter().max().cloned().unwrap_or(zero_offset);
-
-        let arrays_padded = arrays_one_row
-            .iter()
-            .zip(lens_one_row.iter())
-            .map(|(arr, len)| {
-                Ok(match (max_len_one_row - *len).as_usize() {
-                    0 => arr.clone(),
-                    len_diff => Arc::new(concat(&[
-                        arr,
-                        &cast(&NullArray::new(len_diff), arr.data_type())?,
-                    ])?),
+        let arrays_padded = if all_uniform {
+            arrays_one_row
+        } else {
+            arrays_one_row
+                .iter()
+                .zip(lens_one_row.iter())
+                .map(|(arr, len)| {
+                    Ok(match (max_len_one_row - *len).as_usize() {
+                        0 => arr.clone(),
+                        len_diff => Arc::new(concat(&[
+                            arr,
+                            &cast(&NullArray::new(len_diff), arr.data_type())?,
+                        ])?),
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?
+        };
 
         let struct_array = to_struct_array(
             arrays_padded.as_slice(),
