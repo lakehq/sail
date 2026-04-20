@@ -964,8 +964,6 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | #.###  |
 
-    @sail-bug
-    # Sail returns '##' instead of '+##' - sign prefix missing in overflow string
     Scenario: overflow with S sign
       When query
         """
@@ -1058,8 +1056,6 @@ Feature: to_char and to_varchar comprehensive tests
         | result  |
         | $1,234- |
 
-    @sail-bug
-    # Sail returns '$<1,234>' instead of '<$1,234>' - dollar position wrong with PR sign
     Scenario: dollar with PR
       When query
         """
@@ -1284,9 +1280,11 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | 3.14   |
 
-    @sail-bug
-    # Sail returns '3.14' instead of '#.##' - FLOAT f32->DECIMAL precision not matching Spark
     Scenario: FLOAT with decimal format overflows due to precision
+      # Spark implicitly casts Float32 to Decimal(14, 7) before formatting.
+      # `3.14` as f32 stores as ~3.1400001, so the 7th decimal is non-zero —
+      # the format's scale 2 can't represent that, so Spark (and Sail) emit
+      # overflow markers.
       When query
         """
         SELECT to_char(CAST(3.14 AS FLOAT), '9.99') AS result
@@ -1929,13 +1927,7 @@ Feature: to_char and to_varchar comprehensive tests
     # Combination of all format features in one query — highest
     # interaction-risk scenario for regression.
 
-    @sail-bug
     Scenario: S prefix + dollar + thousands + decimals on negative
-      # Sail bug: emits '$-1,234.56' (currency before sign). Spark places
-      # the sign BEFORE the currency symbol: '-$1,234.56'. The order is
-      # derived from the format string: 'S' appears before '$', so sign
-      # should apply to the outside. `apply_sign` + `apply_currency`
-      # composition in Sail is reversed for this ordering.
       When query
         """
         SELECT to_char(-1234.56, 'S$9,999.99') AS result

@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StringArray, *};
 use datafusion::arrow::datatypes::{DataType, *};
-use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -17,6 +15,7 @@ use datafusion_expr_common::signature::Volatility;
 use lazy_static::lazy_static;
 use regex::{Captures, Regex};
 
+use crate::error::invalid_arg_count_exec_err;
 use crate::functions_nested_utils::downcast_arg;
 use crate::functions_utils::make_scalar_function;
 
@@ -118,11 +117,11 @@ impl ScalarUDFImpl for SparkToNumber {
 
 pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return internal_err!(
-            "`{}` function requires 2 arguments, got {}",
+        return Err(invalid_arg_count_exec_err(
             SparkToNumber::NAME,
-            args.len()
-        );
+            (2, 2),
+            args.len(),
+        ));
     }
     let values: &StringArray = downcast_arg!(&args[0], StringArray);
     let format_arr = downcast_arg!(&args[1], StringArray);
@@ -131,8 +130,10 @@ pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     // by checking row 0 (format is always a constant literal for this UDF,
     // so all rows of the format array share the same null-ness).
     if format_arr.is_null(0) {
-        let nulls: Vec<ScalarValue> = vec![ScalarValue::Decimal256(None, 1, 0); values.len()];
-        return ScalarValue::iter_to_array(nulls);
+        return Ok(datafusion::arrow::array::new_null_array(
+            &DataType::Decimal256(1, 0),
+            values.len(),
+        ));
     }
 
     let format: &str = format_arr.value(0);

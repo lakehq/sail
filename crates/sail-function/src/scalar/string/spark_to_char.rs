@@ -176,7 +176,15 @@ impl ScalarUDFImpl for SparkToChar {
         let format_scale = components.scale as usize;
         if let Some(in_scale) = input_scale {
             if in_scale > format_scale {
-                let overflow = build_overflow_string(&spec, &components);
+                // Scale overflow is a per-row condition, but the current
+                // broadcast path can't cheaply thread each row's sign — and
+                // pre-fix this branch wasn't sign-aware at all. We pass
+                // `is_negative=false` (positive sign treatment) as a safe
+                // default; overflow values with negative inputs may still
+                // render a neutral overflow body. Known limitation tracked
+                // in `@sail-bug` scenarios for signed + scale-overflow
+                // combinations.
+                let overflow = build_overflow_string(false, &spec, &components);
                 return match &args[0] {
                     ColumnarValue::Scalar(s) => {
                         if s.is_null() {
@@ -206,13 +214,24 @@ impl ScalarUDFImpl for SparkToChar {
             }
         }
 
+        // Spark implicitly casts Float32/Float64 to Decimal(14, 7)/Decimal(30, 15)
+        // before formatting, which means values that aren't exactly representable
+        // at the FLOAT precision (e.g. `3.14f32` stores as ~3.1400001) can produce
+        // overflow when the format has fewer decimal slots than the implicit scale.
+        let float_native_scale = match args[0].data_type() {
+            DataType::Float32 => Some(7usize),
+            DataType::Float64 => Some(15usize),
+            _ => None,
+        };
+
         match &args[0] {
             ColumnarValue::Scalar(scalar) => {
                 let result = if use_integer_path {
                     scalar_to_i128(scalar)?.map(|v| format_spark_integer(v, &spec, &components))
                 } else {
-                    scalar_to_f64(scalar)?
-                        .and_then(|v| format_spark_number_opt(v, &spec, &components))
+                    scalar_to_f64(scalar)?.and_then(|v| {
+                        format_spark_number_opt(v, &spec, &components, float_native_scale)
+                    })
                 };
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
             }
@@ -250,7 +269,11 @@ impl ScalarUDFImpl for SparkToChar {
                     let f64_arr = cast_to_f64(arr)?;
                     let result: StringArray = f64_arr
                         .iter()
-                        .map(|opt| opt.and_then(|v| format_spark_number_opt(v, &spec, &components)))
+                        .map(|opt| {
+                            opt.and_then(|v| {
+                                format_spark_number_opt(v, &spec, &components, float_native_scale)
+                            })
+                        })
                         .collect();
                     Ok(ColumnarValue::Array(Arc::new(result)))
                 }
@@ -273,25 +296,65 @@ fn format_spark_integer(value: i128, spec: &RegexSpec, components: &NumberCompon
     let int_slots = components.numbers.len();
 
     if int_str.len() > int_slots {
-        return build_overflow_string(spec, components);
+        return build_overflow_string(is_negative, spec, components);
     }
 
     let formatted_int = format_integer_part(&int_str, &components.numbers);
     let with_grouping = insert_grouping_separators(&formatted_int, &spec.numbers);
-    let with_sign = apply_sign(&with_grouping, is_negative, spec);
-    apply_currency(&with_sign, spec)
+    // Currency inside sign — see ToNumberParser.scala::format() in Spark.
+    let with_currency = apply_currency(&with_grouping, spec);
+    apply_sign(&with_currency, is_negative, spec)
 }
 
 /// Wrapper that returns None for NaN/Infinity (Spark returns NULL for these).
+///
+/// `float_native_scale` is the Spark-implicit decimal scale for the ORIGINAL
+/// input type (before cast to f64): 7 for Float32, 15 for Float64, None for
+/// non-float inputs (integer, Decimal — already handled by the explicit scale
+/// overflow check earlier). When set and the value has non-zero digits below
+/// `format_scale` but still within `native_scale`, the output is an overflow
+/// string — matching Spark's behavior where Float is implicitly cast to
+/// `Decimal(14, 7)` / `Decimal(30, 15)` before formatting.
 fn format_spark_number_opt(
     value: f64,
     spec: &RegexSpec,
     components: &NumberComponents,
+    float_native_scale: Option<usize>,
 ) -> Option<String> {
     if value.is_nan() || value.is_infinite() {
         return None;
     }
+    if let Some(native_scale) = float_native_scale {
+        if float_has_excess_precision(value, native_scale, components.scale as usize) {
+            let is_negative = value < 0.0 && value.to_bits() != (-0.0_f64).to_bits();
+            return Some(build_overflow_string(is_negative, spec, components));
+        }
+    }
     Some(format_spark_number(value, spec, components))
+}
+
+/// Check whether a Float-derived `value` has significant digits beyond
+/// `format_scale` when viewed at its native Decimal scale. Matches Spark's
+/// overflow rule: `CAST(3.14 AS FLOAT)` (f32 stores ~3.1400001) formatted
+/// with `'9.99'` (scale 2) → `#.##` because the 7th decimal is non-zero.
+///
+/// Returns false when `format_scale >= native_scale` (format has room for all
+/// native digits) or when the value isn't finite (NaN/Infinity handled
+/// separately by the caller).
+fn float_has_excess_precision(value: f64, native_scale: usize, format_scale: usize) -> bool {
+    if format_scale >= native_scale || !value.is_finite() {
+        return false;
+    }
+    let scaled = value.abs() * 10f64.powi(native_scale as i32);
+    let rounded = scaled.round();
+    // Saturation guard: values beyond u128::MAX at native scale are already
+    // integer-overflow at ANY format scale — treat as overflow.
+    if rounded < 0.0 || rounded > u128::MAX as f64 {
+        return true;
+    }
+    let stored = rounded as u128;
+    let drop_factor = 10u128.pow((native_scale - format_scale) as u32);
+    !stored.is_multiple_of(drop_factor)
 }
 
 /// Core formatting function: number → string using Spark's 9/0/S/$ format.
@@ -313,7 +376,7 @@ fn format_spark_number(value: f64, spec: &RegexSpec, components: &NumberComponen
 
     // Integer overflow check
     if int_digits > int_slots {
-        return build_overflow_string(spec, components);
+        return build_overflow_string(is_negative, spec, components);
     }
 
     // Format integer part with 0/9 padding
@@ -340,11 +403,14 @@ fn format_spark_number(value: f64, spec: &RegexSpec, components: &NumberComponen
     // Combine number body
     let number_str = format!("{with_grouping}{formatted_dec}");
 
-    // Apply sign
-    let with_sign = apply_sign(&number_str, is_negative, spec);
-
-    // Apply currency
-    apply_currency(&with_sign, spec)
+    // Composition order: currency is INSIDE sign/brackets. Spark reference
+    // `ToNumberParser.scala::format()` processes the $ token to emit the
+    // currency at that format-string position, then later the sign/bracket
+    // tokens wrap the accumulated result. This matches: `to_char(-1234,
+    // '$9,999PR')` → `<$1,234>` (brackets outside $), and
+    // `to_char(-1234.56, 'S$9,999.99')` → `-$1,234.56` (sign outside $).
+    let with_currency = apply_currency(&number_str, spec);
+    apply_sign(&with_currency, is_negative, spec)
 }
 
 /// Split a number into integer and decimal string parts.
@@ -488,15 +554,33 @@ fn apply_currency(number: &str, spec: &RegexSpec) -> String {
     }
 }
 
-/// Build overflow string (all `#` chars matching format width).
-fn build_overflow_string(spec: &RegexSpec, components: &NumberComponents) -> String {
+/// Build the overflow body (`##` or `##.##`) and compose sign + currency
+/// around it using the same pipeline as the regular number path. Matches
+/// Spark's behavior where overflow replaces only the DIGIT portion and the
+/// format's sign/currency tokens still render normally around it — see
+/// `ToNumberParser.scala::format()` overflow branch + token loop.
+///
+/// Examples (validated against Spark JVM):
+///   `to_char(1234, 'S99')`      → `+##`    (sign prefix applied)
+///   `to_char(-1234, 'S99')`     → `-##`
+///   `to_char(-1234, 'S$99')`    → `-$##`   (currency inside sign)
+///   `to_char(1234, '$99')`      → `$##`    (no sign spec, currency only)
+///   `to_char(-1234, '99PR')`    → `<##>`   (PR brackets for negative)
+///   `to_char(1234, '99PR')`     → `##  `   (PR positive: trailing spaces)
+///   `to_char(1234, '99MI')`     → `## `    (MI positive: trailing space)
+///   `to_char(-1234, '99MI')`    → `##-`
+///   `to_char(1234, '99')`       → `##`     (no sign spec, no change)
+fn build_overflow_string(
+    is_negative: bool,
+    spec: &RegexSpec,
+    components: &NumberComponents,
+) -> String {
     let int_width = spec.numbers.len();
     let dec_width = if components.scale > 0 {
         1 + components.scale as usize
     } else {
         0
     };
-
     let total = int_width + dec_width;
     let overflow_body: String = (0..total)
         .map(|i| {
@@ -508,18 +592,11 @@ fn build_overflow_string(spec: &RegexSpec, components: &NumberComponents) -> Str
         })
         .collect();
 
-    // Sign/currency take their normal width
-    let mut result = overflow_body;
-    if spec.left_sign.is_some() || spec.right_sign.is_some() {
-        result = format!(" {result}");
-    }
-    if spec.currency_left.is_some() {
-        result = format!("${result}");
-    } else if spec.currency_right.is_some() {
-        result = format!("{result}$");
-    }
-
-    result
+    // Reuse the same composition pipeline as successful formatting so that
+    // overflow output stays consistent with non-overflow output for the same
+    // (sign, currency) combination.
+    let with_currency = apply_currency(&overflow_body, spec);
+    apply_sign(&with_currency, is_negative, spec)
 }
 
 /// Convert a ScalarValue to i128 (for exact integer formatting).
