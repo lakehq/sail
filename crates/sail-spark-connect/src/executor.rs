@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::future::FutureExt;
@@ -195,7 +194,7 @@ impl Executor {
 
         let mut empty = true;
         while let Some(batch) = context.next().await? {
-            let batch = to_arrow_batch(batch)?;
+            let batch = to_arrow_batch(&batch)?;
             let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
             context.save_output(&out)?;
             tx.send(out).await?;
@@ -203,7 +202,7 @@ impl Executor {
         }
         if empty {
             let batch = RecordBatch::new_empty(context.stream.schema());
-            let batch = to_arrow_batch(batch)?;
+            let batch = to_arrow_batch(&batch)?;
             let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
             context.save_output(&out)?;
             tx.send(out).await?;
@@ -318,43 +317,12 @@ pub(crate) async fn read_stream(
     stream.err_into().try_collect::<Vec<_>>().await
 }
 
-pub(crate) fn to_arrow_batch(batch: RecordBatch) -> SparkResult<ArrowBatch> {
-    // Normalize Arrow view types (Utf8View, BinaryView) to their non-view
-    // equivalents (Utf8, Binary) because PySpark does not support view types.
-    let schema = batch.schema();
-    let needs_cast = schema.fields().iter().any(|f| {
-        matches!(
-            f.data_type(),
-            ArrowDataType::Utf8View | ArrowDataType::BinaryView
-        )
-    });
-    let batch = if needs_cast {
-        let fields: Vec<_> = schema
-            .fields()
-            .iter()
-            .map(|f| match f.data_type() {
-                ArrowDataType::Utf8View => Arc::new(
-                    Field::new(f.name(), ArrowDataType::Utf8, f.is_nullable())
-                        .with_metadata(f.metadata().clone()),
-                ),
-                ArrowDataType::BinaryView => Arc::new(
-                    Field::new(f.name(), ArrowDataType::Binary, f.is_nullable())
-                        .with_metadata(f.metadata().clone()),
-                ),
-                _ => f.clone(),
-            })
-            .collect();
-        let target_schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
-        sail_common_datafusion::array::record_batch::cast_record_batch(batch, target_schema)?
-    } else {
-        batch
-    };
-
+pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
-        writer.write(&batch)?;
+        writer.write(batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;
     }
