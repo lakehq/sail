@@ -106,6 +106,17 @@ impl ScalarUDFImpl for ArraysZip {
                 args.number_rows,
             )));
         }
+        // Any arg that is a fully-null ListArray column propagates NULL to
+        // every output row. Short-circuit: skip combine_validity_masks and
+        // the row loop entirely, return a typed-null array directly.
+        if args.args.iter().any(|a| {
+            matches!(a, ColumnarValue::Array(arr) if !arr.is_empty() && arr.null_count() == arr.len())
+        }) {
+            return Ok(ColumnarValue::Array(new_null_array(
+                args.return_field.data_type(),
+                args.number_rows,
+            )));
+        }
         match args.return_field.data_type() {
             DataType::LargeList(_) => {
                 make_scalar_function(arrays_zip_generic::<i64>, vec![])(&args.args)

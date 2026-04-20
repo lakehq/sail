@@ -406,6 +406,21 @@ Feature: arrays_zip comprehensive tests
         | [{1, x}] |
         | NULL     |
 
+    Scenario: arrays_zip multi-row all-null column returns all NULL
+      When query
+        """
+        SELECT arrays_zip(a, b) AS result FROM VALUES
+          (CAST(NULL AS ARRAY<INT>), array(1, 2)),
+          (CAST(NULL AS ARRAY<INT>), array(3, 4)),
+          (CAST(NULL AS ARRAY<INT>), array(5, 6))
+        AS t(a, b)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | NULL   |
+        | NULL   |
+
   Rule: Error conditions
 
     Scenario: arrays_zip non-array input errors
