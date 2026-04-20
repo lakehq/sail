@@ -340,6 +340,24 @@ Feature: uniform() generates random numbers within a range
         | column | type         | nullable |
         | result | decimal(2,1) | false    |
 
+    Scenario: uniform with mixed scales uses larger precision
+      When query
+        """
+        SELECT uniform(5.65, 100.0, 123) AS result
+        """
+      Then query schema type
+        | column | type         | nullable |
+        | result | decimal(4,1) | false    |
+
+    Scenario: uniform with large int and small decimal uses decimal type
+      When query
+        """
+        SELECT uniform(1234567890, 1.2, 42) AS result
+        """
+      Then query schema type
+        | column | type         | nullable |
+        | result | decimal(2,1) | false    |
+
     Scenario: uniform returns float type for decimal mixed with float
       When query
         """
@@ -357,6 +375,34 @@ Feature: uniform() generates random numbers within a range
       Then query schema type
         | column | type   | nullable |
         | result | double | false    |
+
+  Rule: All-null short-circuit must NOT bypass seed validation
+
+    # Invariant: the all-null fast path in `uniform()` lives AFTER `coerce_types`,
+    # so invalid-seed errors must still fire even when a bound is NULL. Moving
+    # the short-circuit above validation (or duplicating validation to a later
+    # stage) would flip these from error to pass (silent bug).
+
+    Scenario: uniform with NULL bound plus STRING seed still errors
+      When query
+        """
+        SELECT uniform(NULL, 10, 'foo') AS result
+        """
+      Then query error (?i).*
+
+    Scenario: uniform with NULL bound plus DECIMAL seed still errors
+      When query
+        """
+        SELECT uniform(NULL, 10, 3.14) AS result
+        """
+      Then query error (?i).*
+
+    Scenario: uniform with NULL bound plus TINYINT seed still errors
+      When query
+        """
+        SELECT uniform(NULL, 10, CAST(42 AS TINYINT)) AS result
+        """
+      Then query error (?i).*
 
   Rule: NULL handling
 

@@ -186,12 +186,13 @@ impl ScalarUDFImpl for SparkUniform {
         // `make_scalar_function` would rebuild the RNG per invocation, which with
         // a fixed seed produces the same value on every row.
         let number_rows = args.number_rows;
+        let output_type = args.return_field.data_type().clone();
         let arrays: Vec<ArrayRef> = args
             .args
             .iter()
             .map(|arg| arg.to_array(number_rows))
             .collect::<Result<_>>()?;
-        let array = uniform(&arrays, number_rows)?;
+        let array = uniform(&arrays, number_rows, &output_type)?;
         Ok(ColumnarValue::Array(array))
     }
 
@@ -377,15 +378,12 @@ fn extract_seed(seed_array: Option<&ArrayRef>, i: usize) -> Option<u64> {
     })
 }
 
-fn uniform(args: &[ArrayRef], number_rows: usize) -> Result<ArrayRef> {
+fn uniform(args: &[ArrayRef], number_rows: usize, output_type: &DataType) -> Result<ArrayRef> {
     use datafusion::arrow::array::AsArray;
 
     let min_array = &args[0];
     let max_array = &args[1];
     let seed_array = args.get(2);
-
-    let output_type =
-        SparkUniform::calculate_output_type(min_array.data_type(), max_array.data_type());
 
     // Fast path: if either bound is fully null, the result is all-null — every
     // per-row branch would fall through to `append_null()` anyway. Skip the
@@ -393,7 +391,7 @@ fn uniform(args: &[ArrayRef], number_rows: usize) -> Result<ArrayRef> {
     if !min_array.is_empty()
         && (min_array.null_count() == min_array.len() || max_array.null_count() == max_array.len())
     {
-        return Ok(new_null_array(&output_type, number_rows));
+        return Ok(new_null_array(output_type, number_rows));
     }
 
     // The seed is required to be foldable, so it is invariant across rows; we
@@ -401,7 +399,7 @@ fn uniform(args: &[ArrayRef], number_rows: usize) -> Result<ArrayRef> {
     let seed_val = extract_seed(seed_array, 0);
     let mut rng = build_rng(seed_val);
 
-    match output_type {
+    match *output_type {
         DataType::Int8 => {
             let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int8Type>();
             let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Int8Type>();
@@ -547,9 +545,10 @@ fn uniform(args: &[ArrayRef], number_rows: usize) -> Result<ArrayRef> {
 
             Ok(Arc::new(builder.finish()))
         }
-        _ => Err(generic_exec_err(
+        _ => Err(unsupported_data_type_exec_err(
             "uniform",
-            &format!("Unsupported array type: {}", output_type),
+            "Integer, Float, or Decimal array",
+            output_type,
         )),
     }
 }
@@ -992,7 +991,8 @@ mod tests {
         let seed = Arc::new(Int64Array::from(vec![42])) as ArrayRef;
 
         let args = vec![min, max, seed];
-        let res = uniform(&args, 1)?;
+        let output_type = DataType::Decimal128(precision, scale);
+        let res = uniform(&args, 1, &output_type)?;
 
         let out = res
             .as_any()
