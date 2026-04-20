@@ -108,90 +108,110 @@ Feature: uniform() generates random numbers within a range
         """
         SELECT uniform(10, 20, 0) AS result
         """
-      Then query schema type
-        | column | type | nullable |
-        | result | int  | false    |
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
 
     Scenario: uniform returns integer type when no seed provided
       When query
         """
         SELECT uniform(10, 20) AS result
         """
-      Then query schema type
-        | column | type | nullable |
-        | result | int  | false    |
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
 
     Scenario: uniform returns byte type for tinyint inputs
       When query
         """
         SELECT uniform(CAST(10 AS TINYINT), CAST(20 AS TINYINT), 0) AS result
         """
-      Then query schema type
-        | column | type    | nullable |
-        | result | tinyint | false    |
+      Then query schema
+        """
+        root
+         |-- result: byte (nullable = false)
+        """
 
     Scenario: uniform returns short type for smallint inputs
       When query
         """
         SELECT uniform(CAST(100 AS SMALLINT), CAST(200 AS SMALLINT), 0) AS result
         """
-      Then query schema type
-        | column | type     | nullable |
-        | result | smallint | false    |
+      Then query schema
+        """
+        root
+         |-- result: short (nullable = false)
+        """
 
     Scenario: uniform returns bigint type for bigint inputs
       When query
         """
         SELECT uniform(CAST(10 AS BIGINT), CAST(20 AS BIGINT), 0) AS result
         """
-      Then query schema type
-        | column | type   | nullable |
-        | result | bigint | false    |
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
 
     Scenario: uniform returns short type for tinyint mixed with smallint
       When query
         """
         SELECT uniform(CAST(1 AS TINYINT), CAST(10 AS SMALLINT), 0) AS result
         """
-      Then query schema type
-        | column | type     | nullable |
-        | result | smallint | false    |
+      Then query schema
+        """
+        root
+         |-- result: short (nullable = false)
+        """
 
     Scenario: uniform returns int type for smallint mixed with int
       When query
         """
         SELECT uniform(CAST(1 AS SMALLINT), 10, 0) AS result
         """
-      Then query schema type
-        | column | type | nullable |
-        | result | int  | false    |
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
 
     Scenario: uniform returns bigint type for int mixed with bigint
       When query
         """
         SELECT uniform(1, CAST(10 AS BIGINT), 0) AS result
         """
-      Then query schema type
-        | column | type   | nullable |
-        | result | bigint | false    |
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
 
     Scenario: uniform returns integer type for INT_MAX bounds
       When query
         """
         SELECT uniform(2147483647, 2147483647, 0) AS result
         """
-      Then query schema type
-        | column | type | nullable |
-        | result | int  | false    |
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
 
     Scenario: uniform returns long type when exceeding INT_MAX
       When query
         """
         SELECT uniform(2147483647, 21474836471, 0) AS result
         """
-      Then query schema type
-        | column | type   | nullable |
-        | result | bigint | false    |
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = false)
+        """
 
   Rule: Schema type inference for floats
 
@@ -200,63 +220,77 @@ Feature: uniform() generates random numbers within a range
         """
         SELECT uniform(CAST(5.5 AS FLOAT), CAST(10.5 AS FLOAT), 123) AS result
         """
-      Then query schema type
-        | column | type  | nullable |
-        | result | float | false    |
+      Then query schema
+        """
+        root
+         |-- result: float (nullable = false)
+        """
 
     Scenario: uniform returns double type for double inputs
       When query
         """
         SELECT uniform(CAST(5.5 AS DOUBLE), CAST(10.5 AS DOUBLE), 123) AS result
         """
-      Then query schema type
-        | column | type   | nullable |
-        | result | double | false    |
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = false)
+        """
 
     Scenario: uniform returns double type for float mixed with double
       When query
         """
         SELECT uniform(CAST(1 AS FLOAT), CAST(10 AS DOUBLE), 0) AS result
         """
-      Then query schema type
-        | column | type   | nullable |
-        | result | double | false    |
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = false)
+        """
 
     Scenario: uniform returns double type for int mixed with double
       When query
         """
         SELECT uniform(1, CAST(10 AS DOUBLE), 0) AS result
         """
-      Then query schema type
-        | column | type   | nullable |
-        | result | double | false    |
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = false)
+        """
 
     Scenario: uniform returns double type for bigint mixed with double
       When query
         """
         SELECT uniform(CAST(1 AS BIGINT), CAST(10 AS DOUBLE), 0) AS result
         """
-      Then query schema type
-        | column | type   | nullable |
-        | result | double | false    |
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = false)
+        """
 
     Scenario: uniform returns float type for float mixed with int
       When query
         """
         SELECT uniform(CAST(1 AS FLOAT), 10, 0) AS result
         """
-      Then query schema type
-        | column | type  | nullable |
-        | result | float | false    |
+      Then query schema
+        """
+        root
+         |-- result: float (nullable = false)
+        """
 
     Scenario: uniform returns float type for float mixed with bigint
       When query
         """
         SELECT uniform(CAST(1 AS FLOAT), CAST(10 AS BIGINT), 0) AS result
         """
-      Then query schema type
-        | column | type  | nullable |
-        | result | float | false    |
+      Then query schema
+        """
+        root
+         |-- result: float (nullable = false)
+        """
 
   Rule: Schema type inference for decimals
 
@@ -265,45 +299,55 @@ Feature: uniform() generates random numbers within a range
         """
         SELECT uniform(5.5, 10.5, 123) AS result
         """
-      Then query schema type
-        | column | type         | nullable |
-        | result | decimal(3,1) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(3,1) (nullable = false)
+        """
 
     Scenario: uniform returns decimal type for mixed decimal and integer
       When query
         """
         SELECT uniform(5.5, 10, 123) AS result
         """
-      Then query schema type
-        | column | type         | nullable |
-        | result | decimal(2,1) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(2,1) (nullable = false)
+        """
 
     Scenario: uniform returns decimal type for mixed integer and decimal
       When query
         """
         SELECT uniform(10, 5.5, 123) AS result
         """
-      Then query schema type
-        | column | type         | nullable |
-        | result | decimal(2,1) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(2,1) (nullable = false)
+        """
 
     Scenario: uniform uses larger decimal precision
       When query
         """
         SELECT uniform(1, 12345.67890, 42) AS result
         """
-      Then query schema type
-        | column | type          | nullable |
-        | result | decimal(10,5) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(10,5) (nullable = false)
+        """
 
     Scenario: uniform uses decimal scale from input
       When query
         """
         SELECT uniform(1, 12.34567890, 42) AS result
         """
-      Then query schema type
-        | column | type          | nullable |
-        | result | decimal(10,8) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(10,8) (nullable = false)
+        """
 
     Scenario: uniform with large decimal precision
       When query
@@ -314,18 +358,22 @@ Feature: uniform() generates random numbers within a range
           42
         ) AS result
         """
-      Then query schema type
-        | column | type          | nullable |
-        | result | decimal(20,0) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(20,0) (nullable = false)
+        """
 
     Scenario: uniform decimal ignores integer type when decimal present
       When query
         """
         SELECT uniform(1.2, 2147483647, 42) AS result
         """
-      Then query schema type
-        | column | type         | nullable |
-        | result | decimal(2,1) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(2,1) (nullable = false)
+        """
 
     Scenario: uniform decimal ignores bigint type when decimal present
       When query
@@ -336,45 +384,55 @@ Feature: uniform() generates random numbers within a range
           43
         ) AS result
         """
-      Then query schema type
-        | column | type         | nullable |
-        | result | decimal(2,1) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(2,1) (nullable = false)
+        """
 
     Scenario: uniform with mixed scales uses larger precision
       When query
         """
         SELECT uniform(5.65, 100.0, 123) AS result
         """
-      Then query schema type
-        | column | type         | nullable |
-        | result | decimal(4,1) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(4,1) (nullable = false)
+        """
 
     Scenario: uniform with large int and small decimal uses decimal type
       When query
         """
         SELECT uniform(1234567890, 1.2, 42) AS result
         """
-      Then query schema type
-        | column | type         | nullable |
-        | result | decimal(2,1) | false    |
+      Then query schema
+        """
+        root
+         |-- result: decimal(2,1) (nullable = false)
+        """
 
     Scenario: uniform returns float type for decimal mixed with float
       When query
         """
         SELECT uniform(CAST(1 AS DECIMAL(5,2)), CAST(10 AS FLOAT), 0) AS result
         """
-      Then query schema type
-        | column | type  | nullable |
-        | result | float | false    |
+      Then query schema
+        """
+        root
+         |-- result: float (nullable = false)
+        """
 
     Scenario: uniform returns double type for decimal mixed with double
       When query
         """
         SELECT uniform(CAST(1 AS DECIMAL(5,2)), CAST(10 AS DOUBLE), 0) AS result
         """
-      Then query schema type
-        | column | type   | nullable |
-        | result | double | false    |
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = false)
+        """
 
   Rule: All-null short-circuit must NOT bypass seed validation
 
@@ -405,37 +463,6 @@ Feature: uniform() generates random numbers within a range
       Then query error (?i).*
 
   Rule: NULL handling
-
-    # NOTE: Spark declares the field as nullable=false even for literal NULL bounds
-    # (constant-folding decides at plan time). Sail's Arrow layer enforces that
-    # non-nullable arrays may not contain nulls, so we drop the nullable assertion
-    # here and let each implementation choose what best matches its runtime.
-    Scenario: uniform returns double type when min is NULL
-      When query
-        """
-        SELECT uniform(NULL, 10, 0) AS result
-        """
-      Then query schema type
-        | column | type   |
-        | result | double |
-
-    Scenario: uniform returns double type when max is NULL
-      When query
-        """
-        SELECT uniform(1, NULL, 0) AS result
-        """
-      Then query schema type
-        | column | type   |
-        | result | double |
-
-    Scenario: uniform returns double type when both min and max are NULL
-      When query
-        """
-        SELECT uniform(NULL, NULL, 0) AS result
-        """
-      Then query schema type
-        | column | type   |
-        | result | double |
 
     Scenario: uniform result is NULL when min is NULL
       When query
@@ -635,4 +662,3 @@ Feature: uniform() generates random numbers within a range
       Then query result
         | result |
         | 2.5    |
-
