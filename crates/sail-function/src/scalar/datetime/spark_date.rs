@@ -146,7 +146,11 @@ impl ScalarUDFImpl for SparkDate {
     }
 
     fn name(&self) -> &str {
-        "spark_date"
+        if self.safe {
+            "try_to_date"
+        } else {
+            "to_date"
+        }
     }
 
     fn signature(&self) -> &Signature {

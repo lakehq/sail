@@ -253,7 +253,11 @@ impl ScalarUDFImpl for SparkTimestamp {
     }
 
     fn name(&self) -> &str {
-        "spark_timestamp"
+        match (self.safe, self.timezone.is_some()) {
+            (true, _) => "try_to_timestamp",
+            (false, true) => "to_timestamp",
+            (false, false) => "to_timestamp_ntz",
+        }
     }
 
     fn signature(&self) -> &Signature {

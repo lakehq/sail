@@ -163,7 +163,11 @@ impl ScalarUDFImpl for SparkTime {
     }
 
     fn name(&self) -> &str {
-        "spark_time"
+        if self.safe {
+            "try_to_time"
+        } else {
+            "to_time"
+        }
     }
 
     fn signature(&self) -> &Signature {
