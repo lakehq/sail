@@ -607,6 +607,26 @@ Feature: uniform() generates random numbers within a range
         | 316    |
         | 714    |
 
+    Scenario: uniform with swapped bounds matches Spark (int)
+      # Spark does NOT normalize min/max. `uniform(20, 10, 0)` uses a negative
+      # span and lands in (max, min] rather than [min, max).
+      When query
+        """
+        SELECT uniform(20, 10, 0) AS result
+        """
+      Then query result
+        | result |
+        | 12     |
+
+    Scenario: uniform with swapped bounds matches Spark (large range)
+      When query
+        """
+        SELECT uniform(1000, 0, 42) AS result
+        """
+      Then query result
+        | result |
+        | 380    |
+
   Rule: Equal bounds are deterministic across RNGs
 
     Scenario: uniform returns the shared bound when min equals max
