@@ -12,7 +12,7 @@ homepage = "https://lakesail.com"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/lakehq/sail"
-rust-version = "1.91.1"
+rust-version = "1.95.0"
 
 [workspace.lints.clippy]
 allow_attributes = "deny"
@@ -24,19 +24,19 @@ todo = "deny"
 
 [workspace.dependencies]
 thiserror = { version = "2.0.18" }
-tokio = { version = "1.51.1", features = ["full"] }
+tokio = { version = "1.52.1", features = ["full"] }
 tokio-stream = { version = "0.1.18", features = ["time", "io-util"] }
 pbjson = "0.9.0"
 pbjson-types = "0.9.0"
 pbjson-build = "0.9.0"
-educe = "0.6"
+educe = "0.6.0"
 tower = { version = "0.5.3", features = ["full"] }
-uuid = { version = "1.22.0", features = ["serde", "v4"] }
+uuid = { version = "1.23.1", features = ["serde", "v4"] }
 async-trait = "0.1.89"
 async-recursion = "1.1.1"
 async-stream = "0.3.6"
 lazy_static = "1.5.0"
-once_cell = "1.21.3"
+once_cell = "1.21.4"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 xee-xpath = "0.1.5"
@@ -55,7 +55,7 @@ html-escape = "0.2.13"
 syn = "2.0.117"
 quote = "1.0.45"
 paste = "1.0.15"
-proc-macro2 = "1.0.105"
+proc-macro2 = "1.0.106"
 prettyplease = "0.2.37"
 phf = { version = "0.13.1", features = ["macros"] }
 ryu = "1.0.23"
@@ -68,16 +68,16 @@ rand_distr = "0.6.0"
 url = "2.5.8"
 lexical-core = { version = "1.0.6", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 aws-config = "1.8.15"
-aws-credential-types = "1.2.13"
-aws-sdk-glue = { version = "1.142.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-smithy-runtime-api = "1.11.3"
-aws-smithy-types = "1.3.3"
-aws-smithy-async = "1.2.6"
-clap = { version = "4.5.60", features = ["derive"] }
+aws-credential-types = "1.2.14"
+aws-sdk-glue = { version = "1.142.1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-smithy-runtime-api = "1.12.0"
+aws-smithy-types = "1.4.7"
+aws-smithy-async = "1.2.14"
+clap = { version = "4.6.1", features = ["derive"] }
 num_enum = "0.7.6"
 num-traits = "0.2.19"
 log = "0.4.29"
-env_logger = "0.11.9"
+env_logger = "0.11.10"
 fastrace = { version = "0.7.17", features = ["enable"] }
 fastrace-opentelemetry = "0.16.0"
 fastrace-futures = "0.7.17"
@@ -86,7 +86,7 @@ opentelemetry_sdk = { version = "0.31.0", features = ["testing"] }
 opentelemetry-otlp = { version = "0.31.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 opentelemetry-appender-log = "0.31.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-kube = "3.0.1"
+kube = "3.1.0"
 k8s-openapi = { version = "0.27.1", features = ["latest"] }
 twox-hash = "2.1.2"
 murmur3 = "0.5.2"
@@ -102,12 +102,12 @@ iana-time-zone = "0.1.65"
 chumsky = { version = "0.12.0", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.5.0", default-features = false, features = ["tokio"] }
-reqwest = { version = "0.12.27", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 percent-encoding = "2.3.2"
 rustls = "0.23.38"
 dashmap = "6.1.0"
 itertools = "0.14.0"
-moka = { version = "0.12.14", features = ["sync", "future"] }
+moka = { version = "0.12.15", features = ["sync", "future"] }
 bytes = "1.11.1"
 indexmap = "2.14.0"
 pin-project-lite = "0.2.17"
@@ -119,7 +119,7 @@ testcontainers = "0.26.2"
 progenitor = "0.11.2"
 progenitor-client = "0.11.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
-tempfile = "3.26.0"
+tempfile = "3.27.0"
 readonly = "0.2.13"
 toml = "0.8"
 
@@ -143,8 +143,8 @@ prost = "0.14"
 prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
-axum = "0.8.8"
-datafusion = { version = "53.0.0", default-features = false, features = [
+axum = "0.8.9"
+datafusion = { version = "53.1.0", default-features = false, features = [
     "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",
@@ -158,28 +158,28 @@ datafusion = { version = "53.0.0", default-features = false, features = [
     "avro",
     "recursive_protection",
 ] }
-datafusion-common = { version = "53.0.0", features = ["object_store", "avro"] }
-datafusion-datasource = { version = "53.0.0" }
-datafusion-expr = { version = "53.0.0", default-features = false }
-datafusion-expr-common = { version = "53.0.0" }
-datafusion-proto = { version = "53.0.0" }
-datafusion-functions = { version = "53.0.0" }
-datafusion-functions-nested = { version = "53.0.0", default-features = false }
-datafusion-physical-expr = { version = "53.0.0" }
-datafusion-session = { version = "53.0.0" }
-datafusion-spark = { version = "53.0.0", features = ["core"] }
+datafusion-common = { version = "53.1.0", features = ["object_store", "avro"] }
+datafusion-datasource = { version = "53.1.0" }
+datafusion-expr = { version = "53.1.0", default-features = false }
+datafusion-expr-common = { version = "53.1.0" }
+datafusion-proto = { version = "53.1.0" }
+datafusion-functions = { version = "53.1.0" }
+datafusion-functions-nested = { version = "53.1.0", default-features = false }
+datafusion-physical-expr = { version = "53.1.0" }
+datafusion-session = { version = "53.1.0" }
+datafusion-spark = { version = "53.1.0", features = ["core"] }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
-pyo3 = { version = "0.28.0", features = ["serde"] }
+pyo3 = { version = "0.28.3", features = ["serde"] }
 # Jiter has a dependency on pyo3, which needs to match the version used in Sail.
 # https://github.com/pydantic/jiter/blob/v0.13.0/Cargo.toml
 jiter = { version = "0.13.0" }
-arrow = { version = "58.0.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "58.0.0" }
-arrow-schema = { version = "58.0.0", features = ["serde"] }
-arrow-flight = { version = "58.0.0", features = ["flight-sql-experimental"] }
-arrow-pyarrow = { version = "58.0.0" }
-parquet = { version = "58.0.0" }
+arrow = { version = "58.1.0", features = ["chrono-tz"] }
+arrow-buffer = { version = "58.1.0" }
+arrow-schema = { version = "58.1.0", features = ["serde"] }
+arrow-flight = { version = "58.1.0", features = ["flight-sql-experimental"] }
+arrow-pyarrow = { version = "58.1.0" }
+parquet = { version = "58.1.0" }
 parquet-variant = { version = "58.1.0" }
 parquet-variant-compute = { version = "58.1.0" }
 parquet-variant-json = { version = "58.1.0" }
