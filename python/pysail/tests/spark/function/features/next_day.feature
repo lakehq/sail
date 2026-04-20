@@ -206,3 +206,35 @@ Feature: next_day comprehensive tests
         SELECT next_day(DATE'2024-01-10', 'InvalidDay') AS result
         """
       Then query error .*
+
+  Rule: Timestamp implicit coercion to Date
+
+    # Spark implicitly casts Timestamp / Timestamp_NTZ to Date before applying
+    # next_day. Regression test for the same pattern as issue #1735 (last_day).
+
+    Scenario: next_day accepts TIMESTAMP input (Spark casts to Date)
+      When query
+        """
+        SELECT next_day(CAST('2024-01-15 10:30:00' AS TIMESTAMP), 'Mon') AS result
+        """
+      Then query result
+        | result     |
+        | 2024-01-22 |
+
+    Scenario: next_day accepts TIMESTAMP_NTZ input (Spark casts to Date)
+      When query
+        """
+        SELECT next_day(CAST('2024-01-15 10:30:00' AS TIMESTAMP_NTZ), 'Fri') AS result
+        """
+      Then query result
+        | result     |
+        | 2024-01-19 |
+
+    Scenario: next_day on TIMESTAMP at year boundary
+      When query
+        """
+        SELECT next_day(CAST('2024-12-31 23:59:59' AS TIMESTAMP), 'Wed') AS result
+        """
+      Then query result
+        | result     |
+        | 2025-01-01 |

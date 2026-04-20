@@ -152,3 +152,49 @@ Feature: last_day comprehensive tests
         | 2024-01-31 |
         | NULL       |
         | 2024-02-29 |
+
+  Rule: Timestamp implicit coercion to Date
+
+    # Spark implicitly casts Timestamp / Timestamp_NTZ to Date before applying
+    # last_day. Regression test for issue #1735 — Sail previously rejected
+    # these types at plan time.
+
+    Scenario: last_day accepts TIMESTAMP input (Spark casts to Date)
+      When query
+        """
+        SELECT last_day(CAST('2024-01-15 10:30:00' AS TIMESTAMP)) AS result
+        """
+      Then query result
+        | result     |
+        | 2024-01-31 |
+
+    Scenario: last_day accepts TIMESTAMP_NTZ input (Spark casts to Date)
+      When query
+        """
+        SELECT last_day(CAST('2024-01-15 10:30:00' AS TIMESTAMP_NTZ)) AS result
+        """
+      Then query result
+        | result     |
+        | 2024-01-31 |
+
+    Scenario: last_day on TIMESTAMP with non-midnight time still truncates
+      When query
+        """
+        SELECT last_day(CAST('2024-02-29 23:59:59' AS TIMESTAMP)) AS result
+        """
+      Then query result
+        | result     |
+        | 2024-02-29 |
+
+    Scenario: last_day on TIMESTAMP column from VALUES
+      When query
+        """
+        SELECT last_day(ts) AS result FROM VALUES
+          (CAST('2024-01-15 10:30:00' AS TIMESTAMP)),
+          (CAST('2024-12-01 00:00:00' AS TIMESTAMP))
+          AS t(ts)
+        """
+      Then query result
+        | result     |
+        | 2024-01-31 |
+        | 2024-12-31 |

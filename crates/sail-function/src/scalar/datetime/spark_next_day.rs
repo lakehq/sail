@@ -137,10 +137,14 @@ impl ScalarUDFImpl for SparkNextDay {
             ));
         }
 
+        // Spark implicitly casts Timestamp/Timestamp_NTZ to Date before
+        // applying `next_day`. Arrow's `Timestamp → Date32` cast truncates
+        // the time component, matching Spark's behaviour.
         let current_native_type: NativeType = (&arg_types[0]).into();
         if matches!(current_native_type, NativeType::Date)
             || matches!(current_native_type, NativeType::String)
             || matches!(current_native_type, NativeType::Null)
+            || matches!(current_native_type, NativeType::Timestamp(_, _))
         {
             if matches!(
                 &arg_types[1],
@@ -160,7 +164,7 @@ impl ScalarUDFImpl for SparkNextDay {
             }
         } else {
             plan_err!(
-                "The first argument of the Spark `next_day` function can only be a date or string, but got {}", &arg_types[0]
+                "The first argument of the Spark `next_day` function can only be a date, string or timestamp, but got {}", &arg_types[0]
             )
         }
     }
