@@ -9,9 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Fetch the entire history for Copilot to have more context.
-          fetch-depth: 0
 
       - uses: ./.github/actions/adjust-swap-space
 
