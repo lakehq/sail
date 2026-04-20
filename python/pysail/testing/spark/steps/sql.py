@@ -137,6 +137,21 @@ def query(template, docstring, variables):
     return Template(docstring).render(**variables) if template else docstring
 
 
+@then("query schema")
+def query_schema(docstring, query, spark):
+    """Analyze the SQL query and compare schema with expected schema tree string."""
+    df = spark.sql(query)
+    if hasattr(df.schema, "treeString"):
+        actual = df.schema.treeString()
+    else:
+        # PySpark < 4.x has no StructType.treeString(); capture printSchema() output instead.
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            df.printSchema()
+        actual = buf.getvalue()
+    assert docstring.strip() == actual.strip()
+
+
 @then("query schema type")
 def query_schema_type(datatable, query, spark):
     """Verify the schema types of query result columns.
