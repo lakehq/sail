@@ -93,11 +93,12 @@ impl ScalarUDFImpl for SparkLastDay {
         if matches!(current_native_type, NativeType::Date)
             || matches!(current_native_type, NativeType::String)
             || matches!(current_native_type, NativeType::Null)
+            || matches!(current_native_type, NativeType::Timestamp(_, _))
         {
             Ok(vec![DataType::Date32])
         } else {
             plan_err!(
-                "The first argument of the Spark `last_day` function can only be a date or string, but got {}", &arg_types[0]
+                "The first argument of the Spark `last_day` function can only be a date, timestamp, or string, but got {}", &arg_types[0]
             )
         }
     }
