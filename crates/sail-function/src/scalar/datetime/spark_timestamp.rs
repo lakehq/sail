@@ -9,9 +9,13 @@ use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::{
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
 
 use crate::error::invalid_arg_count_exec_err;
@@ -322,5 +326,19 @@ impl ScalarUDFImpl for SparkTimestamp {
             move |a: &[ArrayRef]| Self::kernel(&parser, timezone.clone(), safe, a),
             vec![],
         )(&args.args)
+    }
+
+    /// Identity fold: `to_timestamp(ts_col)` → `ts_col` when the input type
+    /// already matches our canonical `Timestamp(Microsecond, self.timezone)`.
+    /// Any mismatch in unit or timezone still needs the real cast path.
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if args.len() == 1 {
+            if let DataType::Timestamp(TimeUnit::Microsecond, tz) = info.get_data_type(&args[0])? {
+                if tz.as_deref() == self.timezone.as_deref() {
+                    return Ok(ExprSimplifyResult::Simplified(args.one()?));
+                }
+            }
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 }

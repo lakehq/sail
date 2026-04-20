@@ -7,8 +7,12 @@ use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::{
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_date;
 
 use crate::error::invalid_arg_count_exec_err;
@@ -200,5 +204,17 @@ impl ScalarUDFImpl for SparkDate {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let safe = self.safe;
         make_scalar_function(move |a: &[ArrayRef]| Self::kernel(safe, a), vec![])(&args.args)
+    }
+
+    /// Identity fold: `to_date(date_col)` → `date_col`. Applies in both the
+    /// strict and `try_*` variants since a value that is already `Date32`
+    /// cannot fail parsing or casting. Only fires when no explicit format is
+    /// provided, because a 2-arg call with a format string enforces
+    /// re-parsing behaviour even on already-typed input.
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if args.len() == 1 && matches!(info.get_data_type(&args[0])?, DataType::Date32) {
+            return Ok(ExprSimplifyResult::Simplified(args.one()?));
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 }
