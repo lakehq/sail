@@ -61,7 +61,7 @@ phf = { version = "0.13.1", features = ["macros"] }
 ryu = "1.0.23"
 either = "1.15.0"
 num-bigint = "0.4.6"
-mimalloc = { version = "0.1.48", default-features = false }
+mimalloc = { version = "0.1.49", default-features = false }
 rand = "0.10.1"
 rand_chacha = "0.10.0"
 rand_distr = "0.6.0"
