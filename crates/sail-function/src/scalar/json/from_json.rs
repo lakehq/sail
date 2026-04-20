@@ -278,7 +278,7 @@ impl SparkFromJsonOptions {
                     (keys, values)
                 } else {
                     return Err(DataFusionError::Plan(format!(
-                        "Expections options to be type map<string, string> but found key type {:?} and value type {:?}",
+                        "Expecting options to be type map<string, string> but found key type {:?} and value type {:?}",
                         key_type,
                         value_type
                     )))

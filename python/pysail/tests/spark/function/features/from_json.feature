@@ -65,6 +65,24 @@ Feature: from_json converts json strings to spark nested types
         | result         |
         | {NULL, NULL}  |
 
+    Scenario: from_json nulls in map
+      When query
+        """
+        SELECT from_json('{"a": null, "b": null}', 'map<string, int>') AS result
+        """
+      Then query result
+        | result         |
+        | {a -> NULL, b -> NULL}  |
+
+    Scenario: from_json nulls in array
+      When query
+        """
+        SELECT from_json('[null, 1, null]', 'array<int>') AS result
+        """
+      Then query result
+        | result         |
+        | [NULL, 1, NULL]  |
+
     Scenario: from_json null row structs
       When query
         """
@@ -201,7 +219,7 @@ Feature: from_json converts json strings to spark nested types
       """
       select from_json('{}', 'a: binary') as result
       """
-      Then query error Binary not supported
+      Then query error Conversion of ConfiguredBinary to Binary not supported
 
   Rule: invalid options
     Scenario: from_json not supported options

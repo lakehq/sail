@@ -222,6 +222,15 @@ impl SailToArrayDataType {
             DataType::ConfiguredBinary => Err(DataFusionError::Internal(
                 "Conversion of ConfiguredBinary to Binary not supported".to_string(),
             )),
+            DataType::Variant => {
+                // Variant layout using Binary for PySpark compatibility.
+                // parquet-variant uses BinaryView internally but we convert to Binary
+                let fields = adt::Fields::from(vec![
+                    adt::Field::new("metadata", adt::DataType::Binary, false),
+                    adt::Field::new("value", adt::DataType::Binary, false),
+                ]);
+                Ok(adt::DataType::Struct(fields))
+            }
             DataType::UserDefined { .. } => Err(DataFusionError::Internal(
                 "user defined data type should only exist in a field".to_string(),
             )),
