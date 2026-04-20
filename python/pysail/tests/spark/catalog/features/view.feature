@@ -100,6 +100,14 @@ Feature: Persistent views
       | 1           | Alice         |
       | 2           | Bob           |
       | 3           | Carol         |
+    When query
+      """
+      DESCRIBE TABLE aliased_customers
+      """
+    Then query result ordered
+      | col_name      | data_type | comment |
+      | customer_id   | int       | NULL    |
+      | customer_name | string    | NULL    |
 
   Scenario: SHOW TABLES lists persistent views
     When query
