@@ -1979,3 +1979,50 @@ Feature: to_char and to_varchar comprehensive tests
         SELECT to_char(5, '9 9') AS result
         """
       Then query error .*
+
+  Rule: All-null short-circuit must NOT bypass format validation
+
+    # These tests lock the invariant that format errors fire BEFORE the
+    # all-null short-circuit. If a future refactor moves the short-circuit
+    # above RegexSpec::try_from, these flip from error to pass (silent bug).
+
+    Scenario: to_char all-null int column with invalid double-S format still errors
+      When query
+        """
+        SELECT to_char(v, 'SS999') AS result FROM VALUES
+          (CAST(NULL AS INT)),
+          (CAST(NULL AS INT))
+          AS t(v)
+        """
+      Then query error .*
+
+    Scenario: to_char all-null double column with invalid comma-start format still errors
+      When query
+        """
+        SELECT to_char(v, ',999') AS result FROM VALUES
+          (CAST(NULL AS DOUBLE))
+          AS t(v)
+        """
+      Then query error .*
+
+    Scenario: to_char all-null decimal column with invalid dot-only format still errors
+      When query
+        """
+        SELECT to_char(v, '.') AS result FROM VALUES
+          (CAST(NULL AS DECIMAL(10,2)))
+          AS t(v)
+        """
+      Then query error .*
+
+    Scenario: to_char all-null int column with VALID format returns all NULL
+      When query
+        """
+        SELECT to_char(v, '999') AS result FROM VALUES
+          (CAST(NULL AS INT)),
+          (CAST(NULL AS INT))
+          AS t(v)
+        """
+      Then query result ordered
+        | result |
+        | NULL   |
+        | NULL   |

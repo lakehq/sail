@@ -224,6 +224,19 @@ impl ScalarUDFImpl for SparkToChar {
             _ => None,
         };
 
+        // All-null input column → all-null output (Utf8). Placed after format
+        // validation (RegexSpec/NumberComponents above) so invalid-format errors
+        // still propagate. Saves the per-row iter().map() which allocates
+        // multiple Strings per row (format_integer_part + grouping + sign +
+        // currency). MED-ROI per arrow-check Rule 20.
+        if let ColumnarValue::Array(arr) = &args[0] {
+            if arr.null_count() == arr.len() {
+                return Ok(ColumnarValue::Array(
+                    datafusion::arrow::array::new_null_array(&DataType::Utf8, arr.len()),
+                ));
+            }
+        }
+
         match &args[0] {
             ColumnarValue::Scalar(scalar) => {
                 let result = if use_integer_path {

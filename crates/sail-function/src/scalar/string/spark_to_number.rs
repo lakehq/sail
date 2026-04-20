@@ -143,6 +143,18 @@ pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         precision, scale, ..
     } = number_components;
 
+    // All-null input column → all-null Decimal256 output. Placed AFTER format
+    // validation (so invalid-format errors still propagate) and AFTER computing
+    // precision/scale so the output dtype matches what the kernel would
+    // produce row-by-row. Saves the per-row regex match + Decimal256 parse
+    // pipeline entirely. HIGH-ROI per arrow-check Rule 20 (regex in hot loop).
+    if values.null_count() == values.len() {
+        return Ok(datafusion::arrow::array::new_null_array(
+            &DataType::Decimal256(precision, scale),
+            values.len(),
+        ));
+    }
+
     // Getting the regex expression according to the format for the value
     let value_regex: Regex = create_regex_expression(&format_spec)?;
 

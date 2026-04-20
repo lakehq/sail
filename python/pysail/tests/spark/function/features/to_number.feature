@@ -385,3 +385,50 @@ Feature: to_number (shared format parser with to_char)
         SELECT to_number('$1,234', 'L9,999') AS result
         """
       Then query error .*
+
+  Rule: All-null short-circuit must NOT bypass format validation
+
+    # Lock the invariant: format errors fire BEFORE the all-null short-circuit.
+    # Moving the `values.null_count() == values.len()` check above the
+    # RegexSpec parsing would silence these errors (silent bug).
+
+    Scenario: to_number all-null column with invalid double-S format still errors
+      When query
+        """
+        SELECT to_number(v, 'SS999') AS result FROM VALUES
+          (CAST(NULL AS STRING)),
+          (CAST(NULL AS STRING))
+          AS t(v)
+        """
+      Then query error .*
+
+    Scenario: to_number all-null column with invalid comma-start format still errors
+      When query
+        """
+        SELECT to_number(v, ',999') AS result FROM VALUES
+          (CAST(NULL AS STRING))
+          AS t(v)
+        """
+      Then query error .*
+
+    Scenario: to_number all-null column with invalid dot-only format still errors
+      When query
+        """
+        SELECT to_number(v, '.') AS result FROM VALUES
+          (CAST(NULL AS STRING))
+          AS t(v)
+        """
+      Then query error .*
+
+    Scenario: to_number all-null column with VALID format returns all NULL
+      When query
+        """
+        SELECT to_number(v, '999') AS result FROM VALUES
+          (CAST(NULL AS STRING)),
+          (CAST(NULL AS STRING))
+          AS t(v)
+        """
+      Then query result ordered
+        | result |
+        | NULL   |
+        | NULL   |
