@@ -161,6 +161,14 @@ impl ScalarUDFImpl for SparkUniform {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if !matches!(args.arg_fields.len(), 2 | 3) {
+            return Err(invalid_arg_count_exec_err(
+                "uniform",
+                (2, 3),
+                args.arg_fields.len(),
+            ));
+        }
+
         let t_min = args.arg_fields[0].data_type();
         let t_max = args.arg_fields[1].data_type();
         let return_type = Self::calculate_output_type(t_min, t_max);
@@ -535,5 +543,34 @@ fn uniform(args: &[ArrayRef], number_rows: usize, output_type: &DataType) -> Res
             "Integer, Float, or Decimal array",
             output_type,
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_return_field_rejects_invalid_arity() {
+        let udf = SparkUniform::new();
+        let int32 = Arc::new(Field::new("x", DataType::Int32, false));
+
+        for arity in [0usize, 1, 4, 5] {
+            let arg_fields: Vec<_> = (0..arity).map(|_| int32.clone()).collect();
+            let scalar_arguments: Vec<Option<&datafusion_common::ScalarValue>> =
+                (0..arity).map(|_| None).collect();
+            let args = ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &scalar_arguments,
+            };
+            let result = udf.return_field_from_args(args);
+            assert!(result.is_err(), "expected error for arity {arity}, got Ok");
+            let msg = match result {
+                Err(e) => e.to_string(),
+                Ok(_) => continue,
+            };
+            assert!(msg.contains("uniform"), "got: {msg}");
+            assert!(msg.contains(&arity.to_string()), "got: {msg}");
+        }
     }
 }
