@@ -418,6 +418,40 @@ Feature: uniform() generates random numbers within a range
         | result |
         | NULL   |
 
+  Rule: Multi-row behavior
+
+    Scenario: uniform with equal bounds produces the same value for every row
+      When query
+        """
+        SELECT uniform(5, 5, 0) AS result FROM range(3)
+        """
+      Then query result
+        | result |
+        | 5      |
+        | 5      |
+        | 5      |
+
+    Scenario: uniform with NULL min produces NULL for every row
+      When query
+        """
+        SELECT CAST(uniform(NULL, 10, 0) AS STRING) AS result FROM range(3)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | NULL   |
+        | NULL   |
+
+    Scenario: uniform with seed produces varied values across rows
+      When query
+        """
+        WITH x AS (SELECT uniform(0, 1000, 42) AS v FROM range(50))
+        SELECT COUNT(DISTINCT v) > 1 AS has_variation FROM x
+        """
+      Then query result
+        | has_variation |
+        | true          |
+
   Rule: Equal bounds are deterministic across RNGs
 
     Scenario: uniform returns the shared bound when min equals max

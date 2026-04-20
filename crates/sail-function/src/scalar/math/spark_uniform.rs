@@ -12,7 +12,6 @@ use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_functions::utils::make_scalar_function;
 use rand::rngs::StdRng;
 use rand::{rng, RngExt, SeedableRng};
 
@@ -208,7 +207,18 @@ impl ScalarUDFImpl for SparkUniform {
                 ));
             }
         }
-        make_scalar_function(uniform, vec![])(&args.args)
+        // Expand the foldable scalars to length-`number_rows` arrays ourselves so
+        // we keep ownership of the RNG across all rows. Using
+        // `make_scalar_function` would rebuild the RNG per invocation, which with
+        // a fixed seed produces the same value on every row.
+        let number_rows = args.number_rows;
+        let arrays: Vec<ArrayRef> = args
+            .args
+            .iter()
+            .map(|arg| arg.to_array(number_rows))
+            .collect::<Result<_>>()?;
+        let array = uniform(&arrays, number_rows)?;
+        Ok(ColumnarValue::Array(array))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -278,11 +288,22 @@ fn is_valid_bound_type(dt: &DataType) -> bool {
         || matches!(dt, DataType::Null)
 }
 
+/// Build a single deterministic RNG for the whole invocation.
+///
+/// Spark creates one RNG per partition and advances it across rows, so with a
+/// fixed seed a multi-row batch produces a sequence of distinct values — not
+/// the same value repeated.  We follow the same contract here.
+fn build_rng(seed: Option<u64>) -> StdRng {
+    match seed {
+        Some(s) => StdRng::seed_from_u64(s),
+        None => StdRng::from_rng(&mut rng()),
+    }
+}
+
 macro_rules! generate_uniform_single_fn {
     ($fn_name_single:ident, $type:ty) => {
-        /// Generate a single uniform value
         #[inline]
-        fn $fn_name_single(min: $type, max: $type, seed: Option<u64>) -> $type {
+        fn $fn_name_single(min: $type, max: $type, rng: &mut StdRng) -> $type {
             let mut min_v = min;
             let mut max_v = max;
 
@@ -294,13 +315,7 @@ macro_rules! generate_uniform_single_fn {
                 return min_v;
             }
 
-            if let Some(seed_val) = seed {
-                let mut rng = StdRng::seed_from_u64(seed_val);
-                rng.random_range(min_v..max_v)
-            } else {
-                let mut rng = rng();
-                rng.random_range(min_v..max_v)
-            }
+            rng.random_range(min_v..max_v)
         }
     };
 }
@@ -320,8 +335,9 @@ fn generate_uniform_int32(
     seed: Option<u64>,
     number_rows: usize,
 ) -> Result<Vec<i32>> {
+    let mut rng = build_rng(seed);
     Ok((0..number_rows)
-        .map(|_| generate_uniform_int32_single(min, max, seed))
+        .map(|_| generate_uniform_int32_single(min, max, &mut rng))
         .collect())
 }
 
@@ -332,8 +348,9 @@ fn generate_uniform_int64(
     seed: Option<u64>,
     number_rows: usize,
 ) -> Result<Vec<i64>> {
+    let mut rng = build_rng(seed);
     Ok((0..number_rows)
-        .map(|_| generate_uniform_int64_single(min, max, seed))
+        .map(|_| generate_uniform_int64_single(min, max, &mut rng))
         .collect())
 }
 
@@ -344,8 +361,9 @@ fn generate_uniform_float(
     seed: Option<u64>,
     number_rows: usize,
 ) -> Result<Vec<f64>> {
+    let mut rng = build_rng(seed);
     Ok((0..number_rows)
-        .map(|_| generate_uniform_float_single(min, max, seed))
+        .map(|_| generate_uniform_float_single(min, max, &mut rng))
         .collect())
 }
 
@@ -367,14 +385,12 @@ fn extract_seed(seed_array: Option<&ArrayRef>, i: usize) -> Option<u64> {
     })
 }
 
-fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn uniform(args: &[ArrayRef], number_rows: usize) -> Result<ArrayRef> {
     use datafusion::arrow::array::AsArray;
 
     let min_array = &args[0];
     let max_array = &args[1];
     let seed_array = args.get(2);
-
-    let number_rows = min_array.len();
 
     let output_type =
         SparkUniform::calculate_output_type(min_array.data_type(), max_array.data_type());
@@ -388,6 +404,11 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
         return Ok(new_null_array(&output_type, number_rows));
     }
 
+    // The seed is required to be foldable, so it is invariant across rows; we
+    // build a single RNG here and advance it as we generate each row.
+    let seed_val = extract_seed(seed_array, 0);
+    let mut rng = build_rng(seed_val);
+
     match output_type {
         DataType::Int8 => {
             let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int8Type>();
@@ -400,8 +421,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                 } else {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
-                    let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_int8_single(min_val, max_val, seed_val));
+                    builder.append_value(generate_uniform_int8_single(min_val, max_val, &mut rng));
                 }
             }
 
@@ -418,8 +438,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                 } else {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
-                    let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_int16_single(min_val, max_val, seed_val));
+                    builder.append_value(generate_uniform_int16_single(min_val, max_val, &mut rng));
                 }
             }
 
@@ -436,8 +455,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                 } else {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
-                    let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_int32_single(min_val, max_val, seed_val));
+                    builder.append_value(generate_uniform_int32_single(min_val, max_val, &mut rng));
                 }
             }
 
@@ -454,8 +472,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                 } else {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
-                    let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_int64_single(min_val, max_val, seed_val));
+                    builder.append_value(generate_uniform_int64_single(min_val, max_val, &mut rng));
                 }
             }
 
@@ -472,9 +489,8 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                 } else {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
-                    let seed_val = extract_seed(seed_array, i);
                     builder
-                        .append_value(generate_uniform_float32_single(min_val, max_val, seed_val));
+                        .append_value(generate_uniform_float32_single(min_val, max_val, &mut rng));
                 }
             }
 
@@ -491,8 +507,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                 } else {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
-                    let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_float_single(min_val, max_val, seed_val));
+                    builder.append_value(generate_uniform_float_single(min_val, max_val, &mut rng));
                 }
             }
 
@@ -513,26 +528,19 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
 
                 let min_val = min_arr.value(i);
                 let max_val = max_arr.value(i);
-                let seed_val = extract_seed(seed_array, i);
 
-                // Generate random i128 directly in the scaled range to avoid precision loss
-                // This maintains full precision for high-precision decimals (e.g., Decimal(38, 10))
+                // Generate random i128 directly in the scaled range to avoid precision loss,
+                // preserving full precision for high-precision decimals (e.g. Decimal(38, 10)).
                 let (min_scaled, max_scaled) = if min_val > max_val {
                     (max_val, min_val)
                 } else {
                     (min_val, max_val)
                 };
 
-                let decimal_val = match (min_scaled == max_scaled, seed_val) {
-                    (true, _) => min_scaled,
-                    (false, Some(seed)) => {
-                        let mut rng = StdRng::seed_from_u64(seed);
-                        rng.random_range(min_scaled..max_scaled)
-                    }
-                    (false, None) => {
-                        let mut rng = rng();
-                        rng.random_range(min_scaled..max_scaled)
-                    }
+                let decimal_val = if min_scaled == max_scaled {
+                    min_scaled
+                } else {
+                    rng.random_range(min_scaled..max_scaled)
                 };
 
                 builder.append_value(decimal_val);
@@ -562,31 +570,28 @@ mod tests {
         Ok(())
     }
 
-    /// Test 2: With a constant seed, all values should be the same
-    /// (matches Spark behavior: each row creates a new RNG with the same seed)
+    /// With a fixed seed, the RNG is built once and advanced across rows, so
+    /// the resulting sequence must contain more than one distinct value (this
+    /// matches Spark's behavior — one RNG per partition).
     #[test]
-    fn test_uniform_constant_seed_same_values() -> Result<()> {
-        let values = generate_uniform_int32(10, 20, Some(0), 5)?;
+    fn test_uniform_constant_seed_advances_across_rows() -> Result<()> {
+        let values = generate_uniform_int32(10, 20, Some(0), 20)?;
 
-        // Verify that we have 5 values
-        assert_eq!(values.len(), 5);
+        assert_eq!(values.len(), 20);
 
-        // Verify that the first value is 18 (with i32 RNG and seed 0)
-        assert_eq!(values[0], 18);
-
-        // With a constant seed, all values should be identical
-        // (each call creates a new RNG with the same seed)
-        let all_same = values.windows(2).all(|w| w[0] == w[1]);
-        assert!(
-            all_same,
-            "All values should be the same with constant seed, got {:?}",
-            values
-        );
-
-        // All values must be in the range [10, 20)
+        // All values must stay in the requested range [10, 20).
         for &v in &values {
             assert!((10..20).contains(&v), "Value {} out of range", v);
         }
+
+        // A single advancing RNG should produce at least two distinct values
+        // across 20 rows; otherwise we would be re-seeding per row.
+        let distinct: std::collections::HashSet<i32> = values.iter().copied().collect();
+        assert!(
+            distinct.len() > 1,
+            "Expected varied values with an advancing RNG, got {:?}",
+            values
+        );
         Ok(())
     }
 
@@ -642,40 +647,20 @@ mod tests {
         Ok(())
     }
 
-    /// Test 8: With a constant seed, all float values should be the same
+    /// Float variant of `test_uniform_constant_seed_advances_across_rows`.
     #[test]
-    fn test_uniform_float_constant_seed() -> Result<()> {
+    fn test_uniform_float_constant_seed_advances_across_rows() -> Result<()> {
         let values = generate_uniform_float(0.0, 1.0, Some(99), 10)?;
         assert_eq!(values.len(), 10);
 
-        // With a constant seed, all values should be identical
-        let all_same = values.windows(2).all(|w| w[0] == w[1]);
-        assert!(
-            all_same,
-            "Float values should be the same with constant seed: {:?}",
-            values
-        );
-
-        // All in range
         for &v in &values {
             assert!((0.0..1.0).contains(&v), "Value {} out of range", v);
         }
-        Ok(())
-    }
 
-    /// Test 9: Verify that seed 0 with 10 values all produce the same value
-    #[test]
-    fn test_uniform_seed_zero_constant() -> Result<()> {
-        let values = generate_uniform_int32(10, 20, Some(0), 10)?;
-        assert_eq!(values.len(), 10);
-
-        assert_eq!(values[0], 18);
-
-        // With constant seed, all values should be the same
-        let all_same = values.windows(2).all(|w| w[0] == w[1]);
+        let first = values[0];
         assert!(
-            all_same,
-            "All values should be the same with constant seed, got {:?}",
+            values.iter().any(|&v| v != first),
+            "Expected varied float values with an advancing RNG, got {:?}",
             values
         );
         Ok(())
@@ -1006,7 +991,7 @@ mod tests {
         let seed = Arc::new(Int64Array::from(vec![42])) as ArrayRef;
 
         let args = vec![min, max, seed];
-        let res = uniform(&args)?;
+        let res = uniform(&args, 1)?;
 
         let out = res
             .as_any()
