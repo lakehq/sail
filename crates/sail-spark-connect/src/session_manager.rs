@@ -17,7 +17,7 @@ use sail_session::session_factory::{
 };
 use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 
-use crate::error::SparkResult;
+use crate::error::{SparkError, SparkResult};
 use crate::session::{SparkSession, SparkSessionOptions};
 
 pub struct SparkSessionMutator {
@@ -90,6 +90,8 @@ pub fn create_spark_session_manager(
             create_spark_session_factory(config.clone(), runtime.clone(), system.clone())
         })
     };
-    let options = SessionManagerOptions::new(config.clone(), runtime.clone(), system, factory);
+    let options = SessionManagerOptions::new(runtime.clone(), system, factory)
+        .with_session_timeout(Duration::from_secs(config.spark.session_timeout_secs))
+        .with_options(config.raw().map_err(SparkError::from)?);
     Ok(SessionManager::try_new(options)?)
 }

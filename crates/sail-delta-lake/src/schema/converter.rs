@@ -2,25 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
+    DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema, SchemaRef,
 };
-use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
-use delta_kernel::schema::{
-    ColumnMetadataKey, MetadataValue, StructField as KernelStructField, StructType,
+
+use crate::spec::{
+    ColumnMappingMode, ColumnMetadataKey, DataType, DeltaError as DeltaTableError, DeltaResult,
+    MetadataValue, StructField, StructType,
 };
-use delta_kernel::table_features::ColumnMappingMode;
-
-use crate::kernel::{DeltaResult, DeltaTableError};
-
-pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
-    Ok(arrow.try_into_kernel()?)
-}
-
-pub fn kernel_to_logical_arrow(schema: &StructType) -> ArrowSchema {
-    schema
-        .try_into_arrow()
-        .unwrap_or_else(|_| ArrowSchema::empty())
-}
 
 pub fn arrow_schema_from_struct_type(
     schema: &StructType,
@@ -50,9 +38,8 @@ pub fn arrow_schema_from_struct_type(
 
 pub fn get_physical_arrow_schema(logical: &StructType, mode: ColumnMappingMode) -> ArrowSchema {
     let physical_kernel = logical.make_physical(mode);
-    let physical_arrow: ArrowSchema = (&physical_kernel)
-        .try_into_arrow()
-        .unwrap_or_else(|_| ArrowSchema::empty());
+    let physical_arrow: ArrowSchema =
+        ArrowSchema::try_from(&physical_kernel).unwrap_or_else(|_| ArrowSchema::empty());
     match mode {
         ColumnMappingMode::Name | ColumnMappingMode::Id => {
             enrich_arrow_with_parquet_field_ids(&physical_arrow, logical)
@@ -61,8 +48,120 @@ pub fn get_physical_arrow_schema(logical: &StructType, mode: ColumnMappingMode) 
     }
 }
 
-fn field_from_struct_field(field: &KernelStructField) -> Result<Field, DeltaTableError> {
-    let arrow_field: Field = field.try_into_arrow()?;
+/// Apply Delta column mapping to an Arrow schema, renaming logical→physical column names.
+///
+/// This is the Arrow-native equivalent of `StructType::make_physical`. It reads the
+/// `delta.columnMapping.physicalName` metadata from each Arrow field and renames the
+/// field accordingly.
+pub fn make_physical_arrow_schema(logical: &ArrowSchema, mode: ColumnMappingMode) -> ArrowSchema {
+    let new_fields: Vec<Field> = logical
+        .fields()
+        .iter()
+        .map(|f| make_physical_arrow_field(f.as_ref(), mode))
+        .collect();
+    ArrowSchema::new(new_fields).with_metadata(logical.metadata().clone())
+}
+
+/// Get the physical name of an Arrow field under a given column mapping mode.
+///
+/// This is the Arrow-native equivalent of `StructField::physical_name`.
+pub fn arrow_field_physical_name(field: &Field, mode: ColumnMappingMode) -> &str {
+    match mode {
+        ColumnMappingMode::None => field.name().as_str(),
+        ColumnMappingMode::Id | ColumnMappingMode::Name => field
+            .metadata()
+            .get(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+            .map(|s| s.as_str())
+            .unwrap_or_else(|| field.name().as_str()),
+    }
+}
+
+fn make_physical_arrow_field(field: &Field, mode: ColumnMappingMode) -> Field {
+    let physical_name_key = ColumnMetadataKey::ColumnMappingPhysicalName.as_ref();
+    let field_id_key = ColumnMetadataKey::ColumnMappingId.as_ref();
+    let parquet_field_id_key = ColumnMetadataKey::ParquetFieldId.as_ref();
+
+    let mut meta = field.metadata().clone();
+
+    let name = match mode {
+        ColumnMappingMode::None => field.name().clone(),
+        ColumnMappingMode::Id | ColumnMappingMode::Name => meta
+            .get(physical_name_key)
+            .cloned()
+            .unwrap_or_else(|| field.name().clone()),
+    };
+
+    match mode {
+        ColumnMappingMode::Id => {
+            if let Some(fid) = meta.get(field_id_key).cloned() {
+                meta.insert(parquet_field_id_key.to_string(), fid);
+            }
+        }
+        ColumnMappingMode::Name => {
+            meta.remove(field_id_key);
+            meta.remove(parquet_field_id_key);
+        }
+        ColumnMappingMode::None => {
+            meta.remove(physical_name_key);
+            meta.remove(field_id_key);
+            meta.remove(parquet_field_id_key);
+        }
+    }
+
+    let new_dt = make_physical_arrow_data_type(field.data_type(), mode);
+    Field::new(name, new_dt, field.is_nullable()).with_metadata(meta)
+}
+
+fn make_physical_arrow_data_type(dt: &ArrowDataType, mode: ColumnMappingMode) -> ArrowDataType {
+    match dt {
+        ArrowDataType::Struct(fields) => {
+            let new_fields: Fields = fields
+                .iter()
+                .map(|f| Arc::new(make_physical_arrow_field(f.as_ref(), mode)))
+                .collect();
+            ArrowDataType::Struct(new_fields)
+        }
+        other => other.clone(),
+    }
+}
+
+/// Build an Arrow schema from an Arrow schema, reordering partition columns to the end
+/// and optionally wrapping partition column types in a dictionary type.
+pub fn arrow_schema_reorder_partitions(
+    schema: &ArrowSchema,
+    partition_columns: &[String],
+    wrap_partitions: bool,
+) -> DeltaResult<SchemaRef> {
+    let mut non_partition_fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .filter(|f| !partition_columns.contains(f.name()))
+        .map(|f| f.as_ref().clone())
+        .collect();
+
+    let partition_fields: Vec<Field> =
+        partition_columns
+            .iter()
+            .map(|col| {
+                let f = schema
+                    .field_with_name(col)
+                    .map_err(|_| DeltaTableError::missing_column(col))?;
+                let corrected = if wrap_partitions {
+                    wrap_partition_type(f.data_type())
+                } else {
+                    f.data_type().clone()
+                };
+                Ok(Field::new(f.name(), corrected, f.is_nullable())
+                    .with_metadata(f.metadata().clone()))
+            })
+            .collect::<Result<Vec<Field>, DeltaTableError>>()?;
+
+    non_partition_fields.extend(partition_fields);
+    Ok(Arc::new(ArrowSchema::new(non_partition_fields)))
+}
+
+fn field_from_struct_field(field: &StructField) -> Result<Field, DeltaTableError> {
+    let arrow_field: Field = Field::try_from(field)?;
     let field_type = arrow_field.data_type().clone();
     Ok(Field::new(
         field.name().to_string(),
@@ -105,16 +204,14 @@ pub fn enrich_arrow_with_parquet_field_ids(
             out.insert(path.clone(), (id, f.name().clone()));
 
             match f.data_type() {
-                delta_kernel::schema::DataType::Struct(nst) => {
-                    build_path_map(nst.as_ref(), path, out)
-                }
-                delta_kernel::schema::DataType::Array(at) => {
-                    if let delta_kernel::schema::DataType::Struct(nst) = at.element_type() {
+                DataType::Struct(nst) => build_path_map(nst.as_ref(), path, out),
+                DataType::Array(at) => {
+                    if let DataType::Struct(nst) = at.element_type() {
                         build_path_map(nst.as_ref(), path, out)
                     }
                 }
-                delta_kernel::schema::DataType::Map(mt) => {
-                    if let delta_kernel::schema::DataType::Struct(nst) = mt.value_type() {
+                DataType::Map(mt) => {
+                    if let DataType::Struct(nst) = mt.value_type() {
                         build_path_map(nst.as_ref(), path, out)
                     }
                 }

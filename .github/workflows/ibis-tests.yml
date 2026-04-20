@@ -7,33 +7,9 @@ on:
         required: false
 
 jobs:
-  setup:
-    name: Setup
-    runs-on: ubuntu-slim
-    outputs:
-      run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/commit-message-match
-        id: match
-        with:
-          pattern: "\\[(ibis )?tests?\\]"
-          ignore_case: true
-
-      - uses: actions/github-script@v7
-        id: label
-        with:
-          script: |
-            const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
-            core.setOutput('has_label', labels.includes('run ibis tests') ? 'true' : 'false');
-
   test:
     name: Test
-    if: needs.setup.outputs.run_tests == 'true'
     runs-on: ubuntu-latest
-    needs:
-      - setup
     env:
       # Set the Hatch environment for `hatch run` commands.
       HATCH_ENV: "test-ibis"

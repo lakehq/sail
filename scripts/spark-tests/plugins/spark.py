@@ -20,8 +20,32 @@ def _is_spark_testing():
 
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
+def spark_cached_remote_relation_patch():
+    from pyspark.sql.connect import plan
+
+    _del = getattr(plan.CachedRemoteRelation, "__del__", None)
+
+    if _del is None:
+        yield
+        return
+
+    def _noop_del(self) -> None:  # noqa: ARG001
+        # Spark Connect client can hang when a CachedRemoteRelation finalizer issues
+        # a blocking gRPC cleanup call during GC while another gRPC request is started
+        # by another thread.
+        return None
+
+    plan.CachedRemoteRelation.__del__ = _noop_del
+
+    try:
+        yield
+    finally:
+        plan.CachedRemoteRelation.__del__ = _del
+
+
+@pytest.fixture(scope="session", autouse=_is_spark_testing())
 def spark_working_dir(tmp_path_factory):
-    import pyspark  # noqa: PLC0415
+    import pyspark
 
     working_dir = tmp_path_factory.mktemp("spark-working-dir-")
 
@@ -67,12 +91,14 @@ def spark_env_var(tmp_path_factory):
 @pytest.fixture(scope="module", autouse=_is_spark_testing())
 def spark_doctest_session(doctest_namespace, request):
     if request.config.option.doctestmodules:
-        from pyspark.sql import SparkSession  # noqa: PLC0415
+        from pyspark.sql import SparkSession
 
         spark = SparkSession.builder.appName("doctest").remote("local").getOrCreate()
         doctest_namespace["spark"] = spark
-        yield
-        spark.stop()
+        try:
+            yield
+        finally:
+            spark.stop()
     else:
         yield
 
@@ -83,15 +109,31 @@ def spark_doctest_session(doctest_namespace, request):
 
 
 def normalize_pandas_data_frame(df):
-    from pandas.api.types import is_hashable  # noqa: PLC0415
+    from pandas.api.types import is_hashable
 
     columns = [col for col in df.columns if all(is_hashable(v) for v in df[col])]
     return df.sort_values(by=columns, ignore_index=True)
 
 
+def normalize_datetime_dtypes(df):
+    """Normalize datetime column dtypes from nanosecond to microsecond resolution.
+
+    Sail uses microsecond precision for timestamps (per Spark specification).
+    In Pandas 2.0-2.1, Python datetime objects and ``pd.Timestamp.apply()``
+    produce ``datetime64[ns]`` dtype, while Sail's ``toPandas()`` returns
+    ``datetime64[us]``. This normalization ensures that dtype comparisons in
+    ``assert_frame_equal`` do not fail due to this precision difference.
+    """
+    result = df.copy()
+    for col in result.columns:
+        if str(result[col].dtype) == "datetime64[ns]":
+            result[col] = result[col].astype("datetime64[us]")
+    return result
+
+
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pyspark_pandas_test_utils():
-    from pyspark.testing.pandasutils import PandasOnSparkTestUtils  # noqa: PLC0415
+    from pyspark.testing.pandasutils import PandasOnSparkTestUtils
 
     _assert_eq = PandasOnSparkTestUtils.assert_eq
 
@@ -103,7 +145,7 @@ def patch_pyspark_pandas_test_utils():
         check_row_order: bool = False,  # noqa: FBT001, FBT002
         **kwargs,
     ):
-        import pandas as pd  # noqa: PLC0415
+        import pandas as pd
 
         if not check_row_order and isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame):
             left = normalize_pandas_data_frame(left)
@@ -116,12 +158,14 @@ def patch_pyspark_pandas_test_utils():
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pandas_test_utils():
-    import pyspark  # noqa: PLC0415
-    from pandas.testing import assert_frame_equal as _assert_frame_equal  # noqa: PLC0415
+    import pyspark
+    from pandas.testing import assert_frame_equal as _assert_frame_equal
 
     def assert_frame_equal(left, right, **kwargs):
         left = normalize_pandas_data_frame(left)
         right = normalize_pandas_data_frame(right)
+        left = normalize_datetime_dtypes(left)
+        right = normalize_datetime_dtypes(right)
         _assert_frame_equal(left, right, **kwargs)
 
     modules = [
@@ -163,7 +207,7 @@ def patch_pandas_test_utils():
 
 
 def is_row_collection(obj):
-    from pyspark.sql import Row  # noqa: PLC0415
+    from pyspark.sql import Row
 
     return isinstance(obj, Iterable) and all(isinstance(x, Row) for x in obj)
 
@@ -174,7 +218,7 @@ def normalize_row_collection(obj):
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pyspark_connect_test_class():
-    from pyspark.testing.connectutils import ReusedConnectTestCase  # noqa: PLC0415
+    from pyspark.testing.connectutils import ReusedConnectTestCase
 
     def assertEqual(self, first, second, msg=None):  # noqa: N802
         if is_row_collection(first) and is_row_collection(second):
@@ -260,6 +304,10 @@ SKIPPED_SPARK_TESTS = [
         reason="Segmentation fault",
     ),
     TestMarker(
+        keywords=["test_data_source_segfault"],
+        reason="Segmentation fault",
+    ),
+    TestMarker(
         keywords=["test_reattach.py"],
         reason="Slow test not working yet",
     ),
@@ -270,6 +318,16 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_parity_job_cancellation.py"],
         reason="Slow test not working yet",
+    ),
+    # The following tests rely on direct JVM access (RDD API, Java gateway),
+    # which is not supported by Sail.
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.rdd"],
+        reason="JVM-dependent test",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.java_method"],
+        reason="JVM-dependent test",
     ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
@@ -352,7 +410,7 @@ def normalize_show_string(s: str) -> str:
 
     def join_row(columns: list[str], widths: list[int]) -> str:
         """Join columns back into a row with proper spacing."""
-        parts = [f"|{col:>{width}}" for col, width in zip(columns, widths)]
+        parts = [f"|{col:>{width}}" for col, width in zip(columns, widths, strict=True)]
         return "".join(parts) + "|"
 
     header_row = split_row(lines[1])
@@ -404,7 +462,7 @@ def normalize_summary_df_show_string(s: str) -> str:
 
 
 def patch_pyspark_doctest_output_checker():
-    import _pytest.doctest  # noqa: PLC0415
+    import _pytest.doctest
 
     # ensure the doctest output checker class is initialized
     _ = _pytest.doctest._get_checker()

@@ -1,3 +1,4 @@
+pub mod error;
 pub mod formats;
 mod listing;
 pub mod options;

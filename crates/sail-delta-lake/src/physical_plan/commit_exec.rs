@@ -20,6 +20,7 @@ use chrono::Utc;
 use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -30,23 +31,22 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use delta_kernel::engine::arrow_conversion::TryIntoKernel;
-use delta_kernel::schema::StructType;
 use futures::stream::{self, StreamExt};
-use futures::TryStreamExt;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::kernel::models::{Action, Add, Metadata, Protocol, RemoveOptions};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
-use crate::kernel::{DeltaOperation, SaveMode};
-use crate::physical_plan::action_schema::CommitMeta;
-use crate::physical_plan::{
-    current_timestamp_millis, decode_actions_and_meta_from_batch, COL_ACTION,
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, OperationMetrics};
+use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
+use crate::physical_plan::action_schema::ExecCommitMeta;
+use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
+use crate::schema::{
+    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
-use crate::schema::normalize_delta_schema;
+use crate::spec::{CommitAction, StructType};
 use crate::storage::{get_object_store_from_context, StorageConfig};
-use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
+use crate::table::{
+    create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
+};
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
 const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
@@ -63,7 +63,7 @@ pub struct DeltaCommitExec {
     sink_schema: SchemaRef,
     sink_mode: PhysicalSinkMode,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaCommitExec {
@@ -93,13 +93,13 @@ impl DeltaCommitExec {
         }
     }
 
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        PlanProperties::new(
+    fn compute_properties(schema: SchemaRef) -> Arc<PlanProperties> {
+        Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        )
+        ))
     }
 
     pub fn table_url(&self) -> &Url {
@@ -137,7 +137,7 @@ impl ExecutionPlan for DeltaCommitExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -202,40 +202,39 @@ impl ExecutionPlan for DeltaCommitExec {
         let partition_columns = self.partition_columns.clone();
         let table_exists = self.table_exists;
         let sink_schema = self.sink_schema.clone();
-        let sink_mode = self.sink_mode.clone();
-
         let schema = self.schema();
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
-            let table = if table_exists {
-                open_table_with_object_store(
-                    table_url.clone(),
-                    object_store.clone(),
-                    storage_config.clone(),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
+            // For existing tables, open concurrently with a full snapshot while
+            // input data (Parquet writes from workers) is being drained.
+            let table_join = if table_exists {
+                let open_url = table_url.clone();
+                let open_store = Arc::clone(&object_store);
+                let open_storage = storage_config.clone();
+                Some(SpawnedTask::spawn(async move {
+                    open_table_with_object_store_and_table_config(
+                        open_url,
+                        open_store,
+                        open_storage,
+                        DeltaSnapshotConfig::default(),
+                    )
+                    .await
+                }))
             } else {
-                create_delta_table_with_object_store(
-                    table_url.clone(),
-                    object_store.clone(),
-                    storage_config.clone(),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                None
             };
 
             let mut total_rows = 0u64;
             let mut has_data = false;
             // "data" actions (Add/Remove/other) and "initial" actions (Protocol/Metadata)
             // are kept separate so we can preserve the required action ordering on commit.
-            let mut actions: Vec<Action> = Vec::new();
-            let mut initial_actions: Vec<Action> = Vec::new();
+            let mut actions: Vec<CommitAction> = Vec::new();
+            let mut initial_actions: Vec<CommitAction> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
-            let mut operation_metrics: HashMap<String, serde_json::Value> = HashMap::new();
+            let mut operation_metrics = OperationMetrics::default();
             let mut data = input_stream;
 
             while let Some(batch_result) = data.next().await {
@@ -246,12 +245,23 @@ impl ExecutionPlan for DeltaCommitExec {
                     let (decoded_actions, decoded_meta) =
                         decode_actions_and_meta_from_batch(&batch)?;
                     for a in decoded_actions {
-                        match a {
-                            Action::Protocol(_) | Action::Metadata(_) => initial_actions.push(a),
-                            _ => actions.push(a),
+                        // Convert from the broad Action type (used for log replay) to
+                        // CommitAction, rejecting any checkpoint-only variants at the
+                        // boundary.  In practice decode_actions_and_meta_from_batch only
+                        // produces Metadata/Protocol/Add/Remove/Cdc/Txn actions.
+                        let ca = CommitAction::try_from(a).map_err(|e| {
+                            DataFusionError::Plan(format!(
+                                "unsupported action in commit batch: {e}"
+                            ))
+                        })?;
+                        match ca {
+                            CommitAction::Protocol(_) | CommitAction::Metadata(_) => {
+                                initial_actions.push(ca)
+                            }
+                            _ => actions.push(ca),
                         }
                     }
-                    if let Some(CommitMeta {
+                    if let Some(ExecCommitMeta {
                         row_count,
                         operation: op,
                         operation_metrics: metrics,
@@ -261,7 +271,7 @@ impl ExecutionPlan for DeltaCommitExec {
                         if operation.is_none() {
                             operation = op;
                         }
-                        merge_operation_metrics(&mut operation_metrics, metrics);
+                        operation_metrics.merge(metrics);
                     }
                     has_data = has_data || batch.num_rows() > 0;
                 } else {
@@ -278,44 +288,16 @@ impl ExecutionPlan for DeltaCommitExec {
                 return Ok(batch);
             }
 
-            // Handle full table overwrite
-            if matches!(sink_mode, PhysicalSinkMode::Overwrite) && table_exists {
-                let snapshot = table
-                    .snapshot()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let all_files: Vec<Add> = snapshot
-                    .snapshot()
-                    .files(table.log_store().as_ref(), None)
-                    .map_ok(|view| view.add_action())
-                    .try_collect()
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let deletion_timestamp = current_timestamp_millis()?;
-                let remove_actions = all_files
-                    .into_iter()
-                    .map(|add| {
-                        Action::Remove(add.into_remove_with_options(
-                            deletion_timestamp,
-                            RemoveOptions {
-                                extended_file_metadata: Some(true),
-                                include_tags: false,
-                            },
-                        ))
-                    })
-                    .collect::<Vec<_>>();
-                actions.extend(remove_actions);
-            }
-
             // Prepend initial actions
             let mut final_actions = initial_actions;
             final_actions.extend(actions);
             let kinds: Vec<&'static str> = final_actions
                 .iter()
                 .map(|a| match a {
-                    Action::Protocol(_) => "Protocol",
-                    Action::Metadata(_) => "Metadata",
-                    Action::Add(_) => "Add",
-                    Action::Remove(_) => "Remove",
+                    CommitAction::Protocol(_) => "Protocol",
+                    CommitAction::Metadata(_) => "Metadata",
+                    CommitAction::Add(_) => "Add",
+                    CommitAction::Remove(_) => "Remove",
                     _ => "Other",
                 })
                 .collect();
@@ -342,11 +324,11 @@ impl ExecutionPlan for DeltaCommitExec {
             // must initialize the table with protocol and metadata.
             let (operation, final_actions) = if !table_exists {
                 let protocol_in_actions = final_actions.iter().find_map(|a| match a {
-                    Action::Protocol(p) => Some(p.clone()),
+                    CommitAction::Protocol(p) => Some(p.clone()),
                     _ => None,
                 });
                 let metadata_in_actions = final_actions.iter().find_map(|a| match a {
-                    Action::Metadata(m) => Some(m.clone()),
+                    CommitAction::Metadata(m) => Some(m.clone()),
                     _ => None,
                 });
 
@@ -356,48 +338,37 @@ impl ExecutionPlan for DeltaCommitExec {
                         DeltaOperation::Create {
                             mode: SaveMode::ErrorIfExists,
                             location: table_url.to_string(),
-                            protocol,
-                            metadata,
+                            protocol: Box::new(protocol),
+                            metadata: Box::new(metadata),
                         },
                         final_actions,
                     )
                 } else {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
-                    let delta_schema: StructType = normalized_sink
-                        .as_ref()
-                        .try_into_kernel()
+                    let protocol = protocol_for_create(false, false, false, &HashMap::new())
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                    let protocol_json = serde_json::json!({
-                        "minReaderVersion": 1,
-                        "minWriterVersion": 2,
-                    });
-                    let protocol: Protocol = serde_json::from_value(protocol_json)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    let configuration: HashMap<String, String> = HashMap::new();
-                    let metadata = Metadata::try_new(
-                        None,
-                        None,
-                        delta_schema.clone(),
+                    let metadata = metadata_for_create_with_struct_type(
+                        StructType::try_from(normalized_sink.as_ref())
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?,
                         partition_columns.to_vec(),
                         Utc::now().timestamp_millis(),
-                        configuration,
+                        HashMap::new(),
                     )
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let mut updated_actions = final_actions;
                     // Insert in order: Protocol, then Metadata
-                    updated_actions.insert(0, Action::Metadata(metadata.clone()));
-                    updated_actions.insert(0, Action::Protocol(protocol.clone()));
+                    updated_actions.insert(0, CommitAction::Metadata(metadata.clone()));
+                    updated_actions.insert(0, CommitAction::Protocol(protocol.clone()));
 
                     (
                         DeltaOperation::Create {
                             mode: SaveMode::ErrorIfExists,
                             location: table_url.to_string(),
-                            protocol,
-                            metadata,
+                            protocol: Box::new(protocol),
+                            metadata: Box::new(metadata),
                         },
                         updated_actions,
                     )
@@ -417,6 +388,23 @@ impl ExecutionPlan for DeltaCommitExec {
                 )
             };
 
+            // Await the concurrently-opened table, or create one for new tables.
+            // For existing tables the open() ran in the background while workers were
+            // writing Parquet; it should be complete (or nearly so) by now.
+            let table = if let Some(join) = table_join {
+                join.await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+            } else {
+                create_delta_table_with_object_store(
+                    table_url.clone(),
+                    object_store.clone(),
+                    storage_config.clone(),
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+            };
+
             let snapshot = if table_exists {
                 Some(
                     table
@@ -426,7 +414,7 @@ impl ExecutionPlan for DeltaCommitExec {
             } else {
                 None
             };
-            let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
+            let reference = snapshot.cloned();
 
             let finalized_commit = CommitBuilder::from(
                 CommitProperties::default().with_operation_metrics(operation_metrics),
@@ -467,48 +455,6 @@ impl ExecutionPlan for DeltaCommitExec {
             self.schema(),
             stream,
         )))
-    }
-}
-
-fn merge_operation_metrics(
-    target: &mut HashMap<String, serde_json::Value>,
-    source: HashMap<String, serde_json::Value>,
-) {
-    for (k, v) in source {
-        match (target.get(&k), &v) {
-            (Some(serde_json::Value::Number(a)), serde_json::Value::Number(b)) => {
-                let sum_i64 = a
-                    .as_i64()
-                    .and_then(|ai| b.as_i64().map(|bi| ai.saturating_add(bi)));
-                let sum_u64 = a
-                    .as_u64()
-                    .and_then(|au| b.as_u64().map(|bu| au.saturating_add(bu)));
-
-                if let Some(sum) = sum_u64 {
-                    target.insert(k, serde_json::Value::from(sum));
-                } else if let Some(sum) = sum_i64 {
-                    target.insert(k, serde_json::Value::from(sum));
-                } else if let (Some(af), Some(bf)) = (a.as_f64(), b.as_f64()) {
-                    let sum = af + bf;
-                    target.insert(
-                        k,
-                        serde_json::Value::Number(
-                            serde_json::Number::from_f64(sum)
-                                .unwrap_or_else(|| serde_json::Number::from(0)),
-                        ),
-                    );
-                } else {
-                    target.insert(k, v);
-                }
-            }
-            (None, _) => {
-                target.insert(k, v);
-            }
-            _ => {
-                // Different shapes; prefer the latest value.
-                target.insert(k, v);
-            }
-        }
     }
 }
 

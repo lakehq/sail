@@ -1,6 +1,8 @@
-use datafusion_expr::{LogicalPlan, ScalarUDF};
+use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::PlanResult;
@@ -36,9 +38,9 @@ impl PlanResolver<'_> {
             deterministic,
         );
 
-        let command = CatalogCommand::RegisterFunction {
-            udf: ScalarUDF::from(udf),
-        };
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let udf = manager.track_function(datafusion_expr::ScalarUDF::from(udf))?;
+        let command = CatalogCommand::RegisterFunction { udf };
         self.resolve_catalog_command(command)
     }
 
@@ -69,9 +71,9 @@ impl PlanResolver<'_> {
         );
         // PySpark UDTF is registered as a scalar UDF since it will be used as a stream UDF
         // in the `MapPartitions` plan.
-        let command = CatalogCommand::RegisterFunction {
-            udf: ScalarUDF::from(udtf),
-        };
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let udf = manager.track_function(datafusion_expr::ScalarUDF::from(udtf))?;
+        let command = CatalogCommand::RegisterFunction { udf };
         self.resolve_catalog_command(command)
     }
 }

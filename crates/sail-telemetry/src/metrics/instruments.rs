@@ -227,6 +227,11 @@ fn validate_attributes(keys: &[&'static str], attributes: &[KeyValue]) {
             panic!("invalid metric attribute key: {k}");
         }
     });
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = keys;
+        let _ = attributes;
+    }
 }
 
 /// Converts a list of attributes into OpenTelemetry key-value pairs.

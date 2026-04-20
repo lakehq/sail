@@ -1,17 +1,11 @@
-import fs from "fs/promises";
-
-import yaml from "js-yaml";
-
-import type { ConfigItem } from "../../.vitepress/theme/utils/config";
 import {
-  APP_CONFIG_PATH,
   buildConfigGroups,
+  loadConfigItems,
 } from "../../.vitepress/theme/utils/config";
 
 export default {
   async load() {
-    const content = await fs.readFile(APP_CONFIG_PATH, "utf-8");
-    const items = yaml.load(content) as ConfigItem[];
+    const items = await loadConfigItems();
     const grouping = {
       groups: [
         {
@@ -40,9 +34,19 @@ export default {
           pattern: /^spark\./,
         },
         {
+          id: "flight",
+          title: "Arrow Flight Options",
+          pattern: /^flight\./,
+        },
+        {
           id: "execution",
           title: "Execution Options",
           pattern: /^execution\./,
+        },
+        {
+          id: "optimizer",
+          title: "Optimizer Options",
+          pattern: /^optimizer\./,
         },
         {
           id: "parquet",
@@ -53,6 +57,16 @@ export default {
           id: "catalog",
           title: "Catalog Options",
           pattern: /^catalog\./,
+        },
+        {
+          id: "telemetry",
+          title: "Telemetry Options",
+          pattern: /^telemetry\./,
+        },
+        {
+          id: "python",
+          title: "Python Options",
+          pattern: /^python\./,
         },
       ],
       fallbackGroup: {

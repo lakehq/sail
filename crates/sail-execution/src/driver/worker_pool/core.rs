@@ -29,6 +29,7 @@ impl WorkerPool {
     pub async fn close(&mut self, ctx: &mut ActorContext<DriverActor>) -> ExecutionResult<()> {
         let worker_ids = self.workers.keys().cloned().collect::<Vec<_>>();
         for worker_id in worker_ids.into_iter() {
+            // TODO: Should we wait for the spawned tasks for stopping the workers?
             self.stop_worker(ctx, worker_id, Some("closing worker pool".to_string()));
         }
         // TODO: support timeout for worker manager stop
@@ -82,7 +83,7 @@ impl WorkerPool {
                 port
             },
             worker_heartbeat_interval: self.options.worker_heartbeat_interval,
-            worker_stream_buffer: self.options.worker_stream_buffer,
+            task_stream_buffer: self.options.task_stream_buffer,
             task_stream_creation_timeout: self.options.task_stream_creation_timeout,
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
         };
@@ -254,6 +255,7 @@ impl WorkerPool {
         }
     }
 
+    /// Dispatches a task to a specific worker by sending the task definition over gRPC.
     pub fn run_task(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,

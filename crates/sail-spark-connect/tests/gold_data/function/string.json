@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects 2 arguments but received 1,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(String), String)) but received NativeType::Binary, DataType: Binary.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'btrim(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects 2 arguments but received 1,Error during planning: Function 'btrim' requires TypeSignatureClass::Native(LogicalType(Native(String), String)), but received Binary (DataType: Binary).\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'btrim(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(String), String)) but received NativeType::Binary, DataType: Binary.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Error during planning: Function 'btrim' expects 1 arguments but received 2.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'btrim(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' requires TypeSignatureClass::Native(LogicalType(Native(String), String)), but received Binary (DataType: Binary).\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String.,Error during planning: Function 'btrim' expects 1 arguments but received 2.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'btrim(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
       }
     },
     {
@@ -985,7 +985,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: format_number"
+        "success": "ok"
       }
     },
     {
@@ -1007,7 +1007,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: format_number"
+        "success": "ok"
       }
     },
     {
@@ -1029,7 +1029,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"Hello World %d %s\"), None), Literal(Int32(100), None), Literal(Utf8(\"days\"), None)]"
+        "success": "ok"
       }
     },
     {
@@ -2327,7 +2327,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: printf"
+        "success": "ok"
       }
     },
     {
@@ -2371,7 +2371,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: randstr"
+        "success": "ok"
       }
     },
     {
@@ -2437,7 +2437,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_extract"
+        "success": "ok"
       }
     },
     {
@@ -2459,7 +2459,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_extract"
+        "success": "ok"
       }
     },
     {
@@ -2485,7 +2485,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_extract_all"
+        "success": "ok"
       }
     },
     {
@@ -2511,7 +2511,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_extract_all"
+        "success": "ok"
       }
     },
     {
@@ -2621,7 +2621,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_substr"
+        "success": "ok"
       }
     },
     {
@@ -2643,7 +2643,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_substr"
+        "success": "ok"
       }
     },
     {
@@ -2827,7 +2827,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sentences"
+        "success": "ok"
       }
     },
     {
@@ -2857,7 +2857,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sentences"
+        "success": "ok"
       }
     },
     {
@@ -2887,7 +2887,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sentences"
+        "success": "ok"
       }
     },
     {
@@ -2909,7 +2909,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: soundex"
+        "success": "ok"
       }
     },
     {

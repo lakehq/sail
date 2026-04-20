@@ -1,6 +1,7 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::{pyfunction, PyErr, PyResult, Python};
 
+/// The Sail CLI entrypoint exposed to Python.
 #[pyfunction]
 pub(crate) fn main(py: Python<'_>, args: Vec<String>) -> PyResult<()> {
     py.detach(move || {

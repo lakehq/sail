@@ -66,6 +66,8 @@ impl PlanResolver<'_> {
             function.eval_type,
             // MapPartitions UDF has the iterator as the only argument
             &[0],
+            &[], // input types not needed for map partitions
+            &[], // map partitions don't use kwargs
             &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
@@ -208,6 +210,8 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
+            &input_types,
+            &[], // group map UDFs don't use kwargs
             &self.config.pyspark_udf_config,
         )?;
         let udaf = PySparkGroupMapUDF::new(
@@ -293,11 +297,7 @@ impl PlanResolver<'_> {
             .zip(right.grouping.iter())
             .map(|(left, right)| left.clone().eq(right.clone()))
             .collect::<Vec<_>>();
-        let offsets: Vec<usize> = left
-            .offsets
-            .into_iter()
-            .chain(right.offsets.into_iter())
-            .collect();
+        let offsets: Vec<usize> = left.offsets.into_iter().chain(right.offsets).collect();
 
         // prepare the output mapping UDF
         let spec::CommonInlineUserDefinedFunction {
@@ -338,6 +338,8 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
+            &[], // input types not needed for cogroup map
+            &[], // cogroup map UDFs don't use kwargs
             &self.config.pyspark_udf_config,
         )?;
         let udf = PySparkCoGroupMapUDF::try_new(
@@ -498,10 +500,7 @@ impl PlanResolver<'_> {
     fn resolve_expression_types(exprs: &[Expr], schema: &DFSchema) -> PlanResult<Vec<DataType>> {
         exprs
             .iter()
-            .map(|arg| {
-                let (data_type, _) = arg.data_type_and_nullable(schema)?;
-                Ok(data_type)
-            })
+            .map(|arg| Ok(arg.to_field(schema)?.1.data_type().clone()))
             .collect::<PlanResult<Vec<_>>>()
     }
 }

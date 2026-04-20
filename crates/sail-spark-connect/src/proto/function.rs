@@ -6,6 +6,7 @@ mod tests {
     use datafusion::arrow::array::RecordBatch;
     use datafusion::arrow::error::ArrowError;
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+    use pyo3::Python;
     use sail_common::config::AppConfig;
     use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
@@ -30,7 +31,7 @@ mod tests {
         schema: JsonDataType,
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn format_record_batches(batches: Vec<RecordBatch>) -> SparkResult<Vec<String>> {
         let options = FormatOptions::default();
         let mut output = vec![];
@@ -54,6 +55,8 @@ mod tests {
 
     #[test]
     fn test_sql_function() -> Result<(), Box<dyn std::error::Error>> {
+        // Initialize Python for Python data source registration when creating sessions.
+        Python::initialize();
         let config = Arc::new(AppConfig::load()?);
         let runtime = RuntimeManager::try_new(&config.runtime)?;
         let handle = runtime.handle();
@@ -71,7 +74,7 @@ mod tests {
             |example: FunctionExample| -> SparkResult<String> {
                 let relation = Relation {
                     common: None,
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     rel_type: Some(RelType::Sql(Sql {
                         query: example.query,
                         args: HashMap::new(),

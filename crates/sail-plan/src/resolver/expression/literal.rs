@@ -2,12 +2,13 @@ use std::str::FromStr;
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
+use chrono::{NaiveTime, Timelike};
 use datafusion_expr::expr;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
-use sail_sql_analyzer::parser::{parse_date, parse_timestamp};
+use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
 use crate::error::PlanResult;
@@ -78,6 +79,28 @@ impl PlanResolver<'_> {
         let literal = spec::Literal::TimestampMicrosecond {
             microseconds: Some(datetime.timestamp_micros()),
             timestamp_type,
+        };
+        self.resolve_expression_literal(literal, state)
+    }
+
+    pub(super) fn resolve_expression_time(
+        &self,
+        value: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let time = parse_time(&value)?;
+
+        // Convert to NaiveTime which validates hour (0-23), minute/second (0-59)
+        let naive_time: NaiveTime = time.try_into()?;
+
+        // Use chrono methods to get microseconds since midnight
+        // Nanoseconds beyond microsecond precision are truncated to match Spark behavior
+        let seconds_from_midnight = naive_time.num_seconds_from_midnight() as i64;
+        let nanoseconds = naive_time.nanosecond() as i64;
+        let microseconds = seconds_from_midnight * 1_000_000 + nanoseconds / 1_000;
+
+        let literal = spec::Literal::Time64Microsecond {
+            microseconds: Some(microseconds),
         };
         self.resolve_expression_literal(literal, state)
     }

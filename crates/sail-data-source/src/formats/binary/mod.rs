@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -7,6 +6,7 @@ use datafusion_common::arrow::datatypes::SchemaRef;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_datasource::file_format::FileFormat;
+use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::binary::file_format::BinaryFileFormat;
 use crate::formats::binary::options::resolve_binary_read_options;
@@ -35,18 +35,20 @@ impl ListingFormat for BinaryListingFormat {
     fn create_read_format(
         &self,
         _ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
+        options: Vec<OptionLayer>,
         _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(BinaryFileFormat::new(
-            resolve_binary_read_options(options)?,
+            resolve_binary_read_options(options)
+                .map_err(datafusion_common::DataFusionError::from)?
+                .into_table_options(),
         )))
     }
 
     fn create_write_format(
         &self,
         _ctx: &dyn Session,
-        _options: Vec<HashMap<String, String>>,
+        _options: Vec<OptionLayer>,
     ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
         not_impl_err!("Binary file format does not support writing")
     }

@@ -11,18 +11,22 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
+arrow = { workspace = true }
+arrow-schema ={ workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 regex = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
+ordered-float = { workspace = true }
 lazy_static = { workspace = true }
 twox-hash = { workspace = true }
 aes = { workspace = true }
@@ -32,6 +36,12 @@ base64 = { workspace = true }
 num = { workspace = true }
 half = { workspace = true }
 url = { workspace = true }
+parquet-variant = { workspace = true }
+parquet-variant-compute = { workspace = true }
+parquet-variant-json = { workspace = true }
 percent-encoding = { workspace = true }
 jiter = { workspace = true }
+thiserror = { workspace = true }
 serde_json = { workspace = true }
+xee-xpath = { workspace = true }
+xot = { workspace = true }

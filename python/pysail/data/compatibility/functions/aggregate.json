@@ -3,7 +3,7 @@
     "module": "pyspark.sql.functions",
     "function": "any",
     "status": "supported",
-    "note": "Spark SQL only; not available in PySpark"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
@@ -48,14 +48,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "bitmap_construct_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "bitmap_or_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -143,8 +141,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "histogram_numeric",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -221,8 +218,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "percentile",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -233,19 +229,18 @@
     "module": "pyspark.sql.functions",
     "function": "percentile_cont",
     "status": "supported",
-    "note": "Spark SQL only; not available in PySpark",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
     "function": "percentile_disc",
     "status": "supported",
-    "note": "Spark SQL only; not available in PySpark"
+    "note": "This is Spark SQL only (not available in PySpark)."
   },
   {
     "module": "pyspark.sql.functions",
     "function": "product",
-    "status": "??? not on roadmap"
+    "status": "planned"
   },
   {
     "module": "pyspark.sql.functions",

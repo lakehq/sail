@@ -166,7 +166,7 @@ impl ScalarFunctionBuilder {
         )
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn scalar_udf<F>(f: F) -> ScalarFunction
     where
         F: Fn() -> Arc<ScalarUDF> + Send + Sync + 'static,
@@ -357,7 +357,6 @@ impl WinFunctionBuilder {
         Arc::new(f)
     }
 
-    #[allow(dead_code)]
     pub fn unknown(name: &str) -> WinFunction {
         let name = name.to_string();
         Arc::new(move |_| Err(PlanError::todo(format!("unknown window function: {name}"))))

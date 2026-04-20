@@ -1,3 +1,4 @@
+pub mod java_random;
 pub mod rand_poisson;
 pub mod randn;
 pub mod random;
@@ -16,4 +17,4 @@ pub mod spark_try_subtract;
 pub mod spark_unhex;
 pub mod spark_uniform;
 mod utils;
-mod xorshift;
+pub mod xorshift;

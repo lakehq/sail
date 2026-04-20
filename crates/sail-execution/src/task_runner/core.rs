@@ -13,10 +13,10 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::debug;
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
+use sail_delta_lake::physical_plan::DeltaPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{Actor, ActorContext};
-use sail_telemetry::telemetry::global_metric_registry;
+use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
 
@@ -73,6 +73,7 @@ impl TaskRunner {
         }
     }
 
+    /// Deserializes and prepares a physical plan for execution on this node.
     fn execute_plan<T: Actor>(
         &mut self,
         ctx: &mut ActorContext<T>,
@@ -100,7 +101,7 @@ impl TaskRunner {
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
         let options = TracingExecOptions {
-            metric_registry: global_metric_registry(),
+            metrics: global_metrics(),
             job_id: Some(key.job_id.into()),
             stage: Some(key.stage),
             attempt: Some(key.attempt),
@@ -119,12 +120,10 @@ impl TaskRunner {
             if let Some(ds) = node.as_any().downcast_ref::<DataSourceExec>() {
                 if let Some((base_config, _parquet)) = ds.downcast_to_file_source::<ParquetSource>()
                 {
-                    let builder = FileScanConfigBuilder::from(base_config.clone());
-                    let new_source = base_config
-                        .file_source()
-                        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory))?;
-                    let new_exec =
-                        DataSourceExec::from_data_source(builder.with_source(new_source).build());
+                    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+                    let builder = FileScanConfigBuilder::from(base_config.clone())
+                        .with_expr_adapter(Some(adapter_factory));
+                    let new_exec = DataSourceExec::from_data_source(builder.build());
                     return Ok(Transformed::yes(new_exec as Arc<dyn ExecutionPlan>));
                 }
             }
@@ -155,14 +154,12 @@ impl TaskRunner {
                         TaskKeyDisplay(key)
                     );
                 };
-                let partitioning = placeholder.properties().output_partitioning().clone();
                 let locations = input.locations(key.job_id);
                 let accessor = StreamAccessor::new(handle.clone());
                 let shuffle = ShuffleReadExec::new(
                     locations,
                     Arc::new(accessor),
-                    placeholder.schema(),
-                    partitioning,
+                    placeholder.properties().clone(),
                 );
                 Ok(Transformed::yes(Arc::new(shuffle)))
             } else {

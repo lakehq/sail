@@ -3,30 +3,19 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{internal_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 /// A placeholder execution plan for stage inputs.
 #[derive(Debug, Clone)]
 pub struct StageInputExec<I> {
     input: I,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl<I> StageInputExec<I> {
-    pub fn new(input: I, schema: SchemaRef, partitioning: Partitioning) -> Self {
-        let properties = PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
-            partitioning,
-            EmissionType::Both,
-            Boundedness::Unbounded {
-                requires_infinite_memory: false,
-            },
-        );
+    pub fn new(input: I, properties: Arc<PlanProperties>) -> Self {
         Self { input, properties }
     }
 
@@ -61,7 +50,7 @@ where
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

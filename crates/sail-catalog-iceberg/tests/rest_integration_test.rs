@@ -10,15 +10,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
 
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
-    DropViewOptions, Namespace, RuntimeAwareCatalogProvider,
+    CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
+    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, Namespace, PartitionTransform, RuntimeAwareCatalogProvider,
 };
 use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
 use sail_common::runtime::RuntimeHandle;
@@ -71,7 +71,7 @@ async fn setup_catalog(
         .await
         .expect("Failed to start MC");
 
-    let rest = GenericImage::new("apache/iceberg-rest-fixture", "latest")
+    let rest = GenericImage::new("apache/iceberg-rest-fixture", "1.10.1")
         .with_wait_for(WaitFor::message_on_stderr(
             "INFO org.eclipse.jetty.server.Server - Started ",
         ))
@@ -102,7 +102,6 @@ async fn setup_catalog(
     let runtime = RuntimeHandle::new(
         tokio::runtime::Handle::current(),
         tokio::runtime::Handle::current(),
-        true,
     );
 
     let catalog = RuntimeAwareCatalogProvider::try_new(
@@ -255,7 +254,7 @@ async fn test_get_namespace() {
     }
 
     let get_db = rest_catalog.get_database(&namespace).await.unwrap();
-    assert_eq!(get_db.database, vec![namespace.to_string()]);
+    assert_eq!(get_db.database, Vec::<String>::from(namespace));
     for (key, value) in &properties {
         assert!(get_db
             .properties
@@ -657,7 +656,7 @@ async fn test_create_table() {
     assert_eq!(properties.len(), 15);
     assert_eq!(static_properties, expected_properties);
     assert!(properties.iter().any(|(k, v)| k == "metadata-location"
-        && v.starts_with("s3://icebergdata/demo/test_create_table.apple.ios/t1/metadata/")));
+        && v.starts_with("s3://icebergdata/demo/test_create_table/apple/ios/t1/metadata/")));
     assert!(properties
         .iter()
         .any(|(k, v)| k == "metadata.last-updated-ms" && !v.is_empty()));
@@ -672,10 +671,10 @@ async fn test_create_table() {
     assert_eq!(constraints, vec![]);
     assert_eq!(
         location,
-        Some("s3://icebergdata/demo/test_create_table.apple.ios/t1".to_string())
+        Some("s3://icebergdata/demo/test_create_table/apple/ios/t1".to_string())
     );
     assert_eq!(format, "iceberg".to_string());
-    assert_eq!(partition_by, Vec::<String>::new());
+    assert_eq!(partition_by, Vec::<CatalogPartitionField>::new());
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
     assert_eq!(options, Vec::<(String, String)>::new());
@@ -777,7 +776,10 @@ async fn test_create_table() {
                 }],
                 location: Some("s3://icebergdata/custom/path/meow".to_string()),
                 format: "iceberg".to_string(),
-                partition_by: vec!["baz".to_string()],
+                partition_by: vec![CatalogPartitionField {
+                    column: "baz".to_string(),
+                    transform: None,
+                }],
                 sort_by: vec![
                     CatalogTableSort {
                         column: "bar".to_string(),
@@ -831,7 +833,13 @@ async fn test_create_table() {
         Some("s3://icebergdata/custom/path/meow".to_string())
     );
     assert_eq!(format, "iceberg".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert_eq!(sort_by.len(), 2);
     assert!(sort_by.contains(&CatalogTableSort {
         column: "bar".to_string(),
@@ -957,7 +965,10 @@ async fn test_get_table() {
                 }],
                 location: Some("s3://icebergdata/custom/path/meow".to_string()),
                 format: "iceberg".to_string(),
-                partition_by: vec!["baz".to_string()],
+                partition_by: vec![CatalogPartitionField {
+                    column: "baz".to_string(),
+                    transform: None,
+                }],
                 sort_by: vec![
                     CatalogTableSort {
                         column: "bar".to_string(),
@@ -1064,7 +1075,13 @@ async fn test_get_table() {
         Some("s3://icebergdata/custom/path/meow".to_string())
     );
     assert_eq!(format, "iceberg".to_string());
-    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(
+        partition_by,
+        vec![CatalogPartitionField {
+            column: "baz".to_string(),
+            transform: None,
+        }]
+    );
     assert_eq!(sort_by.len(), 2);
     assert!(sort_by.contains(&CatalogTableSort {
         column: "bar".to_string(),
@@ -1794,4 +1811,242 @@ async fn test_drop_view() {
         .drop_view(&namespace, "view1", DropViewOptions { if_exists: true })
         .await;
     assert!(result.is_ok());
+}
+
+async fn create_partitioned_table(
+    catalog: &RuntimeAwareCatalogProvider<IcebergRestCatalogProvider>,
+    namespace: &Namespace,
+    table_name: &str,
+    partition_by: Vec<CatalogPartitionField>,
+) -> TableKind {
+    let columns = vec![
+        CreateTableColumnOptions {
+            name: "id".to_string(),
+            data_type: DataType::Int64,
+            nullable: false,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+        CreateTableColumnOptions {
+            name: "ts".to_string(),
+            data_type: DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+        CreateTableColumnOptions {
+            name: "name".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+    ];
+
+    let result = catalog
+        .create_table(
+            namespace,
+            table_name,
+            CreateTableOptions {
+                columns,
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by,
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    result.kind
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_create_table_partition_identity() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("partition_identity").await;
+    let namespace = Namespace::try_from(vec!["partition_identity_ns"]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let kind = create_partitioned_table(
+        &rest_catalog,
+        &namespace,
+        "identity_table",
+        vec![CatalogPartitionField {
+            column: "id".to_string(),
+            transform: None,
+        }],
+    )
+    .await;
+
+    match kind {
+        TableKind::Table { partition_by, .. } => {
+            assert_eq!(partition_by.len(), 1);
+            assert_eq!(
+                partition_by[0],
+                CatalogPartitionField {
+                    column: "id".to_string(),
+                    transform: None,
+                }
+            );
+        }
+        _ => panic!("Expected Table kind"),
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_create_table_partition_year() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("partition_year").await;
+    let namespace = Namespace::try_from(vec!["partition_year_ns"]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let kind = create_partitioned_table(
+        &rest_catalog,
+        &namespace,
+        "year_table",
+        vec![CatalogPartitionField {
+            column: "ts".to_string(),
+            transform: Some(PartitionTransform::Year),
+        }],
+    )
+    .await;
+
+    match kind {
+        TableKind::Table { partition_by, .. } => {
+            assert_eq!(partition_by.len(), 1);
+            assert_eq!(
+                partition_by[0],
+                CatalogPartitionField {
+                    column: "ts".to_string(),
+                    transform: Some(PartitionTransform::Year),
+                }
+            );
+        }
+        _ => panic!("Expected Table kind"),
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_create_table_partition_bucket() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("partition_bucket").await;
+    let namespace = Namespace::try_from(vec!["partition_bucket_ns"]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let kind = create_partitioned_table(
+        &rest_catalog,
+        &namespace,
+        "bucket_table",
+        vec![CatalogPartitionField {
+            column: "id".to_string(),
+            transform: Some(PartitionTransform::Bucket(16)),
+        }],
+    )
+    .await;
+
+    match kind {
+        TableKind::Table { partition_by, .. } => {
+            assert_eq!(partition_by.len(), 1);
+            assert_eq!(
+                partition_by[0],
+                CatalogPartitionField {
+                    column: "id".to_string(),
+                    transform: Some(PartitionTransform::Bucket(16)),
+                }
+            );
+        }
+        _ => panic!("Expected Table kind"),
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_create_table_partition_truncate() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("partition_truncate").await;
+    let namespace = Namespace::try_from(vec!["partition_truncate_ns"]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let kind = create_partitioned_table(
+        &rest_catalog,
+        &namespace,
+        "truncate_table",
+        vec![CatalogPartitionField {
+            column: "name".to_string(),
+            transform: Some(PartitionTransform::Truncate(10)),
+        }],
+    )
+    .await;
+
+    match kind {
+        TableKind::Table { partition_by, .. } => {
+            assert_eq!(partition_by.len(), 1);
+            assert_eq!(
+                partition_by[0],
+                CatalogPartitionField {
+                    column: "name".to_string(),
+                    transform: Some(PartitionTransform::Truncate(10)),
+                }
+            );
+        }
+        _ => panic!("Expected Table kind"),
+    }
 }

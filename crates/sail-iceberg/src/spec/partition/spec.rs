@@ -25,7 +25,7 @@ use crate::spec::schema::Schema;
 use crate::spec::transform::Transform;
 use crate::spec::types::{NestedField, StructType};
 
-#[allow(unused)]
+#[expect(unused)]
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
 
@@ -149,12 +149,10 @@ impl PartitionSpec {
     /// Check if the partition spec has sequential field ids starting from 1000.
     /// Required for spec version 1 in the reference implementation.
     pub fn has_sequential_ids(&self) -> bool {
-        let mut expected = 1000;
-        for field in &self.fields {
+        for (expected, field) in (1000..).zip(self.fields.iter()) {
             if field.field_id != expected {
                 return false;
             }
-            expected += 1;
         }
         true
     }

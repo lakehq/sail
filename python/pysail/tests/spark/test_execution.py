@@ -8,7 +8,7 @@ from pyspark.sql.types import Row
 from pyspark.sql.window import Window
 
 from pysail.spark import SparkConnectServer
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 @pytest.fixture(scope="session")
@@ -122,7 +122,6 @@ class TestLocalClusterExecution:
 
         assert_frame_equal(result, expected)
 
-    @pytest.mark.skip(reason="Temporary skip to pass CI failures")
     def test_window_functions(self, large_dataset):
         """Test window functions in local-cluster mode."""
         window_spec = Window.partitionBy("category").orderBy("value")

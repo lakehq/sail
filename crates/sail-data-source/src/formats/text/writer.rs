@@ -101,7 +101,7 @@ impl<W: Write> TextWriter<W> {
         Ok(())
     }
 
-    #[allow(unused)]
+    #[expect(unused)]
     fn into_inner(self) -> W {
         self.writer
     }
@@ -191,6 +191,7 @@ impl FileSink for TextSink {
             context,
             serializer,
             self.writer_options.compression.into(),
+            None,
             object_store,
             demux_task,
             file_stream_rx,

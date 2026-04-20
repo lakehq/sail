@@ -16,6 +16,7 @@ mod provider;
 mod token;
 
 pub mod unity {
+    #![expect(clippy::allow_attributes)]
     include!(concat!(env!("OUT_DIR"), "/unity_catalog.rs"));
 }
 

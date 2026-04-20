@@ -11,7 +11,6 @@
 // limitations under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -25,35 +24,35 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{internal_err, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
-use serde_json::Value;
 
-use crate::kernel::models::{Add, Remove, RemoveOptions};
+use crate::kernel::transaction::OperationMetrics;
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
-    CommitMeta, ExecAction, COL_ACTION,
+    meta_adds, ExecCommitMeta, COL_ACTION,
 };
+use crate::spec::{Action, Add, Remove, RemoveOptions};
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
 #[derive(Debug)]
 pub struct DeltaRemoveActionsExec {
     input: Arc<dyn ExecutionPlan>,
     metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaRemoveActionsExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Result<Self> {
         // Output schema must match DeltaWriterExec output schema (row-per-action).
         let schema = delta_action_schema()?;
-        let cache = PlanProperties::new(
+        let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Ok(Self {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -102,7 +101,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -161,10 +160,12 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                         adds_to_remove.push(add);
                     }
                 } else {
-                    return Err(DataFusionError::Plan(
-                        "DeltaRemoveActionsExec input must be delta action rows ('action')"
-                            .to_string(),
-                    ));
+                    let adds = meta_adds::decode_adds_from_meta_batch(&batch, None)?;
+                    for add in adds {
+                        num_removed_bytes = num_removed_bytes
+                            .saturating_add(u64::try_from(add.size).unwrap_or_default());
+                        adds_to_remove.push(add);
+                    }
                 }
             }
 
@@ -175,36 +176,23 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
             output_rows.add(usize::try_from(num_removed_files).unwrap_or(usize::MAX));
             output_bytes.add(usize::try_from(num_removed_bytes).unwrap_or(usize::MAX));
 
-            let mut operation_metrics: HashMap<String, Value> = HashMap::new();
-            operation_metrics.insert(
-                "numRemovedFiles".to_string(),
-                Value::from(num_removed_files),
-            );
-            operation_metrics.insert(
-                "numRemovedBytes".to_string(),
-                Value::from(num_removed_bytes),
-            );
-            operation_metrics.insert(
-                "executionTimeMs".to_string(),
-                Value::from(exec_start.elapsed().as_millis() as u64),
-            );
+            let operation_metrics = OperationMetrics {
+                execution_time_ms: Some(exec_start.elapsed().as_millis() as u64),
+                num_removed_files: Some(num_removed_files),
+                num_removed_bytes: Some(num_removed_bytes),
+                ..Default::default()
+            };
 
-            let mut exec_actions: Vec<ExecAction> = Vec::new();
+            let output_actions = remove_actions.into_iter().map(Action::Remove).collect();
 
-            for remove in remove_actions {
-                exec_actions.push(remove.into());
-            }
-
-            exec_actions.push(
-                CommitMeta {
+            encode_actions(
+                output_actions,
+                Some(ExecCommitMeta {
                     row_count: 0,
                     operation: None,
                     operation_metrics,
-                }
-                .try_into()?,
-            );
-
-            encode_actions(exec_actions)
+                }),
+            )
         };
 
         let stream = stream::once(future);

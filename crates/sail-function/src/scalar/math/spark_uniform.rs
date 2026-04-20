@@ -14,7 +14,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 use rand::rngs::StdRng;
-use rand::{rng, Rng, SeedableRng};
+use rand::{rng, RngExt, SeedableRng};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
@@ -227,8 +227,8 @@ impl ScalarUDFImpl for SparkUniform {
     }
 }
 
-macro_rules! generate_uniform_fn {
-    ($fn_name:ident, $fn_name_single:ident, $type:ty) => {
+macro_rules! generate_uniform_single_fn {
+    ($fn_name_single:ident, $type:ty) => {
         /// Generate a single uniform value
         #[inline]
         fn $fn_name_single(min: $type, max: $type, seed: Option<u64>) -> $type {
@@ -251,35 +251,52 @@ macro_rules! generate_uniform_fn {
                 rng.random_range(min_v..max_v)
             }
         }
-
-        #[allow(dead_code)]
-        fn $fn_name(
-            min: $type,
-            max: $type,
-            seed: Option<u64>,
-            number_rows: usize,
-        ) -> Result<Vec<$type>> {
-            // Match the runtime behavior: generate each row using the single-value
-            // generator, which creates a new RNG per call when a seed is provided.
-            let values: Vec<$type> = (0..number_rows)
-                .map(|_| $fn_name_single(min, max, seed))
-                .collect();
-
-            Ok(values)
-        }
     };
 }
 
-generate_uniform_fn!(generate_uniform_int8, generate_uniform_int8_single, i8);
-generate_uniform_fn!(generate_uniform_int16, generate_uniform_int16_single, i16);
-generate_uniform_fn!(generate_uniform_int32, generate_uniform_int32_single, i32);
-generate_uniform_fn!(generate_uniform_int64, generate_uniform_int64_single, i64);
-generate_uniform_fn!(
-    generate_uniform_float32,
-    generate_uniform_float32_single,
-    f32
-);
-generate_uniform_fn!(generate_uniform_float, generate_uniform_float_single, f64);
+generate_uniform_single_fn!(generate_uniform_int8_single, i8);
+generate_uniform_single_fn!(generate_uniform_int16_single, i16);
+generate_uniform_single_fn!(generate_uniform_int32_single, i32);
+generate_uniform_single_fn!(generate_uniform_int64_single, i64);
+generate_uniform_single_fn!(generate_uniform_float32_single, f32);
+generate_uniform_single_fn!(generate_uniform_float_single, f64);
+
+// Array variants — used only in tests below to verify batch/seed consistency.
+#[cfg(test)]
+fn generate_uniform_int32(
+    min: i32,
+    max: i32,
+    seed: Option<u64>,
+    number_rows: usize,
+) -> Result<Vec<i32>> {
+    Ok((0..number_rows)
+        .map(|_| generate_uniform_int32_single(min, max, seed))
+        .collect())
+}
+
+#[cfg(test)]
+fn generate_uniform_int64(
+    min: i64,
+    max: i64,
+    seed: Option<u64>,
+    number_rows: usize,
+) -> Result<Vec<i64>> {
+    Ok((0..number_rows)
+        .map(|_| generate_uniform_int64_single(min, max, seed))
+        .collect())
+}
+
+#[cfg(test)]
+fn generate_uniform_float(
+    min: f64,
+    max: f64,
+    seed: Option<u64>,
+    number_rows: usize,
+) -> Result<Vec<f64>> {
+    Ok((0..number_rows)
+        .map(|_| generate_uniform_float_single(min, max, seed))
+        .collect())
+}
 
 #[inline]
 fn extract_seed(seed_array: Option<&ArrayRef>, i: usize) -> Option<u64> {

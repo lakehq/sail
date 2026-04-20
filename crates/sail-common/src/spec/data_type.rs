@@ -12,6 +12,13 @@ pub const ARROW_DECIMAL128_MAX_SCALE: i8 = arrow_schema::DECIMAL128_MAX_SCALE;
 pub const ARROW_DECIMAL256_MAX_PRECISION: u8 = arrow_schema::DECIMAL256_MAX_PRECISION;
 pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
 
+/// Arrow extension type metadata key (`ARROW:extension:metadata`).
+pub use arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY;
+/// Arrow extension type name key (`ARROW:extension:name`).
+pub use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
+/// Arrow extension type name for Variant.
+pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
+
 /// Field name for list type.
 pub const SAIL_LIST_FIELD_NAME: &str = "item";
 /// Field name for map type's entries.
@@ -20,6 +27,53 @@ pub const SAIL_MAP_FIELD_NAME: &str = "entries";
 pub const SAIL_MAP_KEY_FIELD_NAME: &str = "key";
 /// Field name for map type's value.
 pub const SAIL_MAP_VALUE_FIELD_NAME: &str = "value";
+
+/// Default SRID for Geometry and Geography types (Spark 4.1 default: 4326 / WGS84).
+pub const GEOSPATIAL_DEFAULT_SRID: i32 = 4326;
+/// Mixed SRID value allowing different SRIDs per row (Spark 4.1: -1).
+pub const GEOSPATIAL_MIXED_SRID: i32 = -1;
+/// Default CRS string for SRID 4326 (Spark 4.1 format: OGC:CRS84).
+pub const GEOSPATIAL_DEFAULT_CRS: &str = "OGC:CRS84";
+
+/// Edge interpolation algorithm for Geography type.
+/// Determines how edges are interpolated between vertices.
+///
+/// Spark 4.1 only defines Spherical interpolation for Geography types.
+/// Reference: org.apache.spark.sql.types.EdgeInterpolationAlgorithm
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    TryFromPrimitive,
+)]
+#[serde(rename_all = "camelCase")]
+#[num_enum(error_type(name = CommonError, constructor = EdgeInterpolationAlgorithm::invalid))]
+#[repr(i32)]
+pub enum EdgeInterpolationAlgorithm {
+    /// Spherical edge interpolation (geodetic coordinates on a sphere).
+    Spherical = 0,
+}
+
+impl EdgeInterpolationAlgorithm {
+    fn invalid(value: i32) -> CommonError {
+        CommonError::invalid(format!("edge interpolation algorithm: {value}"))
+    }
+}
+
+impl std::fmt::Display for EdgeInterpolationAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EdgeInterpolationAlgorithm::Spherical => write!(f, "Spherical"),
+        }
+    }
+}
 
 /// Native Sail data types that convert to Arrow types.
 /// Types directly match to [`arrow_schema::DataType`] variants when there is a corresponding type.
@@ -102,10 +156,10 @@ pub enum DataType {
     Duration {
         time_unit: TimeUnit,
     },
-    /// A "calendar" interval which models types that don't necessarily
-    /// have a precise duration without the context of a base timestamp (e.g.
-    /// days can differ in length during daylight savings time transitions).
-    /// Corresponds to [`arrow_schema::DataType::Interval`].
+    /// Represents Spark's interval types.
+    /// `YearMonth` and `MonthDayNano` are resolved to [`arrow_schema::DataType::Interval`].
+    /// `DayTime` is resolved to [`arrow_schema::DataType::Duration`] with microsecond
+    /// precision to match Spark's `DayTimeIntervalType`.
     Interval {
         interval_unit: IntervalUnit,
         start_field: Option<IntervalFieldType>,
@@ -201,6 +255,24 @@ pub enum DataType {
         value_type_nullable: bool,
         keys_sorted: bool,
     },
+    /// Geometry type for 2D spatial data with Cartesian coordinates.
+    /// Stored as WKB-encoded Binary with geoarrow.wkb extension metadata.
+    /// Corresponds to Spark 4.1 GeometryType.
+    Geometry {
+        /// Spatial Reference System Identifier (SRID).
+        /// Common values: 4326 (WGS84), 3857 (Web Mercator), 0 (unspecified), -1 (mixed).
+        srid: i32,
+    },
+    /// Geography type for 2D spatial data with spherical (geodetic) coordinates.
+    /// Stored as WKB-encoded Binary with geoarrow.wkb extension metadata.
+    /// Corresponds to Spark 4.1 GeographyType.
+    Geography {
+        /// Spatial Reference System Identifier (SRID).
+        /// In Spark 4.1, only SRID 4326 (WGS84) is valid for Geography.
+        srid: i32,
+        /// Edge interpolation algorithm. Spark 4.1 only supports Spherical.
+        algorithm: EdgeInterpolationAlgorithm,
+    },
     //
     // Everything below this line is not part of the Arrow specification.
     //
@@ -210,6 +282,9 @@ pub enum DataType {
         serialized_python_class: Option<String>,
         sql_type: Box<DataType>,
     },
+    /// Variant type for semi-structured data.
+    /// Corresponds to Spark's VariantType.
+    Variant,
     /// Resolves to either [`DataType::Utf8`] or [`DataType::LargeUtf8`],
     /// based on `config.arrow_use_large_var_types`.
     ConfiguredUtf8 {
@@ -409,8 +484,9 @@ impl Display for UnionMode {
 pub enum IntervalUnit {
     /// Indicates the number of elapsed whole months, stored as 4-byte integers.
     YearMonth = 0,
-    /// Indicates the number of elapsed days and milliseconds,
-    /// stored as 2 contiguous 32-bit integers (days, milliseconds) (8-bytes in total).
+    /// Represents Spark's `DayTimeIntervalType` with microsecond precision.
+    /// Resolved to [`arrow_schema::DataType::Duration`] instead of Arrow's
+    /// `IntervalUnit::DayTime` (which only has millisecond precision).
     DayTime = 1,
     /// A triple of the number of elapsed months, days, and nanoseconds.
     /// The values are stored contiguously in 16 byte blocks. Months and

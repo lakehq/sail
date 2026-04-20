@@ -72,6 +72,11 @@ impl fmt::Display for JobGraph {
                 writeln!(f, "group={}", stage.group)?;
             }
             writeln!(f, "mode={}", stage.mode)?;
+            writeln!(
+                f,
+                "partitions={}",
+                stage.plan.output_partitioning().partition_count()
+            )?;
             writeln!(f, "distribution={}", stage.distribution)?;
             writeln!(f, "placement={}", stage.placement)?;
             writeln!(f, "{}", displayable.indent(true))?;
@@ -91,6 +96,7 @@ pub struct Stage {
     pub placement: TaskPlacement,
 }
 
+/// Specifies whether a task must run on the driver or on any available worker node.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum TaskPlacement {
     Driver,

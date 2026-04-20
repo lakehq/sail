@@ -39,13 +39,13 @@ const MSI_API_VERSION: &str = "2019-08-01";
 
 /// A list of known Azure authority hosts
 pub mod authority_hosts {
-    #[allow(unused)]
+    #[expect(unused)]
     /// China-based Azure Authority Host
     pub const AZURE_CHINA: &str = "https://login.chinacloudapi.cn";
-    #[allow(unused)]
+    #[expect(unused)]
     /// Germany-based Azure Authority Host
     pub const AZURE_GERMANY: &str = "https://login.microsoftonline.de";
-    #[allow(unused)]
+    #[expect(unused)]
     /// US Government Azure Authority Host
     pub const AZURE_GOVERNMENT: &str = "https://login.microsoftonline.us";
     /// Public Cloud Azure Authority Host
@@ -473,7 +473,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
     }
 }
 
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use reqwest::Client;

@@ -14,6 +14,7 @@ pub struct NamedPlan {
 }
 
 impl PlanResolver<'_> {
+    /// Resolves a plan into a named plan.
     pub async fn resolve_named_plan(&self, plan: spec::Plan) -> PlanResult<NamedPlan> {
         let mut state = PlanResolverState::new();
         match plan {

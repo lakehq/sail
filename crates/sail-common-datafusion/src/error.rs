@@ -128,7 +128,6 @@ impl CommonErrorCause {
                 DataFusionError::AvroError(e) => Self::FormatAvro(e.to_string()),
                 DataFusionError::ObjectStore(e) => Self::Io(e.to_string()),
                 DataFusionError::IoError(e) => Self::Io(e.to_string()),
-                DataFusionError::SQL(e, _) => Self::Unknown(e.to_string()),
                 DataFusionError::NotImplemented(x) => Self::NotImplemented(x.clone()),
                 DataFusionError::Internal(x) => Self::Internal(x.clone()),
                 DataFusionError::Plan(x) => Self::Plan(x.clone()),
@@ -146,6 +145,7 @@ impl CommonErrorCause {
                     Some(e) => Self::build::<Py>(e, seen),
                 },
                 DataFusionError::Shared(e) => Self::build::<Py>(e.as_ref(), seen),
+                DataFusionError::Ffi(x) => Self::Unknown(x.clone()),
             };
         }
 

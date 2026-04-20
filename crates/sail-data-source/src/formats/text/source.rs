@@ -5,17 +5,17 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::ArrowError;
+use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::DisplayFormatType;
-use datafusion_common::{DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::decoder::{deserialize_stream, Decoder, DecoderDeserializer};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::{calculate_range, PartitionedFile, RangeCalculation, TableSchema};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
@@ -23,25 +23,35 @@ use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use crate::formats::text;
 use crate::formats::text::reader::{Format, ReaderBuilder};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TextSource {
+    table_schema: TableSchema,
     whole_text: bool,
     line_sep: Option<u8>,
     batch_size: Option<usize>,
-    file_schema: Option<SchemaRef>,
-    file_projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    projection: SplitProjection,
 }
 
 impl TextSource {
-    pub fn new(whole_text: bool, line_sep: Option<u8>) -> Self {
+    pub fn new(
+        table_schema: impl Into<TableSchema>,
+        whole_text: bool,
+        line_sep: Option<u8>,
+    ) -> Self {
+        let table_schema = table_schema.into();
         Self {
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
             whole_text,
             line_sep,
-            ..Self::default()
+            batch_size: None,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
+    }
+
+    pub fn table_schema(&self) -> &TableSchema {
+        &self.table_schema
     }
 
     pub fn whole_text(&self) -> bool {
@@ -70,23 +80,15 @@ impl TextSource {
         let batch_size = self.batch_size.ok_or_else(|| {
             DataFusionError::Internal("batch_size must be set before calling builder()".to_string())
         })?;
-        let schema = if let Some(schema) = &self.file_schema {
-            Arc::clone(schema)
-        } else {
-            return Err(DataFusionError::Internal(
-                "Schema must be set before calling builder()".to_string(),
-            ));
-        };
+        let schema = Arc::clone(self.table_schema.file_schema());
         let mut format = Format::default().with_whole_text(self.whole_text);
         if let Some(line_sep) = self.line_sep {
             format = format.with_line_sep(line_sep);
         }
-        let mut builder = ReaderBuilder::new(schema)
+        let builder = ReaderBuilder::new(schema)
             .with_batch_size(batch_size)
-            .with_format(format);
-        if let Some(file_projection) = &self.file_projection {
-            builder = builder.with_projection(file_projection.clone());
-        }
+            .with_format(format)
+            .with_projection(self.projection.file_indices.clone());
         Ok(builder)
     }
 }
@@ -103,16 +105,28 @@ impl FileSource for TextSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        Arc::new(TextOpener::new(
+    ) -> Result<Arc<dyn FileOpener>> {
+        let opener = Arc::new(TextOpener::new(
             Arc::new(self.clone()),
             base_config.file_compression_type,
             object_store,
-        ))
+        )) as Arc<dyn FileOpener>;
+
+        let opener = ProjectionOpener::try_new(
+            self.projection.clone(),
+            opener,
+            self.table_schema.file_schema(),
+        )?;
+
+        Ok(opener)
     }
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn table_schema(&self) -> &TableSchema {
+        &self.table_schema
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
@@ -121,35 +135,22 @@ impl FileSource for TextSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.file_schema = Some(schema.file_schema().clone());
-        Arc::new(conf)
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.file_projection = config.file_column_projection_indices();
-        Arc::new(conf)
-    }
-
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        statistics.clone().ok_or_else(|| {
-            DataFusionError::Internal(
-                "projected_statistics must be set before calling statistics()".to_string(),
-            )
-        })
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        let new_projection = self.projection.source.try_merge(projection)?;
+        source.projection = SplitProjection::new(self.table_schema.file_schema(), &new_projection);
+        Ok(Some(Arc::new(source)))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        Some(&self.projection.source)
     }
 
     fn file_type(&self) -> &str {
@@ -167,20 +168,6 @@ impl FileSource for TextSource {
             }
             DisplayFormatType::TreeRender => Ok(()),
         }
-    }
-
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
     }
 }
 

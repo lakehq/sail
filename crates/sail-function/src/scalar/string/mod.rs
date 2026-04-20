@@ -1,8 +1,15 @@
+pub mod decimal_format;
+pub mod format_number;
 pub mod levenshtein;
 pub mod make_valid_utf8;
+pub mod randstr;
+pub mod soundex;
 pub mod spark_base64;
+pub mod spark_concat_ws;
 pub mod spark_encode_decode;
 pub mod spark_mask;
+pub mod spark_regexp_extract_all;
+pub mod spark_sentences;
 pub mod spark_split;
 pub mod spark_to_binary;
 pub mod spark_to_number;

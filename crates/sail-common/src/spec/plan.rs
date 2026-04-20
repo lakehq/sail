@@ -104,6 +104,10 @@ pub enum QueryNode {
         schema: Option<Schema>,
     },
     Sample(Sample),
+    TableSample {
+        input: Box<QueryPlan>,
+        sample: TableSample,
+    },
     Deduplicate(Deduplicate),
     Range(Range),
     SubqueryAlias {
@@ -253,6 +257,11 @@ pub enum QueryNode {
         recursive: bool,
         ctes: Vec<(Identifier, QueryPlan)>,
     },
+    /// A relation that wraps a root plan with referenced subquery plans.
+    WithRelations {
+        root: Box<QueryPlan>,
+        references: Vec<QueryPlan>,
+    },
     LateralView {
         input: Option<Box<QueryPlan>>,
         function: ObjectName,
@@ -261,6 +270,12 @@ pub enum QueryNode {
         table_alias: Option<ObjectName>,
         column_aliases: Option<Vec<Identifier>>,
         outer: bool,
+    },
+    LateralJoin {
+        left: Box<QueryPlan>,
+        right: Box<QueryPlan>,
+        join_condition: Option<Expr>,
+        join_type: JoinType,
     },
 }
 
@@ -279,6 +294,17 @@ pub enum CommandNode {
     ListDatabases {
         qualifier: Option<ObjectName>,
         pattern: Option<String>,
+    },
+    ListCatalogs {
+        pattern: Option<String>,
+    },
+    ShowTables {
+        database: Option<ObjectName>,
+        pattern: Option<String>,
+    },
+    ShowTableExtended {
+        database: Option<ObjectName>,
+        pattern: String,
     },
     ListTables {
         database: Option<ObjectName>,
@@ -351,9 +377,6 @@ pub enum CommandNode {
     CurrentCatalog,
     SetCurrentCatalog {
         catalog: Identifier,
-    },
-    ListCatalogs {
-        pattern: Option<String>,
     },
     CreateCatalog {
         catalog: Identifier,
@@ -592,12 +615,11 @@ pub enum MergeNotMatchedByTargetAction {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-#[allow(clippy::large_enum_variant)]
 pub enum ReadType {
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
-    NamedTable(ReadNamedTable),
-    Udtf(ReadUdtf),
-    DataSource(ReadDataSource),
+    NamedTable(Box<ReadNamedTable>),
+    Udtf(Box<ReadUdtf>),
+    DataSource(Box<ReadDataSource>),
+    DynamicTable(Box<ReadDynamicTable>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -605,6 +627,14 @@ pub enum ReadType {
 pub struct ReadNamedTable {
     pub name: ObjectName,
     pub temporal: Option<TableTemporal>,
+    pub sample: Option<TableSample>,
+    pub options: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadDynamicTable {
+    pub name: Expr,
     pub sample: Option<TableSample>,
     pub options: Vec<(String, String)>,
 }
@@ -848,7 +878,7 @@ pub struct TableDefinition {
     pub location: Option<String>,
     pub file_format: Option<TableFileFormat>,
     pub row_format: Option<TableRowFormat>,
-    pub partition_by: Vec<Identifier>,
+    pub partition_by: Vec<PartitionColumn>,
     pub sort_by: Vec<SortOrder>,
     pub bucket_by: Option<SaveBucketBy>,
     pub cluster_by: Vec<ObjectName>,
@@ -856,6 +886,17 @@ pub struct TableDefinition {
     pub replace: bool,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+}
+
+/// A column reference or typed column definition used in a `PARTITIONED BY` clause.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "variant")]
+pub enum PartitionColumn {
+    /// A partition expression, such as a column reference or transform function.
+    Expression(Expr),
+    /// A typed partition column definition, e.g. `col_name data_type` in Hive-style
+    /// `PARTITIONED BY (col_name data_type)` syntax.
+    Definition(TableColumnDefinition),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -924,7 +965,7 @@ pub struct Write {
     pub save_type: SaveType,
     pub mode: Option<SaveMode>,
     pub sort_columns: Vec<SortOrder>,
-    pub partitioning_columns: Vec<Identifier>,
+    pub partitioning_columns: Vec<Expr>,
     pub clustering_columns: Vec<Identifier>,
     pub bucket_by: Option<SaveBucketBy>,
     pub options: Vec<(String, String)>,
@@ -934,6 +975,7 @@ pub struct Write {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum SaveType {
     Path(String),
+    Sink,
     Table {
         table: ObjectName,
         save_method: TableSaveMethod,

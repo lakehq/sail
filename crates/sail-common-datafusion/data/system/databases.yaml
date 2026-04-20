@@ -226,6 +226,23 @@
 - name: session
   description: The database containing user session data.
   tables:
+    - name: options
+      row_name: option
+      description: The table containing current application configuration options.
+      columns:
+        - name: key
+          description: The configuration key.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+        - name: value
+          description: The configuration value as a string that can be interpreted as a TOML value.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::system::types::string()
+          nullable: false
+
     - name: sessions
       row_name: session
       description: The table containing user session information.

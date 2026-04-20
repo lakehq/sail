@@ -127,6 +127,13 @@ impl SparkXorShiftRandom {
         let low = self.next(27) as i64;
         ((high + low) as f64) / ((1i64 << 53) as f64)
     }
+
+    /// Generate the next random 32-bit integer.
+    ///
+    /// This is equivalent to Java's `Random.nextInt()`.
+    pub fn next_int(&mut self) -> i32 {
+        self.next(32)
+    }
 }
 
 #[cfg(test)]

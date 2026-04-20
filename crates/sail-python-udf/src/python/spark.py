@@ -3,10 +3,10 @@ from __future__ import annotations
 import ctypes
 import decimal
 import itertools
-from typing import TYPE_CHECKING, Any, Callable, Union
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
 import pandas as pd
 import pyarrow as pa
@@ -26,7 +26,7 @@ if _PYARROW_HAS_VIEW_TYPES:
         pa.ListViewArray,
         pa.LargeListViewArray,
     )
-    _PyArrowListType = Union[pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType]
+    _PyArrowListType = pa.ListType | pa.LargeListType | pa.FixedSizeListType | pa.ListViewType | pa.LargeListViewType
 
     def _pyarrow_is_string(t: pa.DataType) -> bool:
         return pa.types.is_string(t) or pa.types.is_large_string(t) or pa.types.is_string_view(t)
@@ -36,7 +36,7 @@ if _PYARROW_HAS_VIEW_TYPES:
 else:
     _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType)
     _PYARROW_LIST_ARRAY_TYPES = (pa.ListArray, pa.LargeListArray, pa.FixedSizeListArray)
-    _PyArrowListType = Union[pa.ListType, pa.LargeListType, pa.FixedSizeListType]
+    _PyArrowListType = pa.ListType | pa.LargeListType | pa.FixedSizeListType
 
     def _pyarrow_is_string(t: pa.DataType) -> bool:
         return pa.types.is_string(t) or pa.types.is_large_string(t)
@@ -53,6 +53,18 @@ except ImportError:
         it = iter(iterable)
         while chunk := tuple(itertools.islice(it, n)):
             yield chunk
+
+
+try:
+    from pyspark.sql.conversion import (
+        ArrowTableToRowsConversion as _ArrowTableToRowsConversion,
+    )
+    from pyspark.sql.conversion import (
+        LocalDataToArrowConversion as _LocalDataToArrowConversion,
+    )
+except ImportError:
+    _ArrowTableToRowsConversion = None
+    _LocalDataToArrowConversion = None
 
 
 class Converter:
@@ -214,7 +226,7 @@ def _to_string(data: Any) -> str | None:
         return data
     if isinstance(data, bool):
         return "true" if data else "false"
-    if isinstance(data, (list, tuple)):
+    if isinstance(data, list | tuple):
         items = ", ".join(_to_string(x) for x in data)
         return f"[{items}]"
     if isinstance(data, dict):
@@ -278,7 +290,7 @@ class ArrayConverter(Converter):
         end = 0
         for x in data:
             _raise_for_row(x)
-            if x is None or not isinstance(x, (list, tuple)):
+            if x is None or not isinstance(x, list | tuple):
                 offsets.append(None)
             else:
                 offsets.append(end)
@@ -308,7 +320,7 @@ class MapConverter(Converter):
                 result.append(None)
             else:
                 (start, end) = (offsets[i], offsets[i + 1])
-                result.append(dict(zip(keys[start:end], values[start:end])))
+                result.append(dict(zip(keys[start:end], values[start:end], strict=True)))
         return result
 
     def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
@@ -345,8 +357,8 @@ class StructConverter(Converter):
         if not isinstance(array, pa.StructArray):
             msg = f"invalid data type for struct: {type(array)}"
             raise TypeError(msg)
-        columns = [c.to_pyspark(col) for col, c in zip(array.flatten(), self._field_converters)]
-        return [self._spark_data_type.fromInternal(x) for x in zip(*columns)]
+        columns = [c.to_pyspark(col) for col, c in zip(array.flatten(), self._field_converters, strict=True)]
+        return [self._spark_data_type.fromInternal(x) for x in zip(*columns, strict=True)]
 
     def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         n = len(self._fields)
@@ -362,7 +374,7 @@ class StructConverter(Converter):
                 for i, v in enumerate(self._spark_data_type.toInternal(x)):
                     columns[i].append(v)
         return pa.StructArray.from_arrays(
-            [c.from_pyspark(col) for col, c in zip(columns, self._field_converters)],
+            [c.from_pyspark(col) for col, c in zip(columns, self._field_converters, strict=True)],
             fields=self._fields,
             mask=pa.array(mask, type=pa.bool_()),
         )
@@ -384,7 +396,55 @@ def _pandas_to_arrow_array(data, data_type: pa.DataType, serializer: ArrowStream
     return serializer._create_array(data, data_type, arrow_cast=serializer._arrow_cast)  # noqa: SLF001
 
 
+def _arrow_columns_to_python(args: list[pa.Array], *, binary_as_bytes: bool = True) -> tuple:
+    """Convert Arrow arrays to Python lists with proper type conversion,
+    matching PySpark's ArrowBatchUDFSerializer.load_stream.
+    Uses ArrowTableToRowsConversion to convert Arrow-native representations
+    to Python-native types (e.g. map arrays become dicts, not list-of-tuples)."""
+    # `none_on_identity=True` returns None when no conversion is needed for the type,
+    # so we can skip the per-element loop and pass the list directly.
+    converters = [
+        _ArrowTableToRowsConversion._create_converter(  # noqa: SLF001
+            from_arrow_type(a.type),
+            none_on_identity=True,
+            binary_as_bytes=binary_as_bytes,
+        )
+        for a in args
+    ]
+    return tuple(
+        [conv(v) for v in a.to_pylist()] if conv is not None else a.to_pylist()
+        for a, conv in zip(args, converters, strict=False)
+    )
+
+
+def _python_values_to_arrow_array(
+    data: list,
+    arrow_type: pa.DataType,
+    spark_type,
+    *,
+    int_to_decimal_coercion_enabled: bool = False,
+    safecheck: bool = False,
+) -> pa.Array:
+    """Convert a Python list of values to an Arrow array, using
+    PySpark's LocalDataToArrowConversion for proper type coercion
+    (e.g. int -> Decimal)."""
+    # `none_on_identity=True` returns None when no conversion is needed for the type,
+    # so we can skip the per-element loop and pass the list directly to `pa.array()`.
+    conv = _LocalDataToArrowConversion._create_converter(  # noqa: SLF001
+        spark_type,
+        none_on_identity=True,
+        int_to_decimal_coercion_enabled=int_to_decimal_coercion_enabled,
+    )
+    converted = [conv(v) for v in data] if conv is not None else data
+    try:
+        return pa.array(converted, type=arrow_type)
+    except pa.lib.ArrowInvalid:
+        return pa.array(converted).cast(target_type=arrow_type, safe=safecheck)
+
+
 def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
+    if not isinstance(data, list):
+        data = list(data)
     if len(data) == 0:
         return pa.array([], type=data_type)
 
@@ -419,7 +479,7 @@ def _named_arrays_to_pandas(
     data: Sequence[pa.Array], names: Sequence[str], serializer: ArrowStreamPandasUDFSerializer
 ) -> Sequence[pd.Series]:
     inputs = [_arrow_column_to_pandas(x, serializer) for x in data]
-    for x, name in zip(inputs, names):
+    for x, name in zip(inputs, names, strict=True):
         x.name = name
     return inputs
 
@@ -432,8 +492,8 @@ class PySparkBatchUdf:
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
         if len(args) > 0:
-            inputs = [c.to_pyspark(a) for a, c in zip(args, self._input_converters)]
-            output = list(self._udf(None, zip(*inputs)))
+            inputs = [c.to_pyspark(a) for a, c in zip(args, self._input_converters, strict=True)]
+            output = list(self._udf(None, zip(*inputs, strict=True)))
         else:
             output = list(self._udf(None, itertools.repeat((), num_rows)))
         return self._output_converter.from_pyspark(output)
@@ -442,23 +502,61 @@ class PySparkBatchUdf:
 class PySparkArrowBatchUdf:
     def __init__(self, udf: Callable[..., Any], config):
         self._udf = udf
-        self._serializer = ArrowStreamPandasUDFSerializer(
-            timezone=config.session_timezone,
-            safecheck=config.arrow_convert_safely,
-            assign_cols_by_name=config.assign_columns_by_name,
-            df_for_struct=False,
-            struct_in_pandas="row",
-            ndarray_as_list=True,
-            arrow_cast=True,
-        )
+        self._use_legacy = config.python_udf_pandas_conversion_enabled or pyspark.__version__.startswith(("3.", "4.0."))
+        if self._use_legacy:
+            self._serializer = ArrowStreamPandasUDFSerializer(
+                timezone=config.session_timezone,
+                safecheck=config.arrow_convert_safely,
+                assign_cols_by_name=config.assign_columns_by_name,
+                df_for_struct=False,
+                struct_in_pandas="row",
+                ndarray_as_list=True,
+                arrow_cast=True,
+            )
+        else:
+            self._binary_as_bytes = config.binary_as_bytes
+            self._int_to_decimal_coercion_enabled = config.python_udf_pandas_int_to_decimal_coercion_enabled
+            self._safecheck = config.arrow_convert_safely
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
+        if self._use_legacy:
+            return self._call_legacy(args, num_rows)
+        return self._call_arrow(args, num_rows)
+
+    def _call_legacy(self, args: list[pa.Array], num_rows: int) -> pa.Array:
         if len(args) == 0:
             inputs = tuple(pd.Series([pyspark._NoValue]).repeat(num_rows) for _ in range(1))  # noqa: SLF001
         else:
             inputs = tuple(_arrow_column_to_pandas(a, self._serializer) for a in args)
-        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        [result] = list(self._udf(None, (inputs,)))
+        output, output_type = result[0], result[1]
         return _pandas_to_arrow_array(output, output_type, self._serializer)
+
+    def _call_arrow(self, args: list[pa.Array], num_rows: int) -> pa.Array:
+        # Convert Arrow arrays to Python lists with proper type conversion,
+        # matching PySpark's ArrowBatchUDFSerializer.load_stream which calls
+        # .to_pylist() with ArrowTableToRowsConversion converters
+        # (e.g. map arrays → dicts instead of list-of-tuples).
+        inputs = (
+            ([pyspark._NoValue] * num_rows,)  # noqa: SLF001
+            if len(args) == 0
+            else _arrow_columns_to_python(args, binary_as_bytes=self._binary_as_bytes)
+        )
+        [result] = list(self._udf(None, (inputs,)))
+        output, output_type, spark_return_type = result[0], result[1], result[2]
+        if isinstance(output, pa.ChunkedArray):
+            output = output.combine_chunks()
+        if not isinstance(output, pa.Array):
+            output = _python_values_to_arrow_array(
+                output,
+                output_type,
+                spark_return_type,
+                int_to_decimal_coercion_enabled=self._int_to_decimal_coercion_enabled,
+                safecheck=self._safecheck,
+            )
+        if output.type != output_type:
+            output = output.cast(output_type)
+        return output
 
 
 class PySparkScalarPandasUdf:
@@ -507,6 +605,60 @@ class PySparkScalarPandasIterUdf:
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
+class PySparkScalarArrowUdf:
+    """Arrow-native scalar UDF (eval_type 250).
+
+    The user function receives and returns pyarrow.Array directly.
+    No Pandas conversion is performed.
+    """
+
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        _config,
+    ):
+        self._udf = udf
+
+    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
+        inputs = tuple(args)
+        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        if isinstance(output, pa.ChunkedArray):
+            output = output.combine_chunks()
+        if not isinstance(output, pa.Array):
+            msg = f"Arrow UDF (eval_type 250) must return a pyarrow.Array, got {type(output).__name__!r}"
+            raise TypeError(msg)
+        if output.type != output_type:
+            output = output.cast(output_type)
+        return output
+
+
+class PySparkScalarArrowIterUdf:
+    """Arrow-native scalar iterator UDF (eval_type 251).
+
+    The user function receives and returns Iterator[pyarrow.Array] directly.
+    No Pandas conversion is performed.
+    """
+
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        _config,
+    ):
+        self._udf = udf
+
+    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
+        inputs = tuple(args)
+        [(output, output_type)] = list(self._udf(None, [inputs]))
+        if isinstance(output, pa.ChunkedArray):
+            output = output.combine_chunks()
+        if not isinstance(output, pa.Array):
+            msg = f"Arrow iterator UDF (eval_type 251) must return a pyarrow.Array, got {type(output).__name__!r}"
+            raise TypeError(msg)
+        if output.type != output_type:
+            output = output.cast(output_type)
+        return output
+
+
 class PySparkGroupAggUdf:
     def __init__(
         self,
@@ -530,6 +682,35 @@ class PySparkGroupAggUdf:
         inputs = _named_arrays_to_pandas(args, self._input_names, self._serializer)
         [(output, output_type)] = list(self._udf(None, (inputs,)))
         return _pandas_to_arrow_array(output, output_type, self._serializer)
+
+
+class PySparkGroupAggArrowUdf:
+    """Arrow-native grouped aggregate UDF (eval_type 252).
+
+    The user function receives pyarrow.Array columns directly and returns
+    a scalar. No Pandas conversion is performed.
+    """
+
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        _config,
+    ):
+        self._udf = udf
+
+    def __call__(self, args: list[pa.Array]) -> pa.Array:
+        [(output, output_type)] = list(self._udf(None, (args,)))
+        if isinstance(output, pa.ChunkedArray):
+            output = output.combine_chunks()
+        if not isinstance(output, pa.Array):
+            msg = (
+                f"Arrow grouped aggregate UDF (eval_type 252) must return a pyarrow.Array, "
+                f"got {type(output).__name__!r}"
+            )
+            raise TypeError(msg)
+        if output.type != output_type:
+            output = output.cast(output_type)
+        return output
 
 
 class PySparkGroupMapUdf:
@@ -671,8 +852,8 @@ class PySparkTableUdf:
         for batch in args:
             arrays = batch.to_struct_array().flatten()
             if len(arrays) > 0:
-                inputs = tuple(c.to_pyspark(a) for a, c in zip(arrays, self._input_converters))
-                yield from zip(*inputs)
+                inputs = tuple(c.to_pyspark(a) for a, c in zip(arrays, self._input_converters, strict=True))
+                yield from zip(*inputs, strict=True)
             else:
                 yield ()
 
@@ -702,6 +883,7 @@ class PySparkArrowTableUdf:
         self,
         udf: Callable[..., Iterator[pa.RecordBatch]],
         input_names: Sequence[str],
+        input_types: Sequence[pa.DataType],
         passthrough_columns: int,
         output_schema: pa.Schema,
         config,
@@ -711,36 +893,103 @@ class PySparkArrowTableUdf:
         self._passthrough_columns = passthrough_columns
         self._output_schema = output_schema
         self._output_type = pa.struct([output_schema.field(i) for i in range(len(output_schema.names))])
-        self._serializer = ArrowStreamPandasUDTFSerializer(
-            timezone=config.session_timezone, safecheck=config.arrow_convert_safely
+        self._use_legacy = config.python_udtf_pandas_conversion_enabled or pyspark.__version__.startswith(
+            ("3.", "4.0.")
         )
+        if self._use_legacy:
+            if pyspark.__version__.startswith(("3.", "4.0.")):
+                self._serializer = ArrowStreamPandasUDTFSerializer(
+                    timezone=config.session_timezone, safecheck=config.arrow_convert_safely
+                )
+            else:
+                spark_input_types = [from_arrow_type(t) for t in input_types]
+                self._serializer = ArrowStreamPandasUDTFSerializer(
+                    timezone=config.session_timezone,
+                    safecheck=config.arrow_convert_safely,
+                    input_types=spark_input_types,
+                    int_to_decimal_coercion_enabled=config.python_udf_pandas_int_to_decimal_coercion_enabled,
+                )
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
-        for output in self._iter_output(args):
+        if self._use_legacy:
+            return self._call_legacy(args)
+        return self._call_arrow(args)
+
+    def _call_arrow(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+        first = next(args, None)
+        if first is None:
+            return
+        args = itertools.chain([first], args)
+        # Tee: one branch for the mapper (full batches), one for passthrough extraction.
+        # The mapper expects full input batches — it handles Python conversion and column
+        # selection internally (via converters + args_kwargs_offsets).
+        batches_for_passthrough, batches_for_mapper = itertools.tee(args)
+        outputs = self._udf(None, batches_for_mapper)
+        # Extract passthrough values from raw arrow batches (no pandas)
+        columns = (tuple(batch.column(i) for i in range(batch.num_columns)) for batch in batches_for_passthrough)
+        last = None
+        for passthrough, (out, _) in itertools.zip_longest(self._iter_passthrough(columns), outputs):
+            if out is None or out.num_rows == 0:
+                continue
+            out_batch = out.combine_chunks().to_batches()[0] if isinstance(out, pa.Table) else out
+            num_rows = out_batch.num_rows
+            if passthrough is None:
+                passthrough = last  # noqa: PLW2901
+            passthrough_arrays = []
+            passthrough_fields = []
+            for i, name in enumerate(self._input_names[: self._passthrough_columns]):
+                field = self._output_schema.field(self._output_schema.get_field_index(name))
+                if passthrough is not None:
+                    val = passthrough[i].as_py() if isinstance(passthrough[i], pa.Scalar) else passthrough[i]
+                    passthrough_arrays.append(pa.array([val] * num_rows, type=field.type))
+                else:
+                    passthrough_arrays.append(pa.nulls(num_rows).cast(field.type))
+                passthrough_fields.append(field)
+            yield pa.RecordBatch.from_arrays(
+                passthrough_arrays + [out_batch.column(i) for i in range(out_batch.num_columns)],
+                schema=pa.schema(
+                    passthrough_fields + [out_batch.schema.field(i) for i in range(out_batch.num_columns)]
+                ),
+            )
+            last = passthrough
+
+    def _call_legacy(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+        for output in self._iter_output_legacy(args):
             array = self._serializer._create_struct_array(output, self._output_type)  # noqa: SLF001
             yield pa.RecordBatch.from_struct_array(array)
 
-    def _iter_input(self, args: Iterator[pa.RecordBatch]) -> Iterator[tuple[pd.Series]]:
+    def _iter_input_legacy(self, args: Iterator[pa.RecordBatch]) -> Iterator[tuple[pd.Series]]:
         for batch in args:
             arrays = batch.to_struct_array().flatten()
-            yield tuple(_arrow_column_to_pandas(x, self._serializer) for x in arrays)
+            columns = tuple(_arrow_column_to_pandas(x, self._serializer) for x in arrays)
+            if len(columns) == 0 and not pyspark.__version__.startswith(("3.", "4.0.")):
+                # PySpark 4.1+ legacy mapper uses len(a[0]) for num_rows.
+                # Preserve the row count for 0-column batches (e.g. 0-arg UDTFs).
+                yield (pd.Series(range(batch.num_rows)),)
+            else:
+                yield columns
 
-    def _iter_output(self, args: Iterator[pa.RecordBatch]) -> Iterator[pd.DataFrame]:
+    def _iter_output_legacy(self, args: Iterator[pa.RecordBatch]) -> Iterator[pd.DataFrame]:
         args1, args2 = itertools.tee(args)
         if sum(1 for _ in args2) == 0:
             return
-        (batches1, batches2) = itertools.tee(self._iter_input(args1))
-        inputs = (x[self._passthrough_columns :] for x in batches2)
+        (batches1, batches2) = itertools.tee(self._iter_input_legacy(args1))
+        if pyspark.__version__.startswith(("3.", "4.0.")):
+            # PySpark 3.x/4.0 mapper receives sliced non-passthrough columns.
+            inputs = (x[self._passthrough_columns :] for x in batches2)
+        else:
+            # PySpark 4.1+ mapper receives full tuples and selects columns via args_kwargs_offsets.
+            inputs = batches2
         outputs = self._udf(None, inputs)
         last = None
-        for passthrough, (out, _) in itertools.zip_longest(self._iter_passthrough(batches1), outputs):
+        for passthrough, (out, *_) in itertools.zip_longest(self._iter_passthrough(batches1), outputs):
             if out is None or len(out) == 0:
                 continue
             df = pd.DataFrame(index=out.index)
             if passthrough is None:
                 passthrough = last  # noqa: PLW2901
             if passthrough is not None:
-                for v, name in zip(passthrough, self._input_names):
+                for v, name in zip(passthrough, self._input_names, strict=False):
                     df[name] = [v] * len(out)
             else:
                 for name in self._input_names:
@@ -750,10 +999,10 @@ class PySparkArrowTableUdf:
             yield df
             last = passthrough
 
-    def _iter_passthrough(self, batches: Iterator[tuple[pd.Series]]) -> Iterator[tuple]:
+    def _iter_passthrough(self, batches: Iterator[tuple]) -> Iterator[tuple]:
         if self._passthrough_columns > 0:
             for batch in batches:
-                yield from zip(*batch[: self._passthrough_columns])
+                yield from zip(*batch[: self._passthrough_columns], strict=True)
         else:
             for batch in batches:
                 if len(batch) > 0:
