@@ -6943,6 +6943,7 @@ dependencies = [
  "prost-build",
  "rand 0.10.1",
  "readonly",
+ "regex",
  "sail-catalog",
  "sail-catalog-system",
  "sail-common",
@@ -6965,6 +6966,7 @@ dependencies = [
  "tonic-types",
  "tower",
  "url",
+ "walkdir",
 ]
 
 [[package]]

@@ -47,3 +47,7 @@ chrono = { workspace = true }
 [build-dependencies]
 prost-build = { workspace = true }
 tonic-prost-build = { workspace = true }
+
+[dev-dependencies]
+regex = { workspace = true }
+walkdir = "2"
