@@ -4,12 +4,19 @@ These tests validate catalog providers by running SQL through Sail's
 Spark Connect interface. Each sub-directory (glue/, iceberg_rest/, unity/)
 provides fixtures that spin up the relevant infrastructure containers and
 a dedicated Sail server.
+
+These tests are **deselected by default**. To run them, pass
+``-m catalog_integration`` explicitly::
+
+    hatch run pytest -m catalog_integration
 """
 
 from __future__ import annotations
 
 import os
 from typing import TYPE_CHECKING
+
+import pytest
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -74,3 +81,23 @@ def create_spark_session(remote: str, app_name: str = "catalog_test") -> SparkSe
     configure_spark_session(spark)
     patch_spark_connect_session(spark)
     return spark
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Auto-mark catalog_integration tests and deselect them unless explicitly requested."""
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    markexpr: str = getattr(config.option, "markexpr", "") or ""
+
+    remaining: list[pytest.Item] = []
+    deselected: list[pytest.Item] = []
+    for item in items:
+        if str(item.fspath).startswith(this_dir):
+            item.add_marker(pytest.mark.catalog_integration)
+            if "catalog_integration" not in markexpr:
+                deselected.append(item)
+                continue
+        remaining.append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = remaining
