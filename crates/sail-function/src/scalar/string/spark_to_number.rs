@@ -250,11 +250,14 @@ impl ParsedNumber {
     }
 }
 
+// Return `Option<&str>` (borrow from the Captures). Callers that need owned
+// String (e.g. RegexSpec fields built ONCE per batch) add `.map(str::to_string)`
+// explicitly. Per-row hot-path callers (get_sign_factor, match_grouping) work
+// directly on &str without allocation — this cuts N Strings/row to 0.
+// See arrow-check Rule 6.
 macro_rules! get_opt_capture_group {
     ($captures:expr, $group_name:expr) => {
-        $captures
-            .name($group_name)
-            .map(|m| m.as_str().trim().to_string())
+        $captures.name($group_name).map(|m| m.as_str().trim())
     };
 }
 
@@ -301,7 +304,8 @@ impl TryFrom<&Captures<'_>> for RegexSpec {
             .collect();
         let dot: Option<String> = get_opt_capture_group!(captures, "dot")
             .map(|s| s.chars().map(|c| if c == 'd' { 'D' } else { c }).collect());
-        let decimals = get_opt_capture_group!(captures, "decimals");
+        let decimals: Option<String> =
+            get_opt_capture_group!(captures, "decimals").map(str::to_string);
 
         // Spark rejects formats with no digit at all (`S`, `.`, `$`,
         // etc.). `numbers` may be empty (e.g. `.99`), but then `decimals`
@@ -317,7 +321,8 @@ impl TryFrom<&Captures<'_>> for RegexSpec {
         // string so both `G` and `g` are covered.
         validate_thousands_separator_positions(&numbers)?;
 
-        let currency_right: Option<String> = get_opt_capture_group!(captures, "currency_right");
+        let currency_right: Option<String> =
+            get_opt_capture_group!(captures, "currency_right").map(str::to_string);
         // Spark: currency characters must appear BEFORE digits. `$999` is
         // valid; `999$` raises INVALID_FORMAT.CUR_MUST_BEFORE_DIGIT. The
         // FORMAT_REGEX accepts a trailing `$` because the same grammar is
@@ -330,13 +335,13 @@ impl TryFrom<&Captures<'_>> for RegexSpec {
         }
 
         Ok(Self {
-            left_sign: get_opt_capture_group!(captures, "sign_left"),
-            currency_left: get_opt_capture_group!(captures, "currency_left"),
+            left_sign: get_opt_capture_group!(captures, "sign_left").map(str::to_string),
+            currency_left: get_opt_capture_group!(captures, "currency_left").map(str::to_string),
             numbers,
             dot,
             decimals,
             currency_right,
-            right_sign: get_opt_capture_group!(captures, "sign_right"),
+            right_sign: get_opt_capture_group!(captures, "sign_right").map(str::to_string),
         })
     }
 }
