@@ -1086,13 +1086,14 @@ fn build_insert_only_projection(
     let mut projections = Vec::new();
 
     // Source columns are prefixed with `__sail_src_`, so target field "id" maps
-    // to source column "__sail_src_id".
+    // to source column "__sail_src_id". Keys are lowercased for case-insensitive
+    // resolution (Spark's default).
     let source_exprs_by_name: HashMap<String, Expr> = source_schema
         .fields()
         .iter()
         .map(|f| {
             (
-                f.name().clone(),
+                f.name().to_ascii_lowercase(),
                 Expr::Column(Column::from_name(f.name().clone())),
             )
         })
@@ -1113,7 +1114,7 @@ fn build_insert_only_projection(
                 .unwrap_or_else(|| lit(true));
             let value = match &clause.action {
                 MergeNotMatchedByTargetAction::InsertAll => source_exprs_by_name
-                    .get(&format!("__sail_src_{name}"))
+                    .get(&format!("__sail_src_{}", name.to_ascii_lowercase()))
                     .cloned()
                     .unwrap_or_else(|| lit(ScalarValue::Null)),
                 MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
