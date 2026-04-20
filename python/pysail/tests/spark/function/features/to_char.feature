@@ -1089,8 +1089,6 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | #.##   |
 
-    @sail-bug
-    # Sail doesn't handle format strings starting with decimal point (no integer digits)
     Scenario: decimal no integer part
       When query
         """
@@ -1693,10 +1691,7 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | <1.5>  |
 
-    @sail-bug
     Scenario: PR on negative decimal without leading int slot
-      # Sail bug: format parser regex rejects leading '.' (no-integer-slot
-      # forms). Spark accepts and returns '<.5>'.
       When query
         """
         SELECT to_char(-0.5, '.9PR') AS result
@@ -1759,10 +1754,7 @@ Feature: to_char and to_varchar comprehensive tests
     # Formats starting with "." (no 9/0 before the decimal) are legal for
     # magnitudes < 1. Validated against Spark JVM.
 
-    @sail-bug
     Scenario: No-integer format on sub-one positive
-      # Sail bug: RegexSpec rejects formats with leading '.' (no integer
-      # slot). Spark accepts `.99` as "only fractional part".
       When query
         """
         SELECT to_char(0.5, '.99') AS result
@@ -1771,7 +1763,6 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | .50    |
 
-    @sail-bug
     Scenario: No-integer format on very small positive
       When query
         """
@@ -1781,7 +1772,6 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | .05    |
 
-    @sail-bug
     Scenario: No-integer format on negative drops sign without sign spec
       When query
         """
@@ -1795,10 +1785,7 @@ Feature: to_char and to_varchar comprehensive tests
     # Spark accepts both G/D (Oracle-style) and g/d (lowercase). Existing
     # coverage only tested uppercase.
 
-    @sail-bug
     Scenario: Lowercase g acts as thousands separator
-      # Sail bug: RegexSpec regex only accepts uppercase G. Spark is
-      # case-insensitive for grouping / decimal markers.
       When query
         """
         SELECT to_char(1234, '9g999') AS result
@@ -1807,10 +1794,7 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | 1,234  |
 
-    @sail-bug
     Scenario: Lowercase d acts as decimal point
-      # Sail bug: RegexSpec regex only accepts uppercase D. Spark is
-      # case-insensitive for grouping / decimal markers.
       When query
         """
         SELECT to_char(1.5, '9d9') AS result
@@ -1969,21 +1953,14 @@ Feature: to_char and to_varchar comprehensive tests
         """
       Then query error .*
 
-    @sail-bug
     Scenario: Comma at start of format errors
-      # Sail bug: accepts ',999' silently. Spark raises
-      # INVALID_FORMAT.CONT_THOUSANDS_SEPS: "separators must have digits
-      # between them".
       When query
         """
         SELECT to_char(1, ',999') AS result
         """
       Then query error .*
 
-    @sail-bug
     Scenario: Comma at end of format errors
-      # Sail bug: accepts '999,' silently. Spark raises
-      # INVALID_FORMAT.CONT_THOUSANDS_SEPS.
       When query
         """
         SELECT to_char(1, '999,') AS result

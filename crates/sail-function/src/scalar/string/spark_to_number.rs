@@ -8,7 +8,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, StringArray, *};
 use datafusion::arrow::datatypes::{DataType, *};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result, ScalarValue,
+    exec_datafusion_err, exec_err, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -26,9 +26,20 @@ pub struct SparkToNumber {
 }
 
 lazy_static! {
+    // Format grammar (Spark / Oracle-style number pattern):
+    //   [sign_left?][currency_left?][numbers][dot?][decimals?][currency_right?][sign_right?]
+    //
+    // - `numbers` uses `*` (not `+`) so "no-integer" formats like `.99`
+    //   parse. Callers (build_number_components / overflow checks) must
+    //   reject the fully-empty case where BOTH numbers and decimals are
+    //   missing — that's "no digit in format", which Spark rejects.
+    // - `G`/`g` and `D`/`d` are Oracle aliases for `,` and `.`; Spark
+    //   accepts both cases, so the character classes include the
+    //   lowercase variants. `(?i)` (case-insensitive flag) is scoped
+    //   just to the grouping/decimal markers.
     static ref FORMAT_REGEX: Regex = {
         #[expect(clippy::unwrap_used)]
-        Regex::new(r"^(?<sign_left>MI|S)?(?<currency_left>\$)?(?<numbers>[09G,]+)(?<dot>[.D])?(?<decimals>[09]+)?(?<currency_right>\$)?(?<sign_right>PR|MI|S)?$")
+        Regex::new(r"^(?<sign_left>MI|S)?(?<currency_left>\$)?(?<numbers>[09Gg,]*)(?<dot>[.Dd])?(?<decimals>[09]+)?(?<currency_right>\$)?(?<sign_right>PR|MI|S)?$")
             .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))
             .unwrap()
     };
@@ -73,25 +84,29 @@ impl ScalarUDFImpl for SparkToNumber {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let format: &str = if let Some(Some(format)) = scalar_arguments.get(1) {
-            match format {
-                ScalarValue::Utf8(Some(format))
-                | ScalarValue::LargeUtf8(Some(format))
-                | ScalarValue::Utf8View(Some(format)) => Ok(format.deref()),
-                _ => internal_err!("Expected UTF-8 format string"),
-            }?
-        } else {
-            return plan_err!(
-                "`{}` function missing 1 required string positional argument (string format)",
-                SparkToNumber::NAME
-            );
+        // Three cases:
+        //   (a) format is a known literal UTF-8 string → parse it to derive
+        //       the return Decimal256 precision/scale.
+        //   (b) format is a known NULL literal → return a stable placeholder
+        //       type; `invoke_with_args` will emit all-NULL rows.
+        //   (c) format is non-literal (unknown at planning) → same as (b):
+        //       we can't derive a precise type, fall back to a placeholder.
+        let format_opt: Option<&str> = match scalar_arguments.get(1) {
+            Some(Some(ScalarValue::Utf8(Some(s))))
+            | Some(Some(ScalarValue::LargeUtf8(Some(s))))
+            | Some(Some(ScalarValue::Utf8View(Some(s)))) => Some(s.deref()),
+            _ => None,
         };
-
-        let format_spec: RegexSpec = RegexSpec::try_from(format)?;
-        let NumberComponents {
-            precision, scale, ..
-        } = NumberComponents::try_from(&format_spec)?;
-        let return_type = DataType::Decimal256(precision, scale);
+        let return_type = match format_opt {
+            Some(format) => {
+                let format_spec: RegexSpec = RegexSpec::try_from(format)?;
+                let NumberComponents {
+                    precision, scale, ..
+                } = NumberComponents::try_from(&format_spec)?;
+                DataType::Decimal256(precision, scale)
+            }
+            None => DataType::Decimal256(1, 0),
+        };
         Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
 
@@ -109,8 +124,18 @@ pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             args.len()
         );
     }
-    // Parsing the format string
-    let format: &str = downcast_arg!(&args[1], StringArray).value(0);
+    let values: &StringArray = downcast_arg!(&args[0], StringArray);
+    let format_arr = downcast_arg!(&args[1], StringArray);
+
+    // Spark: `to_number(x, NULL)` returns NULL for every row. We detect this
+    // by checking row 0 (format is always a constant literal for this UDF,
+    // so all rows of the format array share the same null-ness).
+    if format_arr.is_null(0) {
+        let nulls: Vec<ScalarValue> = vec![ScalarValue::Decimal256(None, 1, 0); values.len()];
+        return ScalarValue::iter_to_array(nulls);
+    }
+
+    let format: &str = format_arr.value(0);
     let format_spec: RegexSpec = RegexSpec::try_from(format)?;
     let number_components: NumberComponents = NumberComponents::try_from(&format_spec)?;
     let NumberComponents {
@@ -120,8 +145,6 @@ pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     // Getting the regex expression according to the format for the value
     let value_regex: Regex = create_regex_expression(&format_spec)?;
 
-    // Parsing the values
-    let values: &StringArray = downcast_arg!(&args[0], StringArray);
     let scalars: Result<Vec<ScalarValue>> = values
         .iter()
         .map(|value| match value {
@@ -256,16 +279,84 @@ impl TryFrom<&Captures<'_>> for RegexSpec {
     type Error = DataFusionError;
 
     fn try_from(captures: &Captures<'_>) -> Result<Self, Self::Error> {
+        // Normalize lowercase aliases to canonical upper-case so downstream
+        // code (insert_grouping_separators, overflow builders, etc.) only
+        // has to match one form.
+        let numbers: String = get_capture_group!(captures, "numbers")?
+            .chars()
+            .map(|c| if c == 'g' { 'G' } else { c })
+            .collect();
+        let dot: Option<String> = get_opt_capture_group!(captures, "dot")
+            .map(|s| s.chars().map(|c| if c == 'd' { 'D' } else { c }).collect());
+        let decimals = get_opt_capture_group!(captures, "decimals");
+
+        // Spark rejects formats with no digit at all (`S`, `.`, `$`,
+        // etc.). `numbers` may be empty (e.g. `.99`), but then `decimals`
+        // must be present.
+        if numbers.is_empty() && decimals.is_none() {
+            return exec_err!(
+                "The format is invalid. The format string requires at least one number digit."
+            );
+        }
+
+        // Thousands separators (`,` / `G`) must have digits on BOTH sides.
+        // Reject `,999`, `999,`, and `9,,9`. Iterate on the normalized
+        // string so both `G` and `g` are covered.
+        validate_thousands_separator_positions(&numbers)?;
+
+        let currency_right: Option<String> = get_opt_capture_group!(captures, "currency_right");
+        // Spark: currency characters must appear BEFORE digits. `$999` is
+        // valid; `999$` raises INVALID_FORMAT.CUR_MUST_BEFORE_DIGIT. The
+        // FORMAT_REGEX accepts a trailing `$` because the same grammar is
+        // shared by other dialects (PostgreSQL permits it in some forms),
+        // but for Spark-compat we reject it explicitly here.
+        if currency_right.is_some() {
+            return exec_err!(
+                "The format is invalid. Currency characters must appear before digits in the number format."
+            );
+        }
+
         Ok(Self {
             left_sign: get_opt_capture_group!(captures, "sign_left"),
             currency_left: get_opt_capture_group!(captures, "currency_left"),
-            numbers: get_capture_group!(captures, "numbers")?,
-            dot: get_opt_capture_group!(captures, "dot"),
-            decimals: get_opt_capture_group!(captures, "decimals"),
-            currency_right: get_opt_capture_group!(captures, "currency_right"),
+            numbers,
+            dot,
+            decimals,
+            currency_right,
             right_sign: get_opt_capture_group!(captures, "sign_right"),
         })
     }
+}
+
+/// Reject thousands-separator positions that Spark classifies as
+/// `INVALID_FORMAT.CONT_THOUSANDS_SEPS` — separators must have digits on both
+/// sides. Operates on the normalized `numbers` group (`g` already folded to
+/// `G`). Any of:
+///
+///   - leading comma/G (`,999` / `G999`)
+///   - trailing comma/G (`999,` / `999G`)
+///   - consecutive separators (`9,,9` / `9G,9`)
+///
+/// is an invalid format.
+fn validate_thousands_separator_positions(numbers: &str) -> Result<()> {
+    let bytes = numbers.as_bytes();
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let is_sep = |b: u8| b == b',' || b == b'G';
+    if is_sep(bytes[0]) || is_sep(bytes[bytes.len() - 1]) {
+        return exec_err!(
+            "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits on both sides."
+        );
+    }
+    for w in bytes.windows(2) {
+        if is_sep(w[0]) && is_sep(w[1]) {
+            return exec_err!(
+                "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits between them."
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Parses a numeric value from a string using a specified format string.
@@ -398,8 +489,15 @@ impl Display for PatternExpression {
             PatternExpression::Brackets(expr) => {
                 write!(f, "(?<angled_left>[<])?{expr}(?<angled_right>[>])?")
             }
-            PatternExpression::Number => write!(f, "(?<numbers>[0-9,G]+)"),
-            PatternExpression::Dot(dot) => write!(f, "(?<dot>[{dot}])?"),
+            // `*` (not `+`) allows empty integer part for formats like `.9`
+            // where the integer slots are absent but decimals are present.
+            PatternExpression::Number => write!(f, "(?<numbers>[0-9,G]*)"),
+            // Spark accepts either `.` or `D`/`d` in the INPUT regardless of
+            // which marker the format uses. The char class is fixed here even
+            // though the format's own marker was captured in `dot`; keeping
+            // both variants in the input regex avoids false-negatives when
+            // users mix markers between input and format strings.
+            PatternExpression::Dot(_) => write!(f, "(?<dot>[.Dd])?"),
             PatternExpression::Decimal => write!(f, "(?<decimals>[0-9]+)?"),
             PatternExpression::Group(group) => {
                 write!(
@@ -527,10 +625,22 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
         return exec_err!("Malformed integer format related groupings: {format_numbers}. Only groupings with ',' or 'G' are allowed.");
     };
 
-    // Check if the groupings are in the correct order position
-    for (pos, sep) in &format_positions {
-        if pos < &numbers.len() && numbers.chars().rev().nth(*pos) != Some(*sep) {
-            return exec_err!("Malformed integer format related groupings: {format_numbers}.");
+    // Check grouping positions. Spark treats `,` and `G`/`g` as
+    // interchangeable between format and input — so `to_number('1,234',
+    // '9G999')` and `to_number('1,234', '9g999')` are both valid, not just
+    // the char-matching pairs. `format_positions` already uses the
+    // normalized `G` form (see `RegexSpec::try_from`); we just need to
+    // accept either `,` or `G` in the input at the flagged positions.
+    for (pos, _sep) in &format_positions {
+        if pos < &numbers.len() {
+            match numbers.chars().rev().nth(*pos) {
+                Some(',') | Some('G') | Some('g') => {}
+                _ => {
+                    return exec_err!(
+                        "Malformed integer format related groupings: {format_numbers}."
+                    );
+                }
+            }
         }
     }
 
@@ -538,10 +648,14 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
 }
 
 /// Validates a value against a regex pattern generated from a format string.
+///
+/// Spark accepts surrounding whitespace in the input (`' 123 '` parses as
+/// `123`), so we wrap the core pattern with `\s*` on both ends. The inner
+/// pattern still matches the format grammar exactly; only the boundaries are
+/// relaxed.
 fn create_regex_expression(format_spec: &RegexSpec) -> Result<Regex> {
     let format_pattern: PatternExpression = PatternExpression::try_from(format_spec)?;
-    let pattern_string: String = format!("^{format_pattern}$");
-    // Create a Regex instance
+    let pattern_string: String = format!(r"^\s*{format_pattern}\s*$");
     Regex::new(pattern_string.as_str())
         .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))
 }
