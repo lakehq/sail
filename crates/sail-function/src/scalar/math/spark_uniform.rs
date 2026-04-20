@@ -185,7 +185,7 @@ impl ScalarUDFImpl for SparkUniform {
                 return Err(generic_exec_err(
                     "uniform",
                     &format!(
-                        "the input `{}` must be a foldable integer or floating-point expression",
+                        "the input `{}` must be a foldable integer, floating-point, or decimal expression",
                         arg_names[i.min(arg_names.len() - 1)]
                     ),
                 ));
@@ -260,15 +260,23 @@ impl ScalarUDFImpl for SparkUniform {
 
 /// Returns true if `dt` is an acceptable min/max bound type for `uniform`:
 /// any numeric (integer, float, decimal) plus the literal NULL type.
+///
+/// `Decimal256` is only accepted when its precision and scale fit in
+/// `Decimal128`, since `calculate_output_type` collapses all decimal paths to
+/// `Decimal128`. Rejecting oversized `Decimal256` here — instead of silently
+/// falling back to `Float64` downstream — keeps `uniform` consistent with
+/// other math UDFs (e.g. ceil/floor) and surfaces precision loss early.
 fn is_valid_bound_type(dt: &DataType) -> bool {
     dt.is_integer()
         || matches!(dt, DataType::Float32 | DataType::Float64)
         || matches!(
             dt,
-            DataType::Decimal32(_, _)
-                | DataType::Decimal64(_, _)
-                | DataType::Decimal128(_, _)
-                | DataType::Decimal256(_, _)
+            DataType::Decimal32(_, _) | DataType::Decimal64(_, _) | DataType::Decimal128(_, _)
+        )
+        || matches!(
+            dt,
+            DataType::Decimal256(precision, scale)
+                if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE
         )
         || matches!(dt, DataType::Null)
 }
@@ -363,12 +371,16 @@ fn uniform(args: &[ArrayRef], number_rows: usize, output_type: &DataType) -> Res
     let max_array = &args[1];
     let seed_array = args.get(2);
 
+    // Empty batch: return an empty typed array. We also skip seed extraction,
+    // which would otherwise index row 0 of a zero-length array and panic.
+    if number_rows == 0 {
+        return Ok(new_null_array(output_type, 0));
+    }
+
     // Fast path: if either bound is fully null, the result is all-null — every
     // per-row branch would fall through to `append_null()` anyway. Skip the
     // type dispatch entirely and allocate the null array directly.
-    if !min_array.is_empty()
-        && (min_array.null_count() == min_array.len() || max_array.null_count() == max_array.len())
-    {
+    if min_array.null_count() == min_array.len() || max_array.null_count() == max_array.len() {
         return Ok(new_null_array(output_type, number_rows));
     }
 

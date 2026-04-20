@@ -493,6 +493,16 @@ Feature: uniform() generates random numbers within a range
 
   Rule: Multi-row behavior
 
+    Scenario: uniform on empty batch returns an empty result
+      # Guards against a panic from extracting the seed at row 0 of a
+      # zero-length array when number_rows == 0.
+      When query
+        """
+        SELECT uniform(1, 10, 0) AS result FROM range(0)
+        """
+      Then query result
+        | result |
+
     Scenario: uniform with equal bounds produces the same value for every row
       When query
         """
