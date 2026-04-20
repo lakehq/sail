@@ -50,10 +50,18 @@ impl CatalogManager {
         } else {
             // Persistent views are stored separately from tables, but Spark's
             // SHOW TABLE EXTENDED includes both tables and views.
-            let (mut tables, views) = tokio::try_join!(
+            let (tables_res, views_res) = tokio::join!(
                 self.list_tables(database, pattern),
                 self.list_views(database, pattern),
-            )?;
+            );
+            let mut tables = tables_res?;
+            // Catalogs like OneLake and open-source Unity return NotSupported from
+            // list_views; treat that as "no views" so SHOW TABLES still works there.
+            let views = match views_res {
+                Ok(v) => v,
+                Err(CatalogError::NotSupported(_)) => vec![],
+                Err(e) => return Err(e),
+            };
             tables.extend(views);
             tables
         };

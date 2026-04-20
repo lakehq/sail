@@ -82,7 +82,13 @@ impl CatalogManager {
         let mut output = if self.state()?.is_global_temporary_view_database(database) {
             self.list_global_temporary_views(pattern).await?
         } else {
-            self.list_views(database, pattern).await?
+            // Catalogs like OneLake and open-source Unity return NotSupported here;
+            // treat that as "no views" so ListViews keeps working on those catalogs.
+            match self.list_views(database, pattern).await {
+                Ok(v) => v,
+                Err(CatalogError::NotSupported(_)) => vec![],
+                Err(e) => return Err(e),
+            }
         };
         output.extend(self.list_temporary_views(pattern).await?);
         Ok(output)
