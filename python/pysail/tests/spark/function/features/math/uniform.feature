@@ -1,10 +1,10 @@
 Feature: uniform() generates random numbers within a range
 
   # IMPLEMENTATION NOTE:
-  # Sail uses Rust's StdRng (ChaCha20-based RNG) while Spark uses Java's Random (LCG),
-  # so specific numeric output differs by seed. These scenarios therefore cover only
-  # behavior that is deterministic across RNGs: schema-type inference, NULL handling,
-  # equal-bound short-circuit, and error-condition validation.
+  # Sail uses `SparkXorShiftRandom` (a port of Apache Spark's XORShiftRandom),
+  # so for the same seed the produced values are bit-for-bit identical to
+  # Spark JVM — including the first-row value, float/double truncation, and
+  # multi-row sequences.
 
   Rule: Arity validation
 
@@ -451,6 +451,88 @@ Feature: uniform() generates random numbers within a range
       Then query result
         | has_variation |
         | true          |
+
+  Rule: Bit-exact values match Spark JVM
+
+    Scenario: uniform int with seed 0 matches Spark
+      When query
+        """
+        SELECT uniform(10, 20, 0) AS result
+        """
+      Then query result
+        | result |
+        | 17     |
+
+    Scenario: uniform int with seed 42 matches Spark
+      When query
+        """
+        SELECT uniform(0, 100, 42) AS result
+        """
+      Then query result
+        | result |
+        | 61     |
+
+    Scenario: uniform int with negative seed matches Spark
+      When query
+        """
+        SELECT uniform(5, 105, -3) AS result
+        """
+      Then query result
+        | result |
+        | 81     |
+
+    Scenario: uniform double with seed 0 matches Spark
+      When query
+        """
+        SELECT uniform(CAST(1 AS DOUBLE), CAST(2 AS DOUBLE), 0) AS result
+        """
+      Then query result
+        | result             |
+        | 1.7604953758285915 |
+
+    Scenario: uniform float with seed 0 matches Spark
+      When query
+        """
+        SELECT uniform(CAST(1 AS FLOAT), CAST(2 AS FLOAT), 0) AS result
+        """
+      Then query result
+        | result    |
+        | 1.7604954 |
+
+    Scenario: uniform decimal with seed 123 matches Spark
+      When query
+        """
+        SELECT uniform(5.5, 10.5, 123) AS result
+        """
+      Then query result
+        | result |
+        | 6.3    |
+
+    Scenario: uniform int with seed 42 multi-row matches Spark
+      When query
+        """
+        SELECT uniform(0, 1000, 42) AS result FROM range(5)
+        """
+      Then query result
+        | result |
+        | 619    |
+        | 509    |
+        | 832    |
+        | 263    |
+        | 670    |
+
+    Scenario: uniform int with seed 0 multi-row matches Spark
+      When query
+        """
+        SELECT uniform(0, 1000, 0) AS result FROM range(5)
+        """
+      Then query result
+        | result |
+        | 760    |
+        | 523    |
+        | 95     |
+        | 316    |
+        | 714    |
 
   Rule: Equal bounds are deterministic across RNGs
 

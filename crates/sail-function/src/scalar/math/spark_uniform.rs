@@ -12,58 +12,32 @@ use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use rand::rngs::StdRng;
-use rand::{rng, RngExt, SeedableRng};
+use rand::{rng, RngExt};
 
+use super::xorshift::SparkXorShiftRandom;
 use crate::error::{
     generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err,
     unsupported_data_types_exec_err,
 };
 
-/// The `Uniform` function generates random numbers from a uniform distribution
-/// between a specified minimum and maximum value.
+/// Generates random numbers from a uniform distribution between `min`
+/// (inclusive) and `max` (exclusive), optionally seeded for reproducibility.
 ///
 /// # Syntax
-/// `uniform(min, max, seed)`
-/// - min: minimum value of the range (inclusive)
-/// - max: maximum value of the range (exclusive)
-/// - seed: optional random seed for reproducibility
+/// `uniform(min, max[, seed])`
 ///
-/// # Implementation Notes
+/// # Implementation
 ///
-/// This implementation follows Apache Spark's `uniform` function API but uses
-/// different random number generation algorithms.
-///
-/// **Spark (Java/Scala)**:
-/// - RNG: `java.util.Random` (Linear Congruential Generator)
-/// - Algorithm: LCG with 48-bit seed
-/// - Integer type: Int32
-/// - Implementation: Uses `XORShiftRandom` wrapper around `java.util.Random`
-/// - Source: See `randomExpressions.scala` in Spark's Catalyst module
-///
-/// **Sail (Rust)**:
-/// - RNG: `rand::rngs::StdRng` (ChaCha20-based cryptographic RNG)
-/// - Algorithm: ChaCha20 stream cipher (20 rounds)
-/// - Integer type: Int32
-/// - Implementation: Uses `rand` crate's standard RNG
-/// - Source: <https://docs.rs/rand/latest/rand/>
-///
-/// **Why Different RNGs?**
-/// - Spark uses `java.util.Random` for JVM ecosystem compatibility
-/// - Sail uses `StdRng` for better cryptographic properties and Rust ecosystem standards
-/// - Both produce statistically uniform distributions
-/// - Both are deterministic (reproducible with same seed in their respective environments)
-/// - Cross-platform reproducibility (Spark ↔ Sail) is **not guaranteed**
-///
-/// Due to different RNG implementations, the same seed produces different
-/// sequences in Spark vs Sail, but both produce statistically uniform
-/// distributions and are deterministic within their respective environments.
+/// Uses [`SparkXorShiftRandom`], a bit-for-bit port of Apache Spark's
+/// `org.apache.spark.util.random.XORShiftRandom` (MurmurHash3-hashed seed +
+/// XORShift with shifts 21/35/4 and a `Random.nextDouble()`-compatible output).
+/// Combined with Spark's scaling formula — `min + floor(nextDouble() * span)`
+/// for integer/decimal types and `min + nextDouble() * span` for floats —
+/// the values produced for any given seed match Spark JVM exactly.
 ///
 /// # References
-/// - Spark Python API: <https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.uniform.html>
-/// - Spark Scala source: <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/randomExpressions.scala>
-/// - Rust rand crate: <https://docs.rs/rand/latest/rand/rngs/struct.StdRng.html>
-/// - ChaCha20 algorithm: <https://docs.rs/rand_chacha/latest/rand_chacha/>
+/// - Spark: <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/randomExpressions.scala>
+/// - XORShiftRandom: <https://github.com/apache/spark/blob/master/core/src/main/scala/org/apache/spark/util/random/XORShiftRandom.scala>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkUniform {
     signature: Signature,
@@ -288,44 +262,62 @@ fn is_valid_bound_type(dt: &DataType) -> bool {
         || matches!(dt, DataType::Null)
 }
 
-/// Build a single deterministic RNG for the whole invocation.
+/// Build a single Spark-compatible RNG for the whole invocation.
 ///
-/// Spark creates one RNG per partition and advances it across rows, so with a
-/// fixed seed a multi-row batch produces a sequence of distinct values — not
-/// the same value repeated.  We follow the same contract here.
-fn build_rng(seed: Option<u64>) -> StdRng {
-    match seed {
-        Some(s) => StdRng::seed_from_u64(s),
-        None => StdRng::from_rng(&mut rng()),
-    }
+/// Spark's `Uniform` expression instantiates `XORShiftRandom(seed + partitionIndex)`
+/// once and advances it across rows, so with a fixed seed a multi-row batch
+/// produces a sequence of distinct, bit-for-bit reproducible values. When the
+/// caller did not supply a seed we fall back to a random i64 drawn from the
+/// thread RNG so different invocations still differ.
+fn build_rng(seed: Option<u64>) -> SparkXorShiftRandom {
+    let s: i64 = match seed {
+        Some(v) => v as i64,
+        None => rng().random(),
+    };
+    SparkXorShiftRandom::new(s)
 }
 
-macro_rules! generate_uniform_single_fn {
-    ($fn_name_single:ident, $type:ty) => {
+/// Compute Spark's uniform integer scaling:
+///     `min + floor(nextDouble * (max - min))`
+///
+/// Both bounds are normalized so `min <= max`; when they are equal the RNG is
+/// not advanced and the shared value is returned, matching Spark.
+macro_rules! generate_uniform_int_fn {
+    ($fn_name:ident, $type:ty) => {
         #[inline]
-        fn $fn_name_single(min: $type, max: $type, rng: &mut StdRng) -> $type {
-            let mut min_v = min;
-            let mut max_v = max;
-
-            if min_v > max_v {
-                std::mem::swap(&mut min_v, &mut max_v);
+        fn $fn_name(min: $type, max: $type, rng: &mut SparkXorShiftRandom) -> $type {
+            let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+            if lo == hi {
+                return lo;
             }
-
-            if min_v == max_v {
-                return min_v;
-            }
-
-            rng.random_range(min_v..max_v)
+            let span = (hi as f64) - (lo as f64);
+            let scaled = (rng.next_double() * span).floor() as i64;
+            ((lo as i64) + scaled) as $type
         }
     };
 }
 
-generate_uniform_single_fn!(generate_uniform_int8_single, i8);
-generate_uniform_single_fn!(generate_uniform_int16_single, i16);
-generate_uniform_single_fn!(generate_uniform_int32_single, i32);
-generate_uniform_single_fn!(generate_uniform_int64_single, i64);
-generate_uniform_single_fn!(generate_uniform_float32_single, f32);
-generate_uniform_single_fn!(generate_uniform_float_single, f64);
+generate_uniform_int_fn!(generate_uniform_int8_single, i8);
+generate_uniform_int_fn!(generate_uniform_int16_single, i16);
+generate_uniform_int_fn!(generate_uniform_int32_single, i32);
+generate_uniform_int_fn!(generate_uniform_int64_single, i64);
+
+/// Spark's uniform float scaling computes in `f64` and casts to the target
+/// float type at the end, so `FLOAT + FLOAT` produces `f32` values whose exact
+/// bits match Spark's `Float.intBitsToFloat(...)` output.
+#[inline]
+fn generate_uniform_float_single(min: f64, max: f64, rng: &mut SparkXorShiftRandom) -> f64 {
+    let (lo, hi) = if min <= max { (min, max) } else { (max, min) };
+    if lo == hi {
+        return lo;
+    }
+    lo + rng.next_double() * (hi - lo)
+}
+
+#[inline]
+fn generate_uniform_float32_single(min: f32, max: f32, rng: &mut SparkXorShiftRandom) -> f32 {
+    generate_uniform_float_single(min as f64, max as f64, rng) as f32
+}
 
 // Array variants — used only in tests below to verify batch/seed consistency.
 #[cfg(test)]
@@ -529,8 +521,11 @@ fn uniform(args: &[ArrayRef], number_rows: usize) -> Result<ArrayRef> {
                 let min_val = min_arr.value(i);
                 let max_val = max_arr.value(i);
 
-                // Generate random i128 directly in the scaled range to avoid precision loss,
-                // preserving full precision for high-precision decimals (e.g. Decimal(38, 10)).
+                // Spark routes decimal through double-space: it converts the
+                // bounds to `double`, interpolates with `nextDouble`, and casts
+                // back to the scaled `i128`. Doing the same preserves
+                // bit-identical values for modest precisions (e.g. the
+                // `uniform(5.5, 10.5, 123) → 6.3` rounding behaviour).
                 let (min_scaled, max_scaled) = if min_val > max_val {
                     (max_val, min_val)
                 } else {
@@ -540,7 +535,11 @@ fn uniform(args: &[ArrayRef], number_rows: usize) -> Result<ArrayRef> {
                 let decimal_val = if min_scaled == max_scaled {
                     min_scaled
                 } else {
-                    rng.random_range(min_scaled..max_scaled)
+                    let scale_factor = 10f64.powi(scale as i32);
+                    let min_f = (min_scaled as f64) / scale_factor;
+                    let max_f = (max_scaled as f64) / scale_factor;
+                    let result_f = min_f + rng.next_double() * (max_f - min_f);
+                    (result_f * scale_factor).round() as i128
                 };
 
                 builder.append_value(decimal_val);
@@ -564,9 +563,10 @@ mod tests {
     /// Test 1: uniform(10, 20, 0) should return 18 (with i32)
     #[test]
     fn test_uniform_single_value() -> Result<()> {
+        // Matches Spark JVM: `SELECT uniform(10, 20, 0)` → 17.
         let values = generate_uniform_int32(10, 20, Some(0), 1)?;
         assert_eq!(values.len(), 1);
-        assert_eq!(values[0], 18);
+        assert_eq!(values[0], 17);
         Ok(())
     }
 
@@ -681,8 +681,9 @@ mod tests {
     /// Test 11: Verify specific value with seed 42
     #[test]
     fn test_uniform_seed_42_value() -> Result<()> {
+        // Matches Spark JVM: `SELECT uniform(0, 100, 42)` → 61.
         let values = generate_uniform_int32(0, 100, Some(42), 1)?;
-        assert_eq!(values[0], 13);
+        assert_eq!(values[0], 61);
         Ok(())
     }
 
