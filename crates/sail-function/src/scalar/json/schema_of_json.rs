@@ -3,18 +3,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{downcast_array, Array, MapArray, StringArray, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use jiter::{Jiter, Peek};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_types_exec_err};
-
-/// Spark DDL type name constants for JSON schema inference.
-const DDL_BIGINT: &str = "BIGINT";
-const DDL_DOUBLE: &str = "DOUBLE";
-const DDL_STRING: &str = "STRING";
-const DDL_BOOLEAN: &str = "BOOLEAN";
-const DDL_NULL: &str = "NULL";
 
 /// Infers the schema of a JSON string and returns it in DDL format.
 ///
@@ -42,6 +35,12 @@ impl SparkSchemaOfJson {
             return Err(generic_exec_err(
                 "schema_of_json",
                 "the input `json` should be a foldable string expression, got a column reference",
+            ));
+        }
+        if let Some(ColumnarValue::Array(_)) = cols.get(1) {
+            return Err(generic_exec_err(
+                "schema_of_json",
+                "the input `options` should be a foldable map expression, got a column reference",
             ));
         }
         Ok(())
@@ -179,184 +178,241 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     }
 }
 
-/// In Spark's JSON schema inference, a bare `null` resolves to STRING.
-fn null_as_string(t: String) -> String {
-    if t == DDL_NULL {
-        DDL_STRING.to_string()
+/// Internal typed representation of an inferred JSON type.
+///
+/// Using a typed enum (instead of DDL strings) avoids ever re-parsing the
+/// output: `common_supertype` operates on variants, and field names are
+/// stored **raw** in `Struct` so escaping is applied exactly once, at the
+/// final `to_ddl()` serialization step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InferredType {
+    Null,
+    Boolean,
+    BigInt,
+    /// Integer wider than i64. Spark uses `DECIMAL(precision, 0)`.
+    Decimal {
+        precision: u32,
+    },
+    Double,
+    String,
+    Array(Box<InferredType>),
+    Struct(Vec<(String, InferredType)>),
+}
+
+impl InferredType {
+    /// In Spark, a bare JSON `null` surfaces as STRING.
+    fn coerce_bare_null(self) -> Self {
+        if matches!(self, InferredType::Null) {
+            InferredType::String
+        } else {
+            self
+        }
+    }
+
+    fn to_ddl(&self) -> String {
+        match self {
+            InferredType::Null => "NULL".to_string(),
+            InferredType::Boolean => "BOOLEAN".to_string(),
+            InferredType::BigInt => "BIGINT".to_string(),
+            InferredType::Decimal { precision } => format!("DECIMAL({precision},0)"),
+            InferredType::Double => "DOUBLE".to_string(),
+            InferredType::String => "STRING".to_string(),
+            InferredType::Array(elem) => format!("ARRAY<{}>", elem.to_ddl()),
+            InferredType::Struct(fields) if fields.is_empty() => "STRUCT<>".to_string(),
+            InferredType::Struct(fields) => {
+                let rendered: Vec<String> = fields
+                    .iter()
+                    .map(|(name, typ)| format!("{}: {}", escape_field_name(name), typ.to_ddl()))
+                    .collect();
+                format!("STRUCT<{}>", rendered.join(", "))
+            }
+        }
+    }
+}
+
+/// Returns the common supertype of two inferred types, following Spark's
+/// JSON schema-inference promotion rules.
+fn common_supertype(a: InferredType, b: InferredType) -> InferredType {
+    use InferredType::*;
+
+    if a == b {
+        return a;
+    }
+    match (a, b) {
+        // `null` loses against any concrete type.
+        (Null, other) | (other, Null) => other,
+
+        // Numeric promotion ladder: BigInt < Decimal < Double.
+        (BigInt, Double) | (Double, BigInt) => Double,
+        (Decimal { .. }, Double) | (Double, Decimal { .. }) => Double,
+        (BigInt, Decimal { precision }) | (Decimal { precision }, BigInt) => {
+            // BIGINT has up to 19 decimal digits; widen to hold both.
+            Decimal {
+                precision: precision.max(19),
+            }
+        }
+        (Decimal { precision: p1 }, Decimal { precision: p2 }) => Decimal {
+            precision: p1.max(p2),
+        },
+
+        // Arrays recurse on element type.
+        (Array(a), Array(b)) => Array(Box::new(common_supertype(*a, *b))),
+
+        // Structs: union of fields, recurse on shared names.
+        (Struct(fa), Struct(fb)) => Struct(merge_struct_fields(fa, fb)),
+
+        // Any other mix falls back to STRING (matches Spark's behaviour for
+        // e.g. `[1, "foo"]` or `[true, 1]`).
+        _ => String,
+    }
+}
+
+/// Merges two lists of struct fields: shared names are promoted via
+/// `common_supertype`, unique names are kept. Output is sorted by name to
+/// match Spark's deterministic ordering.
+fn merge_struct_fields(
+    mut a: Vec<(String, InferredType)>,
+    b: Vec<(String, InferredType)>,
+) -> Vec<(String, InferredType)> {
+    for (name_b, type_b) in b {
+        match a.iter_mut().find(|(n, _)| n == &name_b) {
+            Some((_, type_a)) => {
+                let merged =
+                    common_supertype(std::mem::replace(type_a, InferredType::Null), type_b);
+                *type_a = merged;
+            }
+            None => a.push((name_b, type_b)),
+        }
+    }
+    a.sort_by(|(n1, _), (n2, _)| n1.cmp(n2));
+    a
+}
+
+/// Spark-compatible field-name escaping.
+///
+/// Unquoted identifiers in Spark DDL must match `[A-Za-z_][A-Za-z0-9_]*`.
+/// Anything else gets backtick-quoted; embedded backticks are doubled.
+fn escape_field_name(name: &str) -> String {
+    let mut chars = name.chars();
+    let is_unquoted = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    };
+    if is_unquoted {
+        name.to_string()
     } else {
-        t
+        format!("`{}`", name.replace('`', "``"))
     }
 }
 
 /// Infer the Spark SQL DDL schema from a JSON string.
 fn infer_json_schema(json: &str) -> Result<String> {
     if json.is_empty() {
-        return Ok(DDL_STRING.to_string());
+        return Ok(InferredType::String.to_ddl());
     }
     let mut jiter = Jiter::new(json.as_bytes());
-    let result = match jiter.peek() {
-        Ok(peek) => infer_type_from_peek(&mut jiter, peek),
-        Err(e) => {
-            return Err(generic_exec_err(
-                "schema_of_json",
-                &format!("failed to parse JSON: {e}"),
-            ));
-        }
-    };
-    Ok(null_as_string(result))
+    let peek = jiter
+        .peek()
+        .map_err(|e| generic_exec_err("schema_of_json", &format!("failed to parse JSON: {e}")))?;
+    let inferred = infer_type_from_peek(&mut jiter, peek)?;
+    Ok(inferred.coerce_bare_null().to_ddl())
 }
 
-fn infer_type_from_peek(jiter: &mut Jiter, peek: Peek) -> String {
-    match peek {
+fn jiter_err(e: impl std::fmt::Display) -> DataFusionError {
+    generic_exec_err("schema_of_json", &format!("failed to parse JSON: {e}"))
+}
+
+fn infer_type_from_peek(jiter: &mut Jiter, peek: Peek) -> Result<InferredType> {
+    let inferred = match peek {
         Peek::Null => {
-            let _ = jiter.known_null();
-            DDL_NULL.to_string()
+            jiter.known_null().map_err(jiter_err)?;
+            InferredType::Null
         }
         Peek::True | Peek::False => {
-            let _ = jiter.known_bool(peek);
-            DDL_BOOLEAN.to_string()
+            jiter.known_bool(peek).map_err(jiter_err)?;
+            InferredType::Boolean
         }
         Peek::String => {
-            let _ = jiter.known_str();
-            DDL_STRING.to_string()
+            jiter.known_str().map_err(jiter_err)?;
+            InferredType::String
         }
-        Peek::Minus => infer_number_type(jiter),
+        Peek::Minus => infer_number_type(jiter)?,
         Peek::Infinity | Peek::NaN => {
-            let _ = jiter.known_float(peek);
-            DDL_DOUBLE.to_string()
+            jiter.known_float(peek).map_err(jiter_err)?;
+            InferredType::Double
         }
-        Peek::Array => infer_array_type(jiter),
-        Peek::Object => infer_struct_type(jiter),
-        _ => infer_number_type(jiter),
-    }
+        Peek::Array => infer_array_type(jiter)?,
+        Peek::Object => infer_struct_type(jiter)?,
+        _ => infer_number_type(jiter)?,
+    };
+    Ok(inferred)
 }
 
-fn infer_number_type(jiter: &mut Jiter) -> String {
+fn infer_number_type(jiter: &mut Jiter) -> Result<InferredType> {
     let start = jiter.current_index();
-    if jiter.next_skip().is_err() {
-        return DDL_BIGINT.to_string();
-    }
+    jiter.next_skip().map_err(jiter_err)?;
     let slice = jiter.slice_to_current(start);
-    let num_str = std::str::from_utf8(slice).unwrap_or("");
+    let num_str = std::str::from_utf8(slice)
+        .map_err(|e| generic_exec_err("schema_of_json", &format!("invalid number utf8: {e}")))?;
 
     if num_str.contains('.') || num_str.contains('e') || num_str.contains('E') {
-        DDL_DOUBLE.to_string()
-    } else {
-        // Check if integer fits in BIGINT range; if not, use DECIMAL(N,0)
-        let digits = num_str.trim_start_matches('-');
-        if digits.len() > 18 {
-            // More than 18 digits might overflow BIGINT
-            if num_str.parse::<i64>().is_err() {
-                return format!("DECIMAL({},0)", digits.len());
-            }
-        }
-        DDL_BIGINT.to_string()
+        return Ok(InferredType::Double);
     }
+
+    // Integer that doesn't fit in BIGINT widens to DECIMAL(digits, 0).
+    let digits = num_str.trim_start_matches('-');
+    if digits.len() > 18 && num_str.parse::<i64>().is_err() {
+        return Ok(InferredType::Decimal {
+            precision: digits.len() as u32,
+        });
+    }
+    Ok(InferredType::BigInt)
 }
 
-fn infer_array_type(jiter: &mut Jiter) -> String {
-    let Ok(first_peek) = jiter.known_array() else {
-        return format!("ARRAY<{DDL_STRING}>");
-    };
+fn infer_array_type(jiter: &mut Jiter) -> Result<InferredType> {
+    let first_peek = jiter.known_array().map_err(jiter_err)?;
 
     let Some(element_peek) = first_peek else {
-        return format!("ARRAY<{DDL_STRING}>");
+        return Ok(InferredType::Array(Box::new(InferredType::String)));
     };
 
-    let mut element_type = infer_type_from_peek(jiter, element_peek);
+    let mut element_type = infer_type_from_peek(jiter, element_peek)?;
 
-    while let Ok(Some(peek)) = jiter.array_step() {
-        let next_type = infer_type_from_peek(jiter, peek);
-        element_type = common_supertype(&element_type, &next_type);
+    while let Some(peek) = jiter.array_step().map_err(jiter_err)? {
+        let next_type = infer_type_from_peek(jiter, peek)?;
+        element_type = common_supertype(element_type, next_type);
     }
 
-    format!("ARRAY<{}>", null_as_string(element_type))
+    Ok(InferredType::Array(Box::new(
+        element_type.coerce_bare_null(),
+    )))
 }
 
-/// Returns the common supertype of two Spark DDL type strings.
-/// Follows Spark's type promotion rules for JSON schema inference.
-fn common_supertype(a: &str, b: &str) -> String {
-    if a == b {
-        return a.to_string();
-    }
-    match (a, b) {
-        (DDL_NULL, other) | (other, DDL_NULL) => other.to_string(),
-        (DDL_BIGINT, DDL_DOUBLE) | (DDL_DOUBLE, DDL_BIGINT) => DDL_DOUBLE.to_string(),
-        (a, b) if a.starts_with("ARRAY<") && b.starts_with("ARRAY<") => {
-            let inner_a = &a[6..a.len() - 1];
-            let inner_b = &b[6..b.len() - 1];
-            format!("ARRAY<{}>", common_supertype(inner_a, inner_b))
-        }
-        (a, b) if a.starts_with("STRUCT<") && b.starts_with("STRUCT<") => merge_struct_types(a, b),
-        _ => DDL_STRING.to_string(),
-    }
-}
+fn infer_struct_type(jiter: &mut Jiter) -> Result<InferredType> {
+    let first_key = jiter.known_object().map_err(jiter_err)?;
 
-/// Merges two STRUCT DDL types: union of fields, common supertype for shared fields.
-fn merge_struct_types(a: &str, b: &str) -> String {
-    let fields_a = parse_struct_fields(a);
-    let fields_b = parse_struct_fields(b);
+    let Some(mut current_key) = first_key else {
+        return Ok(InferredType::Struct(Vec::new()));
+    };
 
-    let mut merged: Vec<(String, String)> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut fields: Vec<(String, InferredType)> = Vec::new();
 
-    for (name, type_a) in &fields_a {
-        let merged_type = if let Some((_, type_b)) = fields_b.iter().find(|(n, _)| n == name) {
-            common_supertype(type_a, type_b)
-        } else {
-            type_a.clone()
-        };
-        merged.push((name.clone(), merged_type));
-        seen.insert(name.clone());
-    }
+    loop {
+        let field_name = current_key.to_string();
+        let peek = jiter.peek().map_err(jiter_err)?;
+        let field_type = infer_type_from_peek(jiter, peek)?.coerce_bare_null();
+        fields.push((field_name, field_type));
 
-    for (name, type_b) in &fields_b {
-        if !seen.contains(name) {
-            merged.push((name.clone(), type_b.clone()));
+        match jiter.next_key().map_err(jiter_err)? {
+            Some(key) => current_key = key,
+            None => break,
         }
     }
 
-    merged.sort_by(|(a, _), (b, _)| a.cmp(b));
-    let fields_str: Vec<String> = merged
-        .into_iter()
-        .map(|(name, typ)| format!("{}: {typ}", escape_field_name(&name)))
-        .collect();
-    format!("STRUCT<{}>", fields_str.join(", "))
-}
-
-/// Parses `STRUCT<name1: type1, name2: type2>` into vec of (name, type) pairs.
-/// Handles nested angle brackets correctly.
-fn parse_struct_fields(s: &str) -> Vec<(String, String)> {
-    let inner = &s[7..s.len() - 1]; // strip "STRUCT<" and ">"
-    if inner.is_empty() {
-        return Vec::new();
-    }
-
-    let mut fields = Vec::new();
-    let mut depth = 0;
-    let mut start = 0;
-
-    for (i, ch) in inner.char_indices() {
-        match ch {
-            '<' | '(' => depth += 1,
-            '>' | ')' => depth -= 1,
-            ',' if depth == 0 => {
-                let field = inner[start..i].trim();
-                if let Some((name, typ)) = field.split_once(": ") {
-                    fields.push((name.to_string(), typ.to_string()));
-                }
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-
-    let field = inner[start..].trim();
-    if let Some((name, typ)) = field.split_once(": ") {
-        fields.push((name.to_string(), typ.to_string()));
-    }
-
-    fields
+    fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+    Ok(InferredType::Struct(fields))
 }
 
 #[derive(Debug, Default)]
@@ -384,7 +440,6 @@ impl ModeOptions {
 #[derive(Debug, Default)]
 struct SparkSchemaOfJsonOptions {
     mode: ModeOptions,
-    _allow_numeric_leading_zeros: bool,
 }
 
 impl SparkSchemaOfJsonOptions {
@@ -396,9 +451,13 @@ impl SparkSchemaOfJsonOptions {
             match key {
                 "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
                 "allowNumericLeadingZeros" => {
-                    // Spark accepts this option; store but don't act on it yet
-                    // TODO: pass to jiter parser when supported
-                    self._allow_numeric_leading_zeros = value == "true";
+                    // Parsing numbers with leading zeros would require either a
+                    // permissive JSON parser or extending jiter. Until that is
+                    // wired in, we refuse the option explicitly rather than
+                    // accepting it as a silent no-op.
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "`schema_of_json` option `allowNumericLeadingZeros` is not yet supported (value: {value})"
+                    )));
                 }
                 other => {
                     return Err(generic_exec_err(
@@ -450,51 +509,5 @@ impl SparkSchemaOfJsonOptions {
                 &format!("unexpected options key/value pair: {key:?}: {value:?}"),
             )),
         }
-    }
-}
-
-/// Escape a field name with backticks if it contains special characters.
-/// Spark backtick-escapes names with dots, spaces, and other non-alphanumeric chars.
-fn escape_field_name(name: &str) -> String {
-    let needs_escape = name.chars().any(|c| !c.is_alphanumeric() && c != '_');
-    if needs_escape {
-        format!("`{name}`")
-    } else {
-        name.to_string()
-    }
-}
-
-fn infer_struct_type(jiter: &mut Jiter) -> String {
-    let Ok(first_key) = jiter.known_object() else {
-        return "STRUCT<>".to_string();
-    };
-
-    let Some(mut current_key) = first_key else {
-        return "STRUCT<>".to_string();
-    };
-
-    let mut fields = Vec::new();
-
-    loop {
-        let field_name = current_key.to_string();
-        let field_type = match jiter.peek() {
-            Ok(peek) => null_as_string(infer_type_from_peek(jiter, peek)),
-            Err(_) => DDL_STRING.to_string(),
-        };
-
-        let escaped_name = escape_field_name(&field_name);
-        fields.push(format!("{escaped_name}: {field_type}"));
-
-        match jiter.next_key() {
-            Ok(Some(key)) => current_key = key,
-            _ => break,
-        }
-    }
-
-    if fields.is_empty() {
-        "STRUCT<>".to_string()
-    } else {
-        fields.sort();
-        format!("STRUCT<{}>", fields.join(", "))
     }
 }

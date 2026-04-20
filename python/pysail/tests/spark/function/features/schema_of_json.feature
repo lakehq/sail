@@ -493,6 +493,12 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         """
       Then query error .*foldable.*
 
+    @sail-bug
+    # Sail currently rejects this option as NotImplemented: jiter does not
+    # accept leading-zero numbers, and silently accepting the option would
+    # produce the wrong schema on JSON with leading zeros. TODO: preprocess
+    # the JSON (or switch to a parser that honours the option) to plumb it
+    # through, then drop the tag.
     Scenario: allowNumericLeadingZeros option is accepted
       When query
         """
@@ -631,8 +637,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: Invalid JSON errors
 
-    @sail-bug
-    # Sail doesn't error on invalid JSON - should raise parse error like Spark
     Scenario: invalid JSON errors
       When query
         """
@@ -640,8 +644,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         """
       Then query error .*
 
-    @sail-bug
-    # Sail doesn't error on unclosed brace - should raise parse error like Spark
     Scenario: unclosed brace errors
       When query
         """
