@@ -25,7 +25,7 @@ pub struct RandExec {
     seed: i64,
     mode: RandMode,
     schema: SchemaRef,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl RandExec {
@@ -37,12 +37,12 @@ impl RandExec {
         schema: SchemaRef,
     ) -> Result<Self> {
         let column_name = column_name.into();
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             input.output_partitioning().clone(),
             input.pipeline_behavior(),
             input.boundedness(),
-        );
+        ));
         Ok(Self {
             input,
             column_name,
@@ -89,7 +89,7 @@ impl ExecutionPlan for RandExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

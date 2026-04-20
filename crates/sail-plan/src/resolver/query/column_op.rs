@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::Column;
-use datafusion_expr::{cast, col, lit, Expr, ExprSchemable, LogicalPlan, Projection};
+use datafusion_expr::{
+    cast, col, lit, Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias,
+};
 use indexmap::IndexMap;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -35,7 +37,7 @@ impl PlanResolver<'_> {
         let expr = schema
             .columns()
             .into_iter()
-            .zip(columns.into_iter())
+            .zip(columns)
             .map(|(col, name)| NamedExpr::new(vec![name.into()], Expr::Column(col)))
             .collect();
         let expr = self.rewrite_named_expressions(expr, state)?;
@@ -180,6 +182,13 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
+        // If the input is a SubqueryAlias, save the alias and re-apply it after building the
+        // projection. A Projection node strips qualifiers from its output schema, so without
+        // re-wrapping, subsequent operations could no longer reference columns by the qualified name.
+        let input_alias = match &input {
+            LogicalPlan::SubqueryAlias(sa) => Some(sa.alias.clone()),
+            _ => None,
+        };
         let schema = input.schema();
         // We use `IndexMap` to ensure the result schema has a deterministic column order.
         let mut aliases: IndexMap<String, (Expr, bool, Vec<_>)> = async {
@@ -241,10 +250,15 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        let result = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
+        if let Some(alias) = input_alias {
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                Arc::new(result),
+                alias,
+            )?))
+        } else {
+            Ok(result)
+        }
     }
 
     pub(super) async fn resolve_query_replace(

@@ -15,13 +15,6 @@
   default: "8388608"
   description: The stack size in bytes for each thread.
 
-- key: runtime.enable_secondary
-  type: boolean
-  default: "true"
-  description: |
-    Use a secondary Tokio runtime to separate object storage I/O tasks from other operations.
-  experimental: true
-
 - key: runtime.memory_pool.type
   type: string
   default: "unbounded"
@@ -734,6 +727,14 @@
     the session active.
   experimental: true
 
+- key: flight.session_timeout_secs
+  type: number
+  default: "3600"
+  description: |
+    The timeout in seconds for idle Flight SQL sessions.
+    Sessions that have been inactive for longer than this duration will be cleaned up.
+  experimental: true
+
 - key: telemetry.export_traces
   type: boolean
   default: "false"
@@ -782,6 +783,12 @@
   type: number
   default: "5"
   description: The interval in seconds for exporting metrics.
+  experimental: true
+
+- key: telemetry.metrics_collection_interval_secs
+  type: number
+  default: "5"
+  description: The interval in seconds for collecting metrics.
   experimental: true
 
 - key: telemetry.logs_export_interval_secs

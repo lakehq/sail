@@ -18,9 +18,8 @@ from pyiceberg.partitioning import (
 from pyiceberg.schema import Schema
 from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
 
-from pysail.tests.spark.utils import escape_sql_string_literal
-
-from .utils import create_sql_catalog, pyiceberg_to_pandas  # noqa: TID252
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.tests.spark.iceberg.utils import create_sql_catalog, pyiceberg_to_pandas
 
 
 def _common_schema() -> Schema:

@@ -1,37 +1,13 @@
-use std::collections::HashMap;
+use sail_common_datafusion::datasource::OptionLayer;
 
-use datafusion_common::Result;
+use crate::error::DataSourceResult;
+use crate::options::gen::{RateReadOptions, RateReadPartialOptions};
+use crate::options::{BuildPartialOptions, PartialOptions};
 
-use crate::options::internal::RateReadOptions;
-use crate::options::{load_default_options, load_options};
-
-#[derive(Debug, Clone, Default)]
-pub struct TableRateOptions {
-    pub rows_per_second: usize,
-    pub num_partitions: usize,
-}
-
-fn apply_rate_read_options(from: RateReadOptions, to: &mut TableRateOptions) -> Result<()> {
-    let RateReadOptions {
-        rows_per_second,
-        num_partitions,
-    } = from;
-    if let Some(v) = rows_per_second {
-        to.rows_per_second = v;
+pub fn resolve_rate_read_options(options: Vec<OptionLayer>) -> DataSourceResult<RateReadOptions> {
+    let mut partial = RateReadPartialOptions::initialize();
+    for layer in options {
+        partial.merge(layer.build_partial_options()?);
     }
-    if let Some(v) = num_partitions {
-        to.num_partitions = v;
-    }
-    Ok(())
-}
-
-pub fn resolve_rate_read_options(
-    options: Vec<HashMap<String, String>>,
-) -> Result<TableRateOptions> {
-    let mut rate_options = TableRateOptions::default();
-    apply_rate_read_options(load_default_options()?, &mut rate_options)?;
-    for opt in options {
-        apply_rate_read_options(load_options(opt)?, &mut rate_options)?;
-    }
-    Ok(rate_options)
+    partial.finalize()
 }

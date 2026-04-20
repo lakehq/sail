@@ -4,7 +4,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
 
-from pysail.tests.spark.utils import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 @pytest.fixture(scope="module")

@@ -6,13 +6,13 @@ use datafusion::arrow::datatypes::SchemaRef;
 
 use crate::datasource::DeltaScanConfig;
 use crate::storage::LogStoreRef;
-use crate::table::DeltaTableState;
+use crate::table::DeltaSnapshot;
 
 #[derive(Clone, Debug)]
 pub struct DeltaTableHandle(Arc<DeltaTableHandleInner>);
 
 pub struct DeltaTableHandleInner {
-    pub snapshot: DeltaTableState,
+    pub snapshot: Arc<DeltaSnapshot>,
     pub log_store: LogStoreRef,
     pub config: DeltaScanConfig,
     pub schema: SchemaRef,

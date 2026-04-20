@@ -1,0 +1,994 @@
+# References:
+#   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-csv.html#data-source-option
+
+# TODO: Delimiter can be one or more characters
+- key: delimiter
+  description: |
+    Sets a single character separator for each field and value.
+  default:
+    value: ","
+    parser: crate::options::parsers::parse_char
+  supported: true
+  rust_type: char
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - delimiter
+        - sep
+      parser: crate::options::parsers::parse_char
+    - type: table_property
+      keys:
+        - option.delimiter
+        - option.sep
+      parser: crate::options::parsers::parse_char
+
+- key: quote
+  description: |
+    Sets a single character used for escaping quoted values where the delimiter can be part of the value.
+    For reading, if you would like to turn off quotations, you need to set not null but an empty string.
+    For writing, if an empty string is set, it uses u0000 (null character).
+  default:
+    value: "\""
+    parser: crate::options::parsers::parse_optional_char
+  supported: true
+  rust_type: "Option<char>"
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - quote
+      parser: crate::options::parsers::parse_optional_char
+    - type: table_property
+      keys:
+        - option.quote
+      parser: crate::options::parsers::parse_optional_char
+
+- key: escape
+  description: |
+    Sets a single character used for escaping quotes inside an already quoted value.
+  default:
+    value: "\\"
+    parser: crate::options::parsers::parse_optional_char
+  supported: true
+  rust_type: "Option<char>"
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - escape
+      parser: crate::options::parsers::parse_optional_char
+    - type: table_property
+      keys:
+        - option.escape
+      parser: crate::options::parsers::parse_optional_char
+
+- key: header
+  description: |
+    For reading, uses the first line as names of columns.
+    For writing, writes the names of columns as the first line.
+    CSV built-in functions ignore this option.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - header
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.header
+      parser: crate::options::parsers::parse_bool
+
+- key: null_value
+  description: |
+    Sets the string representation of a null value. Throws an exception if `null_regex` is also set.
+    Defaults to treating empty values as null.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - null_value
+        - nullValue
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.null_value
+        - option.nullValue
+      parser: crate::options::parsers::parse_string
+
+- key: comment
+  description: |
+    Sets a single character used for skipping lines beginning with this character. By default, disabled.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_char
+  supported: true
+  rust_type: "Option<char>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - comment
+      parser: crate::options::parsers::parse_optional_char
+    - type: table_property
+      keys:
+        - option.comment
+      parser: crate::options::parsers::parse_optional_char
+
+- key: null_regex
+  description: |
+    Optional regex to match null values. Throws an exception if `null_value` is also set.
+    Defaults to treating empty values as null.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - null_regex
+        - nullRegex
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.null_regex
+        - option.nullRegex
+      parser: crate::options::parsers::parse_string
+
+- key: line_sep
+  description: |
+    Sets the single character line separator that should be used for parsing.
+    CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+    For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_char
+  supported: true
+  rust_type: "Option<char>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - line_sep
+        - lineSep
+        - terminator
+      parser: crate::options::parsers::parse_optional_char
+    - type: table_property
+      keys:
+        - option.line_sep
+        - option.lineSep
+        - option.terminator
+      parser: crate::options::parsers::parse_optional_char
+
+- key: infer_schema
+  description: |
+    Infers the input schema automatically from data. It requires one extra pass over the data.
+    Ignored if the schema is specified explicitly. If False, the schema must be specified explicitly.
+    CSV built-in functions ignore this option.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - infer_schema
+        - inferSchema
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.infer_schema
+        - option.inferSchema
+      parser: crate::options::parsers::parse_bool
+
+- key: schema_infer_max_records
+  description: |
+    The maximum number of rows to read from CSV files for schema inference if needed.
+  default:
+    value: "1000"
+    parser: crate::options::parsers::parse_usize
+  supported: true
+  rust_type: usize
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - schema_infer_max_records
+        - schemaInferMaxRecords
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.schema_infer_max_records
+        - option.schemaInferMaxRecords
+      parser: crate::options::parsers::parse_usize
+
+- key: multi_line
+  description: |
+    Specifies whether newlines in quoted values are supported.
+    Allows a row to span multiple lines, by parsing line breaks within quoted values as part of the value itself.
+    Parsing newlines in quoted values may be affected by execution behavior such as parallel file scanning.
+    Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - multi_line
+        - multiLine
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.multi_line
+        - option.multiLine
+      parser: crate::options::parsers::parse_bool
+
+- key: compression
+  description: |
+    Specifies the file compression type. The following compression types are supported:
+      - `GZIP` or `GZ`
+      - `BZIP2` or `BZ2`
+      - `XZ`
+      - `ZSTD` or `ZST`
+      - `UNCOMPRESSED` or ""
+  default:
+    value: "UNCOMPRESSED"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - compression
+        - codec
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.compression
+        - option.codec
+      parser: crate::options::parsers::parse_string
+
+- key: allow_truncated_rows
+  description: |
+    Whether rows with fewer columns should be allowed.
+    If true, when parsing a row that has fewer columns than the schema requires, the
+    missing columns are filled with null values.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - allow_truncated_rows
+        - allowTruncatedRows
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.allow_truncated_rows
+        - option.allowTruncatedRows
+      parser: crate::options::parsers::parse_bool
+
+- key: escape_quotes
+  description: |
+    A flag indicating whether values containing quotes should always be enclosed in quotes.
+    When enabled (which is the default), quotes are escaped by doubling them (e.g., `"` escapes to `""`).
+    When disabled, quotes are escaped with the escape character (which is `\\` by default).
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - escape_quotes
+        - escapeQuotes
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.escape_quotes
+        - option.escapeQuotes
+      parser: crate::options::parsers::parse_bool
+
+- key: compression
+  description: |
+    Specifies the file compression type. The following compression types are supported:
+      - `GZIP` or `GZ`
+      - `BZIP2` or `BZ2`
+      - `XZ`
+      - `ZSTD` or `ZST`
+      - `UNCOMPRESSED` or ""
+  default:
+    value: "UNCOMPRESSED"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - compression
+        - codec
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.compression
+        - option.codec
+      parser: crate::options::parsers::parse_string
+
+- key: positive_inf
+  description: |
+    Sets the string representation of a positive infinity value.
+  default:
+    value: "Inf"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - positive_inf
+        - positiveInf
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.positive_inf
+        - option.positiveInf
+      parser: crate::options::parsers::parse_string
+
+- key: negative_inf
+  description: |
+    Sets the string representation of a negative infinity value.
+  default:
+    value: "-Inf"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - negative_inf
+        - negativeInf
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.negative_inf
+        - option.negativeInf
+      parser: crate::options::parsers::parse_string
+
+- key: date_format
+  description: |
+    Sets the string that indicates a date format. Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
+  default:
+    value: "yyyy-MM-dd"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - date_format
+        - dateFormat
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.date_format
+        - option.dateFormat
+      parser: crate::options::parsers::parse_string
+
+- key: timestamp_format
+  description: |
+    Sets the string that indicates a timestamp format. Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
+  default:
+    value: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - timestamp_format
+        - timestampFormat
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.timestamp_format
+        - option.timestampFormat
+      parser: crate::options::parsers::parse_string
+
+- key: timestamp_ntz_format
+  description: |
+    Sets the string that indicates a timestamp without timezone format.
+    Custom date formats follow the formats at Datetime Patterns (https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
+  default:
+    value: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - timestamp_ntz_format
+        - timestampNTZFormat
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.timestamp_ntz_format
+        - option.timestampNTZFormat
+      parser: crate::options::parsers::parse_string
+
+- key: ignore_leading_white_space
+  description: |
+    A flag indicating whether or not leading whitespaces from values being read should be skipped.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - ignore_leading_white_space
+        - ignoreLeadingWhiteSpace
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.ignore_leading_white_space
+        - option.ignoreLeadingWhiteSpace
+      parser: crate::options::parsers::parse_bool
+
+- key: ignore_trailing_white_space
+  description: |
+    A flag indicating whether or not trailing whitespaces from values being read/written should be skipped.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - ignore_trailing_white_space
+        - ignoreTrailingWhiteSpace
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.ignore_trailing_white_space
+        - option.ignoreTrailingWhiteSpace
+      parser: crate::options::parsers::parse_bool
+
+- key: enforce_schema
+  description: |
+    If it is set to true, the specified or inferred schema will be forcibly applied to datasource files, and headers in
+    CSV files will be ignored. If the option is set to false, the schema will be validated against all headers in CSV
+    files in the case when the header option is set to true. Field names in the schema and column names in CSV headers
+    are checked by their positions taking into account the Sail configuration option `sql.case_sensitive` (to be
+    implemented). Though the default value is true, it is recommended to disable the `enforce_schema` option to avoid
+    incorrect results. CSV built-in functions ignore this option.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - enforce_schema
+        - enforceSchema
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.enforce_schema
+        - option.enforceSchema
+      parser: crate::options::parsers::parse_bool
+
+- key: nan_value
+  description: |
+    Sets the string representation of a non-number value.
+  default:
+    value: "NaN"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - nan_value
+        - nanValue
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.nan_value
+        - option.nanValue
+      parser: crate::options::parsers::parse_string
+
+- key: max_columns
+  description: |
+    Defines a hard limit of how many columns a record can have.
+  default:
+    value: "20480"
+    parser: crate::options::parsers::parse_usize
+  supported: false
+  rust_type: usize
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - max_columns
+        - maxColumns
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.max_columns
+        - option.maxColumns
+      parser: crate::options::parsers::parse_usize
+
+- key: max_chars_per_column
+  description: |
+    Defines the maximum number of characters allowed for any given value being read.
+    Defaults to -1 meaning unlimited length.
+  default:
+    value: "-1"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - max_chars_per_column
+        - maxCharsPerColumn
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.max_chars_per_column
+        - option.maxCharsPerColumn
+      parser: crate::options::parsers::parse_string
+
+- key: mode
+  description: |
+    Allows a mode for dealing with corrupt records during parsing. It supports the following case-insensitive modes.
+      - `PERMISSIVE`: When it meets a corrupted record, puts the malformed string into a field configured by
+        `column_name_of_corrupt_record`, and sets malformed fields to null.
+      - `DROPMALFORMED`: Ignores the whole corrupted records. This mode is unsupported in the CSV built-in functions.
+      - `FAILFAST`: Throws an exception when it meets corrupted records.
+  default:
+    value: "PERMISSIVE"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - mode
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.mode
+      parser: crate::options::parsers::parse_string
+
+- key: column_name_of_corrupt_record
+  description: |
+    Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
+    Defaults to the Sail configuration option `sql.column_name_of_corrupt_record` (to be implemented).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - column_name_of_corrupt_record
+        - columnNameOfCorruptRecord
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.column_name_of_corrupt_record
+        - option.columnNameOfCorruptRecord
+      parser: crate::options::parsers::parse_string
+
+- key: char_to_escape_quote_escaping
+  description: |
+    Sets a single character used for escaping the escape for the quote character.
+    The default value is the escape character when escape and quote characters are different, \\0 otherwise.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - char_to_escape_quote_escaping
+        - charToEscapeQuoteEscaping
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.char_to_escape_quote_escaping
+        - option.charToEscapeQuoteEscaping
+      parser: crate::options::parsers::parse_string
+
+- key: sampling_ratio
+  description: |
+    Defines fraction of rows used for schema inferring. CSV built-in functions ignore this option.
+  default:
+    value: "1.0"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - sampling_ratio
+        - samplingRatio
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.sampling_ratio
+        - option.samplingRatio
+      parser: crate::options::parsers::parse_string
+
+- key: empty_value
+  description: |
+    Sets the string representation of an empty value.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - empty_value
+        - emptyValue
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.empty_value
+        - option.emptyValue
+      parser: crate::options::parsers::parse_string
+
+- key: locale
+  description: |
+    Sets a locale as language tag in IETF BCP 47 format.
+    For instance, this is used while parsing dates and timestamps.
+  default:
+    value: "en-US"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - locale
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.locale
+      parser: crate::options::parsers::parse_string
+
+- key: unescaped_quote_handling
+  description: |
+    Defines how the CSV Parser will handle values with unescaped quotes.
+      - `STOP_AT_CLOSING_QUOTE`: If unescaped quotes are found in the input, accumulate the quote character and proceed
+        parsing the value as a quoted value, until a closing quote is found.
+      - `BACK_TO_DELIMITER`: If unescaped quotes are found in the input, consider the value as an unquoted value.
+        This will make the parser accumulate all characters of the current parsed value until the delimiter is found.
+      - `STOP_AT_DELIMITER`: If unescaped quotes are found in the input, consider the value as an unquoted value.
+        This will make the parser accumulate all characters until the delimiter or a line ending is found in the input. 
+      - `SKIP_VALUE`: If unescaped quotes are found in the input, the content parsed for the given value will be 
+        skipped and the value set in nullValue will be produced instead.
+      - `RAISE_ERROR`: If unescaped quotes are found in the input, a `TextParsingException` will be thrown.
+  default:
+    value: "STOP_AT_DELIMITER"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - unescaped_quote_handling
+        - unescapedQuoteHandling
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.unescaped_quote_handling
+        - option.unescapedQuoteHandling
+      parser: crate::options::parsers::parse_string
+
+- key: time_zone
+  description: |
+    Sets the string that indicates a time zone ID to be used to format timestamps in the CSV data sources or
+    partition values. The following formats of timeZone are supported:
+      - Region-based zone ID: It should have the form 'area/city', such as 'America/Los_Angeles'.
+      - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
+        Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
+    Other short names like 'CST' are not recommended to use because they can be ambiguous.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+    - write
+  origins:
+    - type: option
+      keys:
+        - time_zone
+        - timeZone
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.time_zone
+        - option.timeZone
+      parser: crate::options::parsers::parse_string
+
+- key: quote_all
+  description: |
+    A flag indicating whether all values should always be enclosed in quotes.
+    Default is to only escape values containing a quote character.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - quote_all
+        - quoteAll
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.quote_all
+        - option.quoteAll
+      parser: crate::options::parsers::parse_bool
+
+- key: encoding
+  description: |
+    For reading, decodes the CSV files by the given encoding type. CSV built-in functions ignore this option.
+  default:
+    value: "UTF-8"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - encoding
+        - charset
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.encoding
+        - option.charset
+      parser: crate::options::parsers::parse_string
+
+- key: prefer_date
+  description: |
+    During schema inference (`infer_schema`), attempts to infer string columns that contain dates as `Date` if the
+    values satisfy the dateFormat option or default date format. For columns that contain a mixture of dates and
+    timestamps, try inferring them as `TimestampType` if timestamp format not specified, otherwise infer them as
+    `StringType`.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - prefer_date
+        - preferDate
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.prefer_date
+        - option.preferDate
+      parser: crate::options::parsers::parse_bool
+
+- key: enable_date_time_parsing_fallback
+  description: |
+    Allows falling back to the backward compatible behavior of parsing dates and timestamps if values do not match the
+    set patterns. Defaults to being enabled if the time parser policy has legacy settings or if no custom date or
+    timestamp pattern was provided.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - enable_date_time_parsing_fallback
+        - enableDateTimeParsingFallback
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.enable_date_time_parsing_fallback
+        - option.enableDateTimeParsingFallback
+      parser: crate::options::parsers::parse_string
+
+- key: extension
+  description: |
+    Sets the file extension for the output files. Limited to letters. Length must equal 3.
+  default:
+    value: "csv"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - extension
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.extension
+      parser: crate::options::parsers::parse_string
+
+- key: encoding
+  description: |
+    For writing, specifies encoding (charset) of saved CSV files. CSV built-in functions ignore this option.
+  default:
+    value: "UTF-8"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - encoding
+        - charset
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.encoding
+        - option.charset
+      parser: crate::options::parsers::parse_string
+
+- key: line_sep
+  description: |
+    Sets the single character line separator that should be used for writing.
+    CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+    For writing, defaults to \\n.
+  default:
+    value: "\n"
+    parser: crate::options::parsers::parse_string
+  supported: false
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - line_sep
+        - lineSep
+        - terminator
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.line_sep
+        - option.lineSep
+        - option.terminator
+      parser: crate::options::parsers::parse_string
+
+- key: ignore_leading_white_space
+  description: |
+    A flag indicating whether or not leading whitespaces from values being written should be skipped.
+    Defaults to true for writing.
+  default:
+    value: "true"
+    parser: crate::options::parsers::parse_bool
+  supported: false
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - ignore_leading_white_space
+        - ignoreLeadingWhiteSpace
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.ignore_leading_white_space
+        - option.ignoreLeadingWhiteSpace
+      parser: crate::options::parsers::parse_bool

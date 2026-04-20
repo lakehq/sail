@@ -1,8 +1,8 @@
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan};
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -42,11 +42,35 @@ impl PlanResolver<'_> {
         let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
             return Err(PlanError::unsupported("qualified function name"));
         };
-        if !named_arguments.is_empty() {
-            return Err(PlanError::todo("named function arguments"));
+        // Extract any NamedArgument entries embedded in arguments (Spark Connect inline path).
+        // PySpark encodes kwargs as NamedArgumentExpression inside the arguments[] repeated field,
+        // which are converted to spec::Expr::NamedArgument. extract_kwargs peels those out before
+        // resolve_expressions_and_names, which would otherwise reject them as standalone expressions.
+        let (mut arguments, mut kwarg_names) = Self::extract_kwargs(arguments);
+        // Also merge named_arguments from spec::UnresolvedFunction (SQL analyzer path).
+        // PySpark sends registered-UDF kwargs here rather than as embedded NamedArgument entries.
+        for (key, value) in named_arguments {
+            kwarg_names.push(Some(key.into()));
+            arguments.push(value);
         }
+
+        // Validate named arguments: reject duplicate kwarg names early so we surface
+        // a proper AnalysisException instead of letting it crash in the Python worker.
+        {
+            let mut seen_kwarg_names = std::collections::HashSet::new();
+            for name in kwarg_names.iter().flatten() {
+                if !seen_kwarg_names.insert(name.as_str()) {
+                    return Err(PlanError::AnalysisError(format!(
+                        "[DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE] \
+                         Duplicate named argument: '{name}' is assigned more than once."
+                    )));
+                }
+            }
+        }
+
         let canonical_function_name = function_name.to_ascii_lowercase();
-        if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
             if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
@@ -67,7 +91,7 @@ impl PlanResolver<'_> {
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
-        let func = if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
+        let func = if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
             if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                 return Err(PlanError::invalid("invalid scalar function clause"));
             }
@@ -83,6 +107,7 @@ impl PlanResolver<'_> {
                     &function_name,
                     arguments,
                     &argument_display_names,
+                    &kwarg_names, // pass kwargs from named_arguments
                     schema,
                     f.deterministic(),
                     is_distinct,
@@ -90,7 +115,7 @@ impl PlanResolver<'_> {
                 )?
             } else {
                 expr::Expr::ScalarFunction(ScalarFunction {
-                    func: udf,
+                    func: std::sync::Arc::new(udf),
                     args: arguments,
                 })
             }

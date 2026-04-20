@@ -22,55 +22,13 @@
 
 use std::collections::HashSet;
 
-use delta_kernel::table_properties::IsolationLevel;
-use delta_kernel::Error as KernelError;
-use thiserror::Error;
-
-use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
-use crate::kernel::snapshot::LogDataHandler;
-use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
+use crate::kernel::DeltaOperation;
+use crate::spec::{
+    Action, Add, CommitAction, CommitConflictError, CommitInfo, DeltaError, DeltaResult,
+    IsolationLevel, Metadata, Protocol, Remove, Transaction,
+};
 use crate::storage::{get_actions, LogStore};
-
-/// Exceptions raised during commit conflict resolution.
-#[derive(Error, Debug)]
-pub enum CommitConflictError {
-    #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
-    ConcurrentAppend,
-
-    #[error("Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
-    ConcurrentDeleteRead,
-
-    #[error("Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data.")]
-    ConcurrentDeleteDelete,
-
-    #[error("Metadata changed since last commit.")]
-    MetadataChanged,
-
-    #[error("Concurrent transaction failed.")]
-    ConcurrentTransaction,
-
-    #[error("Protocol changed since last commit: {0}")]
-    ProtocolChanged(String),
-
-    #[error("Delta-rs does not support writer version {0}")]
-    UnsupportedWriterVersion(i32),
-
-    #[error("Delta-rs does not support reader version {0}")]
-    UnsupportedReaderVersion(i32),
-
-    #[error("Snapshot is corrupted: {source}")]
-    CorruptedState {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    #[error("Error evaluating predicate: {source}")]
-    Predicate {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-
-    #[error("No metadata found, please make sure table is loaded.")]
-    NoMetadata,
-}
+use crate::table::DeltaSnapshot;
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
 #[expect(unused)]
@@ -78,23 +36,23 @@ pub(crate) struct TransactionInfo<'a> {
     txn_id: String,
     /// appIds that have been seen by the transaction
     read_app_ids: HashSet<String>,
-    /// delta log actions that the transaction wants to commit
-    actions: &'a [Action],
-    /// read [`DeltaTableState`] used for the transaction
-    read_snapshot: LogDataHandler<'a>,
+    /// delta log actions that the transaction wants to commit (commit-only actions)
+    actions: &'a [CommitAction],
+    /// read snapshot used for the transaction
+    read_snapshot: &'a DeltaSnapshot,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
 }
 
 impl<'a> TransactionInfo<'a> {
     pub fn try_new(
-        read_snapshot: LogDataHandler<'a>,
-        actions: &'a [Action],
+        read_snapshot: &'a DeltaSnapshot,
+        actions: &'a [CommitAction],
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
-            if let Action::Txn(Transaction { app_id, .. }) = action {
+            if let CommitAction::Txn(Transaction { app_id, .. }) = action {
                 read_app_ids.insert(app_id.clone());
             }
         }
@@ -103,13 +61,13 @@ impl<'a> TransactionInfo<'a> {
     }
 
     pub fn new(
-        read_snapshot: LogDataHandler<'a>,
-        actions: &'a [Action],
+        read_snapshot: &'a DeltaSnapshot,
+        actions: &'a [CommitAction],
         read_whole_table: bool,
     ) -> Self {
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
-            if let Action::Txn(Transaction { app_id, .. }) = action {
+            if let CommitAction::Txn(Transaction { app_id, .. }) = action {
                 read_app_ids.insert(app_id.clone());
             }
         }
@@ -126,7 +84,7 @@ impl<'a> TransactionInfo<'a> {
     pub fn metadata_changed(&self) -> bool {
         self.actions
             .iter()
-            .any(|a| matches!(a, Action::Metadata(_)))
+            .any(|a| matches!(a, CommitAction::Metadata(_)))
     }
 
     // TODO: properly handle predicates in the PhysicalPlan
@@ -149,7 +107,7 @@ impl<'a> TransactionInfo<'a> {
 
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.iter().map(|f| f.add_action()))
+        Ok(self.read_snapshot.adds().iter().cloned())
     }
 
     /// Whether the whole table was read during the transaction
@@ -159,16 +117,28 @@ impl<'a> TransactionInfo<'a> {
 
     pub fn protocol_action(&self) -> Option<&Protocol> {
         self.actions.iter().find_map(|a| match a {
-            Action::Protocol(p) => Some(p),
+            CommitAction::Protocol(p) => Some(p),
             _ => None,
         })
     }
 
     pub fn metadata_action(&self) -> Option<&Metadata> {
         self.actions.iter().find_map(|a| match a {
-            Action::Metadata(m) => Some(m),
+            CommitAction::Metadata(m) => Some(m),
             _ => None,
         })
+    }
+
+    pub fn domain_metadata_domains(&self) -> HashSet<String> {
+        self.actions
+            .iter()
+            .filter_map(|action| match action {
+                CommitAction::DomainMetadata(domain_metadata) => {
+                    Some(domain_metadata.domain.clone())
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -207,7 +177,7 @@ impl WinningCommitSummary {
                     commit_info,
                 })
             }
-            None => Err(KernelError::MissingVersion.into()),
+            None => Err(DeltaError::MissingVersion),
         }
     }
 
@@ -239,6 +209,17 @@ impl WinningCommitSummary {
             .cloned()
             .filter_map(|action| match action {
                 Action::Protocol(protocol) => Some(protocol),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn domain_metadata_domains(&self) -> HashSet<String> {
+        self.actions
+            .iter()
+            .cloned()
+            .filter_map(|action| match action {
+                Action::DomainMetadata(domain_metadata) => Some(domain_metadata.domain),
                 _ => None,
             })
             .collect()
@@ -340,6 +321,7 @@ impl<'a> ConflictChecker<'a> {
     pub fn check_conflicts(&self) -> Result<(), CommitConflictError> {
         self.check_protocol_compatibility()?;
         self.check_no_metadata_updates()?;
+        self.check_no_domain_metadata_conflicts()?;
         self.check_for_added_files_that_should_have_been_read_by_current_txn()?;
         self.check_for_deleted_files_against_current_txn_read_files()?;
         self.check_for_deleted_files_against_current_txn_deleted_files()?;
@@ -396,6 +378,22 @@ impl<'a> ConflictChecker<'a> {
             }
         }
         Ok(())
+    }
+
+    fn check_no_domain_metadata_conflicts(&self) -> Result<(), CommitConflictError> {
+        let txn_domains = self.txn_info.domain_metadata_domains();
+        if txn_domains.is_empty() {
+            return Ok(());
+        }
+
+        let winning_domains = self.winning_commit_summary.domain_metadata_domains();
+        if let Some(domain) = txn_domains.intersection(&winning_domains).next() {
+            Err(CommitConflictError::ConcurrentDomainMetadata(
+                (*domain).clone(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Check if the new files added by the already committed transactions
@@ -498,7 +496,7 @@ impl<'a> ConflictChecker<'a> {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::Remove(remove) => Some(remove.path),
+                CommitAction::Remove(remove) => Some(remove.path),
                 _ => None,
             })
             .collect();
