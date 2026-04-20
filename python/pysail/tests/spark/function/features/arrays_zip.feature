@@ -48,8 +48,6 @@ Feature: arrays_zip comprehensive tests
         | result                   |
         | [{1, 1}, {2, 2}, {3, 3}] |
 
-    @sail-bug
-    # Sail rejects 0 args but Spark returns empty array
     Scenario: arrays_zip zero args returns empty array
       When query
         """
@@ -122,8 +120,6 @@ Feature: arrays_zip comprehensive tests
 
   Rule: NULL handling
 
-    @sail-bug
-    # Sail errors on untyped NULL but Spark returns NULL
     Scenario: arrays_zip untyped NULL array returns NULL
       When query
         """

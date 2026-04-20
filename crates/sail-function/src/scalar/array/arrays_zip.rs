@@ -3,14 +3,16 @@ use std::ops::BitAnd;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_empty_array, Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, NullArray,
-    OffsetSizeTrait, StructArray,
+    new_empty_array, new_null_array, Array, ArrayRef, AsArray, FixedSizeListArray,
+    GenericListArray, NullArray, OffsetSizeTrait, StructArray,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{cast, concat};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{arrow_err, exec_err, plan_err, DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
@@ -30,7 +32,10 @@ impl Default for ArraysZip {
 impl ArraysZip {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::Nullary, TypeSignature::VariadicAny],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -82,6 +87,25 @@ impl ScalarUDFImpl for ArraysZip {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Spark: arrays_zip() with no args returns an empty List<Struct<>> per row.
+        if args.args.is_empty() {
+            return Ok(ColumnarValue::Array(build_empty_zip_result(
+                args.number_rows,
+            )?));
+        }
+        // Untyped NULL (Spark: array<void>) makes every output row NULL.
+        // Short-circuit to a single typed-null allocation instead of building
+        // intermediate all-NULL ListArrays and running the row loop.
+        if args
+            .args
+            .iter()
+            .any(|a| matches!(a.data_type(), DataType::Null))
+        {
+            return Ok(ColumnarValue::Array(new_null_array(
+                args.return_field.data_type(),
+                args.number_rows,
+            )));
+        }
         match args.return_field.data_type() {
             DataType::LargeList(_) => {
                 make_scalar_function(arrays_zip_generic::<i64>, vec![])(&args.args)
@@ -92,6 +116,19 @@ impl ScalarUDFImpl for ArraysZip {
             _ => make_scalar_function(arrays_zip_generic::<i32>, vec![])(&args.args),
         }
     }
+}
+
+fn build_empty_zip_result(num_rows: usize) -> Result<ArrayRef> {
+    let struct_field = struct_result_field(&[]);
+    // StructArray with zero fields needs explicit length, not inferred from columns.
+    let empty_struct = StructArray::new_empty_fields(0, None);
+    let offsets = OffsetBuffer::<i32>::new_zeroed(num_rows);
+    Ok(Arc::new(GenericListArray::<i32>::try_new(
+        struct_field,
+        offsets,
+        Arc::new(empty_struct),
+        None,
+    )?))
 }
 
 struct ListParams {
@@ -121,6 +158,12 @@ fn get_list_params(data_type: &DataType) -> Result<ListParams> {
         DataType::LargeList(field) | DataType::LargeListView(field) => {
             Ok(ListParams::new(field.clone(), true, None))
         }
+        // Spark coerces bare untyped NULL to `array<void>`.
+        DataType::Null => Ok(ListParams::new(
+            Arc::new(Field::new_list_field(DataType::Null, true)),
+            false,
+            None,
+        )),
         _ => plan_err!("`arrays_zip` can only accept List, LargeList or FixedSizeList."),
     }
 }
@@ -220,7 +263,6 @@ fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32) -> Result<ArrayRef
 
 fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let (num_rows, inner_fields, field_names) = num_rows_inner_fields_and_names(args)?;
-    let validity_mask_opt = combine_validity_masks(args);
 
     // Create fields with nullable=true, preserving metadata from inner fields
     let arg_fields: Vec<Arc<Field>> = inner_fields
@@ -252,6 +294,11 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
             _ => exec_err!("`arrays_zip` can only accept List, LargeList or FixedSizeList."),
         })
         .collect::<Result<Vec<_>>>()?;
+
+    // Combine validity masks on the CAST arrays: NullArray has implicit nulls
+    // (.nulls() returns None) but the cast path above produces an explicit
+    // all-NULL buffer on the resulting ListArray.
+    let validity_mask_opt = combine_validity_masks(&casted_lists);
 
     let lists = casted_lists
         .iter()
