@@ -2,8 +2,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array,
+    new_null_array, Array, ArrayRef, Decimal128Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array,
 };
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -16,7 +16,10 @@ use datafusion_functions::utils::make_scalar_function;
 use rand::rngs::StdRng;
 use rand::{rng, RngExt, SeedableRng};
 
-use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_types_exec_err};
+use crate::error::{
+    generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err,
+    unsupported_data_types_exec_err,
+};
 
 /// The `Uniform` function generates random numbers from a uniform distribution
 /// between a specified minimum and maximum value.
@@ -111,51 +114,48 @@ impl SparkUniform {
     }
 
     fn calculate_output_type(t_min: &DataType, t_max: &DataType) -> DataType {
-        if t_min.is_integer() && t_max.is_integer() {
-            // Integer type promotion hierarchy: Int8 < Int16 < Int32 < Int64
-            // UInt32/UInt64 require Int64 to safely represent all values
-            use DataType::*;
+        use DataType::*;
 
+        // Spark's literal NULL produces a DOUBLE fallback regardless of the other side.
+        if matches!(t_min, Null) || matches!(t_max, Null) {
+            return Float64;
+        }
+
+        // Float precedence: DOUBLE wins over FLOAT, which wins over DECIMAL/INT.
+        if matches!(t_min, Float64) || matches!(t_max, Float64) {
+            return Float64;
+        }
+        if matches!(t_min, Float32) || matches!(t_max, Float32) {
+            return Float32;
+        }
+
+        if t_min.is_integer() && t_max.is_integer() {
+            // Integer promotion hierarchy: Int8 < Int16 < Int32 < Int64.
+            // UInt32/UInt64 require Int64 to safely represent all values.
             return match (t_min, t_max) {
-                // 64-bit types or UInt32 -> Int64 (highest priority)
                 (Int64, _) | (_, Int64) | (UInt32, _) | (_, UInt32) | (UInt64, _) | (_, UInt64) => {
-                    DataType::Int64
+                    Int64
                 }
-                // 32-bit types or UInt16 -> Int32
-                (Int32, _) | (_, Int32) | (UInt16, _) | (_, UInt16) => DataType::Int32,
-                // 16-bit types or UInt8 -> Int16
-                (Int16, _) | (_, Int16) | (UInt8, _) | (_, UInt8) => DataType::Int16,
-                // Both Int8 -> Int8
-                (Int8, Int8) => DataType::Int8,
-                // Fallback for any other integer types
-                _ => DataType::Int32,
+                (Int32, _) | (_, Int32) | (UInt16, _) | (_, UInt16) => Int32,
+                (Int16, _) | (_, Int16) | (UInt8, _) | (_, UInt8) => Int16,
+                (Int8, Int8) => Int8,
+                _ => Int32,
             };
         }
 
-        // Try to extract decimal info from both types
         let decimal_min = Self::extract_decimal_info(t_min);
         let decimal_max = Self::extract_decimal_info(t_max);
 
         match (decimal_min, decimal_max) {
             (Some((p1, s1)), Some((p2, s2))) => {
-                // Both are decimal types
-                // Spark's behavior: When one decimal has significantly larger precision,
-                // use that decimal's type completely (both precision AND scale).
-                // Example: Decimal(2,1) + Decimal(20,0) → Decimal(20,0) (not Decimal(20,1))
-                // This happens when mixing small literals (1.2) with large numbers (12345678901234567890)
+                // When one decimal has significantly larger precision, use that decimal's
+                // type completely (both precision AND scale): e.g. Decimal(2,1) + Decimal(20,0)
+                // → Decimal(20,0), not Decimal(20,1).
                 let (precision, scale) = Self::calculate_decimal_output(p1, s1, p2, s2);
-                DataType::Decimal128(precision, scale)
+                Decimal128(precision, scale)
             }
-            (Some((p, s)), None) => DataType::Decimal128(p, s),
-            (None, Some((p, s))) => DataType::Decimal128(p, s),
-            (None, None) => {
-                // Float type handling: Float32 only if both are Float32, otherwise Float64
-                use DataType::*;
-                match (t_min, t_max) {
-                    (Float32, Float32) => DataType::Float32,
-                    _ => DataType::Float64,
-                }
-            }
+            (Some((p, s)), None) | (None, Some((p, s))) => Decimal128(p, s),
+            (None, None) => Float64,
         }
     }
 }
@@ -182,12 +182,32 @@ impl ScalarUDFImpl for SparkUniform {
         let t_max = args.arg_fields[1].data_type();
         let return_type = Self::calculate_output_type(t_min, t_max);
 
-        let nullable: bool = args.arg_fields[0].is_nullable() || args.arg_fields[1].is_nullable();
+        // The result is NULL whenever a bound is NULL, so the field must be
+        // nullable if either bound is a NULL literal or a nullable expression.
+        let nullable = matches!(t_min, DataType::Null)
+            || matches!(t_max, DataType::Null)
+            || args.arg_fields[0].is_nullable()
+            || args.arg_fields[1].is_nullable();
 
         Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Spark requires all arguments to be foldable (literal-like). A column
+        // reference arrives here as `ColumnarValue::Array`, so we reject that
+        // case to match Spark's `DATATYPE_MISMATCH.NON_FOLDABLE_INPUT`.
+        let arg_names = ["min", "max", "seed"];
+        for (i, arg) in args.args.iter().enumerate() {
+            if matches!(arg, ColumnarValue::Array(_)) {
+                return Err(generic_exec_err(
+                    "uniform",
+                    &format!(
+                        "the input `{}` must be a foldable integer or floating-point expression",
+                        arg_names[i.min(arg_names.len() - 1)]
+                    ),
+                ));
+            }
+        }
         make_scalar_function(uniform, vec![])(&args.args)
     }
 
@@ -203,19 +223,35 @@ impl ScalarUDFImpl for SparkUniform {
         let t_min = &arg_types[0];
         let t_max = &arg_types[1];
 
+        if !is_valid_bound_type(t_min) {
+            return Err(unsupported_data_type_exec_err(
+                "uniform",
+                "NUMERIC type for min",
+                t_min,
+            ));
+        }
+        if !is_valid_bound_type(t_max) {
+            return Err(unsupported_data_type_exec_err(
+                "uniform",
+                "NUMERIC type for max",
+                t_max,
+            ));
+        }
+
         let output_type: DataType = Self::calculate_output_type(t_min, t_max);
 
         let mut coerced_types = vec![output_type.clone(), output_type];
 
         if arg_types.len() == 3 {
+            // Spark accepts only INT or BIGINT for the seed. Both are coerced to
+            // Int64 internally so the RNG always receives a 64-bit seed.
             let seed_type = match &arg_types[2] {
-                t if t.is_signed_integer() => DataType::Int64,
-                t if t.is_unsigned_integer() => DataType::UInt64,
+                DataType::Int32 | DataType::Int64 => DataType::Int64,
                 DataType::Null => DataType::Null,
                 _ => {
                     return Err(unsupported_data_types_exec_err(
                         "uniform",
-                        "Integer Type for seed",
+                        "INT or BIGINT type for seed",
                         &arg_types[2..],
                     ))
                 }
@@ -225,6 +261,21 @@ impl ScalarUDFImpl for SparkUniform {
 
         Ok(coerced_types)
     }
+}
+
+/// Returns true if `dt` is an acceptable min/max bound type for `uniform`:
+/// any numeric (integer, float, decimal) plus the literal NULL type.
+fn is_valid_bound_type(dt: &DataType) -> bool {
+    dt.is_integer()
+        || matches!(dt, DataType::Float32 | DataType::Float64)
+        || matches!(
+            dt,
+            DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+        )
+        || matches!(dt, DataType::Null)
 }
 
 macro_rules! generate_uniform_single_fn {
@@ -327,6 +378,15 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let output_type =
         SparkUniform::calculate_output_type(min_array.data_type(), max_array.data_type());
+
+    // Fast path: if either bound is fully null, the result is all-null — every
+    // per-row branch would fall through to `append_null()` anyway. Skip the
+    // type dispatch entirely and allocate the null array directly.
+    if !min_array.is_empty()
+        && (min_array.null_count() == min_array.len() || max_array.null_count() == max_array.len())
+    {
+        return Ok(new_null_array(&output_type, number_rows));
+    }
 
     match output_type {
         DataType::Int8 => {
@@ -489,6 +549,8 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::ScalarValue;
+
     use super::*;
 
     /// Test 1: uniform(10, 20, 0) should return 18 (with i32)
@@ -660,7 +722,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -685,7 +751,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -709,7 +779,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -733,7 +807,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -787,7 +865,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -842,7 +924,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -872,7 +958,11 @@ mod tests {
         // Create ReturnFieldArgs
         let return_field_args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         // Get the field using return_field_from_args
@@ -951,7 +1041,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -977,7 +1071,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1003,7 +1101,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1030,7 +1132,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1056,7 +1162,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1082,7 +1192,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1107,7 +1221,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1132,7 +1250,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1157,7 +1279,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1182,7 +1308,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1206,7 +1336,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1251,7 +1385,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1277,7 +1415,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1303,7 +1445,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1328,7 +1474,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1353,7 +1503,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1378,7 +1532,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1403,7 +1561,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1428,7 +1590,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
@@ -1453,7 +1619,11 @@ mod tests {
 
         let args = ReturnFieldArgs {
             arg_fields: &arg_fields,
-            scalar_arguments: &[None, None, None],
+            scalar_arguments: &[
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+                Some(&ScalarValue::Null),
+            ],
         };
 
         let field = uniform_fn.return_field_from_args(args)?;
