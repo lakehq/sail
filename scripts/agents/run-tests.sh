@@ -16,11 +16,11 @@ fi
 case "${TEST_PROVIDER}" in
   spark-3.5.7|spark-4.1.1)
     hatch_env="test-spark.${TEST_PROVIDER}"
-    test_envs=("TEST_RUN_NAME=${TEST_PROVIDER}-selected")
+    test_envs=("TEST_RUN_NAME=selected")
     ;;
   ibis)
     hatch_env="test-ibis"
-    test_envs=("TEST_RUN_NAME=${TEST_PROVIDER}-selected" "SPARK_REMOTE=sc://localhost:50051")
+    test_envs=("TEST_RUN_NAME=selected" "SPARK_REMOTE=sc://localhost:50051")
     ;;
   *)
     echo "Invalid value for TEST_PROVIDER: ${TEST_PROVIDER}"
