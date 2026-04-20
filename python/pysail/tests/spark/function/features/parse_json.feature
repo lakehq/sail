@@ -237,3 +237,20 @@ Feature: parse_json (strict version; errors on invalid JSON)
       Then query result
         | result |
         | 123    |
+
+  Rule: All-null input column returns all NULL (fast-path invariant)
+
+    Scenario: parse_json multi-row all-null column returns all NULL
+      When query
+        """
+        SELECT parse_json(v) AS result FROM VALUES
+          (CAST(NULL AS STRING)),
+          (CAST(NULL AS STRING)),
+          (CAST(NULL AS STRING))
+        AS t(v)
+        """
+      Then query result ordered
+        | result |
+        | NULL   |
+        | NULL   |
+        | NULL   |
