@@ -42,7 +42,7 @@ trap clean_up EXIT INT TERM
 cd "${project_path}"
 
 echo "Building editable package..."
-hatch run "${hatch_env}:maturin develop"
+hatch run "${hatch_env}:maturin" develop
 
 echo "Starting Spark Connect server..."
 hatch run "${hatch_env}:env" CI=1 scripts/spark-tests/run-server.sh &
