@@ -1,71 +1,169 @@
 Feature: randn function (Gaussian/normal distribution)
 
-  Rule: randn with seed produces deterministic Gaussian values
+  # IMPLEMENTATION NOTE:
+  # Sail uses `SparkXorShiftRandom::next_gaussian` (port of Spark's
+  # `XORShiftRandom`/`Random.nextGaussian`). For any given seed the sequence
+  # matches Spark JVM bit-for-bit.
 
-    Scenario: randn with seed 42 returns expected value
+  Rule: Arity validation
+
+    Scenario: randn with two args fails
       When query
-      """
-      SELECT CAST(randn(42) * 1000000 AS BIGINT) AS r
-      """
-      Then query result
-      | r       |
-      | 2384479 |
+        """
+        SELECT randn(1, 2) AS r
+        """
+      Then query error (?i).*
 
-    Scenario: randn with seed 1 returns expected value
+  Rule: Seed type validation
+
+    Scenario: randn rejects string seed
       When query
-      """
-      SELECT CAST(randn(1) * 1000000 AS BIGINT) AS r
-      """
-      Then query result
-      | r       |
-      | 1684561 |
+        """
+        SELECT randn('foo') AS r
+        """
+      Then query error (?i).*
 
-    Scenario: randn with seed 24 returns expected value
+    Scenario: randn rejects decimal seed
       When query
-      """
-      SELECT CAST(randn(24) * 1000000 AS BIGINT) AS r
-      """
-      Then query result
-      | r        |
-      | -2465657 |
+        """
+        SELECT randn(3.14) AS r
+        """
+      Then query error (?i).*
 
-  Rule: randn with different seeds returns different values
-
-    Scenario: randn values differ across seeds
+    Scenario: randn rejects tinyint seed
       When query
-      """
-      SELECT
-        CAST(randn(1) * 1000000 AS BIGINT) AS r1,
-        CAST(randn(42) * 1000000 AS BIGINT) AS r42
-      """
-      Then query result
-      | r1      | r42     |
-      | 1684561 | 2384479 |
+        """
+        SELECT randn(CAST(42 AS TINYINT)) AS r
+        """
+      Then query error (?i).*
 
-  Rule: randn without seed is non-deterministic
+    Scenario: randn rejects smallint seed
+      When query
+        """
+        SELECT randn(CAST(42 AS SMALLINT)) AS r
+        """
+      Then query error (?i).*
+
+    Scenario: randn rejects non-foldable seed from column
+      When query
+        """
+        SELECT randn(CAST(id AS INT)) AS r FROM range(3)
+        """
+      Then query error (?i).*
+
+  Rule: Bit-exact values match Spark JVM
+
+    Scenario: randn with seed 0 matches Spark
+      When query
+        """
+        SELECT randn(0) AS r
+        """
+      Then query result
+        | r                  |
+        | 1.6034991609278433 |
+
+    Scenario: randn with seed 1 matches Spark
+      When query
+        """
+        SELECT randn(1) AS r
+        """
+      Then query result
+        | r                  |
+        | 1.6845611254444919 |
+
+    Scenario: randn with seed 24 matches Spark
+      When query
+        """
+        SELECT randn(24) AS r
+        """
+      Then query result
+        | r                   |
+        | -2.4656575828961267 |
+
+    Scenario: randn with seed 42 matches Spark
+      When query
+        """
+        SELECT randn(42) AS r
+        """
+      Then query result
+        | r                 |
+        | 2.384479054241165 |
+
+    Scenario: randn with negative seed matches Spark
+      When query
+        """
+        SELECT randn(-1) AS r
+        """
+      Then query result
+        | r                   |
+        | -1.1760378827493814 |
+
+    Scenario: randn with INT seed behaves as BIGINT
+      When query
+        """
+        SELECT randn(CAST(42 AS INT)) AS r
+        """
+      Then query result
+        | r                 |
+        | 2.384479054241165 |
+
+    Scenario: randn with seed 42 multi-row matches Spark
+      When query
+        """
+        SELECT randn(42) AS r FROM range(5)
+        """
+      Then query result
+        | r                   |
+        | 2.384479054241165   |
+        | 0.1920934041293524  |
+        | 0.7337336533286575  |
+        | -0.5224480195716871 |
+        | 2.060084179317831   |
+
+    Scenario: randn with seed 0 multi-row matches Spark
+      When query
+        """
+        SELECT randn(0) AS r FROM range(5)
+        """
+      Then query result
+        | r                    |
+        | 1.6034991609278433   |
+        | 0.14416006165776865  |
+        | -0.6253564498627744  |
+        | -0.28385414448030416 |
+        | 0.9333495004884642   |
+
+  Rule: NULL seed is equivalent to seed 0
+
+    # Spark treats a literal NULL seed as a concrete seed of 0 (not as "no
+    # seed"), so `randn(NULL)` is deterministic and matches `randn(0)`.
+
+    Scenario: randn with NULL seed equals randn with seed 0
+      When query
+        """
+        SELECT randn(NULL) AS r
+        """
+      Then query result
+        | r                  |
+        | 1.6034991609278433 |
+
+  Rule: No-seed returns a value
 
     Scenario: randn without seed returns a value
       When query
-      """
-      SELECT randn() IS NOT NULL AS has_value
-      """
+        """
+        SELECT randn() IS NOT NULL AS has_value
+        """
       Then query result
-      | has_value |
-      | true      |
+        | has_value |
+        | true      |
 
-  Rule: randn produces multiple rows with range
+  Rule: Empty batch
 
-    Scenario: randn with seed over range produces expected sequence
+    Scenario: randn on empty batch returns empty result
       When query
-      """
-      SELECT id, CAST(randn(42) * 10000 AS BIGINT) AS r
-      FROM range(0, 5)
-      ORDER BY id
-      """
-      Then query result ordered
-      | id | r      |
-      | 0  | 23844  |
-      | 1  | 1920   |
-      | 2  | 7337   |
-      | 3  | -5224  |
-      | 4  | 20600  |
+        """
+        SELECT randn(0) AS r FROM range(0)
+        """
+      Then query result
+        | r |
