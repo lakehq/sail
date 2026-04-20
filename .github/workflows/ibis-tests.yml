@@ -80,7 +80,7 @@ jobs:
           TEST_RUN_GIT_COMMIT: ${{ github.sha }}
           TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
-          hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh || true
+          hatch run test-ibis:env scripts/spark-tests/run-tests.sh || true
 
       - name: Shutdown Spark Connect Server
         if: ${{ !cancelled() }}
