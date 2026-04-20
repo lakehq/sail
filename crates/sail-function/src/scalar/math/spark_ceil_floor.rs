@@ -11,12 +11,14 @@ use datafusion::arrow::util::display::FormatOptions;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::expr_fn::cast;
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use num::integer::{div_ceil, div_floor};
+use num::traits::CheckedAdd;
 
 use crate::error::{
     generic_exec_err, generic_internal_err, invalid_arg_count_exec_err,
@@ -265,6 +267,17 @@ impl ScalarUDFImpl for SparkCeil {
     ) -> Result<Option<Vec<Interval>>> {
         propagate_ceil_floor(CeilFloor::Ceil, interval, inputs)
     }
+
+    // NOTE: no `preimage` hook for `ceil`. The preimage of `ceil(x) = N` is the
+    // half-open interval `(N - 1, N]` (right-closed, left-open), but
+    // `PreimageResult::Range` is defined as `[lower, upper)` (left-closed,
+    // right-open) — see `udf_preimage::rewrite_with_preimage`, which rewrites
+    // `<expr> = x`  →  `<expr> >= lower AND <expr> < upper`. Any half-open
+    // interval we returned would either include `N - 1` (wrong: `ceil(N-1) =
+    // N-1`, not `N`) or exclude `N` (wrong: `ceil(N) = N`), producing an
+    // unsound filter rewrite. Upstream DataFusion v53 skips this hook on
+    // `CeilFunc` for the same reason. Filter pushdown for `ceil` would require
+    // extending `PreimageResult` to support right-closed intervals.
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -337,6 +350,15 @@ impl ScalarUDFImpl for SparkFloor {
     ) -> Result<Option<Vec<Interval>>> {
         propagate_ceil_floor(CeilFloor::Floor, interval, inputs)
     }
+
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        preimage_floor(args, lit_expr, info)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -350,39 +372,36 @@ const PROPAGATE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     format_options: FormatOptions::new(),
 };
 
-/// Constraint propagation for `ceil` / `floor` (Rule 17): given a known output `interval`
-/// (e.g. from `WHERE ceil(col) > 5`), derive the widest safe interval on the input that can
-/// still produce that output. Enables filter pushdown past the function.
+/// Constraint propagation for `ceil` / `floor` (Rule 17): given a known output
+/// `interval` (e.g. from `WHERE ceil(col) > 5`), derive the widest safe interval
+/// on the input that can still produce that output.
 ///
 /// Math (both functions are monotonic non-decreasing):
 /// - `ceil(x) ∈ [a, b]`  ⇔  `x ∈ (a - 1, b]`   → safe over-approximation: `[a - 1, b]`
 /// - `floor(x) ∈ [a, b]` ⇔  `x ∈ [a, b + 1)`  → safe over-approximation: `[a, b + 1]`
 ///
-/// Over-approximating is sound: the final filter re-evaluates `ceil/floor(x)` so the extra
-/// rows are discarded; missing rows would be a correctness bug. The result is intersected
-/// with the current child interval to keep any tighter pre-existing bounds.
+/// Over-approximating is sound: the final filter re-evaluates `ceil/floor(x)`
+/// so the extra rows are discarded; missing rows would be a correctness bug.
+/// The result is intersected with the current child interval to keep any
+/// tighter pre-existing bounds.
 ///
-/// # DataFusion v53 observable effect
+/// # Why both hooks?
 ///
-/// The only external consumer of this hook in DF v53 is
-/// `FilterExec::statistics_by_expr()` (via `physical_expr::analysis::analyze`
-/// → `ExprIntervalGraph::update_ranges` → `cp_solver`), used for cardinality
-/// estimates. **On typical scalar plans this produces no observable effect**:
-/// the column statistics emitted by `FilterExec` for `WHERE ceil(col) > 2`
-/// keep the unnarrowed `Min`/`Max` of the input — the refined interval does
-/// not flow back. Likely `ExprIntervalGraph::gather_node_indices` does not
-/// thread ScalarUDF children into propagation, or the solver returns
-/// `CannotPropagate` at the UDF node.
+/// `floor` also exposes a `preimage()` hook (below), and the logical simplifier
+/// rewrites `WHERE floor(col) OP lit` into a literal column predicate *before*
+/// physical planning even sees the UDF. So for floor, `propagate_constraints`
+/// is rarely on the critical path — it kicks in only for the cases the
+/// simplifier can't reach (non-literal RHS, multi-arg forms, volatile contexts).
 ///
-/// Nor is this hook plumbed into `PruningPredicate` (Parquet row-group
-/// pruning): that path uses `LiteralGuarantee` which only inspects
-/// literal-based predicates — `WHERE ceil(col) > 2` is not rewritten to
-/// `WHERE col > 1` before pruning, so `row_groups_pruned_statistics` stays 0.
-///
-/// Why keep it, then? The math is correct and the impl is forward-compatible:
-/// when DataFusion upstream plumbs either path (UDFs through the interval
-/// graph, or a preimage rewrite before `PruningPredicate`), `ceil`/`floor`
-/// filter pushdown becomes automatic with no code changes here.
+/// For `ceil`, preimage is not safe (the preimage of `ceil(x) = N` is the
+/// right-closed interval `(N - 1, N]`, which cannot be expressed as
+/// `[lower, upper)`), so `propagate_constraints` is the only forward-compat
+/// hook. Even so, the only DF v53 consumer today is
+/// `FilterExec::statistics_by_expr()` via `physical_expr::analysis::analyze`,
+/// which does not thread ScalarUDF children through `ExprIntervalGraph` — so
+/// the refined interval currently has no observable effect on `ceil` plans.
+/// Keeping the hook is cheap and becomes load-bearing the moment upstream
+/// wires UDFs into the interval graph.
 fn propagate_ceil_floor(
     kind: CeilFloor,
     interval: &Interval,
@@ -793,6 +812,144 @@ fn mask_non_finite_f64(arg: &ColumnarValue) -> ColumnarValue {
         }
         other => other.clone(),
     }
+}
+
+/// Preimage for `floor(x) = N`: the set of `x` with `floor(x) = N` is exactly the
+/// half-open interval `[N, N + 1)`, which matches the contract of
+/// `PreimageResult::Range`. Enables the logical simplifier to rewrite
+/// `WHERE floor(col) = N` into `WHERE col >= N AND col < N + 1`, dropping the
+/// UDF call in the filter and unlocking downstream pruning (min/max stats,
+/// `PruningPredicate`).
+///
+/// Only the 1-arg form (`floor(x)`) is handled. The 2-arg form
+/// `floor(x, target_scale)` returns a Decimal128 whose preimage still fits a
+/// half-open interval in principle, but the literal on the RHS would need to
+/// match `(precision, scale)` exactly, and the extra complexity isn't justified
+/// until we see a real workload.
+///
+/// Returns `PreimageResult::None` whenever the rewrite would be unsound:
+/// - non-integer literal (e.g. `floor(x) = 1.5` has no solution),
+/// - NaN / Infinity,
+/// - overflow of `N + 1` at the primitive's MAX,
+/// - unsupported literal type (strings, bools, etc.).
+fn preimage_floor(
+    args: &[Expr],
+    lit_expr: &Expr,
+    info: &SimplifyContext,
+) -> Result<PreimageResult> {
+    if args.len() != 1 {
+        return Ok(PreimageResult::None);
+    }
+    let Expr::Literal(lit_value, _) = lit_expr else {
+        return Ok(PreimageResult::None);
+    };
+    // Spark's `floor(x)` returns an integer, so a non-integer RHS means the
+    // equality has no solution and the rewrite must bail.
+    let Some(rhs) = lit_as_integer(lit_value) else {
+        return Ok(PreimageResult::None);
+    };
+    // The returned interval must match `args[0]`'s data type; the rewrite emits
+    // `args[0] >= lower AND args[0] < upper` and DataFusion's interval graph
+    // rejects mismatched types (e.g. Float64 column vs Int64 literal).
+    let input_type = info.get_data_type(&args[0])?;
+
+    let bounds = match &input_type {
+        DataType::Float64 => float_bounds(rhs).map(|(lo, hi)| {
+            (
+                ScalarValue::Float64(Some(lo)),
+                ScalarValue::Float64(Some(hi)),
+            )
+        }),
+        DataType::Float32 => float_bounds(rhs).and_then(|(lo, hi)| {
+            let lo32 = lo as f32;
+            let hi32 = hi as f32;
+            // f32 can only represent integers exactly up to 2^24. Reject when
+            // the round-trip would collapse the interval.
+            if (lo32 as f64) != lo || (hi32 as f64) != hi || hi32 <= lo32 {
+                None
+            } else {
+                Some((
+                    ScalarValue::Float32(Some(lo32)),
+                    ScalarValue::Float32(Some(hi32)),
+                ))
+            }
+        }),
+        DataType::Int8 => int_bounds::<i8>(rhs)
+            .map(|(lo, hi)| (ScalarValue::Int8(Some(lo)), ScalarValue::Int8(Some(hi)))),
+        DataType::Int16 => int_bounds::<i16>(rhs)
+            .map(|(lo, hi)| (ScalarValue::Int16(Some(lo)), ScalarValue::Int16(Some(hi)))),
+        DataType::Int32 => int_bounds::<i32>(rhs)
+            .map(|(lo, hi)| (ScalarValue::Int32(Some(lo)), ScalarValue::Int32(Some(hi)))),
+        DataType::Int64 => int_bounds::<i64>(rhs)
+            .map(|(lo, hi)| (ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi)))),
+        DataType::Decimal128(precision, scale) => decimal128_bounds(rhs, *precision, *scale),
+        _ => None,
+    };
+
+    let Some((lower, upper)) = bounds else {
+        return Ok(PreimageResult::None);
+    };
+    Ok(PreimageResult::Range {
+        expr: args[0].clone(),
+        interval: Box::new(Interval::try_new(lower, upper)?),
+    })
+}
+
+/// Extract the literal RHS as an integer. `floor` produces integer-valued
+/// results, so a non-integer literal means the equality is unsatisfiable and
+/// the rewrite must return `None`.
+fn lit_as_integer(v: &ScalarValue) -> Option<i128> {
+    match v {
+        ScalarValue::Int8(Some(n)) => Some(*n as i128),
+        ScalarValue::Int16(Some(n)) => Some(*n as i128),
+        ScalarValue::Int32(Some(n)) => Some(*n as i128),
+        ScalarValue::Int64(Some(n)) => Some(*n as i128),
+        ScalarValue::Float32(Some(n)) if n.is_finite() && n.fract() == 0.0 => Some(*n as i128),
+        ScalarValue::Float64(Some(n)) if n.is_finite() && n.fract() == 0.0 => Some(*n as i128),
+        ScalarValue::Decimal128(Some(n), _, 0) => Some(*n),
+        ScalarValue::Decimal128(Some(n), _, scale) if *scale > 0 => {
+            let pow = 10_i128.checked_pow(*scale as u32)?;
+            if n % pow == 0 {
+                Some(n / pow)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn float_bounds(n: i128) -> Option<(f64, f64)> {
+    let lo = n as f64;
+    let hi = n.checked_add(1).map(|m| m as f64)?;
+    if !lo.is_finite() || !hi.is_finite() || hi <= lo {
+        return None;
+    }
+    Some((lo, hi))
+}
+
+fn int_bounds<T>(n: i128) -> Option<(T, T)>
+where
+    T: TryFrom<i128> + CheckedAdd + num::One,
+{
+    let lo = T::try_from(n).ok()?;
+    let hi = lo.checked_add(&T::one())?;
+    Some((lo, hi))
+}
+
+fn decimal128_bounds(n: i128, precision: u8, scale: i8) -> Option<(ScalarValue, ScalarValue)> {
+    if scale < 0 {
+        return None;
+    }
+    // Convert the integer `n` to Decimal128 stored form at `scale`:
+    // value_stored = n * 10^scale. Then width-1 unit at `scale` is also `10^scale`.
+    let step = 10_i128.checked_pow(scale as u32)?;
+    let lo = n.checked_mul(step)?;
+    let hi = lo.checked_add(step)?;
+    Some((
+        ScalarValue::Decimal128(Some(lo), precision, scale),
+        ScalarValue::Decimal128(Some(hi), precision, scale),
+    ))
 }
 
 #[inline]

@@ -816,6 +816,29 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | c |
         | 2 |
 
+    # Exercises the preimage rewrite: `floor(v) = N` becomes
+    # `v >= N AND v < N + 1`. Result must still match Spark row-for-row.
+    Scenario: WHERE floor(col) = N keeps the right rows
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW vals AS SELECT * FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.0 AS DOUBLE)),
+          (CAST(1.9 AS DOUBLE)),
+          (CAST(2.0 AS DOUBLE)),
+          (CAST(-0.5 AS DOUBLE)),
+          (CAST(NULL AS DOUBLE))
+        AS t(v)
+        """
+      When query
+        """
+        SELECT v FROM vals WHERE floor(v) = 1 ORDER BY v
+        """
+      Then query result ordered
+        | v   |
+        | 1.0 |
+        | 1.9 |
+
     Scenario: GROUP BY ceil(v) aggregates correctly
       Given statement
         """
@@ -918,40 +941,53 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         """
       Then query plan matches snapshot
 
-  Rule: Plan snapshot — filter pushdown on Parquet (propagate_constraints)
-    # DataFusion v53 observable effect: `propagate_constraints` is implemented
-    # on SparkCeil/SparkFloor (mathematically correct, returns widened intervals).
-    # The only DF v53 consumer is `FilterExec::statistics_by_expr()` via
-    # `physical_expr::analysis::analyze` — but for scalar UDF plans this does
-    # NOT produce observable effects. Direct evidence in the snapshots:
+  Rule: Plan snapshot — filter pushdown on Parquet (preimage + propagate_constraints)
+    # Two complementary hooks cover filter pushdown for ceil/floor, with very
+    # different visibility in DF v53:
     #
-    # Literal filter `WHERE v > 2.0` on Parquet (see baseline scenario):
-    #   DataSourceExec:
-    #     predicate=CAST(v@0 AS Decimal128...) > Some(...)
-    #     pruning_predicate=v_max > ...       ← DF built a min/max-based rewrite
-    #     required_guarantees=[]              ← DF can reason about bounds
+    # 1) `preimage()` — WIRED ON FLOOR ONLY.
+    #    The logical simplifier rule `rewrite_with_preimage` calls
+    #    `ScalarUDFImpl::preimage` and rewrites `<udf>(col) OP lit` into a pure
+    #    column predicate `col OP' lower/upper` (see
+    #    `datafusion_optimizer::simplify_expressions::udf_preimage`). We
+    #    implement it on `SparkFloor` because `floor(x) = N` ⇔ `x ∈ [N, N+1)`
+    #    fits the half-open `PreimageResult::Range` exactly.
     #
-    # UDF filter `WHERE ceil(v) > 2` on Parquet (see pushdown + analyze scenarios):
-    #   DataSourceExec:
-    #     predicate=spark_ceil(v@0) > 2       ← per-row eval only
-    #     <no pruning_predicate>              ← DF gave up; did NOT invoke
-    #     <no required_guarantees>            ← our hook to derive bounds
+    #    We do NOT implement it on `SparkCeil` because `ceil(x) = N` ⇔
+    #    `x ∈ (N - 1, N]` is right-closed / left-open and cannot be expressed
+    #    as `[lower, upper)` — any attempt would produce an unsound rewrite
+    #    (either include `N - 1` spuriously or drop `N`). Upstream DF v53
+    #    makes the same choice on `CeilFunc`.
     #
-    # Additionally, FilterExec.statistics after `WHERE ceil(v) > 2` still
-    # shows `Min=0.5 Max=10.5` — the refined interval never flows back.
-    # And `row_groups_pruned_statistics` stays 0.
+    #    Observable effect for floor: `WHERE floor(v) <= 1` at the logical
+    #    layer turns into `v < 2` (after `<=` → `< upper` via the rewrite),
+    #    so `DataSourceExec` gets a literal column predicate — same shape as
+    #    the literal-baseline scenario — and `pruning_predicate` +
+    #    `required_guarantees` are populated. Row groups can now be pruned by
+    #    Parquet min/max stats.
     #
-    # Root cause: in DF v53 `PruningPredicate` builds its pruning expr from
-    # `LiteralGuarantee::analyze`, which inspects only literal-based predicates
-    # and never walks into ScalarUDFs. Our `propagate_constraints` would be
-    # the right hook to call but the pruning path does not reach it.
+    #    Floor snapshots are the proof: compare `EXPLAIN ... WHERE floor(v)
+    #    <= 1` against `EXPLAIN ... WHERE v < 2` (baseline) — the two
+    #    predicate trees match.
     #
-    # Why keep the hook: forward-compat. When DF upstream either threads UDFs
-    # through `ExprIntervalGraph` or adds a preimage rewrite before
-    # `PruningPredicate`, `ceil`/`floor` filter pushdown becomes automatic.
-    # These snapshots serve as regression fixtures: the literal-vs-UDF diff
-    # disappears when the wiring arrives, and the test forces us to update
-    # the narrative.
+    # 2) `propagate_constraints()` — CORRECT BUT INVISIBLE.
+    #    Implemented on both SparkCeil and SparkFloor (see `propagate_ceil_floor`).
+    #    The only DF v53 consumer is `FilterExec::statistics_by_expr()` via
+    #    `physical_expr::analysis::analyze` → `ExprIntervalGraph`. For
+    #    ScalarUDF children the graph stops at the UDF node, so the refined
+    #    interval never reaches `FilterExec.statistics` and
+    #    `row_groups_pruned_statistics` stays 0. The hook is kept for
+    #    forward-compat: when upstream threads UDFs into the interval graph
+    #    (or adds a preimage rewrite before `PruningPredicate` for operators
+    #    not covered by `udf_preimage`), `ceil` filter pushdown will turn on
+    #    automatically. Ceil also benefits indirectly via the
+    #    integer-identity simplify (`ceil(int_col) → int_col`).
+    #
+    # The `ceil` snapshots below retain the old shape (per-row
+    # `spark_ceil(v@0) > 2` predicate, no pruning predicate), and serve as
+    # regression fixtures for that asymmetry. When/if preimage gets a
+    # right-closed variant, updating the ceil snapshots will be the test
+    # that forces us to revisit this narrative.
 
     # ── STEP 1: LITERAL BASELINE ──────────────────────────────────────
     # Reference point. A pure literal predicate that PruningPredicate +
