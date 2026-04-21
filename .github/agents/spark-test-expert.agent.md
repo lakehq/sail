@@ -29,14 +29,14 @@ All the commands mentioned in the instructions should be run in the project dire
 GitHub Actions runs these tests on every push to the `main` branch. Follow the steps below to access the test logs.
 
 1. Get the run ID of the latest successful run on the `main` branch for the `build.yml` workflow.
-2. Decide which artifact to download from the workflow run. The artifact name is `spark-${version}-test-logs` for PySpark tests, where `${version}` is the Spark version, or `ibis-test-logs` for Ibis tests.
+2. Decide which artifact to download from the workflow run. The artifact name is `spark-${version}-test-logs` for PySpark tests or `ibis-test-logs` for Ibis tests.
 3. Download the artifact to a temporary directory and unzip it.
 
 The test logs include one `.jsonl` file and one `.log` file for each test suite.
 The `.log` file is the pytest output showing a summary of the test results.
 The `.jsonl` file contains events emitted during test execution. The events contain error messages and stack traces of failed tests. Since the `.jsonl` file is large, you may use `grep` or `jq` to analyze the test results.
 
-You do not need to download and analyze the test logs if you are only asked to fix specific test cases.
+You do not need to download and analyze the existing `main` branch test logs if you are only asked to fix specific test cases.
 
 ## Preparing Test Environments
 
@@ -110,7 +110,7 @@ Run the following command to wait until the server is ready to accept connection
 scripts/spark-tests/wait-for-server.sh
 ```
 
-After running the tests, stop the server with the following command. Otherwise, the port remains occupied and you may be unable to restart the server after making code changes.
+After running the tests, stop the server with the following command. Otherwise, the port remains occupied, and you may be unable to restart the server after making code changes.
 
 ```bash
 scripts/spark-tests/stop-server.sh
@@ -124,7 +124,7 @@ Without a test-selection argument, the script runs all test suites for the envir
 
 How you run the script depends on the test environment and the test suite you want to run, as described below.
 
-The PySpark test environments support five test suites: one `pyspark.sql.tests.connect` unit test suite and four doctest suites for `pyspark.sql.*` modules. Here are a few examples of how to run PySpark tests.
+The PySpark test environments support five test suites: one `pyspark.sql.tests.connect` unit test suite and four doctest suites for `pyspark.sql.*` modules. Here are a few examples of how to run PySpark tests, where the argument after `-k` depends on the test cases you want to run.
 
 ```bash
 hatch run "test-spark.spark-${version}:env" TEST_RUN_NAME=selected scripts/spark-tests/run-tests.sh --pyargs pyspark.sql.tests.connect -k "test_parity_arrow"
@@ -134,7 +134,7 @@ hatch run "test-spark.spark-${version}:env" TEST_RUN_NAME=selected scripts/spark
 hatch run "test-spark.spark-${version}:env" TEST_RUN_NAME=selected scripts/spark-tests/run-tests.sh --doctest-modules --pyargs pyspark.sql.functions -k "array"
 ```
 
-The Ibis test environment supports one test suite. Here is an example of how to run Ibis tests.
+The Ibis test environment supports one test suite. Here is an example of how to run Ibis tests, where the argument after `-k` depends on the test cases you want to run.
 
 ```bash
 hatch run test-ibis:env TEST_RUN_NAME=selected scripts/spark-tests/run-tests.sh --pyargs ibis.backends -m pyspark -k "test_array or test_aggregation"
