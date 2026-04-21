@@ -198,14 +198,14 @@ Feature: next_day comprehensive tests
         """
         SELECT next_day(d, day) AS result FROM VALUES (DATE'2024-01-10', 'Monday'), (DATE'2024-01-10', 'InvalidDay') AS t(d, day)
         """
-      Then query error .*
+      Then query error .*Illegal input for day of week.*
 
     Scenario: next_day invalid day name errors
       When query
         """
         SELECT next_day(DATE'2024-01-10', 'InvalidDay') AS result
         """
-      Then query error .*
+      Then query error .*Illegal input for day of week.*
 
   Rule: Timestamp implicit coercion to Date
 
