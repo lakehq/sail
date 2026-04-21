@@ -1324,13 +1324,16 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | 0      |
 
-  Rule: ANSI mode on overflow (found via /bug-hunt 2026-04-21)
+  Rule: ANSI mode on overflow
 
-    @sail-bug
-    Scenario: ANSI=false overflow returns NULL
-      # BUG: Sail ignores ANSI=false on the Decimal cast inside ceil(double, scale).
-      # Spark JVM returns NULL; Sail raises "Cast error: Cannot cast to Decimal128(18, 2). Overflowing on 1e300".
-      # See memory/math_udfs_bugs.md.
+    # Fixed 2026-04-21: SparkCeil/SparkFloor now carry ansi_mode: bool state bound
+    # at planning time from PlanConfig::ansi_mode (serialized via protobuf
+    # SparkCeilUdf/SparkFloorUdf for distributed execution). Under ANSI=false,
+    # overflow in the Float→Decimal cast becomes NULL; under ANSI=true it errors.
+    # Both UDFs share the spark_ceil_floor() helper — testing all 4 combinations
+    # (ceil/floor × ANSI=true/false) guards against regressions in either wrapper.
+
+    Scenario: ceil ANSI=false overflow returns NULL
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1339,3 +1342,29 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       Then query result
         | result |
         | NULL   |
+
+    Scenario: ceil ANSI=true overflow errors
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT ceil(CAST(1e300 AS DOUBLE), 2) AS result
+        """
+      Then query error .*
+
+    Scenario: floor ANSI=false overflow returns NULL
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT floor(CAST(1e300 AS DOUBLE), 2) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: floor ANSI=true overflow errors
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT floor(CAST(1e300 AS DOUBLE), 2) AS result
+        """
+      Then query error .*

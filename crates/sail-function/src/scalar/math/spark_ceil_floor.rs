@@ -200,19 +200,29 @@ fn get_return_type_precision_scale(return_type: &DataType) -> Result<(u8, i8)> {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
+    /// Bound at planning time from `PlanConfig::ansi_mode` (which maps
+    /// `spark.sql.ansi.enabled`). Controls overflow handling in the
+    /// Float→Decimal cast path: `true` errors on overflow, `false`
+    /// returns NULL. Serialized in `codec.rs` for distributed execution.
+    ansi_mode: bool,
 }
 
 impl Default for SparkCeil {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl SparkCeil {
-    pub fn new() -> Self {
+    pub fn new(ansi_mode: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            ansi_mode,
         }
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 }
 
@@ -242,7 +252,7 @@ impl ScalarUDFImpl for SparkCeil {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let (arg, target_scale) = extract_call_args("ceil", &args.args)?;
         let return_type = args.return_field.data_type();
-        spark_ceil_floor("ceil", arg, target_scale, return_type)
+        spark_ceil_floor("ceil", arg, target_scale, return_type, self.ansi_mode)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -283,19 +293,26 @@ impl ScalarUDFImpl for SparkCeil {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFloor {
     signature: Signature,
+    /// See [`SparkCeil::ansi_mode`].
+    ansi_mode: bool,
 }
 
 impl Default for SparkFloor {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl SparkFloor {
-    pub fn new() -> Self {
+    pub fn new(ansi_mode: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            ansi_mode,
         }
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 }
 
@@ -325,7 +342,7 @@ impl ScalarUDFImpl for SparkFloor {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let (arg, target_scale) = extract_call_args("floor", &args.args)?;
         let return_type = args.return_field.data_type();
-        spark_ceil_floor("floor", arg, target_scale, return_type)
+        spark_ceil_floor("floor", arg, target_scale, return_type, self.ansi_mode)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -462,12 +479,28 @@ fn simplify_ceil_floor(
     Ok(ExprSimplifyResult::Original(args))
 }
 
+/// Safe cast options: overflow becomes NULL instead of erroring. Used in
+/// the Float→Decimal path when `spark.sql.ansi.enabled = false`.
+const SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
+    safe: true,
+    format_options: FormatOptions::new(),
+};
+
 fn spark_ceil_floor(
     name: &str,
     arg: &ColumnarValue,
     target_scale: &Option<i32>,
     return_type: &DataType,
+    ansi_mode: bool,
 ) -> Result<ColumnarValue> {
+    // Float→Decimal cast options depend on ANSI mode:
+    //   ANSI=true  → None (default: safe=false) → overflow errors, matching Spark ANSI.
+    //   ANSI=false → Some(&SAFE_CAST_OPTIONS) → overflow becomes NULL, matching Spark non-ANSI.
+    let float_cast_options: Option<&CastOptions> = if ansi_mode {
+        None
+    } else {
+        Some(&SAFE_CAST_OPTIONS)
+    };
     if matches!(
         arg.data_type(),
         DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
@@ -634,7 +667,7 @@ fn spark_ceil_floor(
                     let masked = mask_non_finite_f32(arg);
                     let arg = masked.cast_to(
                         &DataType::Decimal128(return_type_precision, return_type_scale),
-                        None,
+                        float_cast_options,
                     )?;
                     decimal128_ceil_floor(name, &arg, &Some(target_scale), return_type)
                 } else {
@@ -670,7 +703,7 @@ fn spark_ceil_floor(
                     let masked = mask_non_finite_f64(arg);
                     let arg = masked.cast_to(
                         &DataType::Decimal128(return_type_precision, return_type_scale),
-                        None,
+                        float_cast_options,
                     )?;
                     decimal128_ceil_floor(name, &arg, &Some(target_scale), return_type)
                 } else {
