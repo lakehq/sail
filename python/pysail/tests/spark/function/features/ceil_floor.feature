@@ -1303,3 +1303,39 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         SELECT ceil(CAST(1e300 AS DOUBLE), 2) AS result
         """
       Then query error .*
+
+  Rule: Scale -37 boundary (max negative scale that fits Decimal128)
+
+    Scenario: ceil scale -37 returns 10^37
+      When query
+        """
+        SELECT ceil(1.5, -37) AS result
+        """
+      Then query result
+        | result                                  |
+        | 10000000000000000000000000000000000000  |
+
+    Scenario: floor scale -37 truncates small value to zero
+      When query
+        """
+        SELECT floor(1.5, -37) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+  Rule: ANSI mode on overflow (found via /bug-hunt 2026-04-21)
+
+    @sail-bug
+    Scenario: ANSI=false overflow returns NULL
+      # BUG: Sail ignores ANSI=false on the Decimal cast inside ceil(double, scale).
+      # Spark JVM returns NULL; Sail raises "Cast error: Cannot cast to Decimal128(18, 2). Overflowing on 1e300".
+      # See memory/math_udfs_bugs.md.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT ceil(CAST(1e300 AS DOUBLE), 2) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
