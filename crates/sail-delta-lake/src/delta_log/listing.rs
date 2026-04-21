@@ -2,12 +2,11 @@ use std::sync::Arc;
 
 use futures::TryStreamExt;
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::spec::{
-    delta_log_prefix_path, delta_log_root_path, last_checkpoint_path, parse_checkpoint_version,
-    parse_checksum_version, parse_commit_version, parse_compacted_json_versions, DeltaResult,
-    LastCheckpointHint,
+    delta_log_root_path, last_checkpoint_path, parse_checkpoint_version, parse_checksum_version,
+    parse_commit_version, parse_compacted_json_versions, DeltaResult, LastCheckpointHint,
 };
 
 pub(crate) fn parse_delta_log_entry_version(meta: &ObjectMeta) -> Option<i64> {
@@ -65,35 +64,24 @@ pub(crate) async fn read_last_checkpoint_version_from_store(
 
 pub(crate) async fn list_delta_log_entries_from(
     store: Arc<dyn ObjectStore>,
-    offset_version: i64,
+    _offset_version: i64,
 ) -> DeltaResult<Vec<ObjectMeta>> {
-    // `delta_log_prefix_path(version)` is a prefix, not a concrete filename, so
-    // files for `version` still compare greater than the offset.
+    // Always list the full _delta_log directory.
+    //
+    // We previously called `list_with_offset(&log_path, &offset)` where
+    // `offset = _delta_log/00000000000000000<version>` (no extension).
+    // Azure/OneLake treats this bare offset as a prefix boundary and
+    // excludes real files like `<version>.checkpoint.parquet`, breaking
+    // tables with a `_last_checkpoint` hint.
+    // See: https://github.com/delta-io/delta-kernel-rs/issues/2433
     let log_path = delta_log_root_path();
-    let offset = delta_log_prefix_path(offset_version);
-    let entries = match store
-        .list_with_offset(Some(&log_path), &offset)
-        .try_collect::<Vec<_>>()
-        .await
-    {
-        Ok(entries) => entries,
-        Err(ObjectStoreError::NotSupported { .. } | ObjectStoreError::NotImplemented { .. }) => {
-            // TODO: Apply the same `location > offset` filter here if needed for the specific store implementation.
-            store.list(Some(&log_path)).try_collect::<Vec<_>>().await?
-        }
-        Err(err) => return Err(err.into()),
-    };
-    Ok(entries)
+    Ok(store.list(Some(&log_path)).try_collect::<Vec<_>>().await?)
 }
 
 pub(crate) async fn latest_version_from_listing(
     store: Arc<dyn ObjectStore>,
 ) -> DeltaResult<Option<i64>> {
-    let offset_version = read_last_checkpoint_version_from_store(store.clone())
-        .await
-        .map(|v| v.saturating_sub(1))
-        .unwrap_or(0);
-    let entries = list_delta_log_entries_from(store, offset_version).await?;
+    let entries = list_delta_log_entries_from(store, 0).await?;
 
     let mut max_version: Option<i64> = None;
     for meta in entries {
@@ -178,20 +166,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(21));
-    }
-
-    #[tokio::test]
-    async fn list_delta_log_entries_from_keeps_empty_results_empty() {
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        store
-            .put(
-                &Path::from("_delta_log/00000000000000000020.checkpoint.parquet"),
-                b"parquet".to_vec().into(),
-            )
-            .await
-            .unwrap();
-
-        let entries = list_delta_log_entries_from(store, 21).await.unwrap();
-        assert!(entries.is_empty());
     }
 }
