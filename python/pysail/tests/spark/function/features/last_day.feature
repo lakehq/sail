@@ -198,3 +198,36 @@ Feature: last_day comprehensive tests
         | result     |
         | 2024-01-31 |
         | 2024-12-31 |
+
+  Rule: Gregorian calendar edge cases (century leap rules + min date)
+
+    # Century rule: divisible by 100 is NOT leap unless also divisible by 400.
+    # 1900 → non-leap (Feb=28 days). 2000 → leap (Feb=29 days).
+    # Exercises the leap-year algorithm correctness, not just the generic path.
+
+    Scenario: last_day February 1900 (century non-leap, rule of 100)
+      When query
+        """
+        SELECT last_day(DATE '1900-02-15') AS result
+        """
+      Then query result
+        | result     |
+        | 1900-02-28 |
+
+    Scenario: last_day February 2000 (century leap, rule of 400)
+      When query
+        """
+        SELECT last_day(DATE '2000-02-15') AS result
+        """
+      Then query result
+        | result     |
+        | 2000-02-29 |
+
+    Scenario: last_day year 1 AD (min date boundary)
+      When query
+        """
+        SELECT last_day(DATE '0001-01-15') AS result
+        """
+      Then query result
+        | result     |
+        | 0001-01-31 |
