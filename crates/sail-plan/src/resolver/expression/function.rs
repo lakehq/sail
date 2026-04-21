@@ -1,3 +1,4 @@
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
@@ -100,7 +101,7 @@ impl PlanResolver<'_> {
                     python_version: f.python_version().to_string(),
                     eval_type: f.eval_type(),
                     command: f.command().to_vec(),
-                    output_type: f.output_type().clone(),
+                    output_type: f.output_type().cloned().unwrap_or(DataType::Null),
                 };
                 self.resolve_python_udf_expr(
                     function,
