@@ -1852,6 +1852,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(safe))));
             }
+            UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -1953,7 +1956,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
-            "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
+            // SparkNextDay has state (ansi_mode) — handled by UdfKind::SparkNextDay
+            // variant above. This Standard fallback only fires if the encoder emitted
+            // `Standard`, which is a bug; default to ansi_mode=false (DataFusion default).
+            "spark_next_day" | "next_day" => {
+                Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(false))))
+            }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
@@ -2100,7 +2108,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
-            || node_inner.is::<SparkNextDay>()
             || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
@@ -2228,6 +2235,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkNextDay>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
         } else {
             return Ok(());
         };

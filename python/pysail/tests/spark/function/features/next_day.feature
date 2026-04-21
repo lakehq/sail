@@ -207,6 +207,45 @@ Feature: next_day comprehensive tests
         """
       Then query error .*Illegal input for day of week.*
 
+  Rule: ANSI mode on invalid day name (Spark JVM parity)
+
+    # ANSI=true → error with ILLEGAL_DAY_OF_WEEK (matches Spark strict mode).
+    # ANSI=false → returns NULL (matches Spark lenient mode).
+    # Bound at planning time via PlanConfig::ansi_mode; serialized in
+    # SparkNextDayUdf for distributed execution.
+
+    Scenario: next_day ANSI=true errors on invalid day name
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT next_day(DATE'2024-01-10', 'InvalidDay') AS result
+        """
+      Then query error .*Illegal input for day of week.*
+
+    Scenario: next_day ANSI=false returns NULL on invalid day name
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT next_day(DATE'2024-01-10', 'InvalidDay') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: next_day ANSI=false multi-row with mixed valid and invalid day names
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT next_day(d, day) AS result FROM VALUES
+          (DATE'2024-01-10', 'Monday'),
+          (DATE'2024-01-10', 'InvalidDay')
+          AS t(d, day)
+        """
+      Then query result
+        | result     |
+        | 2024-01-15 |
+        | NULL       |
+
   Rule: Timestamp implicit coercion to Date
 
     # Spark implicitly casts Timestamp / Timestamp_NTZ to Date before applying
