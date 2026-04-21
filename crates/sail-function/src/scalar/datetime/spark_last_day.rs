@@ -10,6 +10,8 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
+/// Spark-compatible `last_day` expression
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#last_day>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkLastDay {
     signature: Signature,

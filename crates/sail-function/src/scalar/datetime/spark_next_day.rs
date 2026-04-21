@@ -10,14 +10,11 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 
 use crate::error::invalid_arg_count_exec_err;
 
+/// Spark-compatible `next_day` expression
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#next_day>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkNextDay {
     signature: Signature,
-    /// Bound at planning time from `PlanConfig::ansi_mode` (which maps
-    /// `spark.sql.ansi.enabled`). Controls invalid-day-name behaviour:
-    /// `true` errors with `ILLEGAL_DAY_OF_WEEK`, `false` returns NULL
-    /// (matches Spark JVM semantics). Serialized in `codec.rs` for
-    /// distributed execution.
     ansi_mode: bool,
 }
 
@@ -77,7 +74,6 @@ impl ScalarUDFImpl for SparkNextDay {
                                     None => Ok(ColumnarValue::Scalar(ScalarValue::Date32(None))),
                                 }
                             } else {
-                                // NULL day name → NULL result (Spark behavior)
                                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
                             }
                         } else {
@@ -106,7 +102,6 @@ impl ScalarUDFImpl for SparkNextDay {
                                 )))),
                             }
                         } else {
-                            // NULL day name → NULL result (Spark behavior)
                             Ok(ColumnarValue::Array(Arc::new(new_null_array(&DataType::Date32, date_array.len()))))
                         }
                     }
