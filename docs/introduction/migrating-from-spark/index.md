@@ -15,7 +15,7 @@ spark = SparkSession.builder.getOrCreate()  # [!code --]
 spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()  # [!code ++]
 ```
 
-If you use [Ibis](https://ibis-project.org/) with its PySpark backend, the same one-line change applies. See the [Ibis](/guide/integrations/ibis/) integration guide.
+If you use [Ibis](https://ibis-project.org/) with its PySpark backend, the same one-line change applies. See the [Ibis](/guide/integrations/ibis) integration guide.
 
 ## Considerations
 
