@@ -461,6 +461,19 @@ async fn build_log_replay_pipeline_with_files(
         final_proj.push((stats_expr, "stats_json".to_string()));
     }
 
+    // Include the deletion vector struct so DeltaScanByAddsExec can apply per-file DV filtering.
+    let dv_field_name = if has_add_field("deletionVector") {
+        Some("deletionVector")
+    } else if has_add_field("deletion_vector") {
+        Some("deletion_vector")
+    } else {
+        None
+    };
+    if let Some(dv_field) = dv_field_name {
+        let dv_expr = simplify(guard_add(get_add_field(dv_field)))?;
+        final_proj.push((dv_expr, "deletionVector".to_string()));
+    }
+
     // Replay key columns (consumed by replay; stripped from replay output schema).
     final_proj.push((replay_path, COL_REPLAY_PATH.to_string()));
     final_proj.push((is_remove, COL_LOG_IS_REMOVE.to_string()));

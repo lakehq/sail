@@ -22,13 +22,14 @@ use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
 use crate::physical_plan::planner::{
-    plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext,
+    plan_delete, plan_delete_mor, plan_merge, DeltaPhysicalPlanner, DeltaPlannerConfig,
+    PlannerContext,
 };
 use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
     DeltaOperation,
 };
-use crate::table::open_table_with_object_store_and_table_config;
+use crate::table::{open_table_with_object_store, open_table_with_object_store_and_table_config};
 use crate::{create_delta_provider, create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
@@ -254,20 +255,49 @@ impl TableFormat for DeltaTableFormat {
         ctx: &dyn Session,
         info: RowLevelWriteInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Strategy branching: all row-level operations check the materialization strategy
-        // before delegating to the format-specific planner. MoR support will be implemented
-        // here in the future; for now only Eager (Copy-on-Write) is supported.
-        match info.merge_strategy {
-            MergeStrategy::Eager => {}
-            MergeStrategy::MergeOnRead => {
-                return not_impl_err!(
-                    "Merge-on-Read strategy is not yet implemented for Delta Lake"
-                );
-            }
-        }
+        // Determine the actual strategy: if the table has deletion vectors enabled,
+        // override to MergeOnRead for DELETE operations. The trait-level merge_strategy()
+        // only provides a default hint; here we inspect the actual table properties.
+        let effective_strategy = if info.command == RowLevelCommand::Delete {
+            detect_merge_strategy(ctx, &info)
+                .await
+                .unwrap_or(info.merge_strategy)
+        } else {
+            info.merge_strategy
+        };
 
-        match info.command {
-            RowLevelCommand::Delete => {
+        match (effective_strategy, info.command) {
+            // ── Merge-on-Read DELETE ──────────────────────────────────────────
+            (MergeStrategy::MergeOnRead, RowLevelCommand::Delete) => {
+                let table_url = Self::parse_table_url(ctx, vec![info.target.path]).await?;
+                let condition = info.condition.ok_or_else(|| {
+                    DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
+                })?;
+                let delta_options = resolve_delta_write_options(info.target.options)?;
+                let delete_config = DeltaPlannerConfig::new(
+                    table_url,
+                    delta_options,
+                    HashMap::new(),
+                    Vec::new(),
+                    None,
+                    true,
+                );
+                let delete_ctx = PlannerContext::new(ctx, delete_config);
+                plan_delete_mor(&delete_ctx, condition).await
+            }
+            // ── MoR for MERGE/UPDATE: not yet implemented ────────────────────
+            (MergeStrategy::MergeOnRead, RowLevelCommand::Merge) => {
+                not_impl_err!(
+                    "Merge-on-Read strategy for MERGE is not yet implemented for Delta Lake"
+                )
+            }
+            (MergeStrategy::MergeOnRead, RowLevelCommand::Update) => {
+                not_impl_err!(
+                    "Merge-on-Read strategy for UPDATE is not yet implemented for Delta Lake"
+                )
+            }
+            // ── Copy-on-Write DELETE ─────────────────────────────────────────
+            (MergeStrategy::Eager, RowLevelCommand::Delete) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path]).await?;
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
@@ -284,7 +314,8 @@ impl TableFormat for DeltaTableFormat {
                 let delete_ctx = PlannerContext::new(ctx, delete_config);
                 plan_delete(&delete_ctx, condition).await
             }
-            RowLevelCommand::Merge => {
+            // ── Copy-on-Write MERGE ──────────────────────────────────────────
+            (MergeStrategy::Eager, RowLevelCommand::Merge) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
                 let delta_options = resolve_delta_write_options(info.target.options.clone())?;
                 let merge_config = DeltaPlannerConfig::new(
@@ -298,7 +329,7 @@ impl TableFormat for DeltaTableFormat {
                 let merge_ctx = PlannerContext::new(ctx, merge_config);
                 plan_merge(&merge_ctx, info).await
             }
-            RowLevelCommand::Update => {
+            (_, RowLevelCommand::Update) => {
                 not_impl_err!("UPDATE is not yet implemented for Delta Lake")
             }
         }
@@ -523,6 +554,40 @@ impl DeltaTableFormat {
             (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
+    }
+}
+
+/// Detect the merge strategy for a Delta table by inspecting its snapshot properties.
+///
+/// Returns `MergeOnRead` if the table has deletion vectors enabled in both protocol features
+/// and table properties. Otherwise returns `Eager` (Copy-on-Write).
+async fn detect_merge_strategy(
+    ctx: &dyn Session,
+    info: &RowLevelWriteInfo,
+) -> Result<MergeStrategy> {
+    let mut urls = resolve_listing_urls(ctx, vec![info.target.path.clone()]).await?;
+    let table_url = match (urls.pop(), urls.is_empty()) {
+        (Some(path), true) => <ListingTableUrl as AsRef<Url>>::as_ref(&path).clone(),
+        _ => return Ok(MergeStrategy::Eager),
+    };
+    let object_store = ctx
+        .runtime_env()
+        .object_store_registry
+        .get_store(&table_url)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    match open_table_with_object_store(table_url, object_store, Default::default()).await {
+        Ok(table) => {
+            let snapshot = table
+                .snapshot()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            if snapshot.verify_deletion_vectors().is_ok() {
+                Ok(MergeStrategy::MergeOnRead)
+            } else {
+                Ok(MergeStrategy::Eager)
+            }
+        }
+        Err(_) => Ok(MergeStrategy::Eager),
     }
 }
 

@@ -1919,11 +1919,13 @@ mod tests {
     async fn create_commit_rejects_unsupported_reader_features() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
+        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
+        // Use it to verify that the commit pipeline correctly rejects unsupported features.
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::DeletionVectors]),
-            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
         let metadata = test_metadata([]);
 
@@ -1955,7 +1957,7 @@ mod tests {
         assert!(matches!(
             err,
             DeltaError::Transaction(TransactionError::UnsupportedTableFeatures(features))
-                if features.contains(&TableFeature::DeletionVectors)
+                if features.contains(&TableFeature::VacuumProtocolCheck)
         ));
     }
 

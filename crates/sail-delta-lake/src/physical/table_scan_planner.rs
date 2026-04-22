@@ -34,6 +34,15 @@ impl ExtensionPlanner for DeltaTablePhysicalPlanner {
         let files =
             if !handle.snapshot.load_config().require_files || handle.snapshot.adds().is_empty() {
                 None
+            } else if handle
+                .snapshot
+                .adds()
+                .iter()
+                .any(|a| a.deletion_vector.is_some())
+            {
+                // When deletion vectors are present, fall through to the
+                // DeltaScanByAddsExec path which applies per-file DV filtering.
+                None
             } else {
                 Some(Arc::new(handle.snapshot.adds().to_vec()))
             };

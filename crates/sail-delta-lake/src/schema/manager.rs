@@ -121,6 +121,21 @@ pub fn protocol_for_create(
         }
     }
 
+    // `delta.enableDeletionVectors = "true"` implicitly activates DeletionVectors.
+    // Setting the metadata property is sufficient—`delta.feature.deletionVectors` is
+    // not also required.
+    if configuration
+        .get("delta.enableDeletionVectors")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+    {
+        if !reader_features.contains(&TableFeature::DeletionVectors) {
+            reader_features.push(TableFeature::DeletionVectors);
+        }
+        if !writer_features.contains(&TableFeature::DeletionVectors) {
+            writer_features.push(TableFeature::DeletionVectors);
+        }
+    }
+
     // `delta.checkpointPolicy = "v2"` implicitly activates V2Checkpoint
     if configuration
         .get("delta.checkpointPolicy")
@@ -261,5 +276,36 @@ mod tests {
             msg.contains("true"),
             "error message should include the bad value: {msg}"
         );
+    }
+
+    #[test]
+    fn protocol_for_create_activates_deletion_vectors_from_enable_property() -> DeltaResult<()> {
+        // `delta.enableDeletionVectors = true` alone must register the DeletionVectors feature
+        // in both reader and writer features.
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.enableDeletionVectors".to_string(),
+            "true".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::DeletionVectors));
+        assert!(protocol.has_writer_feature(&TableFeature::DeletionVectors));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_deletion_vectors_not_activated_when_disabled() -> DeltaResult<()> {
+        // `delta.enableDeletionVectors = false` must NOT register the feature.
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.enableDeletionVectors".to_string(),
+            "false".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, &config)?;
+        assert!(!protocol.has_reader_feature(&TableFeature::DeletionVectors));
+        assert!(!protocol.has_writer_feature(&TableFeature::DeletionVectors));
+        Ok(())
     }
 }

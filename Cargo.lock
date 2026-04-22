@@ -6507,6 +6507,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roaring"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ba9ce64a8f45d7fc86358410bb1a82e8c987504c0d4900e9141d69a9f26c885"
+dependencies = [
+ "bytemuck",
+ "byteorder",
+]
+
+[[package]]
 name = "roxmltree"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6895,6 +6905,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "crc32fast",
  "datafusion",
  "datafusion-common",
  "datafusion-functions-nested",
@@ -6910,6 +6921,7 @@ dependencies = [
  "parquet",
  "percent-encoding",
  "regex",
+ "roaring",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
