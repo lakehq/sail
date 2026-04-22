@@ -459,8 +459,7 @@ impl DeltaWriterExec {
             // table properties are persisted in the first Delta log commit.
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
-                // Build kernel schema for feature detection. Column-level metadata such as
-                // `delta.generationExpression` is carried on the arrow schema (propagated
+                // Column-level metadata is carried on the arrow schema (propagated
                 // end-to-end via Alias field metadata) and preserved by `StructType::try_from`
                 // for sources that keep arrow `Field::metadata`. However, DataFusion's
                 // physical planner strips Alias metadata when lowering to arrow, so we also
@@ -1047,8 +1046,7 @@ impl DeltaWriterExec {
     }
 }
 
-/// Attach `delta.generationExpression` metadata to top-level fields of a kernel
-/// schema based on a column-name keyed map.
+/// Attach `delta.generationExpression` metadata to top-level fields based on a column-name keyed map.
 ///
 /// DataFusion's physical planner may strip `Field::metadata` set via
 /// `Expr::Alias::with_metadata` when lowering logical expressions to arrow, which

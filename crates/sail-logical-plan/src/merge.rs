@@ -1089,20 +1089,6 @@ fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
     combine_disjunction(&preds).unwrap_or_else(|| lit(false))
 }
 
-/// Apply generation expressions as a post-processing projection on the MERGE write plan.
-///
-/// For each generated column:
-/// - For INSERT rows (NOT MATCHED BY TARGET): enforce the Delta protocol constraint that a
-///   user-provided non-NULL value must match the generation expression. Explicitly provided
-///   values that do not match raise `DELTA_GENERATED_COLUMNS_VALUE_MISMATCH`. NULL values
-///   (column not specified in the INSERT clause) are silently replaced by the gen expression.
-/// - For UPDATE rows (MATCHED): silently recompute the generated column from the expression,
-///   since the previous target value is stale and not a user-provided constraint.
-///
-/// Non-generated columns and internal MERGE columns are passed through unchanged.
-///
-/// `generated_column_exprs` must already have their column references rewritten to actual names
-/// (i.e., after `rewrite_merge_columns` has been applied in `expand_merge`).
 fn apply_generation_projection(
     plan: LogicalPlan,
     generated_column_exprs: &[(String, Expr)],

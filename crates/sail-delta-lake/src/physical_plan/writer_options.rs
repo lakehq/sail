@@ -19,15 +19,6 @@ use serde::{Deserialize, Serialize};
 ///
 /// This is a subset of `DeltaWriteOptions` containing only the fields used
 /// during physical writing. It derives serde for use in the physical plan.
-///
-/// Note on column-level metadata (e.g. generation expressions, identity
-/// columns, default values): the canonical carrier is arrow `Field::metadata`
-/// on the sink schema, but DataFusion's physical planner can strip field
-/// metadata set via `Expr::Alias::with_metadata` when lowering to arrow. The
-/// `generation_expressions` field below mirrors that metadata so the writer
-/// can still commit the correct Delta schema for new tables. It is populated
-/// programmatically from the write input's logical schema at plan-build time,
-/// not via a user-facing configuration option.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeltaWriterExecOptions {
     pub target_file_size: u64,

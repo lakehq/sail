@@ -561,13 +561,6 @@ impl DeltaTableFormat {
     }
 }
 
-/// Extract column-level generation expressions from a DataFusion logical schema.
-///
-/// Column-level expressions are attached via `Expr::Alias::with_metadata` in the
-/// plan resolver (see `sail-plan/src/resolver/command/write.rs`) and survive
-/// through the logical plan's `DFSchema`. The physical planner may strip field
-/// metadata when lowering to arrow, so the logical schema is the canonical place
-/// to read these values at sink construction time.
 fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<String, String> {
     let Some(schema) = logical_schema else {
         return HashMap::new();
