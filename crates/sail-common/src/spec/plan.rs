@@ -1299,6 +1299,7 @@ pub enum ExplainMode {
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
     Unknown,
+    RenameTable { new_name: ObjectName },
     // TODO: add all the alter table operations
 }
 

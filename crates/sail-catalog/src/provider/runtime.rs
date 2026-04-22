@@ -177,4 +177,26 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .await
             .map_err(|e| CatalogError::External(format!("Failed to execute drop_view: {e}")))?
     }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        old_name: &str,
+        new_database: &Namespace,
+        new_name: &str,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let old_name = old_name.to_string();
+        let new_database = new_database.clone();
+        let new_name = new_name.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .rename_table(&database, &old_name, &new_database, &new_name)
+                    .await
+            })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute rename_table: {e}")))?
+    }
 }
