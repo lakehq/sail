@@ -252,7 +252,9 @@ Feature: abs comprehensive tests
         | 0.001  |
 
     @sail-bug
-    # JVM promotes precision during cast rounding → 10^37; Sail keeps 37 nines (mathematically correct)
+    # Divergence lives in CAST, not abs: JVM applies half-up rounding during
+    # CAST to DECIMAL(38,0) and rounds 37 nines up to 10^37; Sail preserves
+    # precision and returns 37 nines (mathematically correct).
     Scenario: abs DECIMAL 38,0 near max
       When query
         """
@@ -263,7 +265,8 @@ Feature: abs comprehensive tests
         | 10000000000000000000000000000000000000  |
 
     @sail-bug
-    # JVM errors on overflow; Sail may silently succeed or diverge
+    # Same root cause: JVM's CAST rounds 38 nines up to 10^38 and errors on
+    # overflow; Sail keeps 38 nines (within DECIMAL(38,0) max) and succeeds.
     Scenario: abs DECIMAL 38,0 exceeds range errors
       When query
         """
