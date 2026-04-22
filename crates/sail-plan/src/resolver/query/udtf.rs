@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use datafusion_common::TableReference;
+use datafusion_common::{ScalarValue, TableReference};
 use datafusion_expr::{Expr, ExprSchemable, Extension, LogicalPlan, Projection};
 use sail_common::spec;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
@@ -109,6 +110,42 @@ impl PlanResolver<'_> {
             .iter()
             .map(|e| e.get_type(plan.schema()))
             .collect::<datafusion_common::Result<Vec<_>>>()?;
+
+        // Resolve the UDTF return type: use the static type if provided, otherwise call the
+        // `analyze` static method on the UDTF to determine the return type dynamically.
+        let return_type = match function.return_type {
+            Some(rt) => rt,
+            None => {
+                // Get the argument types (excluding passthrough columns).
+                let arg_types = &input_types[passthrough_columns..];
+                // Extract literal values from argument expressions.
+                // Each projection is wrapped in an Alias after `rewrite_named_expressions`,
+                // so we need to unwrap the alias to get the inner expression.
+                let literal_evaluator = LiteralEvaluator::new();
+                let arg_literals: Vec<Option<ScalarValue>> = projections[passthrough_columns..]
+                    .iter()
+                    .map(|e| {
+                        let inner = match e {
+                            Expr::Alias(alias) => alias.expr.as_ref(),
+                            other => other,
+                        };
+                        if inner.is_volatile() {
+                            return None;
+                        }
+                        literal_evaluator.evaluate(inner).ok()
+                    })
+                    .collect();
+                PySparkUdtfPayload::analyze(
+                    &function.python_version,
+                    &function.command,
+                    function.eval_type,
+                    arg_types,
+                    &arg_literals,
+                    kwargs,
+                )?
+            }
+        };
+
         let payload = PySparkUdtfPayload::build(
             &function.python_version,
             &function.command,
@@ -116,7 +153,7 @@ impl PlanResolver<'_> {
             arguments_len,
             &input_types,
             kwargs,
-            &function.return_type,
+            &return_type,
             &self.config.pyspark_udf_config,
         )?;
         let udtf = PySparkUDTF::try_new(
@@ -126,7 +163,7 @@ impl PlanResolver<'_> {
             input_names,
             input_types,
             passthrough_columns,
-            function.return_type,
+            return_type,
             function_output_names,
             deterministic,
             self.config.pyspark_udf_config.clone(),

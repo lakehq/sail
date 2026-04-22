@@ -1292,20 +1292,21 @@ fn from_ast_table_columns(
             data_type,
             options,
         } = column;
-        // TODO: support `default` and `generated_always_as` SQL expression strings
+        // TODO: support `default` SQL expression strings
         let ColumnDefinitionOptions {
             not_null,
             default: _,
-            generated_always_as: _,
+            generated_always_as,
             comment,
         } = options.try_into()?;
         let comment = comment.map(from_ast_string).transpose()?;
+        let generated_always_as = generated_always_as.map(|expr| expr.text().trim().to_string());
         let column = spec::TableColumnDefinition {
             name: name.value,
             data_type: from_ast_data_type(data_type)?,
             nullable: !not_null,
             default: None,
-            generated_always_as: None,
+            generated_always_as,
             comment,
         };
         output.push(column);

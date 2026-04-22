@@ -15,6 +15,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::array::BooleanArray;
+use datafusion::arrow::buffer::BooleanBuffer;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::stats::ColumnStatistics;
@@ -36,10 +38,13 @@ use url::Url;
 
 use crate::datasource::scan::{FileScanParams, TableStatsMode};
 use crate::datasource::{build_file_scan_config, df_logical_schema, DeltaScanConfig};
+use crate::deletion_vector::DeletionVectorBitmap;
 use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
 use crate::schema::{arrow_field_physical_name, get_physical_schema};
 use crate::session_extension::{load_table_uncached, DeltaTableCache};
 use crate::spec::StructType;
+use crate::storage::LogStoreRef;
+use crate::table::DeltaSnapshot;
 
 // TODO(dynamic-file-scheduling): Replace fixed file-count chunking with byte-aware chunking
 // and optional work-stealing so executors pull remaining file work dynamically under skew.
@@ -246,13 +251,109 @@ impl ScanByAddsStreamState {
             .ok_or_else(|| DataFusionError::Internal("missing logical_names".into()))?
             .clone();
 
-        // TODO(size-aware-bin-packing): Build file groups from `Add.size` with bin-packing
-        // instead of static grouping to reduce per-partition size skew.
+        // Split adds into files with deletion vectors and files without.
+        // Files without DVs are scanned in bulk (fast path). Files with DVs are scanned
+        // individually so that we can track per-file row indices and filter deleted rows.
         let adds = std::mem::take(&mut self.pending_adds);
+        let (dv_adds, plain_adds): (Vec<_>, Vec<_>) =
+            adds.into_iter().partition(|a| a.deletion_vector.is_some());
+
+        let mut all_streams: Vec<SendableRecordBatchStream> = Vec::new();
+
+        // ── Fast path: bulk scan for files without deletion vectors ──────────
+        if !plain_adds.is_empty() {
+            let streams = self.build_bulk_scan(
+                snapshot,
+                log_store,
+                session_state,
+                &plain_adds,
+                file_schema.clone(),
+                &logical_names,
+            )?;
+            all_streams.extend(streams);
+        }
+
+        // ── DV path: per-file scan with row-index filtering ─────────────────
+        if !dv_adds.is_empty() {
+            let table_url = self.table_url.clone();
+            let object_store = self
+                .context
+                .runtime_env()
+                .object_store_registry
+                .get_store(&table_url)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            // Fetch all deletion vector bitmaps concurrently.
+            let dv_futures = dv_adds.iter().map(|add| {
+                let store = Arc::clone(&object_store);
+                let url = table_url.clone();
+                let dv_descriptor = add.deletion_vector.clone();
+                async move {
+                    let descriptor = dv_descriptor.ok_or_else(|| {
+                        DataFusionError::Internal("DV partition guarantees deletion vector".into())
+                    })?;
+                    let bitmap = crate::deletion_vector::read_deletion_vector(
+                        store.as_ref(),
+                        &url,
+                        &descriptor,
+                    )
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    Ok::<_, DataFusionError>(bitmap)
+                }
+            });
+            let bitmaps = futures::future::try_join_all(dv_futures).await?;
+
+            for (add, bitmap) in dv_adds.iter().zip(bitmaps) {
+                let file_streams = self.build_bulk_scan(
+                    snapshot,
+                    log_store,
+                    session_state,
+                    std::slice::from_ref(add),
+                    file_schema.clone(),
+                    &logical_names,
+                )?;
+
+                let bitmap = Arc::new(bitmap);
+                for inner in file_streams {
+                    all_streams.push(dv_filter_stream(inner, Arc::clone(&bitmap)));
+                }
+            }
+        }
+
+        let output_schema = Arc::clone(&self.output_schema);
+        let combined = stream::iter(all_streams)
+            .map(Ok::<_, DataFusionError>)
+            .try_flatten()
+            .and_then(move |batch| {
+                let output_schema = Arc::clone(&output_schema);
+                async move {
+                    let casted = cast_record_batch_relaxed_tz(&batch, &output_schema)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    Ok(casted)
+                }
+            });
+        self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.output_schema),
+            combined,
+        )));
+        Ok(())
+    }
+
+    /// Build a bulk Parquet scan for a set of Add actions (no DV filtering).
+    fn build_bulk_scan(
+        &self,
+        snapshot: &DeltaSnapshot,
+        log_store: &LogStoreRef,
+        session_state: &dyn datafusion::catalog::Session,
+        adds: &[crate::spec::Add],
+        file_schema: SchemaRef,
+        logical_names: &[String],
+    ) -> Result<Vec<SendableRecordBatchStream>> {
         let file_scan_config = build_file_scan_config(
             snapshot,
             log_store,
-            &adds,
+            adds,
             &self.scan_config,
             FileScanParams {
                 pruning_mask: None,
@@ -271,29 +372,14 @@ impl ScanByAddsStreamState {
         let scan_exec =
             datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
         let scan_exec =
-            rename_projected_physical_plan(scan_exec, &logical_names, self.projection.as_ref())
+            rename_projected_physical_plan(scan_exec, logical_names, self.projection.as_ref())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let mut scans = Vec::with_capacity(partitions);
+
+        let mut streams = Vec::with_capacity(partitions);
         for partition in 0..partitions {
-            scans.push(scan_exec.execute(partition, Arc::clone(&self.context))?);
+            streams.push(scan_exec.execute(partition, Arc::clone(&self.context))?);
         }
-        let output_schema = Arc::clone(&self.output_schema);
-        let combined = stream::iter(scans)
-            .map(Ok::<_, DataFusionError>)
-            .try_flatten()
-            .and_then(move |batch| {
-                let output_schema = Arc::clone(&output_schema);
-                async move {
-                    let casted = cast_record_batch_relaxed_tz(&batch, &output_schema)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    Ok(casted)
-                }
-            });
-        self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&self.output_schema),
-            combined,
-        )));
-        Ok(())
+        Ok(streams)
     }
 
     async fn decode_adds_from_meta_batch(
@@ -307,6 +393,59 @@ impl ScanByAddsStreamState {
             .unwrap_or_else(|| meta_adds::infer_partition_columns_from_schema(&batch.schema()));
         meta_adds::decode_adds_from_meta_batch(batch, Some(&partition_columns))
     }
+}
+
+/// Wrap a record-batch stream so that rows whose file-level indices appear in the
+/// deletion vector bitmap are excluded.
+///
+/// The wrapper maintains a running `row_offset` across successive batches received
+/// from the inner stream. For each batch it builds a boolean selection mask by
+/// checking every global row index against the bitmap, then applies
+/// `filter_record_batch` to drop deleted rows.  Batches where all rows are deleted
+/// are silently skipped instead of emitting empty batches.
+fn dv_filter_stream(
+    inner: SendableRecordBatchStream,
+    bitmap: Arc<DeletionVectorBitmap>,
+) -> SendableRecordBatchStream {
+    let schema = inner.schema();
+    let filtered = stream::try_unfold(
+        (inner, bitmap, 0u64),
+        |(mut inner, bitmap, mut row_offset)| async move {
+            loop {
+                match inner.try_next().await? {
+                    None => return Ok(None),
+                    Some(batch) => {
+                        let num_rows = batch.num_rows();
+                        if num_rows == 0 {
+                            continue;
+                        }
+
+                        // Build selection mask: true = keep, false = deleted.
+                        let keep: BooleanBuffer = (0..num_rows)
+                            .map(|i| !bitmap.contains(row_offset + i as u64))
+                            .collect();
+                        row_offset += num_rows as u64;
+
+                        let keep_count = keep.count_set_bits();
+                        if keep_count == 0 {
+                            // Entire batch is deleted.
+                            continue;
+                        }
+                        if keep_count == num_rows {
+                            // Nothing deleted in this batch.
+                            return Ok(Some((batch, (inner, bitmap, row_offset))));
+                        }
+
+                        let predicate = BooleanArray::new(keep, None);
+                        let filtered_batch =
+                            datafusion::arrow::compute::filter_record_batch(&batch, &predicate)?;
+                        return Ok(Some((filtered_batch, (inner, bitmap, row_offset))));
+                    }
+                }
+            }
+        },
+    );
+    Box::pin(RecordBatchStreamAdapter::new(schema, filtered))
 }
 
 /// Physical execution node that scans Delta data files based on Add actions from upstream.

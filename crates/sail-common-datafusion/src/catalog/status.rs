@@ -7,7 +7,14 @@ use datafusion_expr::LogicalPlan;
 use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
+use crate::column_features::ColumnFeaturesBuilder;
 use crate::session::plan::PlanFormatter;
+
+/// Metadata key used by Spark Connect's column protocol for generation
+/// expressions. This is an input/output boundary value translated to the
+/// engine's canonical [`crate::column_features::ColumnFeatureKey`] at the
+/// protocol layer.
+pub const SPARK_GENERATION_EXPRESSION_METADATA_KEY: &str = "GENERATION_EXPRESSION";
 
 #[derive(Debug, Clone)]
 pub struct DatabaseStatus {
@@ -217,7 +224,20 @@ pub struct TableColumnStatus {
 
 impl TableColumnStatus {
     pub fn field(&self) -> Field {
-        Field::new(self.name.clone(), self.data_type.clone(), self.nullable)
+        let mut metadata = std::collections::HashMap::new();
+        if let Some(expr) = &self.generated_always_as {
+            let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(comment) = &self.comment {
+            metadata.insert("comment".to_string(), comment.clone());
+        }
+        let field = Field::new(self.name.clone(), self.data_type.clone(), self.nullable);
+        if metadata.is_empty() {
+            field
+        } else {
+            field.with_metadata(metadata)
+        }
     }
 }
 

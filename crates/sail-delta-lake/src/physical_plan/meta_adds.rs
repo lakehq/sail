@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, Int64Array, RecordBatch, StringArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
+};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
@@ -9,14 +11,15 @@ use percent_encoding::percent_decode_str;
 
 use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
 use crate::spec::fields::FIELD_NAME_STATS_PARSED;
-use crate::spec::Add;
+use crate::spec::{Add, DeletionVectorDescriptor, StorageType};
 
 const COL_SIZE_BYTES: &str = "size_bytes";
 const COL_MODIFICATION_TIME: &str = "modification_time";
 const COL_STATS_JSON: &str = "stats_json";
 const COL_PARTITION_SCAN: &str = "partition_scan";
+const COL_DELETION_VECTOR: &str = "deletionVector";
 
-const RESERVED_META_COLUMNS: [&str; 8] = [
+const RESERVED_META_COLUMNS: [&str; 9] = [
     PATH_COLUMN,
     COL_SIZE_BYTES,
     COL_MODIFICATION_TIME,
@@ -25,6 +28,7 @@ const RESERVED_META_COLUMNS: [&str; 8] = [
     COL_PARTITION_SCAN,
     COMMIT_VERSION_COLUMN,
     COMMIT_TIMESTAMP_COLUMN,
+    COL_DELETION_VECTOR,
 ];
 
 /// Infer partition column names from a metadata batch schema by excluding known reserved columns.
@@ -94,6 +98,15 @@ pub fn decode_adds_from_meta_batch(
         })
         .collect();
 
+    // Extract deletion vector struct column if present.
+    let dv_arr: Option<&StructArray> = batch.column_by_name(COL_DELETION_VECTOR).and_then(|c| {
+        if matches!(c.data_type(), DataType::Struct(_)) {
+            Some(c.as_struct())
+        } else {
+            None
+        }
+    });
+
     let mut adds = Vec::with_capacity(batch.num_rows());
     for row in 0..batch.num_rows() {
         if path_arr.is_null(row) {
@@ -158,7 +171,7 @@ pub fn decode_adds_from_meta_batch(
             data_change: true,
             stats,
             tags: None,
-            deletion_vector: None,
+            deletion_vector: extract_dv_from_struct(dv_arr, row),
             base_row_id: None,
             default_row_commit_version: None,
             clustering_provider: None,
@@ -168,6 +181,67 @@ pub fn decode_adds_from_meta_batch(
     }
 
     Ok(adds)
+}
+
+/// Extract a `DeletionVectorDescriptor` from a struct array at the given row.
+fn extract_dv_from_struct(
+    dv_arr: Option<&StructArray>,
+    row: usize,
+) -> Option<DeletionVectorDescriptor> {
+    let dv_arr = dv_arr?;
+    if dv_arr.is_null(row) {
+        return None;
+    }
+
+    let storage_type_str = dv_arr
+        .column_by_name("storageType")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+        .filter(|a| !a.is_null(row))
+        .map(|a| a.value(row))?;
+
+    let storage_type = match storage_type_str {
+        "u" => StorageType::UuidRelativePath,
+        "i" => StorageType::Inline,
+        "p" => StorageType::AbsolutePath,
+        _ => return None,
+    };
+
+    let path_or_inline_dv = dv_arr
+        .column_by_name("pathOrInlineDv")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+        .filter(|a| !a.is_null(row))
+        .map(|a| a.value(row).to_string())?;
+
+    let offset = dv_arr
+        .column_by_name("offset")
+        .and_then(|c| c.as_any().downcast_ref::<Int32Array>())
+        .and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row))
+            }
+        });
+
+    let size_in_bytes = dv_arr
+        .column_by_name("sizeInBytes")
+        .and_then(|c| c.as_any().downcast_ref::<Int32Array>())
+        .filter(|a| !a.is_null(row))
+        .map(|a| a.value(row))?;
+
+    let cardinality = dv_arr
+        .column_by_name("cardinality")
+        .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+        .filter(|a| !a.is_null(row))
+        .map(|a| a.value(row))?;
+
+    Some(DeletionVectorDescriptor {
+        storage_type,
+        path_or_inline_dv,
+        offset,
+        size_in_bytes,
+        cardinality,
+    })
 }
 
 #[cfg(test)]

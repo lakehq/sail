@@ -56,9 +56,10 @@ message ExtendedPhysicalPlanNode {
     BarrierExecNode barrier = 41;
     RelaxedTzCastExecNode relaxed_tz_cast = 42;
     SparkPartitionIdExecNode spark_partition_id = 43;
-    IcebergManifestScanExecNode iceberg_manifest_scan = 44;
-    IcebergDiscoveryExecNode iceberg_discovery = 45;
-    IcebergScanByDataFilesExecNode iceberg_scan_by_data_files = 46;
+    DeletionVectorWriterExecNode deletion_vector_writer = 44;
+    IcebergManifestScanExecNode iceberg_manifest_scan = 45;
+    IcebergDiscoveryExecNode iceberg_discovery = 46;
+    IcebergScanByDataFilesExecNode iceberg_scan_by_data_files = 47;
   }
 }
 
@@ -90,6 +91,7 @@ message ExtendedScalarUdf {
     XpathTypedUdf xpath_typed = 13;
     SparkVariantGetUdf spark_variant_get = 14;
     SparkNextDayUdf spark_next_day = 15;
+    SparkTimeUdf spark_time = 16;
   }
 }
 
@@ -182,6 +184,10 @@ message SparkNextDayUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message SparkTimeUdf {
+  bool is_try = 1;
 }
 
 message StandardUdaf {}
@@ -692,6 +698,15 @@ message DeltaLogReplayExecNode {
   // Preferred encoding for hash replay mode.
   optional bytes checkpoint_input = 7;
   optional bytes commits_input = 8;
+}
+
+message DeletionVectorWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  bytes condition = 3;
+  bytes table_schema = 4;
+  int64 version = 5;
+  optional string operation_json = 6;
 }
 
 message PythonDataSourceInputPartition {

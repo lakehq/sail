@@ -60,10 +60,22 @@ impl PlanResolver<'_> {
                     python_version: f.python_version().to_string(),
                     eval_type: f.eval_type(),
                     command: f.command().to_vec(),
-                    return_type: f.output_type().clone(),
+                    return_type: f.output_type().cloned(),
                 };
+                // Merge named_arguments (SQL kwargs like `col => expr`) into the argument list
+                // as NamedArgument expressions so extract_kwargs can process them uniformly.
+                let all_arguments: Vec<spec::Expr> = arguments
+                    .into_iter()
+                    .chain(named_arguments.into_iter().map(|(key, value)| {
+                        spec::Expr::NamedArgument {
+                            key: key.into(),
+                            value: Box::new(value),
+                        }
+                    }))
+                    .collect();
+                let (positional_args, kwarg_names) = Self::extract_kwargs(all_arguments);
                 let arguments = self
-                    .resolve_named_expressions(arguments, input.schema(), state)
+                    .resolve_named_expressions(positional_args, input.schema(), state)
                     .await?;
                 let output_names =
                     column_aliases.map(|aliases| aliases.into_iter().map(|x| x.into()).collect());
@@ -75,7 +87,7 @@ impl PlanResolver<'_> {
                     &function_name,
                     input,
                     arguments,
-                    &[], // lateral view kwargs come via named_arguments, not NamedArgument exprs
+                    &kwarg_names,
                     output_names,
                     output_qualifier,
                     f.deterministic(),

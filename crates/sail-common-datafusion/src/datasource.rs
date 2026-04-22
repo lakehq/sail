@@ -163,6 +163,11 @@ pub struct SinkInfo {
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
     pub options: Vec<OptionLayer>,
+    /// The logical schema of the writer's input, if available. This schema can
+    /// preserve arrow field metadata that the physical planner may strip (e.g.
+    /// metadata attached via `Expr::Alias::with_metadata`). Table formats can use
+    /// this to recover column-level metadata such as `delta.generationExpression`.
+    pub logical_schema: Option<datafusion_common::DFSchemaRef>,
 }
 
 impl SinkInfo {
