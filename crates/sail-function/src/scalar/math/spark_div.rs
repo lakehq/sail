@@ -67,14 +67,6 @@ impl ScalarUDFImpl for SparkIntervalDiv {
 }
 
 fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return Err(invalid_arg_count_exec_err(
-            "spark_interval_div",
-            (2, 2),
-            args.len(),
-        ));
-    }
-
     let dividend = &args[0];
     let divisor = &args[1];
 

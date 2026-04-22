@@ -46,12 +46,8 @@ impl ScalarUDFImpl for SparkNextDay {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let [date, day_of_week] = args.as_slice() else {
-            return exec_err!(
-                "Spark `next_day` function requires 2 arguments, got {}",
-                args.len()
-            );
-        };
+        let date = &args[0];
+        let day_of_week = &args[1];
 
         match (date, day_of_week) {
             (ColumnarValue::Scalar(date), ColumnarValue::Scalar(day_of_week)) => {

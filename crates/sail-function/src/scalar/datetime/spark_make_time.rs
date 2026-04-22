@@ -62,13 +62,6 @@ impl ScalarUDFImpl for SparkMakeTime {
             args, number_rows, ..
         } = args;
 
-        if args.len() != 3 {
-            return exec_err!(
-                "Spark `make_time` function requires 3 arguments, got {}",
-                args.len()
-            );
-        }
-
         // Handle NULL propagation for scalar inputs
         let contains_scalar_null = args.iter().any(|arg| {
             matches!(

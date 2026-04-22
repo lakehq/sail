@@ -62,12 +62,8 @@ impl ScalarUDFImpl for SparkTimeTrunc {
             args, number_rows, ..
         } = args;
 
-        let [unit_arg, time_arg] = args.as_slice() else {
-            return exec_err!(
-                "Spark `time_trunc` function requires 2 arguments, got {}",
-                args.len()
-            );
-        };
+        let unit_arg = &args[0];
+        let time_arg = &args[1];
 
         match (unit_arg, time_arg) {
             // (Scalar unit, Scalar time) — return a scalar

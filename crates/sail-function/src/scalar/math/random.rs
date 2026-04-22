@@ -54,12 +54,7 @@ impl ScalarUDFImpl for Random {
             return invoke_no_seed(number_rows);
         }
 
-        let [seed] = args.as_slice() else {
-            return exec_err!(
-                "random should be called with at most 1 argument, got {}",
-                args.len()
-            );
-        };
+        let seed = &args[0];
 
         match seed {
             ColumnarValue::Scalar(scalar) => {

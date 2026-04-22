@@ -55,9 +55,9 @@ impl ScalarUDFImpl for SparkConv {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
-        let [num, from_base, to_base] = args.as_slice() else {
-            return Err(invalid_arg_count_exec_err("spark_conv", (3, 3), args.len()));
-        };
+        let num = &args[0];
+        let from_base = &args[1];
+        let to_base = &args[2];
 
         if matches!(num, ColumnarValue::Array(_)) {
             return invoke_vectorized(num, from_base, to_base);

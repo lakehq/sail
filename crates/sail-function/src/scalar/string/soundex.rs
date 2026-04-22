@@ -50,9 +50,6 @@ impl ScalarUDFImpl for Soundex {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        if args.len() != 1 {
-            return exec_err!("`soundex` function requires 1 argument, got {}", args.len());
-        }
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(soundex::<i32>, vec![])(&args),
             DataType::Utf8View => make_scalar_function(soundex_view, vec![])(&args),

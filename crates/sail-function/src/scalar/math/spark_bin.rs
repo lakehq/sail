@@ -45,9 +45,6 @@ impl ScalarUDFImpl for SparkBin {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 {
-            return Err(invalid_arg_count_exec_err("bin", (1, 1), args.args.len()));
-        }
         match &args.args[0] {
             ColumnarValue::Scalar(ScalarValue::Int64(value)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(value.map(bin))))

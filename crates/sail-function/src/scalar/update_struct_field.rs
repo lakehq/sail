@@ -175,12 +175,8 @@ impl ScalarUDFImpl for UpdateStructField {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let args = ColumnarValue::values_to_arrays(&args)?;
-        let [struct_array, new_field_array] = args.as_slice() else {
-            return exec_err!(
-                "update_struct_field function requires 2 arguments, got {}",
-                args.len()
-            );
-        };
+        let struct_array = &args[0];
+        let new_field_array = &args[1];
         if struct_array.data_type().is_null() {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }

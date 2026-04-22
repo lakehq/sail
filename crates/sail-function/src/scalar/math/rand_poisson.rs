@@ -51,18 +51,6 @@ impl ScalarUDFImpl for RandPoisson {
         let ScalarFunctionArgs {
             args, number_rows, ..
         } = args;
-        if args.is_empty() {
-            return exec_err!(
-                "`random_poisson` must be called with either 1 or 2 arguments, got {}",
-                args.len()
-            );
-        }
-        if args.len() > 2 {
-            return exec_err!(
-                "`random_poisson` must be called with either 1 or 2 arguments, got {}",
-                args.len()
-            );
-        }
         let lambda = &args[0];
         let lambda = match lambda {
             ColumnarValue::Scalar(scalar) => match scalar {

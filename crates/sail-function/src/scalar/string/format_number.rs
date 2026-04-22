@@ -49,9 +49,6 @@ impl ScalarUDFImpl for FormatNumber {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        if args.len() != 2 {
-            return exec_err!("`format_number` requires 2 arguments, got {}", args.len());
-        }
 
         match &args[1] {
             ColumnarValue::Scalar(s) => match s {

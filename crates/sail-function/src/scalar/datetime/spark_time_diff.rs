@@ -65,12 +65,9 @@ impl ScalarUDFImpl for SparkTimeDiff {
             args, number_rows, ..
         } = args;
 
-        let [unit_arg, start_arg, end_arg] = args.as_slice() else {
-            return exec_err!(
-                "Spark `time_diff` function requires 3 arguments, got {}",
-                args.len()
-            );
-        };
+        let unit_arg = &args[0];
+        let start_arg = &args[1];
+        let end_arg = &args[2];
 
         // All-scalar fast path — return a scalar value directly.
         if let (
