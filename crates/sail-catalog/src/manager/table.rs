@@ -1,6 +1,6 @@
 use sail_common_datafusion::catalog::TableStatus;
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{CreateTableOptions, DropTableOptions};
 use crate::utils::match_pattern;
@@ -38,7 +38,7 @@ impl CatalogManager {
             .collect())
     }
 
-    pub async fn list_tables_and_temporary_views<T: AsRef<str>>(
+    pub async fn list_tables_and_views<T: AsRef<str>>(
         &self,
         database: &[T],
         pattern: Option<&str>,
@@ -48,7 +48,22 @@ impl CatalogManager {
         let mut output = if self.state()?.is_global_temporary_view_database(database) {
             self.list_global_temporary_views(pattern).await?
         } else {
-            self.list_tables(database, pattern).await?
+            // Persistent views are stored separately from tables, but Spark's
+            // SHOW TABLE EXTENDED includes both tables and views.
+            let (tables_res, views_res) = tokio::join!(
+                self.list_tables(database, pattern),
+                self.list_views(database, pattern),
+            );
+            let mut tables = tables_res?;
+            // Catalogs like OneLake and open-source Unity return NotSupported from
+            // list_views; treat that as "no views" so SHOW TABLES still works there.
+            let views = match views_res {
+                Ok(v) => v,
+                Err(CatalogError::NotSupported(_)) => vec![],
+                Err(e) => return Err(e),
+            };
+            tables.extend(views);
+            tables
         };
         // Spark (local) temporary views are session-scoped and are not associated with a catalog.
         // We should include the temporary views in the output.
@@ -86,6 +101,13 @@ impl CatalogManager {
             Err(CatalogError::NotFound(_, _)) => {}
             Err(e) => return Err(e),
         }
-        self.get_view(reference).await
+        match self.get_view(reference).await {
+            Ok(x) => Ok(x),
+            Err(CatalogError::NotFound(_, name)) => Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                format!("[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {name}"),
+            )),
+            Err(e) => Err(e),
+        }
     }
 }
