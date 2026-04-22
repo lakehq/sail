@@ -163,9 +163,12 @@ impl CatalogManager {
         functions.extend(registry.list_functions(pattern));
 
         // 3. Session-registered temporary functions.
-        let state = self.state()?;
-        for name in state.functions.keys() {
-            if match_pattern(name, pattern) {
+        let temp_names: Vec<Arc<str>> = {
+            let state = self.state()?;
+            state.functions.keys().cloned().collect()
+        };
+        for name in temp_names {
+            if match_pattern(&name, pattern) {
                 functions.push(FunctionStatus {
                     catalog: None,
                     namespace: None,
@@ -192,8 +195,8 @@ mod tests {
     use super::*;
     use crate::manager::CatalogManagerOptions;
     use crate::provider::{
-        CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-        DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+        AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+        CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
     };
 
     #[tokio::test]
@@ -323,6 +326,15 @@ mod tests {
             _database: &Namespace,
             _table: &str,
             _options: DropTableOptions,
+        ) -> CatalogResult<()> {
+            Err(CatalogError::NotSupported("test".to_string()))
+        }
+
+        async fn alter_table(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            _options: AlterTableOptions,
         ) -> CatalogResult<()> {
             Err(CatalogError::NotSupported("test".to_string()))
         }

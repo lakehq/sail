@@ -77,7 +77,7 @@ impl FunctionRegistry for SparkFunctionRegistry {
     }
 
     fn list_functions(&self, pattern: Option<&str>) -> Vec<FunctionStatus> {
-        sail_catalog::utils::filter_pattern(BUILT_IN_FUNCTION_NAMES.to_vec(), pattern)
+        sail_catalog::utils::filter_pattern(BUILT_IN_FUNCTION_NAMES.iter().copied(), pattern)
             .into_iter()
             .map(Self::make_status)
             .collect()

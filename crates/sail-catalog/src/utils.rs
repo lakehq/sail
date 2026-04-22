@@ -15,7 +15,11 @@ lazy_static! {
 // Translation of Spark's `filterPattern` function.
 // Only '*' and '|' are allowed as wildcards, others will follow regular expression convention.
 // Will do a case-insensitive match, and white spaces on both ends will be ignored.
-pub fn filter_pattern(names: Vec<&str>, pattern: Option<&str>) -> Vec<String> {
+pub fn filter_pattern<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    pattern: Option<&str>,
+) -> Vec<String> {
+    let names: Vec<&str> = names.into_iter().collect();
     let pattern = match pattern {
         Some(pattern) => pattern.to_string(),
         None => return names.iter().map(|&s| s.to_string()).collect(),
@@ -45,7 +49,7 @@ pub fn filter_pattern(names: Vec<&str>, pattern: Option<&str>) -> Vec<String> {
 }
 
 pub fn match_pattern(name: &str, pattern: Option<&str>) -> bool {
-    !filter_pattern(vec![name], pattern).is_empty()
+    !filter_pattern(std::iter::once(name), pattern).is_empty()
 }
 
 pub fn quote_name_if_needed(name: &str) -> String {
