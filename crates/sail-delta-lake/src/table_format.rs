@@ -395,6 +395,7 @@ impl TableFormat for DeltaTableFormat {
             false,
             false,
             TableProperties::from(new_config.iter()).enable_in_commit_timestamps(),
+            false,
             &new_config,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
