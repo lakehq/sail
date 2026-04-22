@@ -12,6 +12,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
 
@@ -209,6 +210,8 @@ impl PlanResolver<'_> {
         };
         let (plan, projections) =
             self.rewrite_projection::<MonotonicIdRewriter>(plan, projections, state)?;
+        let (plan, projections) =
+            self.rewrite_projection::<SparkPartitionIdRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<ExplodeRewriter>(plan, projections, state)?;
         let (plan, projections) =

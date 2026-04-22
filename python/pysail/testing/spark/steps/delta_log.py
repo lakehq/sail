@@ -295,6 +295,11 @@ def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, d
         obj = _normalize_delta_commit_info_for_snapshot(obj)
         if "operationParameters" in obj:
             obj["operationParameters"] = _recursive_parse_json_strings(obj["operationParameters"])
+    elif which == "latest effective protocol and metadata":
+        obj = _latest_effective_protocol_and_metadata_from_variables(variables)
+        assert "protocol" in obj, "protocol action not found in delta log"
+        assert "metaData" in obj, "metaData action not found in delta log"
+        obj["metaData"] = _normalize_delta_metadata_for_snapshot(obj["metaData"])
     else:
         obj = _first_commit_actions_from_variables(variables)
         assert "protocol" in obj, "protocol action not found in first commit"
@@ -334,7 +339,7 @@ def _parse_i64_list(raw: str) -> list[int]:
 
 @then(
     parsers.re(
-        r"delta log (?P<which>latest commit info|first commit protocol and metadata) "
+        r"delta log (?P<which>latest commit info|first commit protocol and metadata|latest effective protocol and metadata) "
         r"(?P<mode>matches snapshot(?: for paths)?|contains)"
     )
 )
@@ -523,3 +528,23 @@ def delta_log_commit_timestamps_are_rewritten(
         crc_obj["inCommitTimestampOpt"] = timestamp_ms
         with crc_path.open("w", encoding="utf-8") as f:
             json.dump(crc_obj, f, separators=(",", ":"))
+
+
+def _latest_effective_protocol_and_metadata_from_variables(variables: dict) -> dict:
+    """Replay all delta log commits to determine the latest effective protocol and metadata."""
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log inspection"
+    log_dir = Path(location.path) / "_delta_log"
+    log_files = sorted(f for f in log_dir.glob("*.json") if not f.stem.endswith(".compacted"))
+    assert log_files, f"no delta logs found in {log_dir}"
+
+    result: dict = {}
+    for log_file in log_files:
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line)
+                if "protocol" in obj:
+                    result["protocol"] = obj["protocol"]
+                if "metaData" in obj:
+                    result["metaData"] = obj["metaData"]
+    return result

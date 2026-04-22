@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import time
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -124,7 +126,15 @@ def query(template, docstring, variables):
 def query_schema(docstring, query, spark):
     """Analyze the SQL query and compare schema with expected schema tree string."""
     df = spark.sql(query)
-    assert docstring.strip() == df.schema.treeString().strip()
+    if hasattr(df.schema, "treeString"):
+        actual = df.schema.treeString()
+    else:
+        # PySpark < 4.x has no StructType.treeString(); capture printSchema() output instead.
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            df.printSchema()
+        actual = buf.getvalue()
+    assert docstring.strip() == actual.strip()
 
 
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))
@@ -145,3 +155,47 @@ def query_error(error, query, spark):
     """Executes the SQL query and expects it to fail with an error (regex match)."""
     with pytest.raises(Exception, match=error):
         _ = spark.sql(query).collect()
+
+
+@then(parsers.parse('query result has row where "{match_column}" is "{match_value}"'))
+def query_result_has_row(match_column: str, match_value: str, query: str, spark) -> None:
+    rows = spark.sql(query).collect()
+    assert any(str(row[match_column]) == match_value for row in rows)
+
+
+@then(
+    parsers.parse(
+        'query result row where "{match_column}" is "{match_value}" has "{value_column}" containing "{substring}"'
+    )
+)
+def query_result_row_value_contains(
+    match_column: str,
+    match_value: str,
+    value_column: str,
+    substring: str,
+    query: str,
+    spark,
+) -> None:
+    rows = spark.sql(query).collect()
+    matches = [row for row in rows if str(row[match_column]) == match_value]
+    assert matches
+    assert substring in str(matches[0][value_column])
+
+
+@then(
+    parsers.parse(
+        'query result row where "{match_column}" is "{match_value}" has "{value_column}" equal to "{expected}"'
+    )
+)
+def query_result_row_value_equals(
+    match_column: str,
+    match_value: str,
+    value_column: str,
+    expected: str,
+    query: str,
+    spark,
+) -> None:
+    rows = spark.sql(query).collect()
+    matches = [row for row in rows if str(row[match_column]) == match_value]
+    assert matches
+    assert str(matches[0][value_column]) == expected

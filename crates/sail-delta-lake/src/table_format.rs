@@ -25,7 +25,10 @@ use crate::kernel::DeltaSnapshotConfig;
 use crate::physical_plan::planner::{
     plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext,
 };
-use crate::spec::{canonicalize_and_validate_table_properties, route_table_property_key};
+use crate::spec::{
+    canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
+    DeltaOperation,
+};
 use crate::table::open_table_with_object_store_and_table_config;
 use crate::{create_delta_provider, create_delta_source, DeltaTableError};
 
@@ -303,6 +306,217 @@ impl TableFormat for DeltaTableFormat {
             }
         }
     }
+
+    async fn alter_table_properties(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        changes: Vec<(String, Option<String>)>,
+        if_exists: bool,
+    ) -> Result<()> {
+        use crate::kernel::transaction::CommitBuilder;
+        use crate::schema::manager::protocol_for_create;
+        use crate::spec::TableProperties;
+
+        // Parse the location into a URL. Handles both absolute filesystem paths
+        // (e.g. `/tmp/table`) and fully-qualified URLs (`file://`, `s3://`, ...).
+        let url = parse_location_to_url(path)?;
+
+        // The `DynamicObjectStoreRegistry` lazily registers schemes such as S3/GCS/ABFS,
+        // so fetching the store from the registry doubles as the registration entry point.
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Only protocol and metadata are needed for ALTER TABLE; skip loading file-level actions.
+        let table = open_table_with_object_store_and_table_config(
+            url,
+            object_store,
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .clone();
+
+        // Split `SET` and `UNSET` changes.
+        let (set_changes, unset_changes): (Vec<_>, Vec<_>) =
+            changes.into_iter().partition(|(_, v)| v.is_some());
+        let set_pairs: Vec<(&str, &str)> = set_changes
+            .iter()
+            .filter_map(|(k, v)| v.as_deref().map(|val| (k.as_str(), val)))
+            .collect();
+        let validated_sets = canonicalize_and_validate_table_properties(set_pairs.iter().copied())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let canonical_unsets: Vec<String> = unset_changes
+            .iter()
+            .map(|(k, _)| {
+                route_table_property_key(k)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| k.clone())
+            })
+            .collect();
+
+        let existing_config = snapshot.metadata().configuration().clone();
+
+        // Enforce existence of UNSET keys unless `IF EXISTS` was specified.
+        if !if_exists {
+            for key in &canonical_unsets {
+                if !existing_config.contains_key(key) {
+                    return plan_err!(
+                        "cannot remove property '{key}' because it is not set on the table"
+                    );
+                }
+            }
+        }
+
+        // Build new metadata by applying changes.
+        let mut new_metadata = snapshot.metadata().clone();
+        for (key, value) in &validated_sets {
+            new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+        }
+        for key in &canonical_unsets {
+            new_metadata = new_metadata.remove_config_key(key);
+        }
+
+        // Derive the desired protocol from the new configuration and merge it with the
+        // existing protocol. We only ever upgrade: features already present on the table
+        // are preserved, and new feature requirements are added.
+        let new_config = new_metadata.configuration().clone();
+        let desired_protocol = protocol_for_create(
+            false,
+            false,
+            TableProperties::from(new_config.iter()).enable_in_commit_timestamps(),
+            &new_config,
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let existing_protocol = snapshot.protocol();
+        let (merged_protocol, protocol_upgraded) =
+            merge_protocol_for_upgrade(existing_protocol, &desired_protocol);
+
+        let mut actions: Vec<CommitAction> = Vec::new();
+        if protocol_upgraded {
+            actions.push(CommitAction::Protocol(merged_protocol));
+        }
+        actions.push(CommitAction::Metadata(new_metadata));
+
+        let operation = match (validated_sets.is_empty(), canonical_unsets.is_empty()) {
+            (false, true) => DeltaOperation::SetTableProperties {
+                properties: validated_sets,
+            },
+            (true, false) => DeltaOperation::UnsetTableProperties {
+                properties: canonical_unsets,
+            },
+            _ => DeltaOperation::SetTableProperties {
+                properties: validated_sets,
+            },
+        };
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(Some(snapshot), table.log_store(), operation)
+            .await
+            .map(|_| ())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        Ok(())
+    }
+}
+
+/// Merge an existing protocol with a desired one. The result preserves every feature and
+/// version already present on the table, and adds anything additionally required by
+/// `desired`. Returns `(merged, upgraded)` where `upgraded` indicates whether the merged
+/// protocol differs from `existing` and therefore needs to be written as a new action.
+fn merge_protocol_for_upgrade(
+    existing: &crate::spec::Protocol,
+    desired: &crate::spec::Protocol,
+) -> (crate::spec::Protocol, bool) {
+    use crate::spec::{Protocol, TableFeature};
+
+    let new_min_reader = existing
+        .min_reader_version()
+        .max(desired.min_reader_version());
+    let new_min_writer = existing
+        .min_writer_version()
+        .max(desired.min_writer_version());
+
+    fn merge_features(
+        existing: Option<&[TableFeature]>,
+        desired: Option<&[TableFeature]>,
+    ) -> Option<Vec<TableFeature>> {
+        match (existing, desired) {
+            (None, None) => None,
+            (Some(a), None) => Some(a.to_vec()),
+            (None, Some(b)) => {
+                if b.is_empty() {
+                    Some(Vec::new())
+                } else {
+                    Some(b.to_vec())
+                }
+            }
+            (Some(a), Some(b)) => {
+                let mut out = a.to_vec();
+                for f in b {
+                    if !out.contains(f) {
+                        out.push(f.clone());
+                    }
+                }
+                Some(out)
+            }
+        }
+    }
+
+    // Only attach explicit reader/writer feature lists if the corresponding version
+    // requires them (>=3 for readers, >=7 for writers) -- otherwise older clients may
+    // mis-interpret the table as being on the table-features protocol.
+    let reader_features = if new_min_reader >= 3 {
+        merge_features(existing.reader_features(), desired.reader_features())
+    } else {
+        existing.reader_features().map(|s| s.to_vec())
+    };
+    let writer_features = if new_min_writer >= 7 {
+        merge_features(existing.writer_features(), desired.writer_features())
+    } else {
+        existing.writer_features().map(|s| s.to_vec())
+    };
+
+    let merged = Protocol::new(
+        new_min_reader,
+        new_min_writer,
+        reader_features,
+        writer_features,
+    );
+
+    let upgraded = merged != *existing;
+    (merged, upgraded)
+}
+
+/// Parse a location string into a [`Url`]. Accepts both fully-qualified URLs and
+/// local absolute file system paths.
+fn parse_location_to_url(path: &str) -> Result<Url> {
+    if let Ok(url) = Url::parse(path) {
+        // Reject "scheme-like" strings on Windows such as `c:/foo` that `Url::parse`
+        // accepts as opaque URLs.
+        if url.scheme().len() > 1 {
+            return Ok(url);
+        }
+    }
+    if std::path::Path::new(path).is_absolute() {
+        return Url::from_file_path(path)
+            .map_err(|_| DataFusionError::Plan(format!("invalid file path: {path}")));
+    }
+    Err(DataFusionError::Plan(format!(
+        "table location must be an absolute path or URL: {path}"
+    )))
 }
 
 impl DeltaTableFormat {
