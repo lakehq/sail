@@ -159,7 +159,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         CREATE TABLE delta_dv_explain
         USING DELTA LOCATION {{ location.sql }}
         TBLPROPERTIES (
-          'delta.enableDeletionVectors' = 'true',
+          'delta.enableDeletionVectors' = 'true'
         )
         AS SELECT * FROM VALUES
           (1, 'Alice',   100),
@@ -203,7 +203,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         CREATE TABLE delta_dv_filetree
         USING DELTA LOCATION {{ location.sql }}
         TBLPROPERTIES (
-          'delta.enableDeletionVectors' = 'true',
+          'delta.enableDeletionVectors' = 'true'
         )
         AS SELECT * FROM VALUES
           (1, 'Alice',   100),
@@ -269,7 +269,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         CREATE TABLE delta_dv_idempotent
         USING DELTA LOCATION {{ location.sql }}
         TBLPROPERTIES (
-          'delta.enableDeletionVectors' = 'true',
+          'delta.enableDeletionVectors' = 'true'
         )
         AS SELECT * FROM VALUES
           (1, 'a'),
