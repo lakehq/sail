@@ -441,7 +441,11 @@ Feature: abs comprehensive tests
         | Infinity |
 
   Rule: Interval values
-    # Sail does not support INTERVAL types in abs (rendering diverges from JVM)
+    # abs preserves the Arrow interval unit, but Sail widens Spark subranges
+    # (DAY, HOUR TO MINUTE, ...) to DAY TO SECOND at the type layer — this
+    # happens even without abs (e.g. SELECT INTERVAL '-5' DAY returns DAY TO
+    # SECOND). The scenarios below are tagged @sail-bug but blocked on the
+    # Sail-wide interval subrange handling, not on abs itself.
 
     @sail-bug
     Scenario: abs negative INTERVAL DAY
