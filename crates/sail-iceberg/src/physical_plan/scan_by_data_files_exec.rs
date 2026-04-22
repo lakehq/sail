@@ -118,6 +118,11 @@ impl ScanByDataFilesState {
 
         // Build PartitionedFile entries using file size from manifest metadata,
         // avoiding a per-file HEAD request to the object store.
+        // `last_modified` is not available from Iceberg manifest metadata, so we
+        // use a placeholder (current time). DataFusion's Parquet reader uses this
+        // field only for cache invalidation (ETag/mtime logic), which is not
+        // exercised in this streaming path. The actual file size from the manifest
+        // is accurate and is the only metadata field that matters for scan planning.
         let mut partitioned_files = Vec::with_capacity(files.len());
         for (raw_path, file_size) in &files {
             let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
