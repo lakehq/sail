@@ -205,6 +205,7 @@ use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
+use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
@@ -985,6 +986,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::SparkPartitionId(gen::SparkPartitionIdExecNode {
+                input,
+                column_name,
+                schema,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(SparkPartitionIdExec::try_new(
+                    self.try_decode_plan(&input, ctx)?,
+                    column_name,
+                    Arc::new(schema),
+                )?))
+            }
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
@@ -1627,6 +1640,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::MonotonicId(gen::MonotonicIdExecNode {
                 input,
                 column_name: monotonic_id.column_name().to_string(),
+                schema,
+            })
+        } else if let Some(spark_partition_id) =
+            node.as_any().downcast_ref::<SparkPartitionIdExec>()
+        {
+            let input = self.try_encode_plan(spark_partition_id.input().clone())?;
+            let schema = self.try_encode_schema(spark_partition_id.schema().as_ref())?;
+            NodeKind::SparkPartitionId(gen::SparkPartitionIdExecNode {
+                input,
+                column_name: spark_partition_id.column_name().to_string(),
                 schema,
             })
         } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {

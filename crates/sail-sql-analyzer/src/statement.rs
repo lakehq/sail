@@ -389,6 +389,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     view: name,
                     definition: spec::ViewDefinition {
                         definition: query_text,
+                        input: Box::new(query),
                         columns,
                         if_not_exists: if_not_exists.is_some(),
                         replace: or_replace.is_some(),

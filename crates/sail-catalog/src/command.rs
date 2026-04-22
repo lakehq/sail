@@ -309,7 +309,7 @@ impl CatalogCommand {
             }
             CatalogCommand::ShowTables { database, pattern } => {
                 let rows = manager
-                    .list_tables_and_temporary_views(&database, pattern.as_deref())
+                    .list_tables_and_views(&database, pattern.as_deref())
                     .await?;
                 let rows = rows
                     .into_iter()
@@ -323,7 +323,7 @@ impl CatalogCommand {
             }
             CatalogCommand::ShowTableExtended { database, pattern } => {
                 let rows = manager
-                    .list_tables_and_temporary_views(&database, Some(pattern.as_str()))
+                    .list_tables_and_views(&database, Some(pattern.as_str()))
                     .await?;
                 let formatter = service.plan_formatter();
                 let rows = rows
@@ -341,7 +341,7 @@ impl CatalogCommand {
             }
             CatalogCommand::ListTables { database, pattern } => {
                 let rows = manager
-                    .list_tables_and_temporary_views(&database, pattern.as_deref())
+                    .list_tables_and_views(&database, pattern.as_deref())
                     .await?;
                 display.tables().to_record_batch(rows)?
             }
