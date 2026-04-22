@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion_common::{ScalarValue, TableReference};
 use datafusion_expr::{Expr, ExprSchemable, Extension, LogicalPlan, Projection};
 use sail_common::spec;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
@@ -120,6 +121,7 @@ impl PlanResolver<'_> {
                 // Extract literal values from argument expressions.
                 // Each projection is wrapped in an Alias after `rewrite_named_expressions`,
                 // so we need to unwrap the alias to get the inner expression.
+                let literal_evaluator = LiteralEvaluator::new();
                 let arg_literals: Vec<Option<ScalarValue>> = projections[passthrough_columns..]
                     .iter()
                     .map(|e| {
@@ -127,10 +129,10 @@ impl PlanResolver<'_> {
                             Expr::Alias(alias) => alias.expr.as_ref(),
                             other => other,
                         };
-                        match inner {
-                            Expr::Literal(sv, _) => Some(sv.clone()),
-                            _ => None,
+                        if inner.is_volatile() {
+                            return None;
                         }
+                        literal_evaluator.evaluate(inner).ok()
                     })
                     .collect();
                 PySparkUdtfPayload::analyze(

@@ -1033,6 +1033,8 @@ def analyze_udtf(handler, arguments):
     pa.Schema
         A PyArrow schema representing the UDTF's return type.
     """
+    import inspect
+    from textwrap import dedent
     from pyspark.sql.pandas.types import from_arrow_type, to_arrow_schema
     from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
 
@@ -1053,11 +1055,37 @@ def analyze_udtf(handler, arguments):
         else:
             args.append(arg)
 
+    udtf_name = getattr(handler, "__name__", "")
+    error_prefix = f"Failed to evaluate the user-defined table function '{udtf_name}'"
+
+    def format_error(msg):
+        return dedent(msg).replace("\n", " ")
+
+    # Check that the arguments match the analyze() signature before calling it.
+    try:
+        inspect.signature(handler.analyze).bind(*args, **kwargs)
+    except TypeError as e:
+        raise TypeError(
+            format_error(
+                f"""
+                {error_prefix} because the function arguments did not match the expected
+                signature of the static 'analyze' method ({e}). Please update the query so that
+                this table function call provides arguments matching the expected signature, or
+                else update the table function so that its static 'analyze' method accepts the
+                provided arguments, and then try the query again."""
+            )
+        )
+
     result = handler.analyze(*args, **kwargs)
 
     if not isinstance(result, AnalyzeResult):
         raise ValueError(
-            f"The 'analyze' method must return an AnalyzeResult instance, got {type(result)}"
+            format_error(
+                f"""
+                {error_prefix} because the static 'analyze' method expects a result of type
+                pyspark.sql.udtf.AnalyzeResult, but instead this method returned a value of
+                type: {type(result)}"""
+            )
         )
 
     return to_arrow_schema(result.schema)
