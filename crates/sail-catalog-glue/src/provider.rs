@@ -849,6 +849,7 @@ impl CatalogProvider for GlueCatalogProvider {
         let mut paginator = client
             .get_user_defined_functions()
             .database_name(&database_name)
+            .pattern("*")
             .into_paginator()
             .send();
 
