@@ -160,7 +160,6 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         USING DELTA LOCATION {{ location.sql }}
         TBLPROPERTIES (
           'delta.enableDeletionVectors' = 'true',
-          'delta.feature.deletionVectors' = 'supported'
         )
         AS SELECT * FROM VALUES
           (1, 'Alice',   100),
@@ -205,7 +204,6 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         USING DELTA LOCATION {{ location.sql }}
         TBLPROPERTIES (
           'delta.enableDeletionVectors' = 'true',
-          'delta.feature.deletionVectors' = 'supported'
         )
         AS SELECT * FROM VALUES
           (1, 'Alice',   100),
@@ -272,7 +270,6 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         USING DELTA LOCATION {{ location.sql }}
         TBLPROPERTIES (
           'delta.enableDeletionVectors' = 'true',
-          'delta.feature.deletionVectors' = 'supported'
         )
         AS SELECT * FROM VALUES
           (1, 'a'),
