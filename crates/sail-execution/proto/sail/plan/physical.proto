@@ -56,6 +56,7 @@ message ExtendedPhysicalPlanNode {
     BarrierExecNode barrier = 41;
     RelaxedTzCastExecNode relaxed_tz_cast = 42;
     SparkPartitionIdExecNode spark_partition_id = 43;
+    DeletionVectorWriterExecNode deletion_vector_writer = 44;
   }
 }
 
@@ -670,6 +671,15 @@ message DeltaLogReplayExecNode {
   // Preferred encoding for hash replay mode.
   optional bytes checkpoint_input = 7;
   optional bytes commits_input = 8;
+}
+
+message DeletionVectorWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  bytes condition = 3;
+  bytes table_schema = 4;
+  int64 version = 5;
+  optional string operation_json = 6;
 }
 
 message PythonDataSourceInputPartition {

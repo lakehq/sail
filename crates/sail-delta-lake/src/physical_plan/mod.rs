@@ -29,6 +29,7 @@ use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
 mod action_schema;
 mod commit_exec;
 pub mod discovery_exec;
+mod dv_writer_exec;
 mod expr_adapter;
 mod log_replay_exec;
 mod meta_adds;
@@ -45,12 +46,14 @@ pub use action_schema::{
 };
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
+pub use dv_writer_exec::DeletionVectorWriterExec;
 pub use expr_adapter::{DeltaCastColumnExpr, DeltaPhysicalExprAdapterFactory};
 pub use log_replay_exec::DeltaLogReplayExec;
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
 pub mod planner;
 pub use planner::{
-    plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext,
+    plan_delete, plan_delete_mor, plan_merge, plan_update, DeltaPhysicalPlanner,
+    DeltaPlannerConfig, PlannerContext,
 };
 pub use relaxed_tz_exec::RelaxedTzCastExec;
 pub use remove_actions_exec::DeltaRemoveActionsExec;

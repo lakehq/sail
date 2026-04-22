@@ -90,9 +90,9 @@ use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
-    DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
-    DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
-    RelaxedTzCastExec,
+    DeletionVectorWriterExec, DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec,
+    DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaWriterExec, RelaxedTzCastExec,
 };
 use sail_delta_lake::spec::DeltaOperation;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
@@ -164,6 +164,7 @@ use sail_function::scalar::misc::spark_aes::{
 };
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
+use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
@@ -1003,6 +1004,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
                 Ok(Arc::new(RelaxedTzCastExec::new(input, schema)))
             }
+            NodeKind::DeletionVectorWriter(gen::DeletionVectorWriterExecNode {
+                input,
+                table_url,
+                condition,
+                table_schema,
+                version,
+                operation_json,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let table_url = Url::parse(&table_url)
+                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
+                let condition = parse_physical_expr(
+                    &self.try_decode_message(&condition)?,
+                    ctx,
+                    &table_schema,
+                    self,
+                )?;
+                let operation = if let Some(s) = operation_json.as_ref() {
+                    Some(
+                        serde_json::from_str::<DeltaOperation>(s)
+                            .map_err(|e| plan_datafusion_err!("{e}"))?,
+                    )
+                } else {
+                    None
+                };
+                Ok(Arc::new(DeletionVectorWriterExec::new(
+                    input,
+                    table_url,
+                    condition,
+                    table_schema,
+                    version,
+                    operation,
+                )?))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1656,6 +1692,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
             let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema })
+        } else if let Some(dv_writer_exec) =
+            node.as_any().downcast_ref::<DeletionVectorWriterExec>()
+        {
+            let input = self.try_encode_plan(dv_writer_exec.input().clone())?;
+            let condition_node = serialize_physical_expr(dv_writer_exec.condition(), self)?;
+            let condition = self.try_encode_message(condition_node)?;
+            let table_schema = self.try_encode_schema(dv_writer_exec.table_schema())?;
+            let operation_json = if let Some(op) = dv_writer_exec.operation() {
+                Some(serde_json::to_string(op).map_err(|e| plan_datafusion_err!("{e}"))?)
+            } else {
+                None
+            };
+            NodeKind::DeletionVectorWriter(gen::DeletionVectorWriterExecNode {
+                input,
+                table_url: dv_writer_exec.table_url().to_string(),
+                condition,
+                table_schema,
+                version: dv_writer_exec.version(),
+                operation_json,
+            })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
@@ -1934,6 +1990,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
+            "rewrite_like_pattern" => Ok(Arc::new(ScalarUDF::from(RewriteLikePatternFunc::new()))),
             "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
             "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
             "json_object_keys" | "json_keys" => {
@@ -2089,6 +2146,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
+            || node_inner.is::<RewriteLikePatternFunc>()
             || node_inner.is::<SparkAbs>()
             || node_inner.is::<SparkAESDecrypt>()
             || node_inner.is::<SparkAESEncrypt>()

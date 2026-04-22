@@ -429,6 +429,7 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub expand_views_at_output: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
