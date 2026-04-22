@@ -1981,12 +1981,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
-            // SparkNextDay has state (ansi_mode) — handled by UdfKind::SparkNextDay
-            // variant above. This Standard fallback only fires if the encoder emitted
-            // `Standard`, which is a bug; default to ansi_mode=false (DataFusion default).
-            "spark_next_day" | "next_day" => {
-                Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(false))))
-            }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
