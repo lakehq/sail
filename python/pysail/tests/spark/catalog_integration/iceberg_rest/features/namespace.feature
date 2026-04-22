@@ -48,6 +48,45 @@ Feature: Iceberg REST catalog namespace (database) operations
       CREATE DATABASE IF NOT EXISTS ine_ns_iceberg COMMENT 'should be ignored'
       """
 
+  Scenario: Create namespace with IF NOT EXISTS preserves original metadata
+    Given statement
+      """
+      CREATE DATABASE ine_keep_ns_iceberg
+      WITH DBPROPERTIES (owner = 'original_owner')
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS ine_keep_ns_iceberg
+      """
+    Given statement
+      """
+      CREATE DATABASE IF NOT EXISTS ine_keep_ns_iceberg
+      WITH DBPROPERTIES (owner = 'should_be_ignored')
+      """
+    When query
+      """
+      SHOW DATABASES LIKE 'ine_keep_ns_iceberg'
+      """
+    Then query result
+      | name                | catalog | description | locationUri |
+      | ine_keep_ns_iceberg | sail    | NULL        | NULL        |
+
+  Scenario: Listing child namespaces of an empty parent returns no rows
+    Given statement
+      """
+      CREATE DATABASE IF NOT EXISTS empty_parent_ns
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS empty_parent_ns
+      """
+    When query
+      """
+      SHOW DATABASES LIKE 'empty_parent_ns.%'
+      """
+    Then query result
+      | name | catalog | description | locationUri |
+
   Scenario: Non-existent namespace does not appear in listing
     When query
       """

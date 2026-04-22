@@ -57,6 +57,31 @@ Feature: Iceberg REST catalog view operations
     Then query result
       | id | value |
       | 1  | hello |
+    When query
+      """
+      DESCRIBE TABLE iceberg_view_test.desc_view
+      """
+    Then query result has row where "col_name" is "id"
+    Then query result has row where "col_name" is "value"
+    Then query result row where "col_name" is "id" has "data_type" equal to "int"
+    Then query result row where "col_name" is "value" has "data_type" equal to "string"
+
+  Scenario: Create view with explicit column list and comments
+    Given statement
+      """
+      CREATE VIEW iceberg_view_test.cols_view (
+        col1,
+        col2 COMMENT 'important column'
+      )
+      AS SELECT 'foo' AS col1, 42 AS col2
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_view_test.cols_view
+      """
+    Then query result has row where "col_name" is "col1"
+    Then query result has row where "col_name" is "col2"
+    Then query result row where "col_name" is "col2" has "comment" equal to "important column"
 
   Scenario: Describe non-existent view raises error
     When query

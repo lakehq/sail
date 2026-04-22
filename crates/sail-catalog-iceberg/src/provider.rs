@@ -706,7 +706,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 for identifier in tables.identifiers.unwrap_or_default() {
                     let _ = client
                         .catalog_api_api()
-                        .drop_table(&ns_string, &identifier.name, Some(false), prefix)
+                        .drop_table(&ns_string, &identifier.name, Some(true), prefix)
                         .await;
                 }
             }

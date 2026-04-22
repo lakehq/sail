@@ -91,6 +91,70 @@ Feature: Iceberg REST catalog table operations
     Then query result
       | database           | tableName | isTemporary |
       | iceberg_table_test | get_t     | false       |
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.get_t
+      """
+    Then query result has row where "col_name" is "foo"
+    Then query result has row where "col_name" is "bar"
+    Then query result has row where "col_name" is "baz"
+    Then query result row where "col_name" is "foo" has "data_type" equal to "string"
+    Then query result row where "col_name" is "bar" has "data_type" equal to "int"
+    Then query result row where "col_name" is "baz" has "data_type" equal to "boolean"
+    Then query result row where "col_name" is "bar" has "comment" equal to "meow"
+
+  Scenario: Create a table with identity partition transform
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.identity_part_t (
+        id INT,
+        category STRING
+      )
+      USING iceberg
+      PARTITIONED BY (category)
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.identity_part_t
+      """
+    Then query result has row where "col_name" is "id"
+    Then query result has row where "col_name" is "category"
+
+  Scenario: Create a table with PRIMARY KEY constraint
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.pk_t (
+        id INT NOT NULL,
+        name STRING
+      )
+      USING iceberg
+      """
+    When query
+      """
+      SHOW TABLES IN iceberg_table_test LIKE 'pk_t'
+      """
+    Then query result
+      | database           | tableName | isTemporary |
+      | iceberg_table_test | pk_t      | false       |
+
+  Scenario: Drop table with PURGE removes it
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.purge_t (id INT) USING iceberg
+      """
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_table_test.purge_t
+      """
+    Given statement
+      """
+      DROP TABLE iceberg_table_test.purge_t PURGE
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.purge_t
+      """
+    Then query error .*
 
   Scenario: Describe non-existent table raises error
     When query

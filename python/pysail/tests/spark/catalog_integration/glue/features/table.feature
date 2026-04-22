@@ -96,6 +96,15 @@ Feature: Glue catalog table operations
     Then query result
       | database       | tableName      | isTemporary |
       | table_test_db  | get_test_table | false       |
+    When query
+      """
+      DESCRIBE TABLE get_test_table
+      """
+    Then query result has row where "col_name" is "id"
+    Then query result row where "col_name" is "id" has "data_type" equal to "bigint"
+    Then query result row where "col_name" is "id" has "comment" equal to "The ID"
+    Then query result has row where "col_name" is "value"
+    Then query result row where "col_name" is "value" has "data_type" equal to "string"
 
   Scenario: Create table with all supported column types
     Given statement
@@ -127,6 +136,25 @@ Feature: Glue catalog table operations
     Then query result
       | database       | tableName | isTemporary |
       | table_test_db  | all_types | false       |
+    When query
+      """
+      DESCRIBE TABLE all_types
+      """
+    Then query result has row where "col_name" is "col_boolean"
+    Then query result has row where "col_name" is "col_tinyint"
+    Then query result has row where "col_name" is "col_smallint"
+    Then query result has row where "col_name" is "col_int"
+    Then query result has row where "col_name" is "col_bigint"
+    Then query result has row where "col_name" is "col_float"
+    Then query result has row where "col_name" is "col_double"
+    Then query result has row where "col_name" is "col_string"
+    Then query result has row where "col_name" is "col_binary"
+    Then query result has row where "col_name" is "col_date"
+    Then query result has row where "col_name" is "col_timestamp"
+    Then query result has row where "col_name" is "col_decimal"
+    Then query result has row where "col_name" is "col_array"
+    Then query result has row where "col_name" is "col_struct"
+    Then query result has row where "col_name" is "col_map"
 
   Scenario: Invalid DDL is rejected
     When query

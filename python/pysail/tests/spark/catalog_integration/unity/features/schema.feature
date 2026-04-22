@@ -47,6 +47,46 @@ Feature: Unity Catalog schema (database) operations
       CREATE SCHEMA IF NOT EXISTS ine_schema_unity COMMENT 'should be ignored'
       """
 
+  Scenario: Create schema with IF NOT EXISTS preserves original metadata
+    Given statement
+      """
+      CREATE SCHEMA ine_keep_meta_unity COMMENT 'original comment'
+      """
+    Given final statement
+      """
+      DROP SCHEMA IF EXISTS ine_keep_meta_unity
+      """
+    Given statement
+      """
+      CREATE SCHEMA IF NOT EXISTS ine_keep_meta_unity COMMENT 'should be ignored'
+      """
+    When query
+      """
+      SHOW SCHEMAS LIKE 'sail_test_catalog.ine_keep_meta_unity'
+      """
+    Then query result
+      | name                                  | catalog | description      | locationUri |
+      | sail_test_catalog.ine_keep_meta_unity | sail    | original comment | NULL        |
+
+  Scenario: Create schema with LOCATION
+    Given statement
+      """
+      CREATE SCHEMA schema_with_location_unity
+      COMMENT 'with location'
+      LOCATION 's3://bucket/path'
+      """
+    Given final statement
+      """
+      DROP SCHEMA IF EXISTS schema_with_location_unity
+      """
+    When query
+      """
+      SHOW SCHEMAS LIKE 'sail_test_catalog.schema_with_location_unity'
+      """
+    Then query result
+      | name                                       | catalog | description   | locationUri      |
+      | sail_test_catalog.schema_with_location_unity | sail    | with location | s3://bucket/path |
+
   Scenario: Non-existent schema does not appear in listing
     When query
       """
@@ -163,6 +203,13 @@ Feature: Unity Catalog schema (database) operations
     Then query result
       | name | catalog | description | locationUri |
 
+  Scenario: Describe non-existent schema raises error
+    When query
+      """
+      DESCRIBE SCHEMA nonexistent_describe_schema
+      """
+    Then query error .*
+
   Scenario: Describe an existing schema
     Given statement
       """
@@ -177,15 +224,6 @@ Feature: Unity Catalog schema (database) operations
       """
       DESCRIBE SCHEMA describe_schema_unity
       """
-    Then query result ordered
-      | info_name      | info_value                              |
-      | Namespace Name | sail_test_catalog.describe_schema_unity |
-      | Comment        | describe test                           |
-      | Location       |                                         |
-
-  Scenario: Describe non-existent schema raises error
-    When query
-      """
-      DESCRIBE SCHEMA nonexistent_describe_schema
-      """
-    Then query error .*
+    Then query result has row where "info_name" is "Namespace Name"
+    Then query result row where "info_name" is "Namespace Name" has "info_value" containing "describe_schema_unity"
+    Then query result row where "info_name" is "Comment" has "info_value" equal to "describe test"

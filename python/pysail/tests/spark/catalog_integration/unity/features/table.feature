@@ -189,3 +189,79 @@ Feature: Unity Catalog table operations
       """
       DROP TABLE IF EXISTS unity_table_test.nonexistent_drop_t
       """
+
+  Scenario: Describe table shows column metadata and comment
+    Given statement
+      """
+      CREATE TABLE unity_table_test.describe_t (
+        foo STRING,
+        bar INT NOT NULL COMMENT 'meow',
+        baz BOOLEAN
+      )
+      USING delta
+      COMMENT 'test table'
+      PARTITIONED BY (baz)
+      LOCATION 's3://deltadata/custom/path/describe_test'
+      TBLPROPERTIES (owner = 'mr. meow', team = 'data-eng')
+      """
+    When query
+      """
+      DESCRIBE TABLE unity_table_test.describe_t
+      """
+    Then query result has row where "col_name" is "foo"
+    Then query result has row where "col_name" is "bar"
+    Then query result has row where "col_name" is "baz"
+    Then query result row where "col_name" is "foo" has "data_type" equal to "string"
+    Then query result row where "col_name" is "bar" has "data_type" equal to "int"
+    Then query result row where "col_name" is "baz" has "data_type" equal to "boolean"
+    Then query result row where "col_name" is "bar" has "comment" equal to "meow"
+
+  Scenario: Describe table shows complex column types
+    Given statement
+      """
+      CREATE TABLE unity_table_test.describe_complex_t (
+        foo STRING,
+        bar ARRAY<STRUCT<a: STRING, b: INT>> NOT NULL COMMENT 'meow',
+        baz MAP<STRING, INT>,
+        mew STRUCT<a: STRING, b: INT>
+      )
+      USING delta
+      COMMENT 'peow'
+      LOCATION 's3://deltadata/custom/path/describe_complex'
+      """
+    When query
+      """
+      DESCRIBE TABLE unity_table_test.describe_complex_t
+      """
+    Then query result has row where "col_name" is "foo"
+    Then query result has row where "col_name" is "bar"
+    Then query result has row where "col_name" is "baz"
+    Then query result has row where "col_name" is "mew"
+    Then query result row where "col_name" is "bar" has "data_type" containing "array"
+    Then query result row where "col_name" is "bar" has "data_type" containing "struct"
+    Then query result row where "col_name" is "baz" has "data_type" containing "map"
+    Then query result row where "col_name" is "mew" has "data_type" containing "struct"
+    Then query result row where "col_name" is "bar" has "comment" equal to "meow"
+
+  Scenario: Create table with storage OPTIONS
+    Given statement
+      """
+      CREATE TABLE unity_table_test.opts_t (
+        foo STRING,
+        bar INT,
+        baz BOOLEAN
+      )
+      USING delta
+      COMMENT 'with options'
+      PARTITIONED BY (baz)
+      OPTIONS (key1 = 'value1')
+      LOCATION 's3://deltadata/custom/path/opts'
+      TBLPROPERTIES (owner = 'mr. meow', team = 'data-eng')
+      """
+    When query
+      """
+      SHOW TABLES IN unity_table_test LIKE 'opts_t'
+      """
+    Then query result
+      | database                           | tableName | isTemporary |
+      | sail_test_catalog.unity_table_test | opts_t    | false       |

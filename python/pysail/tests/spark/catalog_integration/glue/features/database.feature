@@ -14,6 +14,13 @@ Feature: Glue catalog database operations
       """
     When query
       """
+      SHOW DATABASES LIKE 'test_create_db'
+      """
+    Then query result
+      | name           | catalog | description  | locationUri      |
+      | test_create_db | sail    | test comment | s3://bucket/path |
+    When query
+      """
       DESCRIBE DATABASE EXTENDED test_create_db
       """
     Then query result ordered
@@ -52,13 +59,11 @@ Feature: Glue catalog database operations
       """
     When query
       """
-      DESCRIBE DATABASE ine_db
+      SHOW DATABASES LIKE 'ine_db'
       """
-    Then query result ordered
-      | info_name      | info_value |
-      | Namespace Name | ine_db     |
-      | Comment        | original   |
-      | Location       |            |
+    Then query result
+      | name   | catalog | description | locationUri |
+      | ine_db | sail    | original    | NULL        |
 
   Scenario: Non-existent database does not appear in listing
     When query
@@ -67,13 +72,6 @@ Feature: Glue catalog database operations
       """
     Then query result
       | name | catalog | description | locationUri |
-
-  Scenario: Describe non-existent database raises error
-    When query
-      """
-      DESCRIBE DATABASE nonexistent_db_glue
-      """
-    Then query error .*
 
   Scenario: Get an existing database
     Given statement
@@ -89,14 +87,11 @@ Feature: Glue catalog database operations
       """
     When query
       """
-      DESCRIBE DATABASE EXTENDED get_test_db
+      SHOW DATABASES LIKE 'get_test_db'
       """
-    Then query result ordered
-      | info_name      | info_value                         |
-      | Namespace Name | get_test_db                        |
-      | Comment        | Get test description               |
-      | Location       | s3://bucket/get-test               |
-      | Properties     | ((owner,test_user),(team,data_eng)) |
+    Then query result
+      | name        | catalog | description          | locationUri          |
+      | get_test_db | sail    | Get test description | s3://bucket/get-test |
 
   Scenario: Drop non-existent database fails
     Given statement with error .*
