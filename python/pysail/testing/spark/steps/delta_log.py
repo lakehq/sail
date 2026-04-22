@@ -295,6 +295,11 @@ def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, d
         obj = _normalize_delta_commit_info_for_snapshot(obj)
         if "operationParameters" in obj:
             obj["operationParameters"] = _recursive_parse_json_strings(obj["operationParameters"])
+    elif which == "latest effective protocol and metadata":
+        obj = _latest_effective_protocol_and_metadata_from_variables(variables)
+        assert "protocol" in obj, "protocol action not found in delta log"
+        assert "metaData" in obj, "metaData action not found in delta log"
+        obj["metaData"] = _normalize_delta_metadata_for_snapshot(obj["metaData"])
     else:
         obj = _first_commit_actions_from_variables(variables)
         assert "protocol" in obj, "protocol action not found in first commit"
@@ -334,7 +339,7 @@ def _parse_i64_list(raw: str) -> list[int]:
 
 @then(
     parsers.re(
-        r"delta log (?P<which>latest commit info|first commit protocol and metadata) "
+        r"delta log (?P<which>latest commit info|first commit protocol and metadata|latest effective protocol and metadata) "
         r"(?P<mode>matches snapshot(?: for paths)?|contains)"
     )
 )
@@ -393,6 +398,41 @@ def delta_log_json_file_matches_snapshot(
     obj = _read_delta_log_json_file(Path(location.path), filename)
     obj = _normalize_delta_log_json_file_for_snapshot(filename, obj)
     assert obj == snapshot
+
+
+@then(parsers.parse("delta log JSON file {filename} in {location_var} contains"))
+def delta_log_json_file_contains(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    datatable,
+) -> None:
+    """Assert that specific fields in a delta log JSON file match expected values.
+
+    The datatable must have two columns: ``path`` and ``value``.
+    ``path`` is a JSONPath expression (without leading ``$``).
+    ``value`` is a JSON-encoded expected value.
+    """
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    obj = _read_delta_log_json_file(Path(location.path), filename)
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+        "expected datatable with columns: | path | value |"
+    )
+    for row in rows:
+        if not row or len(row) < 2:  # noqa: PLR2004
+            continue
+        path, raw_value = row[0], row[1]
+        actual = _get_by_path(obj, path)
+        expected = _parse_expected_value(raw_value)
+        assert actual == expected, f"field {path!r}: expected {expected!r}, got {actual!r}"
 
 
 @given(
@@ -488,3 +528,23 @@ def delta_log_commit_timestamps_are_rewritten(
         crc_obj["inCommitTimestampOpt"] = timestamp_ms
         with crc_path.open("w", encoding="utf-8") as f:
             json.dump(crc_obj, f, separators=(",", ":"))
+
+
+def _latest_effective_protocol_and_metadata_from_variables(variables: dict) -> dict:
+    """Replay all delta log commits to determine the latest effective protocol and metadata."""
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log inspection"
+    log_dir = Path(location.path) / "_delta_log"
+    log_files = sorted(f for f in log_dir.glob("*.json") if not f.stem.endswith(".compacted"))
+    assert log_files, f"no delta logs found in {log_dir}"
+
+    result: dict = {}
+    for log_file in log_files:
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line)
+                if "protocol" in obj:
+                    result["protocol"] = obj["protocol"]
+                if "metaData" in obj:
+                    result["metaData"] = obj["metaData"]
+    return result

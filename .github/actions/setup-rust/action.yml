@@ -89,7 +89,7 @@ runs:
       if: ${{ github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true' }}
       run: |
         mkdir -p tmp
-        .github/workflows/mtime/save-mtime.sh > tmp/mtime.jsonl
+        git ls-files | .github/workflows/mtime/save_mtime.py > tmp/mtime.jsonl
       shell: bash
 
     # We save the cache only for push events, so that more cache space can be reserved
@@ -111,7 +111,7 @@ runs:
       if: ${{ github.event_name != 'push' }}
       run: |
         if [[ -f tmp/mtime.jsonl ]]; then
-          .github/workflows/mtime/restore-mtime.sh < tmp/mtime.jsonl
+          .github/workflows/mtime/restore_mtime.py < tmp/mtime.jsonl
         fi
       shell: bash
 

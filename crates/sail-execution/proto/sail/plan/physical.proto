@@ -55,9 +55,10 @@ message ExtendedPhysicalPlanNode {
     CatalogCommandExecNode catalog_command = 40;
     BarrierExecNode barrier = 41;
     RelaxedTzCastExecNode relaxed_tz_cast = 42;
-    IcebergManifestScanExecNode iceberg_manifest_scan = 43;
-    IcebergDiscoveryExecNode iceberg_discovery = 44;
-    IcebergScanByDataFilesExecNode iceberg_scan_by_data_files = 45;
+    SparkPartitionIdExecNode spark_partition_id = 43;
+    IcebergManifestScanExecNode iceberg_manifest_scan = 44;
+    IcebergDiscoveryExecNode iceberg_discovery = 45;
+    IcebergScanByDataFilesExecNode iceberg_scan_by_data_files = 46;
   }
 }
 
@@ -88,6 +89,7 @@ message ExtendedScalarUdf {
     SparkFromCsvUdf spark_from_csv = 12;
     XpathTypedUdf xpath_typed = 13;
     SparkVariantGetUdf spark_variant_get = 14;
+    SparkNextDayUdf spark_next_day = 15;
   }
 }
 
@@ -172,6 +174,10 @@ message SparkDateUdf {
 
 message SparkVariantGetUdf {
   bool safe = 1;
+}
+
+message SparkNextDayUdf {
+  bool ansi_mode = 1;
 }
 
 message SparkFromCsvUdf {
@@ -576,6 +582,12 @@ message MergeCardinalityCheckExecNode {
 }
 
 message MonotonicIdExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  bytes schema = 3;
+}
+
+message SparkPartitionIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;

@@ -188,6 +188,7 @@ use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
 use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;
+use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjectUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -207,6 +208,7 @@ use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
+use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
@@ -987,6 +989,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::SparkPartitionId(gen::SparkPartitionIdExecNode {
+                input,
+                column_name,
+                schema,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(SparkPartitionIdExec::try_new(
+                    self.try_decode_plan(&input, ctx)?,
+                    column_name,
+                    Arc::new(schema),
+                )?))
+            }
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
@@ -1668,6 +1682,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: monotonic_id.column_name().to_string(),
                 schema,
             })
+        } else if let Some(spark_partition_id) =
+            node.as_any().downcast_ref::<SparkPartitionIdExec>()
+        {
+            let input = self.try_encode_plan(spark_partition_id.input().clone())?;
+            let schema = self.try_encode_schema(spark_partition_id.schema().as_ref())?;
+            NodeKind::SparkPartitionId(gen::SparkPartitionIdExecNode {
+                input,
+                column_name: spark_partition_id.column_name().to_string(),
+                schema,
+            })
         } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {
             let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
             let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
@@ -1917,6 +1941,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(safe))));
             }
+            UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -1943,6 +1970,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
             "parse_json" => Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
+            "to_variant_object" => Ok(Arc::new(ScalarUDF::from(SparkToVariantObjectUdf::new()))),
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
@@ -2017,7 +2045,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
-            "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
+            // SparkNextDay has state (ansi_mode) — handled by UdfKind::SparkNextDay
+            // variant above. This Standard fallback only fires if the encoder emitted
+            // `Standard`, which is a bug; default to ansi_mode=false (DataFusion default).
+            "spark_next_day" | "next_day" => {
+                Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(false))))
+            }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
@@ -2149,6 +2182,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkJsonToVariantUdf>()
+            || node_inner.is::<SparkToVariantObjectUdf>()
             || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
@@ -2163,7 +2197,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
-            || node_inner.is::<SparkNextDay>()
             || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
@@ -2291,6 +2324,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkNextDay>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
         } else {
             return Ok(());
         };
