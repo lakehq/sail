@@ -25,13 +25,13 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result};
-use futures::stream::once;
+use futures::stream::{self, TryStreamExt};
 use url::Url;
 
 use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
 };
-use crate::spec::{ManifestContentType, ManifestStatus, Snapshot};
+use crate::spec::{ManifestContentType, ManifestFile, ManifestStatus, Snapshot};
 
 /// Column names for the metadata batch produced by `IcebergManifestScanExec`.
 pub const COL_FILE_PATH: &str = "file_path";
@@ -158,7 +158,8 @@ impl ExecutionPlan for IcebergManifestScanExec {
         let snapshot = self.snapshot.clone();
         let schema = self.output_schema.clone();
 
-        let fut = async move {
+        // Phase 1: Load the manifest list (a single lightweight metadata file).
+        let init = async move {
             let table_url_parsed =
                 Url::parse(&table_url).map_err(|e| DataFusionError::External(Box::new(e)))?;
             let object_store = context
@@ -175,56 +176,80 @@ impl ExecutionPlan for IcebergManifestScanExec {
             );
             let manifest_list = io_load_manifest_list(&store_ctx, manifest_list_path).await?;
 
-            let mut file_paths = Vec::new();
-            let mut file_formats = Vec::new();
-            let mut record_counts = Vec::new();
-            let mut file_sizes = Vec::new();
-            let mut partition_spec_ids = Vec::new();
-            let mut content_types = Vec::new();
+            // Collect data manifests only (skip delete manifests).
+            let data_manifests: Vec<ManifestFile> = manifest_list
+                .entries()
+                .iter()
+                .filter(|m| m.content == ManifestContentType::Data)
+                .cloned()
+                .collect();
 
-            for manifest_file in manifest_list.entries() {
-                if manifest_file.content != ManifestContentType::Data {
-                    continue;
-                }
-
-                let manifest =
-                    io_load_manifest(&store_ctx, manifest_file.manifest_path.as_str()).await?;
-
-                for entry_ref in manifest.entries() {
-                    let entry = entry_ref.as_ref();
-                    if !matches!(
-                        entry.status,
-                        ManifestStatus::Added | ManifestStatus::Existing
-                    ) {
-                        continue;
-                    }
-
-                    let df = &entry.data_file;
-                    file_paths.push(df.file_path().to_string());
-                    file_formats.push(df.file_format().as_action_str().to_string());
-                    record_counts.push(df.record_count());
-                    file_sizes.push(df.file_size_in_bytes());
-                    partition_spec_ids.push(manifest_file.partition_spec_id);
-                    content_types.push(format!("{:?}", df.content_type()));
-                }
-            }
-
-            let batch = RecordBatch::try_new(
-                schema,
-                vec![
-                    Arc::new(StringArray::from(file_paths)),
-                    Arc::new(StringArray::from(file_formats)),
-                    Arc::new(UInt64Array::from(record_counts)),
-                    Arc::new(UInt64Array::from(file_sizes)),
-                    Arc::new(Int32Array::from(partition_spec_ids)),
-                    Arc::new(StringArray::from(content_types)),
-                ],
-            )?;
-
-            Ok(batch)
+            Ok::<_, DataFusionError>((store_ctx, data_manifests, schema))
         };
 
-        let stream = once(fut);
+        // Phase 2: Stream one RecordBatch per manifest file to cap peak memory usage
+        // and improve time-to-first-row for large tables.
+        let stream = stream::once(init)
+            .map_ok(|(store_ctx, manifests, schema)| {
+                stream::try_unfold(
+                    (store_ctx, manifests, 0usize, schema),
+                    |(store_ctx, manifests, mut idx, schema)| async move {
+                        while idx < manifests.len() {
+                            let manifest_path = manifests[idx].manifest_path.clone();
+                            let partition_spec_id = manifests[idx].partition_spec_id;
+                            idx += 1;
+
+                            let manifest =
+                                io_load_manifest(&store_ctx, manifest_path.as_str()).await?;
+
+                            let mut file_paths = Vec::new();
+                            let mut file_formats = Vec::new();
+                            let mut record_counts = Vec::new();
+                            let mut file_sizes = Vec::new();
+                            let mut partition_spec_ids = Vec::new();
+                            let mut content_types = Vec::new();
+
+                            for entry_ref in manifest.entries() {
+                                let entry = entry_ref.as_ref();
+                                if !matches!(
+                                    entry.status,
+                                    ManifestStatus::Added | ManifestStatus::Existing
+                                ) {
+                                    continue;
+                                }
+
+                                let df = &entry.data_file;
+                                file_paths.push(df.file_path().to_string());
+                                file_formats.push(df.file_format().as_action_str().to_string());
+                                record_counts.push(df.record_count());
+                                file_sizes.push(df.file_size_in_bytes());
+                                partition_spec_ids.push(partition_spec_id);
+                                content_types.push(format!("{:?}", df.content_type()));
+                            }
+
+                            if file_paths.is_empty() {
+                                continue;
+                            }
+
+                            let batch = RecordBatch::try_new(
+                                schema.clone(),
+                                vec![
+                                    Arc::new(StringArray::from(file_paths)),
+                                    Arc::new(StringArray::from(file_formats)),
+                                    Arc::new(UInt64Array::from(record_counts)),
+                                    Arc::new(UInt64Array::from(file_sizes)),
+                                    Arc::new(Int32Array::from(partition_spec_ids)),
+                                    Arc::new(StringArray::from(content_types)),
+                                ],
+                            )?;
+                            return Ok(Some((batch, (store_ctx, manifests, idx, schema))));
+                        }
+                        Ok(None)
+                    },
+                )
+            })
+            .try_flatten();
+
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.output_schema.clone(),
             stream,

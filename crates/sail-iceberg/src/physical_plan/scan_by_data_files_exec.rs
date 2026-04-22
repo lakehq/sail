@@ -3,10 +3,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, StringArray};
+use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::memory::DataSourceExec;
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::context::TaskContext;
@@ -20,11 +21,11 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use object_store::{ObjectMeta, ObjectStoreExt};
+use object_store::ObjectMeta;
 use url::Url;
 
 use crate::io::StoreContext;
-use crate::physical_plan::manifest_scan_exec::COL_FILE_PATH;
+use crate::physical_plan::manifest_scan_exec::{COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES};
 
 /// How many files to accumulate before building a DataSourceExec scan batch.
 const SCAN_CHUNK_FILES: usize = 1024;
@@ -39,8 +40,8 @@ struct ScanByDataFilesState {
     table_url: Url,
     /// The Arrow schema of the actual user data.
     output_schema: SchemaRef,
-    /// Pending file paths accumulated from the metadata stream.
-    pending_paths: Vec<String>,
+    /// Pending file entries (path, size_in_bytes) accumulated from the metadata stream.
+    pending_files: Vec<(String, u64)>,
     /// Currently active scan stream (draining Parquet data).
     current_scan: Option<SendableRecordBatchStream>,
     /// Whether the upstream input has been fully consumed.
@@ -61,15 +62,15 @@ impl ScanByDataFilesState {
             context,
             table_url,
             output_schema,
-            pending_paths: Vec::new(),
+            pending_files: Vec::new(),
             current_scan: None,
             input_done: false,
             emitted_empty: false,
         }
     }
 
-    /// Extract file paths from a metadata RecordBatch.
-    fn extract_paths(&self, batch: &RecordBatch) -> Result<Vec<String>> {
+    /// Extract file paths and sizes from a metadata RecordBatch.
+    fn extract_file_info(&self, batch: &RecordBatch) -> Result<Vec<(String, u64)>> {
         let path_col = batch
             .column_by_name(COL_FILE_PATH)
             .and_then(|c| c.as_any().downcast_ref::<StringArray>())
@@ -80,22 +81,32 @@ impl ScanByDataFilesState {
                 ))
             })?;
 
-        let mut paths = Vec::with_capacity(path_col.len());
+        let size_col = batch
+            .column_by_name(COL_FILE_SIZE_IN_BYTES)
+            .and_then(|c| c.as_any().downcast_ref::<UInt64Array>())
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "IcebergScanByDataFilesExec: missing or invalid '{}' column",
+                    COL_FILE_SIZE_IN_BYTES
+                ))
+            })?;
+
+        let mut files = Vec::with_capacity(path_col.len());
         for i in 0..path_col.len() {
             if !path_col.is_null(i) {
-                paths.push(path_col.value(i).to_string());
+                files.push((path_col.value(i).to_string(), size_col.value(i)));
             }
         }
-        Ok(paths)
+        Ok(files)
     }
 
-    /// Build and start a Parquet scan for the accumulated file paths.
+    /// Build and start a Parquet scan for the accumulated file entries.
     async fn build_next_scan(&mut self) -> Result<()> {
-        if self.pending_paths.is_empty() {
+        if self.pending_files.is_empty() {
             return Ok(());
         }
 
-        let paths = std::mem::take(&mut self.pending_paths);
+        let files = std::mem::take(&mut self.pending_files);
 
         let object_store = self
             .context
@@ -103,21 +114,18 @@ impl ScanByDataFilesState {
             .object_store_registry
             .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let store_ctx = StoreContext::new(object_store.clone(), &self.table_url)?;
+        let store_ctx = StoreContext::new(object_store, &self.table_url)?;
 
-        // Build PartitionedFile entries for each accumulated file path.
-        let mut partitioned_files = Vec::with_capacity(paths.len());
-        for raw_path in &paths {
+        // Build PartitionedFile entries using file size from manifest metadata,
+        // avoiding a per-file HEAD request to the object store.
+        let mut partitioned_files = Vec::with_capacity(files.len());
+        for (raw_path, file_size) in &files {
             let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
-            let meta = object_store
-                .head(&file_path)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             partitioned_files.push(PartitionedFile {
                 object_meta: ObjectMeta {
                     location: file_path,
-                    last_modified: meta.last_modified,
-                    size: meta.size,
+                    last_modified: chrono::Utc::now(),
+                    size: *file_size,
                     e_tag: None,
                     version: None,
                 },
@@ -142,7 +150,19 @@ impl ScanByDataFilesState {
         let object_store_url = ObjectStoreUrl::parse(base_url_parsed)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let parquet_source = ParquetSource::new(Arc::clone(&self.output_schema));
+        // Use session Parquet options for parity with the driver-based scan path.
+        let parquet_options = TableParquetOptions {
+            global: self
+                .context
+                .session_config()
+                .options()
+                .execution
+                .parquet
+                .clone(),
+            ..Default::default()
+        };
+        let parquet_source = ParquetSource::new(Arc::clone(&self.output_schema))
+            .with_table_parquet_options(parquet_options);
         let parquet_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
             Arc::new(parquet_source);
 
@@ -307,9 +327,9 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
                     }
                 }
 
-                // Phase 2: If we have enough pending paths (or input done), build a scan.
-                if !st.pending_paths.is_empty()
-                    && (st.pending_paths.len() >= SCAN_CHUNK_FILES || st.input_done)
+                // Phase 2: If we have enough pending files (or input done), build a scan.
+                if !st.pending_files.is_empty()
+                    && (st.pending_files.len() >= SCAN_CHUNK_FILES || st.input_done)
                 {
                     st.build_next_scan().await?;
                     continue;
@@ -321,14 +341,14 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
                         if batch.num_rows() == 0 {
                             continue;
                         }
-                        let paths = st.extract_paths(&batch)?;
-                        st.pending_paths.extend(paths);
+                        let files = st.extract_file_info(&batch)?;
+                        st.pending_files.extend(files);
                         continue;
                     }
                     None => {
                         st.input_done = true;
-                        // Build final scan from remaining paths.
-                        if !st.pending_paths.is_empty() {
+                        // Build final scan from remaining files.
+                        if !st.pending_files.is_empty() {
                             st.build_next_scan().await?;
                             continue;
                         }
