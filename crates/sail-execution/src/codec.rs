@@ -114,6 +114,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
+use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -1999,6 +2000,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_schema_of_json" | "schema_of_json" => {
                 Ok(Arc::new(ScalarUDF::from(SparkSchemaOfJson::new())))
             }
+            "schema_of_csv" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfCsv::new()))),
             "xpath" => Ok(Arc::new(ScalarUDF::from(
                 sail_function::scalar::xml::xpath::Xpath::new(),
             ))),
@@ -2035,12 +2037,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
-            }
-            // SparkNextDay has state (ansi_mode) — handled by UdfKind::SparkNextDay
-            // variant above. This Standard fallback only fires if the encoder emitted
-            // `Standard`, which is a bug; default to ansi_mode=false (DataFusion default).
-            "spark_next_day" | "next_day" => {
-                Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(false))))
             }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
             "spark_make_dt_interval" | "make_dt_interval" => {
@@ -2193,6 +2189,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSequence>()
+            || node_inner.is::<SparkSchemaOfCsv>()
             || node_inner.is::<SparkSchemaOfJson>()
             || node_inner.is::<SparkShuffle>()
             || node_inner.is::<SparkSha1>()
