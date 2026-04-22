@@ -83,6 +83,10 @@ impl PlanResolver<'_> {
         let target_schema = target_plan_aliased.schema();
         let source_schema = source_plan_aliased.schema();
 
+        // Capture the user-facing field names before further resolution pollutes the state.
+        let resolved_target_field_names = Self::get_field_names(target_schema, state)?;
+        let resolved_source_field_names = Self::get_field_names(source_schema, state)?;
+
         // Register synthetic plan ids for both sides. These are only used to disambiguate
         // unqualified attributes when the Connect proto omits `plan_id`.
         // Must use the aliased (still #N-named) schemas so that register_plan_id_for_field
@@ -146,9 +150,10 @@ impl PlanResolver<'_> {
             source_alias: source_alias_string,
             target: target_metadata,
             with_schema_evolution,
-            // Store real-name schemas so that expand_merge can use them directly.
             resolved_target_schema: target_plan.schema().clone(),
             resolved_source_schema: source_plan.schema().clone(),
+            resolved_target_field_names,
+            resolved_source_field_names,
             on_condition: ExprWithSource::new(on_condition, on_condition_source),
             matched_clauses,
             not_matched_by_source_clauses: not_matched_by_source,
