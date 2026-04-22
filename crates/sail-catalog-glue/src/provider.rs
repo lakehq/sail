@@ -7,6 +7,7 @@ use aws_sdk_glue::types::{
 };
 use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewColumnOptions,
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
@@ -15,7 +16,6 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKi
 use tokio::sync::OnceCell;
 
 use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
-use crate::format::GlueStorageFormat;
 use crate::{hive, iceberg};
 
 /// Configuration for AWS Glue Data Catalog.
@@ -96,11 +96,15 @@ impl GlueCatalogProvider {
         let location = storage.and_then(|sd| sd.location()).map(|s| s.to_string());
 
         // Detect format from serde info
-        let format = storage
-            .and_then(|sd| sd.serde_info())
-            .and_then(|si| si.serialization_library())
-            .map(|lib| GlueStorageFormat::detect_format_from_serde(Some(lib)))
-            .unwrap_or_else(|| "unknown".to_string());
+        let format = HiveDetectedFormat::detect(
+            storage
+                .and_then(|sd| sd.serde_info())
+                .and_then(|si| si.serialization_library()),
+            storage.and_then(|sd| sd.input_format()),
+            storage.and_then(|sd| sd.output_format()),
+        )
+        .as_str()
+        .to_string();
 
         // Extract columns from storage descriptor
         let mut columns: Vec<TableColumnStatus> = storage

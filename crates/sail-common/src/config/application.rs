@@ -381,6 +381,17 @@ pub enum CatalogType {
         region: Option<String>,
         endpoint_url: Option<String>,
     },
+    #[serde(alias = "hms")]
+    HiveMetastore {
+        name: String,
+        uris: Vec<String>,
+        warehouse: Option<String>,
+        thrift_transport: Option<String>,
+        auth: Option<String>,
+        kerberos_service_principal: Option<String>,
+        sasl_qop_min: Option<String>,
+        connect_timeout_secs: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]

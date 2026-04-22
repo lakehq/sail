@@ -50,8 +50,7 @@ pub fn to_scalar(literal: &Literal, iceberg_type: &Type) -> Result<ScalarValue> 
 
 /// Convert a PrimitiveLiteral with type context to the correct ScalarValue.
 fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveType) -> ScalarValue {
-    use PrimitiveLiteral as PL;
-    use ScalarValue as SV;
+    use {PrimitiveLiteral as PL, ScalarValue as SV};
 
     match (prim_type, prim) {
         // Date: Int -> Date32
@@ -94,8 +93,7 @@ fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveTyp
 
 /// Basic conversion without explicit Iceberg type context (primitive-only).
 pub fn primitive_to_scalar_default(prim: &PrimitiveLiteral) -> ScalarValue {
-    use PrimitiveLiteral as PL;
-    use ScalarValue as SV;
+    use {PrimitiveLiteral as PL, ScalarValue as SV};
 
     match prim {
         PL::Boolean(v) => SV::Boolean(Some(*v)),
@@ -254,8 +252,7 @@ pub fn scalar_to_iceberg_literal(
     scalar: &ScalarValue,
     _arrow_type: &ArrowDataType,
 ) -> Result<Literal, String> {
-    use PrimitiveLiteral as PL;
-    use ScalarValue as SV;
+    use {PrimitiveLiteral as PL, ScalarValue as SV};
 
     match scalar {
         SV::Boolean(Some(v)) => Ok(Literal::Primitive(PL::Boolean(*v))),
