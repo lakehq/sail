@@ -378,7 +378,7 @@ impl PlanResolver<'_> {
                         python_version: f.python_version().to_string(),
                         eval_type: f.eval_type(),
                         command: f.command().to_vec(),
-                        return_type: f.output_type().clone(),
+                        return_type: f.output_type().cloned(),
                     };
                     let input = self.resolve_query_empty(true)?;
                     let arguments = self

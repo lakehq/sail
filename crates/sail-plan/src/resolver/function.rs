@@ -10,14 +10,14 @@ pub(super) struct PythonUdf {
     pub python_version: String,
     pub eval_type: spec::PySparkUdfType,
     pub command: Vec<u8>,
-    pub output_type: DataType,
+    pub output_type: Option<DataType>,
 }
 
 pub(super) struct PythonUdtf {
     pub python_version: String,
     pub eval_type: spec::PySparkUdfType,
     pub command: Vec<u8>,
-    pub return_type: DataType,
+    pub return_type: Option<DataType>,
 }
 
 impl PlanResolver<'_> {
@@ -45,7 +45,9 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
-        let output_type = self.resolve_data_type(&output_type, state)?;
+        let output_type = output_type
+            .map(|t| self.resolve_data_type(&t, state))
+            .transpose()?;
         Ok(PythonUdf {
             python_version,
             eval_type,
@@ -71,7 +73,9 @@ impl PlanResolver<'_> {
                 python_version,
             } => (return_type, eval_type, command, python_version),
         };
-        let return_type = self.resolve_data_type(&return_type, state)?;
+        let return_type = return_type
+            .map(|t| self.resolve_data_type(&t, state))
+            .transpose()?;
         Ok(PythonUdtf {
             python_version,
             eval_type,

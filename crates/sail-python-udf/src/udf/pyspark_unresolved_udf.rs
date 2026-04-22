@@ -13,7 +13,7 @@ pub struct PySparkUnresolvedUDF {
     python_version: String,
     eval_type: spec::PySparkUdfType,
     command: Vec<u8>,
-    output_type: DataType,
+    output_type: Option<DataType>,
     deterministic: bool,
 }
 
@@ -23,7 +23,7 @@ impl PySparkUnresolvedUDF {
         python_version: String,
         eval_type: spec::PySparkUdfType,
         command: Vec<u8>,
-        output_type: DataType,
+        output_type: Option<DataType>,
         deterministic: bool,
     ) -> Self {
         Self {
@@ -52,8 +52,8 @@ impl PySparkUnresolvedUDF {
         &self.command
     }
 
-    pub fn output_type(&self) -> &DataType {
-        &self.output_type
+    pub fn output_type(&self) -> Option<&DataType> {
+        self.output_type.as_ref()
     }
 
     pub fn deterministic(&self) -> bool {
@@ -75,7 +75,10 @@ impl ScalarUDFImpl for PySparkUnresolvedUDF {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(self.output_type.clone())
+        match &self.output_type {
+            Some(t) => Ok(t.clone()),
+            None => internal_err!("unresolved UDF {} has no output type", self.name()),
+        }
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

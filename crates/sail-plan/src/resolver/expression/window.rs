@@ -166,6 +166,9 @@ impl PlanResolver<'_> {
                         } else {
                             (arguments, input_types)
                         };
+                        let output_type = function.output_type.ok_or_else(|| {
+                            PlanError::invalid("Python UDF output type is required")
+                        })?;
                         let udaf = PySparkGroupAggregateUDF::new(
                             kind,
                             get_udf_name(&function_name, &payload),
@@ -173,7 +176,7 @@ impl PlanResolver<'_> {
                             deterministic,
                             argument_display_names.clone(),
                             input_types,
-                            function.output_type,
+                            output_type,
                             self.config.pyspark_udf_config.clone(),
                             actual_arg_count,
                         );

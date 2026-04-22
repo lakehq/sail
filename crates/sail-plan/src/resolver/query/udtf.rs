@@ -109,6 +109,9 @@ impl PlanResolver<'_> {
             .iter()
             .map(|e| e.get_type(plan.schema()))
             .collect::<datafusion_common::Result<Vec<_>>>()?;
+        let return_type = function
+            .return_type
+            .ok_or_else(|| PlanError::invalid("Python UDTF return type is required"))?;
         let payload = PySparkUdtfPayload::build(
             &function.python_version,
             &function.command,
@@ -116,7 +119,7 @@ impl PlanResolver<'_> {
             arguments_len,
             &input_types,
             kwargs,
-            &function.return_type,
+            &return_type,
             &self.config.pyspark_udf_config,
         )?;
         let udtf = PySparkUDTF::try_new(
@@ -126,7 +129,7 @@ impl PlanResolver<'_> {
             input_names,
             input_types,
             passthrough_columns,
-            function.return_type,
+            return_type,
             function_output_names,
             deterministic,
             self.config.pyspark_udf_config.clone(),

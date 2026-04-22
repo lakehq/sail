@@ -60,7 +60,7 @@ impl PlanResolver<'_> {
                     python_version: f.python_version().to_string(),
                     eval_type: f.eval_type(),
                     command: f.command().to_vec(),
-                    return_type: f.output_type().clone(),
+                    return_type: f.output_type().cloned(),
                 };
                 let arguments = self
                     .resolve_named_expressions(arguments, input.schema(), state)

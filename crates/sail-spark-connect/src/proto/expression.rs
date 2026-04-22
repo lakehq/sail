@@ -445,9 +445,9 @@ impl TryFrom<udf::Function> for spec::FunctionDefinition {
                 python_ver,
                 additional_includes,
             }) => {
-                let output_type = output_type.required("Python UDF output type")?;
+                let output_type = output_type.map(|x| x.try_into()).transpose()?;
                 Ok(spec::FunctionDefinition::PythonUdf {
-                    output_type: output_type.try_into()?,
+                    output_type,
                     eval_type: spec::PySparkUdfType::try_from(eval_type)?,
                     command,
                     python_version: python_ver,
@@ -524,9 +524,9 @@ impl TryFrom<udtf::Function> for spec::TableFunctionDefinition {
                 command,
                 python_ver,
             }) => {
-                let return_type = return_type.required("Python UDTF return type")?;
+                let return_type = return_type.map(|x| x.try_into()).transpose()?;
                 Ok(spec::TableFunctionDefinition::PythonUdtf {
-                    return_type: return_type.try_into()?,
+                    return_type,
                     eval_type: spec::PySparkUdfType::try_from(eval_type)?,
                     command,
                     python_version: python_ver,

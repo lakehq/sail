@@ -125,6 +125,10 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Expr> {
         use spec::PySparkUdfType;
 
+        let output_type = function
+            .output_type
+            .ok_or_else(|| PlanError::invalid("Python UDF output type is required"))?;
+
         let mut scope = state.enter_config_scope();
         let state = scope.state();
         state.config_mut().arrow_allow_large_var_types = true;
@@ -174,7 +178,7 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
-                    function.output_type,
+                    output_type.clone(),
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -189,7 +193,7 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
-                    function.output_type,
+                    output_type.clone(),
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -204,7 +208,7 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
-                    function.output_type,
+                    output_type.clone(),
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -219,7 +223,7 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
-                    function.output_type,
+                    output_type.clone(),
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -260,7 +264,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     argument_display_names.to_vec(),
                     input_types,
-                    function.output_type,
+                    output_type.clone(),
                     self.config.pyspark_udf_config.clone(),
                     actual_arg_count,
                 );
@@ -283,7 +287,7 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
-                    function.output_type,
+                    output_type.clone(),
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -299,7 +303,7 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
-                    function.output_type,
+                    output_type.clone(),
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -341,7 +345,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     argument_display_names.to_vec(),
                     input_types,
-                    function.output_type,
+                    output_type.clone(),
                     self.config.pyspark_udf_config.clone(),
                     actual_arg_count,
                 );

@@ -50,7 +50,10 @@ impl PlanResolver<'_> {
             .await?;
         let input_names = Self::get_field_names(input.schema(), state)?;
         let function = self.resolve_python_udf(function, state)?;
-        let output_schema = match function.output_type {
+        let output_type = function
+            .output_type
+            .ok_or_else(|| PlanError::invalid("MapPartitions UDF output type is required"))?;
+        let output_schema = match output_type {
             DataType::Struct(fields) => Arc::new(Schema::new(fields)),
             _ => {
                 return Err(PlanError::invalid(
@@ -168,7 +171,10 @@ impl PlanResolver<'_> {
         } = function;
         let function_name: String = function_name.into();
         let function = self.resolve_python_udf(function, state)?;
-        let output_fields = match function.output_type {
+        let output_type = function
+            .output_type
+            .ok_or_else(|| PlanError::invalid("UDF output type is required"))?;
+        let output_fields = match output_type {
             DataType::Struct(fields) => fields,
             _ => {
                 return Err(PlanError::invalid(
@@ -312,7 +318,10 @@ impl PlanResolver<'_> {
         }
         let function_name: String = function_name.into();
         let function = self.resolve_python_udf(function, state)?;
-        let output_fields = match function.output_type {
+        let output_type = function
+            .output_type
+            .ok_or_else(|| PlanError::invalid("CoGroupMap UDF output type is required"))?;
+        let output_fields = match output_type {
             DataType::Struct(fields) => fields,
             _ => {
                 return Err(PlanError::invalid(
