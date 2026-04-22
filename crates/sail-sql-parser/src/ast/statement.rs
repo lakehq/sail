@@ -6,18 +6,18 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
-    Catalogs, Change, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns, Comment,
-    Compute, Cost, Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete,
-    Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain,
-    Extended, External, Fields, Fileformat, First, For, Format, Formatted, From, Function,
-    Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy,
-    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options,
-    Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
-    Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
-    Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary,
-    Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View,
-    Views, When, With, Zone,
+    Add, After, All, Alter, Always, Analyze, And, Archive, As, Buckets, By, Cache, Cascade,
+    Catalog, Catalogs, Change, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns,
+    Comment, Compute, Cost, Create, Data, Database, Databases, Dbproperties, Default, Defined,
+    Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists,
+    Explain, Extended, External, Fields, File, Fileformat, First, For, Format, Formatted, From,
+    Function, Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items,
+    Jar, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not,
+    Null, On, Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties,
+    Purge, Recover, Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties,
+    Set, Show, Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp,
+    Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values,
+    Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -192,6 +192,17 @@ pub enum Statement {
         refresh: Refresh,
         function: Function,
         name: ObjectName,
+    },
+    CreateFunction {
+        create: Create,
+        or_replace: Option<(Or, Replace)>,
+        temporary: Option<Either<Temp, Temporary>>,
+        function: Function,
+        if_not_exists: Option<(If, Not, Exists)>,
+        name: ObjectName,
+        r#as: As,
+        class_name: StringLiteral,
+        using: Option<CreateFunctionUsing>,
     },
     DropFunction {
         drop: Drop,
@@ -600,6 +611,25 @@ pub enum CreateViewClause {
 pub struct ViewColumn {
     pub name: Ident,
     pub comment: Option<(Comment, StringLiteral)>,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct CreateFunctionUsing {
+    pub using: Using,
+    pub resources: Sequence<FunctionResource, Comma>,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct FunctionResource {
+    pub kind: FunctionResourceKind,
+    pub path: StringLiteral,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum FunctionResourceKind {
+    Jar(Jar),
+    File(File),
+    Archive(Archive),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
