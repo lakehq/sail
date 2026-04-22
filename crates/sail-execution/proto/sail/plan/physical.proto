@@ -55,6 +55,7 @@ message ExtendedPhysicalPlanNode {
     CatalogCommandExecNode catalog_command = 40;
     BarrierExecNode barrier = 41;
     RelaxedTzCastExecNode relaxed_tz_cast = 42;
+    SparkPartitionIdExecNode spark_partition_id = 43;
   }
 }
 
@@ -573,6 +574,12 @@ message MergeCardinalityCheckExecNode {
 }
 
 message MonotonicIdExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  bytes schema = 3;
+}
+
+message SparkPartitionIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;

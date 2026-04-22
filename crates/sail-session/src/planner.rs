@@ -33,6 +33,7 @@ use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
+use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
 use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
@@ -48,6 +49,7 @@ use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
+use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
@@ -132,6 +134,15 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 return internal_err!("MonotonicIdExec requires exactly one physical input");
             };
             Arc::new(MonotonicIdExec::try_new(
+                input.clone(),
+                node.column_name().to_string(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+            )?)
+        } else if let Some(node) = node.as_any().downcast_ref::<SparkPartitionIdNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("SparkPartitionIdExec requires exactly one physical input");
+            };
+            Arc::new(SparkPartitionIdExec::try_new(
                 input.clone(),
                 node.column_name().to_string(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),

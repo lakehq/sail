@@ -13,6 +13,7 @@ use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
@@ -113,6 +114,8 @@ impl PlanResolver<'_> {
             .await?;
         let (input, expr) = self.rewrite_wildcard(input, vec![expr], state)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
+        let (input, expr) =
+            self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
