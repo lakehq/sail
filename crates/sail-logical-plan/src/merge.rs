@@ -15,12 +15,14 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    col, lit, Expr, Join, JoinConstraint, JoinType, LogicalPlan, UserDefinedLogicalNodeCore,
+    col, lit, when, BinaryExpr, Expr, Join, JoinConstraint, JoinType, LogicalPlan, Operator,
+    ScalarUDF, UserDefinedLogicalNodeCore,
 };
 use educe::Educe;
 use log::trace;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::monotonic_id::MonotonicIdNode;
 
@@ -130,6 +132,11 @@ pub struct MergeIntoOptions {
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
     pub resolved_source_schema: DFSchemaRef,
+    /// User-facing field names for target and source, resolved from opaque IDs
+    /// at plan resolution time. Used by `expand_merge` to map opaque IDs back
+    /// to real column names without the fragile `recover_field_names` heuristic.
+    pub resolved_target_field_names: Vec<String>,
+    pub resolved_source_field_names: Vec<String>,
     pub on_condition: ExprWithSource,
     pub matched_clauses: Vec<MergeMatchedClause>,
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
@@ -140,6 +147,11 @@ pub struct MergeIntoOptions {
     pub residual_predicates: Vec<Expr>,
     /// Predicates from ON that only touch target columns (useful for early pruning)
     pub target_only_predicates: Vec<Expr>,
+    /// Generation expressions for generated columns in the target table.
+    /// Each entry is `(column_name, resolved_expr)` where `resolved_expr` initially
+    /// references target schema field IDs and is rewritten to actual column names
+    /// by `expand_merge` before being applied as a post-processing projection.
+    pub generated_column_exprs: Vec<(String, Expr)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -582,26 +594,33 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
             .collect::<Vec<_>>()
     );
 
-    // Rename target/source to the resolved logical column names carried in `input_schema`
-    // because upstream scans may surface placeholder names like "#0".
-    let desired_target_names =
+    // Use the real field names captured at resolution time to map opaque IDs
+    // back to user-facing column names. Fall back to the `recover_field_names`
+    // heuristic only when the resolver did not provide names.
+    let desired_target_names = if !options.resolved_target_field_names.is_empty() {
+        options.resolved_target_field_names.clone()
+    } else {
         recover_field_names(&target_plan, path_column).unwrap_or_else(|| {
-            node.options()
+            options
                 .resolved_target_schema
                 .fields()
                 .iter()
                 .map(|f| f.name().clone())
                 .collect()
-        });
-    let desired_source_names =
+        })
+    };
+    let desired_source_names = if !options.resolved_source_field_names.is_empty() {
+        options.resolved_source_field_names.clone()
+    } else {
         recover_field_names(&source_plan, path_column).unwrap_or_else(|| {
-            node.options()
+            options
                 .resolved_source_schema
                 .fields()
                 .iter()
                 .map(|f| f.name().clone())
                 .collect()
-        });
+        })
+    };
     trace!("resolved target names: {:?}", &desired_target_names);
     trace!("resolved source names: {:?}", &desired_source_names);
 
@@ -772,6 +791,11 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     rewrite_clauses(&mut options.matched_clauses, &rewrite)?;
     rewrite_not_matched_by_source(&mut options.not_matched_by_source_clauses, &rewrite)?;
     rewrite_not_matched_by_target(&mut options.not_matched_by_target_clauses, &rewrite)?;
+    options.generated_column_exprs = options
+        .generated_column_exprs
+        .iter()
+        .map(|(name, expr)| Ok((name.clone(), rewrite(expr.clone())?)))
+        .collect::<Result<Vec<_>>>()?;
     trace!(
         "expand_merge options after rewrite - join_key_pairs: {:?}, matched_clauses: {:?}, not_matched_by_source_clauses: {:?}, not_matched_by_target_clauses: {:?}, on_condition: {:?}",
         &options.join_key_pairs,
@@ -816,6 +840,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         let projected = LogicalPlanBuilder::from(filtered)
             .project(projection_exprs)?
             .build()?;
+        let projected = apply_generation_projection(projected, &options.generated_column_exprs)?;
 
         let touched_plan = LogicalPlanBuilder::empty(false).build()?;
         let command_schema = Arc::new(DFSchema::empty());
@@ -827,7 +852,25 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         });
     }
 
-    // Default MERGE expansion path (full outer join + presence columns + touched files).
+    build_default_merge_expansion(
+        options,
+        target_plan,
+        source_plan,
+        should_check_cardinality,
+        path_column,
+    )
+}
+
+/// Default MERGE expansion: full outer join + presence columns + touched files.
+fn build_default_merge_expansion(
+    options: MergeIntoOptions,
+    target_plan: LogicalPlan,
+    source_plan: LogicalPlan,
+    should_check_cardinality: bool,
+    path_column: &str,
+) -> Result<MergeExpansion> {
+    let target_schema = target_plan.schema();
+    let source_schema = source_plan.schema();
 
     let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
         .project(append_presence_projection(
@@ -936,6 +979,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     let projected = LogicalPlanBuilder::from(filtered)
         .project(projection_exprs.clone())?
         .build()?;
+    let projected = apply_generation_projection(projected, &options.generated_column_exprs)?;
 
     let (rewrite_matched, rewrite_not_matched_by_source) =
         build_rewrite_predicates(&options, &matched_pred, &not_matched_by_source_pred);
@@ -1045,6 +1089,71 @@ fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
     combine_disjunction(&preds).unwrap_or_else(|| lit(false))
 }
 
+fn apply_generation_projection(
+    plan: LogicalPlan,
+    generated_column_exprs: &[(String, Expr)],
+) -> Result<LogicalPlan> {
+    if generated_column_exprs.is_empty() {
+        return Ok(plan);
+    }
+    let gen_map: HashMap<&str, &Expr> = generated_column_exprs
+        .iter()
+        .map(|(name, expr)| (name.as_str(), expr))
+        .collect();
+    let schema = plan.schema().clone();
+    let has_op_col = schema.has_column_with_unqualified_name(OPERATION_COLUMN);
+    let insert_op_val = lit(RowLevelOperationType::Insert.as_i32());
+    let post_exprs: Vec<Expr> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let name = f.name();
+            if let Some(gen_expr) = gen_map.get(name.as_str()) {
+                let gen_expr = (*gen_expr).clone();
+                let current_value = col(name.clone());
+                // For INSERT rows, enforce Delta protocol: if the user explicitly provided a
+                // non-NULL value for the generated column that doesn't match the expression,
+                // raise an error instead of silently overwriting.
+                //
+                // For UPDATE rows, the generated column's current value is stale (from the
+                // existing target row) — always silently recompute from the expression.
+                //
+                // We distinguish INSERT from UPDATE via the operation column when available.
+                let mismatch_check =
+                    current_value
+                        .clone()
+                        .is_null()
+                        .or(Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(current_value),
+                            Operator::IsNotDistinctFrom,
+                            Box::new(gen_expr.clone()),
+                        )));
+                let err_msg = format!(
+                    "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] \
+                     CHECK constraint for generated column `{name}` violated: \
+                     user-provided value does not match the generation expression."
+                );
+                let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
+                let enforced = when(mismatch_check, gen_expr.clone())
+                    .otherwise(raise)
+                    .map(|e| e.alias(name.clone()))?;
+                if has_op_col {
+                    // Only enforce for INSERT operations; UPDATE always recomputes silently.
+                    when(col(OPERATION_COLUMN).eq(insert_op_val.clone()), enforced)
+                        .otherwise(gen_expr.clone())
+                        .map(|e| e.alias(name.clone()))
+                } else {
+                    // Insert-only path (fast-append): always enforce.
+                    Ok(enforced)
+                }
+            } else {
+                Ok(col(name.clone()))
+            }
+        })
+        .collect::<Result<Vec<Expr>>>()?;
+    LogicalPlanBuilder::from(plan).project(post_exprs)?.build()
+}
+
 fn build_insert_only_projection(
     options: &MergeIntoOptions,
     target_schema: &DFSchemaRef,
@@ -1055,14 +1164,21 @@ fn build_insert_only_projection(
     // with clause order determining first-match semantics.
     let mut projections = Vec::new();
 
-    // Build lookup for source expressions by index, consistent with existing InsertAll behavior.
-    let source_exprs = source_schema
+    // Source columns are prefixed with `__sail_src_`, so target field "id" maps
+    // to source column "__sail_src_id". Keys are lowercased for case-insensitive
+    // resolution (Spark's default).
+    let source_exprs_by_name: HashMap<String, Expr> = source_schema
         .fields()
         .iter()
-        .map(|f| Expr::Column(Column::from_name(f.name().clone())))
-        .collect::<Vec<_>>();
+        .map(|f| {
+            (
+                f.name().to_ascii_lowercase(),
+                Expr::Column(Column::from_name(f.name().clone())),
+            )
+        })
+        .collect();
 
-    for (idx, field) in target_schema.fields().iter().enumerate() {
+    for field in target_schema.fields().iter() {
         if field.name() == path_column || field.name() == TARGET_ROW_ID_COLUMN {
             continue;
         }
@@ -1076,8 +1192,8 @@ fn build_insert_only_projection(
                 .map(|x| x.expr.clone())
                 .unwrap_or_else(|| lit(true));
             let value = match &clause.action {
-                MergeNotMatchedByTargetAction::InsertAll => source_exprs
-                    .get(idx)
+                MergeNotMatchedByTargetAction::InsertAll => source_exprs_by_name
+                    .get(&format!("__sail_src_{}", name.to_ascii_lowercase()))
                     .cloned()
                     .unwrap_or_else(|| lit(ScalarValue::Null)),
                 MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
@@ -1301,10 +1417,28 @@ fn build_merge_projection(
         target_exprs.push(Expr::Column(Column::from_name(field.name().clone())));
     }
 
-    let mut source_exprs = Vec::new();
-    for field in source_schema.fields() {
-        source_exprs.push(Expr::Column(Column::from_name(field.name().clone())));
-    }
+    let source_exprs_by_name: HashMap<String, Expr> = source_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            (
+                f.name().to_ascii_lowercase(),
+                Expr::Column(Column::from_name(f.name().clone())),
+            )
+        })
+        .collect();
+
+    // Find the source expression that corresponds to a target field by name.
+    // Source columns are prefixed with `__sail_src_`, so target field "id"
+    // maps to source column "__sail_src_id". Keys are lowercased for
+    // case-insensitive resolution (Spark's default).
+    let source_expr_for_target = |target_name: &str| -> Expr {
+        let prefixed = format!("__sail_src_{}", target_name.to_ascii_lowercase());
+        source_exprs_by_name
+            .get(&prefixed)
+            .cloned()
+            .unwrap_or_else(|| lit(ScalarValue::Null))
+    };
 
     for clause in &options.matched_clauses {
         let mut pred = col(TARGET_PRESENT_COLUMN)
@@ -1316,11 +1450,8 @@ fn build_merge_projection(
         match &clause.action {
             MergeMatchedAction::Delete => {}
             MergeMatchedAction::UpdateAll => {
-                for (idx, field) in target_schema.fields().iter().enumerate() {
-                    let value = source_exprs
-                        .get(idx)
-                        .cloned()
-                        .unwrap_or_else(|| lit(ScalarValue::Null));
+                for field in target_schema.fields().iter() {
+                    let value = source_expr_for_target(field.name());
                     if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
                         entry.1.push((pred.clone(), value));
                     }
@@ -1369,11 +1500,8 @@ fn build_merge_projection(
 
         match &clause.action {
             MergeNotMatchedByTargetAction::InsertAll => {
-                for (idx, field) in target_schema.fields().iter().enumerate() {
-                    let value = source_exprs
-                        .get(idx)
-                        .cloned()
-                        .unwrap_or_else(|| lit(ScalarValue::Null));
+                for field in target_schema.fields().iter() {
+                    let value = source_expr_for_target(field.name());
                     if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
                         entry.1.push((pred.clone(), value));
                     }
@@ -1613,12 +1741,15 @@ where
 
 /// Try to recover meaningful field names from a logical plan by walking its inputs
 /// until we find a schema whose fields are not all placeholder names like "#0".
+/// The recovered schema must have the same number of fields as the top-level plan
+/// to ensure a 1:1 mapping between opaque IDs and real names.
 fn recover_field_names(plan: &LogicalPlan, path_column: &str) -> Option<Vec<String>> {
+    let expected_len = plan.schema().fields().len();
     let mut queue = VecDeque::new();
     queue.push_back(plan);
     while let Some(p) = queue.pop_front() {
         let schema = p.schema();
-        if !all_placeholder_schema(schema, path_column) {
+        if !all_placeholder_schema(schema, path_column) && schema.fields().len() == expected_len {
             return Some(schema.fields().iter().map(|f| f.name().clone()).collect());
         }
         queue.extend(p.inputs());

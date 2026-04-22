@@ -85,6 +85,26 @@ pub struct DeletionVectorDescriptor {
     pub cardinality: i64,
 }
 
+impl DeletionVectorDescriptor {
+    /// Compute the derived `uniqueId` field as specified by the Delta protocol.
+    ///
+    /// ```text
+    /// uniqueId = <storageType><pathOrInlineDv>          (when offset is None)
+    ///          = <storageType><pathOrInlineDv>@<offset>  (when offset is Some)
+    /// ```
+    ///
+    /// This value is used as a component of the logical file primary key `(path, uniqueId)`
+    /// during action reconciliation (log replay / snapshot construction).
+    pub fn unique_id(&self) -> String {
+        match self.offset {
+            None => format!("{}{}", self.storage_type, self.path_or_inline_dv),
+            Some(offset) => {
+                format!("{}{}@{}", self.storage_type, self.path_or_inline_dv, offset)
+            }
+        }
+    }
+}
+
 /// Delta Lake action envelope.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

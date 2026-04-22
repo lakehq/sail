@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\"), None), Literal(Utf8(\"/%SYSTEMDrive/%//Users%\"), None), Literal(Utf8(\"/\"), None)]"
+        "success": "ok"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\"), None), Literal(Utf8(\"/%SystemDrive/%//Users%\"), None), Literal(Utf8(\"/\"), None)]"
+        "success": "ok"
       }
     },
     {
@@ -1187,7 +1187,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nInvalid regex\ncaused by\nExternal error: regex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit"
+        "failure": "error in DataFusion: Arrow error: Compute error: Regular expression did not compile: Syntax(\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nregex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n)"
       }
     },
     {
@@ -1253,7 +1253,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nInvalid regex\ncaused by\nExternal error: regex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit"
+        "failure": "error in DataFusion: Arrow error: Compute error: Regular expression did not compile: Syntax(\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nregex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n)"
       }
     },
     {
@@ -1319,7 +1319,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nInvalid regex\ncaused by\nExternal error: regex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit"
+        "failure": "error in DataFusion: Arrow error: Compute error: Regular expression did not compile: Syntax(\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nregex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n)"
       }
     },
     {

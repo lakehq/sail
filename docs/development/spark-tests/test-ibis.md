@@ -25,9 +25,7 @@ hatch run test-ibis:scripts/spark-tests/run-server.sh
 After running the server, start another terminal and use the following command to run the Ibis tests.
 
 ```bash
-hatch run test-ibis:env \
-  SPARK_REMOTE="sc://localhost:50051" \
-  scripts/spark-tests/run-tests.sh
+hatch run test-ibis:env scripts/spark-tests/run-tests.sh
 ```
 
 The test logs will be written to `tmp/spark-tests/<name>` where `<name>` is defined by
@@ -39,7 +37,6 @@ You can run selected tests by passing `pytest` arguments to the script.
 
 ```bash
 hatch run test-ibis:env \
-  SPARK_REMOTE="sc://localhost:50051" \
   TEST_RUN_NAME=ibis-selected \
   scripts/spark-tests/run-tests.sh \
   --pyargs ibis.backends -m pyspark -k "test_array"

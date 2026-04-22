@@ -54,6 +54,12 @@ jobs:
           node-version: "22"
           cache: pnpm
 
+      - name: Install grpc_health_probe
+        run: |
+          wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.48/grpc_health_probe-linux-amd64"
+          chmod +x /usr/local/bin/grpc_health_probe
+          grpc_health_probe -version
+
       - name: Configure development environment
         run: |
           echo "CARGO_PROFILE_DEV_DEBUG=0" >> "$GITHUB_ENV"

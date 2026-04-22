@@ -67,6 +67,14 @@ pub trait CatalogProvider: Send + Sync {
         options: DropTableOptions,
     ) -> CatalogResult<()>;
 
+    /// Alters a table in the catalog.
+    async fn alter_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+    ) -> CatalogResult<()>;
+
     /// Creates a view in the catalog.
     async fn create_view(
         &self,

@@ -90,9 +90,9 @@ use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
-    DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
-    DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
-    RelaxedTzCastExec,
+    DeletionVectorWriterExec, DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec,
+    DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaWriterExec, RelaxedTzCastExec,
 };
 use sail_delta_lake::spec::DeltaOperation;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
@@ -114,6 +114,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
+use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -125,6 +126,7 @@ use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -164,6 +166,7 @@ use sail_function::scalar::misc::spark_aes::{
 };
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
+use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
@@ -205,6 +208,7 @@ use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
+use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
@@ -985,10 +989,57 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::SparkPartitionId(gen::SparkPartitionIdExecNode {
+                input,
+                column_name,
+                schema,
+            }) => {
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(SparkPartitionIdExec::try_new(
+                    self.try_decode_plan(&input, ctx)?,
+                    column_name,
+                    Arc::new(schema),
+                )?))
+            }
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
                 Ok(Arc::new(RelaxedTzCastExec::new(input, schema)))
+            }
+            NodeKind::DeletionVectorWriter(gen::DeletionVectorWriterExecNode {
+                input,
+                table_url,
+                condition,
+                table_schema,
+                version,
+                operation_json,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let table_url = Url::parse(&table_url)
+                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
+                let condition = parse_physical_expr(
+                    &self.try_decode_message(&condition)?,
+                    ctx,
+                    &table_schema,
+                    self,
+                )?;
+                let operation = if let Some(s) = operation_json.as_ref() {
+                    Some(
+                        serde_json::from_str::<DeltaOperation>(s)
+                            .map_err(|e| plan_datafusion_err!("{e}"))?,
+                    )
+                } else {
+                    None
+                };
+                Ok(Arc::new(DeletionVectorWriterExec::new(
+                    input,
+                    table_url,
+                    condition,
+                    table_schema,
+                    version,
+                    operation,
+                )?))
             }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
@@ -1629,10 +1680,40 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: monotonic_id.column_name().to_string(),
                 schema,
             })
+        } else if let Some(spark_partition_id) =
+            node.as_any().downcast_ref::<SparkPartitionIdExec>()
+        {
+            let input = self.try_encode_plan(spark_partition_id.input().clone())?;
+            let schema = self.try_encode_schema(spark_partition_id.schema().as_ref())?;
+            NodeKind::SparkPartitionId(gen::SparkPartitionIdExecNode {
+                input,
+                column_name: spark_partition_id.column_name().to_string(),
+                schema,
+            })
         } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {
             let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
             let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema })
+        } else if let Some(dv_writer_exec) =
+            node.as_any().downcast_ref::<DeletionVectorWriterExec>()
+        {
+            let input = self.try_encode_plan(dv_writer_exec.input().clone())?;
+            let condition_node = serialize_physical_expr(dv_writer_exec.condition(), self)?;
+            let condition = self.try_encode_message(condition_node)?;
+            let table_schema = self.try_encode_schema(dv_writer_exec.table_schema())?;
+            let operation_json = if let Some(op) = dv_writer_exec.operation() {
+                Some(serde_json::to_string(op).map_err(|e| plan_datafusion_err!("{e}"))?)
+            } else {
+                None
+            };
+            NodeKind::DeletionVectorWriter(gen::DeletionVectorWriterExecNode {
+                input,
+                table_url: dv_writer_exec.table_url().to_string(),
+                condition,
+                table_schema,
+                version: dv_writer_exec.version(),
+                operation_json,
+            })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
@@ -1845,12 +1926,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
+            UdfKind::SparkTime(gen::SparkTimeUdf { is_try }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkTime::new(is_try))));
+            }
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone }) => {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(safe))));
+            }
+            UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
             }
         };
         match name {
@@ -1908,6 +1995,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
+            "rewrite_like_pattern" => Ok(Arc::new(ScalarUDF::from(RewriteLikePatternFunc::new()))),
             "json_length" | "json_len" => Ok(sail_function::scalar::json::json_length_udf()),
             "json_as_text" => Ok(sail_function::scalar::json::json_as_text_udf()),
             "json_object_keys" | "json_keys" => {
@@ -1916,6 +2004,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_schema_of_json" | "schema_of_json" => {
                 Ok(Arc::new(ScalarUDF::from(SparkSchemaOfJson::new())))
             }
+            "schema_of_csv" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfCsv::new()))),
             "xpath" => Ok(Arc::new(ScalarUDF::from(
                 sail_function::scalar::xml::xpath::Xpath::new(),
             ))),
@@ -1953,7 +2042,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
-            "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
@@ -2058,6 +2146,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
+            || node_inner.is::<RewriteLikePatternFunc>()
             || node_inner.is::<SparkAbs>()
             || node_inner.is::<SparkAESDecrypt>()
             || node_inner.is::<SparkAESEncrypt>()
@@ -2100,11 +2189,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
-            || node_inner.is::<SparkNextDay>()
             || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSequence>()
+            || node_inner.is::<SparkSchemaOfCsv>()
             || node_inner.is::<SparkSchemaOfJson>()
             || node_inner.is::<SparkShuffle>()
             || node_inner.is::<SparkSha1>()
@@ -2222,12 +2311,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTime>() {
+            let is_try = func.is_try();
+            UdfKind::SparkTime(gen::SparkTimeUdf { is_try })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkVariantGet>() {
             let safe = func.safe();
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkNextDay>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
         } else {
             return Ok(());
         };

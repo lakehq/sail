@@ -45,6 +45,7 @@ impl TableFormat for ConsoleTableFormat {
             sort_order,
             table_properties: _,
             options,
+            logical_schema: _,
         } = info;
         if !is_flow_event_schema(&input.schema()) {
             return plan_err!("the console table format only supports streaming data");

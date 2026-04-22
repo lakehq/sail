@@ -199,6 +199,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             sort_order,
             table_properties,
             options,
+            logical_schema: _,
         } = info;
         // Prepend table properties as an OptionLayer so that format-level options
         // specified via TBLPROPERTIES (e.g. `option.delimiter`) are applied when writing,

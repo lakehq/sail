@@ -211,6 +211,15 @@ pub(crate) async fn plan_delta_scan(
         None
     };
 
+    // When the table protocol declares the deletionVectors feature, always use the
+    // metadata-as-data path (DeltaScanByAddsExec) which loads a fresh snapshot and
+    // applies per-file DV filtering. The pre-populated files may come from a stale
+    // catalog entry.
+    let has_dvs = snapshot
+        .protocol()
+        .has_reader_feature(&crate::spec::TableFeature::DeletionVectors);
+    let files = if has_dvs { None } else { files };
+
     if let Some(files) = files {
         let file_scan_config = build_file_scan_config(
             snapshot,
