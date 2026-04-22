@@ -11,6 +11,8 @@ use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
+use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSchemaOfCsv {
     signature: Signature,
@@ -205,7 +207,7 @@ impl SparkSchemaOfCsvOptions {
             match key {
                 "sep" | "delimiter" => options.sep = value.to_string(),
                 "timestampFormat" => {
-                    options.timestamp_format = super::convert_java_timestamp_format(value);
+                    options.timestamp_format = spark_datetime_format_to_chrono_strftime(value)?;
                 }
                 // Silently ignore unrecognised options, matching Spark's behaviour.
                 _ => {}

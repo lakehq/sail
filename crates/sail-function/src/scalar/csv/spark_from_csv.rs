@@ -22,6 +22,7 @@ use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
+use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
@@ -59,20 +60,21 @@ impl SparkFromCSVOptions {
     pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%d %H:%M:%S";
 
     /// Build `SparkFromCSVOptions` from a DataFusion `MapArray` of key-value pairs.
-    fn from_map(map: &MapArray) -> Self {
+    fn from_map(map: &MapArray) -> Result<Self> {
         let sep = find_key_value(map, Self::SEP_OPTION)
             .or(find_key_value(map, Self::DELIMITER_OPTION))
             .unwrap_or(Self::SEP_DEFAULT.to_string());
 
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(super::convert_java_timestamp_format)
+            .map(spark_datetime_format_to_chrono_strftime)
+            .transpose()?
             .unwrap_or(Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
 
-        Self {
+        Ok(Self {
             sep,
             timestamp_format,
-        }
+        })
     }
 }
 
@@ -224,7 +226,7 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     };
 
     let options: SparkFromCSVOptions = if let Some(options) = args.get(2) {
-        SparkFromCSVOptions::from_map(downcast_arg!(options, MapArray))
+        SparkFromCSVOptions::from_map(downcast_arg!(options, MapArray))?
     } else {
         SparkFromCSVOptions::default()
     };
