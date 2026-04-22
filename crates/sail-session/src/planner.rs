@@ -11,7 +11,6 @@ use datafusion_common::{internal_datafusion_err, internal_err, DFSchema, ToDFSch
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
 use sail_catalog::manager::CatalogManager;
-use sail_catalog_system::logical_rewriter::RewriteSystemTableSource;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
@@ -68,10 +67,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // TODO: show rewriters and the final logical plan in `EXPLAIN`
-        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
-            Box::new(RewriteSystemTableSource),
-            Box::new(RewriteDeltaTableSource),
-        ];
+        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![Box::new(RewriteDeltaTableSource)];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan)?.data
