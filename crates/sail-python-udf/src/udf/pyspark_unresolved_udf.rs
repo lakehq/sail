@@ -77,9 +77,14 @@ impl ScalarUDFImpl for PySparkUnresolvedUDF {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // For UDTFs with dynamic return types (analyze method), we use Null as a placeholder.
-        // The actual return type is determined at query analysis time by calling the analyze method.
-        Ok(self.output_type.clone().unwrap_or(DataType::Null))
+        match &self.output_type {
+            Some(t) => Ok(t.clone()),
+            None => internal_err!(
+                "unresolved UDF {} has no scalar return type; \
+                 dynamic-return UDTFs must be resolved during query analysis before scalar use",
+                self.name()
+            ),
+        }
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

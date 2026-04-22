@@ -1035,6 +1035,7 @@ def analyze_udtf(handler, arguments):
     """
     import inspect
     from textwrap import dedent
+
     from pyspark.sql.pandas.types import from_arrow_type, to_arrow_schema
     from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
 
@@ -1074,12 +1075,12 @@ def analyze_udtf(handler, arguments):
                 else update the table function so that its static 'analyze' method accepts the
                 provided arguments, and then try the query again."""
             )
-        )
+        ) from e
 
     result = handler.analyze(*args, **kwargs)
 
     if not isinstance(result, AnalyzeResult):
-        raise ValueError(
+        raise TypeError(
             format_error(
                 f"""
                 {error_prefix} because the static 'analyze' method expects a result of type

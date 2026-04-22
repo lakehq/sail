@@ -67,7 +67,7 @@ impl PySparkUdtfPayload {
         Python::attach(|py| -> PyUdfResult<DataType> {
             // Load the UDTF handler by directly unpickling the command bytes.
             // The command is a CloudPickle-serialized UDTF class (compatible with pickle.loads).
-            let cloudpickle = PyModule::import(py, intern!(py, "cloudpickle"))
+            let cloudpickle = PyModule::import(py, intern!(py, "pyspark.cloudpickle"))
                 .map_err(PyUdfError::PythonError)?;
             let handler = cloudpickle
                 .getattr(intern!(py, "loads"))

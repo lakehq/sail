@@ -141,7 +141,7 @@ impl PlanResolver<'_> {
                     function.eval_type,
                     arg_types,
                     &arg_literals,
-                    &kwargs[..arguments_len.min(kwargs.len())],
+                    kwargs,
                 )?
             }
         };
