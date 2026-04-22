@@ -324,12 +324,19 @@ fn date_format(expr: Expr, format: Expr) -> Expr {
     expr_fn::to_char(expr, format)
 }
 
-fn to_timestamp(args: Vec<Expr>) -> PlanResult<Expr> {
+fn to_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let args = input.arguments;
     if args.len() == 1 {
-        Ok(cast(
-            args.one()?,
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-        ))
+        let expr = args.one()?;
+        let expr_type = expr.get_type(input.function_context.schema)?;
+        if matches!(expr_type, DataType::Timestamp(_, Some(_))) {
+            Ok(expr_fn::to_local_time(vec![expr]))
+        } else {
+            Ok(cast(
+                expr,
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+            ))
+        }
     } else if args.len() == 2 {
         let (expr, format) = args.two()?;
         let format = to_chrono_fmt(format);
@@ -783,13 +790,13 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("to_date", F::custom(to_date)),
         ("to_time", F::var_arg(to_time)),
-        ("to_timestamp", F::var_arg(to_timestamp)),
+        ("to_timestamp", F::custom(to_timestamp)),
         // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
         //  "Parses the timestamp with the format to a timestamp without time zone. Returns null with invalid input."
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ltz.html
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
-        ("to_timestamp_ltz", F::var_arg(to_timestamp)),
-        ("to_timestamp_ntz", F::var_arg(to_timestamp)),
+        ("to_timestamp_ltz", F::custom(to_timestamp)),
+        ("to_timestamp_ntz", F::custom(to_timestamp)),
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
         ("trunc", F::binary(trunc)),

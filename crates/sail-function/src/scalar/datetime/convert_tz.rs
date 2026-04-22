@@ -1,8 +1,7 @@
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use chrono::{Local, TimeZone};
+use chrono::TimeZone;
 use chrono_tz::Tz;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array};
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
@@ -25,6 +24,31 @@ impl ConvertTz {
         Self {
             signature: Signature::any(3, Volatility::Immutable),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::arrow::array::{ArrayRef, StringArray, TimestampMicrosecondArray};
+    use std::sync::Arc;
+
+    #[test]
+    fn convert_timezone_ntz_uses_from_timezone_offset() {
+        // 2023-01-01 10:00:00 local time in Europe/Amsterdam should become 09:00:00 UTC.
+        let from: ArrayRef = Arc::new(StringArray::from(vec!["Europe/Amsterdam"]));
+        let to: ArrayRef = Arc::new(StringArray::from(vec!["UTC"]));
+        let ts: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![Some(
+            1_672_567_200_000_000i64,
+        )]));
+
+        let result = convert_tz_inner(&[from, to, ts]).expect("conversion succeeded");
+        let result = result
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .expect("timestamp result");
+
+        assert_eq!(result.value(0), 1_672_563_600_000_000i64);
     }
 }
 
@@ -51,13 +75,11 @@ impl ScalarUDFImpl for ConvertTz {
         if arg_types.len() != 3 {
             return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
         }
-        match &arg_types[2] {
-            DataType::Timestamp(unit, _tz) => Ok(DataType::Timestamp(*unit, local_offset_opt())),
-            _ => Ok(DataType::Timestamp(
-                TimeUnit::Microsecond,
-                local_offset_opt(),
-            )), // TODO: strict type coersion
-        }
+        let (time_unit, tz) = match &arg_types[2] {
+            DataType::Timestamp(unit, tz) => (*unit, tz.clone()),
+            _ => (TimeUnit::Microsecond, None), // TODO: strict type coersion
+        };
+        Ok(DataType::Timestamp(time_unit, tz))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -141,12 +163,14 @@ fn convert_tz_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             _ => Ok(None),
         };
 
+    let (time_unit, tz) = match args[2].data_type() {
+        DataType::Timestamp(unit, tz) => (*unit, tz.clone()),
+        _ => (TimeUnit::Microsecond, None),
+    };
+
     let ts_arr = match args[2].data_type() {
         DataType::Timestamp(_time_unit, _tz) => args[2].clone(),
-        _ => cast::cast(
-            &args[2],
-            &DataType::Timestamp(TimeUnit::Microsecond, local_offset_opt()),
-        )?,
+        _ => cast::cast(&args[2], &DataType::Timestamp(time_unit, tz.clone()))?,
     };
 
     let from_tz_strs_arr = cast::cast(&args[0], &DataType::Utf8)?;
@@ -219,16 +243,7 @@ fn convert_tz_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }?;
 
-    let time_unit = match args[2].data_type() {
-        DataType::Timestamp(unit, _tz) => *unit,
-        _ => TimeUnit::Microsecond,
-    };
-
-    nanoseconds_to_timestamp(results, &DataType::Timestamp(time_unit, local_offset_opt()))
-}
-
-fn local_offset_opt() -> Option<Arc<str>> {
-    Some(Arc::from(Local::now().offset().to_string()))
+    nanoseconds_to_timestamp(results, &DataType::Timestamp(time_unit, tz))
 }
 
 fn tz_shifted_utc_nanos<T1: TimeZone + Clone, T2: TimeZone + Clone>(
@@ -268,7 +283,7 @@ fn timestamp_to_nanoseconds(array: &dyn Array) -> Result<Int64Array> {
 
 fn nanoseconds_to_timestamp(array: Int64Array, data_type: &DataType) -> Result<ArrayRef> {
     match data_type {
-        DataType::Timestamp(time_unit, _tz) => Ok(cast::cast(
+        DataType::Timestamp(time_unit, tz) => Ok(cast::cast(
             &numeric::div(
                 &array,
                 &numeric::div(
@@ -276,10 +291,7 @@ fn nanoseconds_to_timestamp(array: Int64Array, data_type: &DataType) -> Result<A
                     &Int64Array::new_scalar(time_unit_to_multiplier(time_unit)),
                 )?,
             )?,
-            &DataType::Timestamp(
-                *time_unit,
-                Some(Arc::from(Local::now().offset().to_string())),
-            ),
+            &DataType::Timestamp(*time_unit, tz.clone()),
         )?),
         _ => {
             exec_err!(
