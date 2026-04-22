@@ -42,6 +42,7 @@ However, since Sail is powered by Arrow, you may consider this page more of a di
 ## Datetime Types
 
 - **DateType** represents calendar dates without a time zone.
+- **TimeType(_precision_)** represents time-of-day values without a time zone. The _precision_ parameter specifies the number of fractional digits retained for the seconds field. Supported values are 0 (seconds), 3 (milliseconds), 6 (microseconds, the default), and 9 (nanoseconds). This type was introduced in Spark 4.1.
 - **TimestampType** represents timestamps with local time zone. The time zone is controlled by the `spark.sql.session.timeZone` configuration option. The timestamp has microsecond precision.
 - **TimestampNTZType** represents timestamps without time zone. The timestamp has microsecond precision.
 

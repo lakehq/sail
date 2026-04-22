@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use chrono::{NaiveTime, Timelike};
 use datafusion::arrow::array::Time64MicrosecondArray;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
@@ -35,15 +36,18 @@ impl SparkTime {
     }
 
     fn string_to_time_micros(value: &str, is_try: bool) -> Result<Option<i64>> {
-        match parse_time(value).map(|t| {
-            t.hour as i64 * 3_600_000_000
-                + t.minute as i64 * 60_000_000
-                + t.second as i64 * 1_000_000
-                + t.nanoseconds as i64 / 1_000
-        }) {
+        let result = parse_time(value)
+            .map_err(|e| exec_datafusion_err!("{e}"))
+            .and_then(|t| NaiveTime::try_from(t).map_err(|e| exec_datafusion_err!("{e}")))
+            .map(|naive_time| {
+                let seconds_from_midnight = naive_time.num_seconds_from_midnight() as i64;
+                let nanoseconds = naive_time.nanosecond() as i64;
+                seconds_from_midnight * 1_000_000 + nanoseconds / 1_000
+            });
+        match result {
             Ok(v) => Ok(Some(v)),
             Err(_e) if is_try => Ok(None),
-            Err(e) => Err(exec_datafusion_err!("{e}")),
+            Err(e) => Err(e),
         }
     }
 }

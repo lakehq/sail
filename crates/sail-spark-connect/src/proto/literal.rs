@@ -214,8 +214,7 @@ impl TryFrom<Literal> for spec::Literal {
             LiteralType::SpecializedArray(_) => {
                 return Err(SparkError::todo("specialized array literal"))
             }
-            LiteralType::Time(x) => {
-                let Time { nano, precision } = x;
+            LiteralType::Time(Time { nano, precision }) => {
                 // Spark TIME literals carry nanoseconds since midnight.
                 // Precision values: 0 = seconds, 3 = milliseconds, 6 = microseconds (default), 9 = nanoseconds.
                 match precision.unwrap_or(6) {
