@@ -645,3 +645,63 @@ Feature: Delta Lake Merge
         | 3  | 2024 | 700   |
         | 4  | 2024 | 900   |
 
+  Rule: MERGE source is a SELECT without FROM clause
+    Background:
+      Given variable location for temporary directory merge_source_no_from
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_source_no_from
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_source_no_from (
+          id INT,
+          event_time TIMESTAMP,
+          value STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_source_no_from
+        SELECT * FROM VALUES
+          (1, TIMESTAMP '2024-01-01 00:00:00', 'old'),
+          (2, TIMESTAMP '2024-06-01 12:00:00', 'existing')
+        """
+
+    Scenario: MERGE with source as scalar SELECT (no FROM) inserts a new row
+      Given statement
+        """
+        MERGE INTO delta_merge_source_no_from AS t
+        USING (SELECT 3 AS id, TIMESTAMP '2024-09-01 00:00:00' AS event_time, 'new' AS value) AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, event_time, value) VALUES (s.id, s.event_time, s.value)
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_source_no_from ORDER BY id
+        """
+      Then query result ordered
+        | id | value    |
+        | 1  | old      |
+        | 2  | existing |
+        | 3  | new      |
+
+    Scenario: MERGE with source as scalar SELECT (no FROM) updates a matched row
+      Given statement
+        """
+        MERGE INTO delta_merge_source_no_from AS t
+        USING (SELECT 1 AS id, TIMESTAMP '2024-01-01 00:00:00' AS event_time, 'updated' AS value) AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN INSERT (id, event_time, value) VALUES (s.id, s.event_time, s.value)
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_source_no_from ORDER BY id
+        """
+      Then query result ordered
+        | id | value    |
+        | 1  | updated  |
+        | 2  | existing |
+
