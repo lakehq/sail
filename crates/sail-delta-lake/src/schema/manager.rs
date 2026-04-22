@@ -299,7 +299,7 @@ mod tests {
             "delta.enableDeletionVectors".to_string(),
             "true".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::DeletionVectors));
@@ -315,7 +315,7 @@ mod tests {
             "delta.enableDeletionVectors".to_string(),
             "false".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
         assert!(!protocol.has_reader_feature(&TableFeature::DeletionVectors));
         assert!(!protocol.has_writer_feature(&TableFeature::DeletionVectors));
         Ok(())
