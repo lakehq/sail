@@ -1254,11 +1254,13 @@ mod tests {
 
     #[test]
     fn delta_table_provider_rejects_unsupported_reader_features() {
+        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
+        // Use it to verify that the provider correctly rejects tables with unsupported features.
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::DeletionVectors]),
-            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1275,17 +1277,19 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("VacuumProtocolCheck")
         ));
     }
 
     #[test]
     fn delta_table_source_rejects_unsupported_reader_features() {
+        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
+        // Use it to verify that the source correctly rejects tables with unsupported features.
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::DeletionVectors]),
-            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1302,7 +1306,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("VacuumProtocolCheck")
         ));
     }
 

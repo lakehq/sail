@@ -89,7 +89,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_csv"
+        "success": "ok"
       }
     },
     {

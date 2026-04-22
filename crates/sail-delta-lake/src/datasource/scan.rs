@@ -108,13 +108,10 @@ pub fn build_file_scan_config(
     let mut per_file_stats: Vec<Arc<Statistics>> = Vec::new();
 
     for action in files.iter() {
-        if action.deletion_vector.is_some() {
-            // TODO: Implement deletion-vector-aware scans by excluding masked row ids during file
-            // reads instead of rejecting the file at planning time.
-            return Err(DataFusionError::NotImplemented(
-                "Reading Delta tables with Deletion Vectors is not yet supported".to_string(),
-            ));
-        }
+        // Files with deletion vectors are accepted: DV filtering is applied post-scan
+        // by DeltaScanByAddsExec which tracks row indices and excludes deleted rows.
+        // Note: the physical numRecords in stats is the total file record count
+        // (not accounting for DV deletions), which is correct for scan planning.
 
         let mut part =
             partitioned_file_from_action(action, &partition_columns_mapped, &complete_schema)?;

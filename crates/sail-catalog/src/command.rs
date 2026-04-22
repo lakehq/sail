@@ -1,6 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
+use sail_common_datafusion::datasource::TableFormatRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -9,8 +10,9 @@ use crate::error::{CatalogError, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
+    AlterTableOptions, CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
+    DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
@@ -74,6 +76,11 @@ pub enum CatalogCommand {
     DropTable {
         table: Vec<String>,
         options: DropTableOptions,
+    },
+    AlterTable {
+        table: Vec<String>,
+        if_exists: bool,
+        options: AlterTableOptions,
     },
     ListColumns {
         table: Vec<String>,
@@ -153,6 +160,7 @@ impl CatalogCommand {
             CatalogCommand::ListTables { .. } => "ListTables",
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
+            CatalogCommand::AlterTable { .. } => "AlterTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
@@ -208,6 +216,7 @@ impl CatalogCommand {
             | CatalogCommand::CreateView { .. }
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
+            | CatalogCommand::AlterTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
             | CatalogCommand::DropView { .. } => display.bools().schema()?,
@@ -344,6 +353,71 @@ impl CatalogCommand {
             }
             CatalogCommand::DropTable { table, options } => {
                 manager.drop_table(&table, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::AlterTable {
+                table,
+                if_exists,
+                options,
+            } => {
+                // Fetch the table status before altering so we can propagate
+                // property changes to the underlying storage (e.g. Delta log).
+                let table_status = match manager.get_table_or_view(&table).await {
+                    Ok(status) => status,
+                    Err(CatalogError::NotFound(_, _)) if if_exists => {
+                        return Ok(display.bools().to_record_batch(vec![true])?);
+                    }
+                    Err(e) => return Err(e),
+                };
+
+                let (location, format) = match &table_status.kind {
+                    sail_common_datafusion::catalog::TableKind::Table {
+                        location: Some(loc),
+                        format,
+                        ..
+                    } => (Some(loc.clone()), Some(format.clone())),
+                    sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
+                        (None, Some(format.clone()))
+                    }
+                    _ => (None, None),
+                };
+
+                // Persist changes to storage first (source of truth for table formats
+                // such as Delta Lake). Only after storage commits successfully do we
+                // update the catalog metadata, so we never end up with the two layers
+                // out of sync.
+                if let (Some(location), Some(format)) = (location, format) {
+                    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                        CatalogError::External(format!(
+                            "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
+                        ))
+                    })?;
+                    let table_format = registry.get(&format).map_err(|e| {
+                        CatalogError::External(format!(
+                            "unknown table format '{format}' for storage-backed ALTER TABLE: {e}"
+                        ))
+                    })?;
+                    let runtime = ctx.runtime_env();
+                    let (changes, if_exists_flag) = match &options {
+                        AlterTableOptions::SetTableProperties { properties } => (
+                            properties
+                                .iter()
+                                .map(|(k, v)| (k.clone(), Some(v.clone())))
+                                .collect::<Vec<_>>(),
+                            false,
+                        ),
+                        AlterTableOptions::UnsetTableProperties { keys, if_exists } => (
+                            keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>(),
+                            *if_exists,
+                        ),
+                    };
+                    table_format
+                        .alter_table_properties(runtime, &location, changes, if_exists_flag)
+                        .await
+                        .map_err(|e| CatalogError::External(e.to_string()))?;
+                }
+
+                manager.alter_table(&table, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::ListColumns { table } => {

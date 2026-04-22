@@ -92,15 +92,31 @@ fn retention_cutoff_timestamp(
         })
 }
 
+/// Primary key for a logical file in the Delta log: `(path, uniqueId)`.
+///
+/// Per the Delta protocol, a logical file is identified by its data-file path
+/// combined with the `uniqueId` of its Deletion Vector (or `None` if no DV is
+/// present). This composite key correctly handles tables where the same physical
+/// path appears with different Deletion Vectors across successive commits.
+type LogicalFileKey = (String, Option<String>);
+
+/// Compute the logical file key for an `Add` or `Remove` action.
+#[inline]
+fn logical_file_key(
+    path: &str,
+    dv: Option<&crate::spec::DeletionVectorDescriptor>,
+) -> LogicalFileKey {
+    (path.to_string(), dv.map(|d| d.unique_id()))
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ReconciledCheckpointState {
     pub(crate) protocol: Option<Protocol>,
     pub(crate) metadata: Option<Metadata>,
     pub(crate) txns: HashMap<String, Transaction>,
     pub(crate) domain_metadata: HashMap<String, DomainMetadata>,
-    // TODO: Use `(path, dvId)` once replay is deletion-vector aware.
-    pub(crate) adds: HashMap<String, Add>,
-    pub(crate) removes: HashMap<String, Remove>,
+    pub(crate) adds: HashMap<LogicalFileKey, Add>,
+    pub(crate) removes: HashMap<LogicalFileKey, Remove>,
     /// Sidecar descriptors collected from a V2 checkpoint. These reference external
     /// parquet files in `_delta_log/_sidecars/` that contain the add/remove actions.
     pub(crate) sidecars: Vec<Sidecar>,
@@ -127,12 +143,14 @@ impl ReconciledCheckpointState {
                 }
             }
             Action::Add(add) => {
-                self.removes.remove(&add.path);
-                self.adds.insert(add.path.clone(), add);
+                let key = logical_file_key(&add.path, add.deletion_vector.as_ref());
+                self.removes.remove(&key);
+                self.adds.insert(key, add);
             }
             Action::Remove(remove) => {
-                self.adds.remove(&remove.path);
-                self.removes.insert(remove.path.clone(), remove);
+                let key = logical_file_key(&remove.path, remove.deletion_vector.as_ref());
+                self.adds.remove(&key);
+                self.removes.insert(key, remove);
             }
             Action::CommitInfo(_)
             | Action::Cdc(_)
@@ -167,12 +185,14 @@ impl ReconciledCheckpointState {
             }
         }
         if let Some(add) = row.add {
-            self.removes.remove(&add.path);
-            self.adds.insert(add.path.clone(), add);
+            let key = logical_file_key(&add.path, add.deletion_vector.as_ref());
+            self.removes.remove(&key);
+            self.adds.insert(key, add);
         }
         if let Some(remove) = row.remove {
-            self.adds.remove(&remove.path);
-            self.removes.insert(remove.path.clone(), remove);
+            let key = logical_file_key(&remove.path, remove.deletion_vector.as_ref());
+            self.adds.remove(&key);
+            self.removes.insert(key, remove);
         }
         Ok(())
     }
@@ -342,8 +362,8 @@ struct CheckpointBatchIter {
     leading_rows: VecDeque<CheckpointActionRow>,
     txns: std::collections::btree_map::IntoIter<String, Transaction>,
     domain_metadata: std::collections::btree_map::IntoIter<String, DomainMetadata>,
-    removes: std::collections::btree_map::IntoIter<String, Remove>,
-    adds: std::collections::btree_map::IntoIter<String, Add>,
+    removes: std::collections::btree_map::IntoIter<LogicalFileKey, Remove>,
+    adds: std::collections::btree_map::IntoIter<LogicalFileKey, Add>,
 }
 
 impl CheckpointBatchIter {
@@ -399,8 +419,8 @@ impl CheckpointBatchIter {
 /// single `Vec`/`RecordBatch`.
 struct SidecarBatchIter {
     batch_size: usize,
-    adds: std::collections::hash_map::IntoValues<String, Add>,
-    removes: std::collections::hash_map::IntoValues<String, Remove>,
+    adds: std::collections::hash_map::IntoValues<LogicalFileKey, Add>,
+    removes: std::collections::hash_map::IntoValues<LogicalFileKey, Remove>,
 }
 
 impl SidecarBatchIter {
@@ -1607,8 +1627,8 @@ mod tests {
             base_row_id: None,
             default_row_commit_version: None,
         }));
-        assert!(!state.adds.contains_key("a.parquet"));
-        assert!(state.removes.contains_key("a.parquet"));
+        assert!(!state.adds.contains_key(&("a.parquet".to_string(), None)));
+        assert!(state.removes.contains_key(&("a.parquet".to_string(), None)));
     }
 
     #[test]
@@ -1678,9 +1698,15 @@ mod tests {
 
         state.prune_expired_checkpoint_actions(now)?;
 
-        assert!(!state.removes.contains_key("expired.parquet"));
-        assert!(state.removes.contains_key("fresh.parquet"));
-        assert!(state.removes.contains_key("unknown-ts.parquet"));
+        assert!(!state
+            .removes
+            .contains_key(&("expired.parquet".to_string(), None)));
+        assert!(state
+            .removes
+            .contains_key(&("fresh.parquet".to_string(), None)));
+        assert!(state
+            .removes
+            .contains_key(&("unknown-ts.parquet".to_string(), None)));
         assert!(!state.txns.contains_key("expired-app"));
         assert!(state.txns.contains_key("fresh-app"));
         assert!(state.txns.contains_key("legacy-app"));
@@ -1717,7 +1743,9 @@ mod tests {
 
         state.prune_expired_checkpoint_actions(now)?;
 
-        assert!(state.removes.contains_key("older-remove.parquet"));
+        assert!(state
+            .removes
+            .contains_key(&("older-remove.parquet".to_string(), None)));
         Ok(())
     }
 

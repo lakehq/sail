@@ -96,6 +96,7 @@ cbc = { version = "0.1.2", features = ["std"] }
 base64 = "0.22.1"
 md-5 = "0.11.0"
 crc32fast = "1.5.0"
+roaring = "0.11.3"
 sha1 = "0.10.6"
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.65"

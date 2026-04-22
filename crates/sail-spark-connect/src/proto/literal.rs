@@ -3,7 +3,7 @@ use sail_common::spec::data_type_to_null_literal;
 use sail_sql_analyzer::literal::numeric::parse_decimal_string;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::spark::connect::expression::literal::{Array, Decimal, LiteralType, Map, Struct};
+use crate::spark::connect::expression::literal::{Array, Decimal, LiteralType, Map, Struct, Time};
 use crate::spark::connect::expression::Literal;
 use crate::spark::connect::{data_type as sdt, DataType};
 
@@ -215,17 +215,23 @@ impl TryFrom<Literal> for spec::Literal {
                 return Err(SparkError::todo("specialized array literal"))
             }
             LiteralType::Time(x) => {
+                let Time { nano, precision } = x;
                 // Spark TIME literals carry nanoseconds since midnight.
-                // Default precision is MICROS (6); NANOS precision (9) uses nanoseconds directly.
-                const NANOS_PRECISION: i32 = 9;
-                if x.precision == Some(NANOS_PRECISION) {
-                    spec::Literal::Time64Nanosecond {
-                        nanoseconds: Some(x.nano),
-                    }
-                } else {
-                    spec::Literal::Time64Microsecond {
-                        microseconds: Some(x.nano / 1_000),
-                    }
+                // Precision values: 0 = seconds, 3 = milliseconds, 6 = microseconds (default), 9 = nanoseconds.
+                match precision.unwrap_or(6) {
+                    0 => spec::Literal::Time32Second {
+                        seconds: Some((nano / 1_000_000_000) as i32),
+                    },
+                    3 => spec::Literal::Time32Millisecond {
+                        milliseconds: Some((nano / 1_000_000) as i32),
+                    },
+                    6 => spec::Literal::Time64Microsecond {
+                        microseconds: Some(nano / 1_000),
+                    },
+                    9 => spec::Literal::Time64Nanosecond {
+                        nanoseconds: Some(nano),
+                    },
+                    p => return Err(SparkError::invalid(format!("invalid TIME precision: {p}"))),
                 }
             }
         };

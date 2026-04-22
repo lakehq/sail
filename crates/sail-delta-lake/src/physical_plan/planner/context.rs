@@ -34,6 +34,12 @@ pub struct DeltaPlannerConfig {
     pub partition_columns: Vec<String>,
     pub table_schema_for_cond: Option<SchemaRef>,
     pub table_exists: bool,
+    /// Column-level generation expressions keyed by column name. Populated from
+    /// `delta.generationExpression` metadata attached to the write input's logical
+    /// schema. Used by the writer to carry generation metadata into the initial
+    /// Delta commit (new tables) even when the physical planner strips the arrow
+    /// field metadata set at logical-plan construction time.
+    pub generation_expressions: HashMap<String, String>,
 }
 
 impl DeltaPlannerConfig {
@@ -52,7 +58,16 @@ impl DeltaPlannerConfig {
             partition_columns,
             table_schema_for_cond,
             table_exists,
+            generation_expressions: HashMap::new(),
         }
+    }
+
+    pub fn with_generation_expressions(
+        mut self,
+        generation_expressions: HashMap<String, String>,
+    ) -> Self {
+        self.generation_expressions = generation_expressions;
+        self
     }
 }
 
@@ -104,6 +119,10 @@ impl<'a> PlannerContext<'a> {
 
     pub fn table_exists(&self) -> bool {
         self.config.table_exists
+    }
+
+    pub fn generation_expressions(&self) -> &HashMap<String, String> {
+        &self.config.generation_expressions
     }
 
     pub fn into_config(self) -> DeltaPlannerConfig {

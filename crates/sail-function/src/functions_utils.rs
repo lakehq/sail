@@ -84,7 +84,7 @@ where
                     Hint::AcceptsSingular => 1,
                     Hint::Pad => inferred_length,
                 };
-                arg.clone().into_array(expansion_len)
+                arg.to_array(expansion_len)
             })
             .collect::<Result<Vec<_>>>()?;
 

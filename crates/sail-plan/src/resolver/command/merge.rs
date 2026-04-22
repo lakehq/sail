@@ -6,6 +6,7 @@ use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryA
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
@@ -104,6 +105,41 @@ impl PlanResolver<'_> {
             )
             .await?;
 
+        // Resolve generation expressions for generated columns in the target table.
+        // After `expand_merge` rewrites column references to actual names, these expressions
+        // are applied as a post-processing projection to ensure generated column values
+        // are always computed from the generation expression, regardless of whether the
+        // user provided an explicit value or not.
+        let generated_column_exprs: Vec<(String, Expr)> = {
+            let mut out = Vec::new();
+            for field in target_schema.fields() {
+                let Some(expr_str) = ColumnFeatures::from_field(field).generation_expression()
+                else {
+                    continue;
+                };
+                // Convert the field_id back to the actual human-readable column name.
+                let actual_name = state
+                    .get_field_info(field.name())
+                    .map(|info| info.name().to_string())
+                    .unwrap_or_else(|_| field.name().clone());
+                let spec_expr = parse_gen_expr(&expr_str)?;
+                // Generation expressions reference non-generated (target) column names.
+                // Disambiguate to target plan_id so the expression references the merged
+                // output values (not the source-prefixed column names).
+                let disambiguated = merge_disambiguate_unqualified_plan_ids(
+                    spec_expr,
+                    state,
+                    target_schema,
+                    source_schema,
+                );
+                let resolved = self
+                    .resolve_expression(disambiguated, &merge_schema, state)
+                    .await?;
+                out.push((actual_name, resolved));
+            }
+            out
+        };
+
         let options = MergeIntoOptions {
             target_alias: target_alias_string,
             source_alias: source_alias_string,
@@ -120,6 +156,7 @@ impl PlanResolver<'_> {
             join_key_pairs,
             residual_predicates,
             target_only_predicates,
+            generated_column_exprs,
         };
 
         Ok(LogicalPlan::Extension(Extension {
@@ -507,6 +544,21 @@ fn merge_schema_has_column_name(
     })
 }
 
+/// Parse and analyze a single generation expression string into a `spec::Expr`.
+fn parse_gen_expr(gen_expr_str: &str) -> PlanResult<spec::Expr> {
+    let ast_expr = sail_sql_analyzer::parser::parse_expression(gen_expr_str).map_err(|e| {
+        PlanError::invalid(format!(
+            "failed to parse generation expression `{gen_expr_str}`: {e}"
+        ))
+    })?;
+    sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|e| {
+        PlanError::invalid(format!(
+            "failed to analyze generation expression `{gen_expr_str}`: {e}"
+        ))
+    })
+}
+
+/// Disambiguate column references in a generation expression for MERGE INSERT/UPDATE context.
 fn merge_disambiguate_unqualified_plan_ids(
     expr: spec::Expr,
     state: &PlanResolverState,
