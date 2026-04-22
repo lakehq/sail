@@ -7229,6 +7229,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "sail-delta-lake",
+ "sail-iceberg",
  "sail-logical-plan",
  "sail-physical-plan",
  "url",
