@@ -214,7 +214,20 @@ impl TryFrom<Literal> for spec::Literal {
             LiteralType::SpecializedArray(_) => {
                 return Err(SparkError::todo("specialized array literal"))
             }
-            LiteralType::Time(_) => return Err(SparkError::todo("time literal")),
+            LiteralType::Time(x) => {
+                // Spark TIME literals carry nanoseconds since midnight.
+                // Default precision is MICROS (6); NANOS precision (9) uses nanoseconds directly.
+                const NANOS_PRECISION: i32 = 9;
+                if x.precision == Some(NANOS_PRECISION) {
+                    spec::Literal::Time64Nanosecond {
+                        nanoseconds: Some(x.nano),
+                    }
+                } else {
+                    spec::Literal::Time64Microsecond {
+                        microseconds: Some(x.nano / 1_000),
+                    }
+                }
+            }
         };
         Ok(literal)
     }

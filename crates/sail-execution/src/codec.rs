@@ -125,6 +125,7 @@ use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -1845,6 +1846,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
+            UdfKind::SparkTime(gen::SparkTimeUdf { is_try }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkTime::new(is_try))));
+            }
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone }) => {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2222,6 +2226,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTime>() {
+            let is_try = func.is_try();
+            UdfKind::SparkTime(gen::SparkTimeUdf { is_try })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkVariantGet>() {
             let safe = func.safe();
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe })
