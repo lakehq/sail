@@ -163,6 +163,42 @@ Feature: div (integer division) comprehensive tests
         | result     |
         | 2147483648 |
 
+    Scenario: div LONG_MAX by 1 is identity
+      When query
+        """
+        SELECT div(CAST(9223372036854775807 AS BIGINT), CAST(1 AS BIGINT)) AS result
+        """
+      Then query result
+        | result              |
+        | 9223372036854775807 |
+
+    Scenario: div LONG_MAX by -1 negates without overflow
+      When query
+        """
+        SELECT div(CAST(9223372036854775807 AS BIGINT), CAST(-1 AS BIGINT)) AS result
+        """
+      Then query result
+        | result               |
+        | -9223372036854775807 |
+
+    Scenario: div zero by zero returns NULL under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(CAST(0 AS BIGINT), CAST(0 AS BIGINT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: div zero by zero errors under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(CAST(0 AS BIGINT), CAST(0 AS BIGINT)) AS result
+        """
+      Then query error .*
+
     Scenario: div BIGINT column containing LONG_MIN with -1 wraps under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -267,6 +303,7 @@ Feature: div (integer division) comprehensive tests
       Then query result
         | result |
         | -3     |
+
 
   Rule: INTERVAL division
 
