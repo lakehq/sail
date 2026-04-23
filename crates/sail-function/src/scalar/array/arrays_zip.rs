@@ -79,10 +79,8 @@ impl ScalarUDFImpl for ArraysZip {
             .map(|row| row.inner_field.clone())
             .collect::<Vec<_>>();
 
-        let struct_field = struct_result_field_with_names(
-            &inner_fields,
-            self.field_names.as_deref(),
-        );
+        let struct_field =
+            struct_result_field_with_names(&inner_fields, self.field_names.as_deref());
 
         let is_large = params.iter().any(|row| row.is_large);
 
@@ -300,7 +298,11 @@ fn combine_validity_masks(arrays: &[ArrayRef]) -> Option<NullBuffer> {
     Some(NullBuffer::new(combined_validity))
 }
 
-fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32, field_names_hint: &[String]) -> Result<ArrayRef> {
+fn arrays_zip_fixed_size(
+    args: &[ArrayRef],
+    fixed_size: &i32,
+    field_names_hint: &[String],
+) -> Result<ArrayRef> {
     let (_num_rows, inner_fields, field_names) =
         num_rows_inner_fields_and_names(args, field_names_hint)?;
 
@@ -338,7 +340,10 @@ fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32, field_names_hint: 
     )?))
 }
 
-fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef], field_names_hint: &[String]) -> Result<ArrayRef> {
+fn arrays_zip_generic<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    field_names_hint: &[String],
+) -> Result<ArrayRef> {
     let (num_rows, inner_fields, field_names) =
         num_rows_inner_fields_and_names(args, field_names_hint)?;
 
