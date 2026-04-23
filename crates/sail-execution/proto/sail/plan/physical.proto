@@ -688,20 +688,12 @@ message IcebergScanByDataFilesExecNode {
   bytes output_schema = 3;
 }
 
-// IcebergDeleteApplyExec wraps a single-data-file Parquet scan and applies
-// matching Iceberg v2 positional + equality delete files on-the-fly.
 message IcebergDeleteApplyExecNode {
-  // Child plan that reads the single data file (row-ordered, no pushdown).
   bytes input = 1;
-  // Absolute path of the data file being read (used to filter positional deletes).
   string data_file_path = 2;
-  // Positional delete refs serialized as JSON (array of DeleteFileRef).
   string positional_deletes_json = 3;
-  // Equality delete refs serialized as JSON (array of DeleteFileRef).
   string equality_deletes_json = 4;
-  // Table URL, needed for object-store resolution on the worker.
   string table_url = 5;
-  // Iceberg schema serialized as JSON, needed to resolve equality_ids -> fields.
   string iceberg_schema_json = 6;
 }
 
