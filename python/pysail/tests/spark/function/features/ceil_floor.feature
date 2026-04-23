@@ -1368,3 +1368,188 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         SELECT floor(CAST(1e300 AS DOUBLE), 2) AS result
         """
       Then query error .*
+
+  Rule: Adversarial — deep nesting stress (simplify chain survival)
+    # 5-level mixed nesting. Spark JVM collapses to the outermost function's
+    # semantic. Our simplify handles same-fn collapse + integer-identity, but
+    # does NOT fold `ceil(floor(x))` pairs directly (cross-nesting is handled
+    # by the integer-identity + cast-folding cascade: floor(x) returns Int64,
+    # then ceil(Int64) simplifies to `cast(floor(x), Int64)` which folds out).
+    # Row-result confirms correctness end-to-end.
+
+    Scenario: 5-level mixed ceil/floor collapses semantically
+      When query
+        """
+        SELECT ceil(floor(ceil(floor(ceil(CAST(1.5 AS DOUBLE)))))) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: 5-level alternating with negative input
+      When query
+        """
+        SELECT floor(ceil(floor(ceil(floor(CAST(-1.5 AS DOUBLE)))))) AS result
+        """
+      Then query result
+        | result |
+        | -2     |
+
+    @sail-only
+    Scenario: EXPLAIN 5-level mixed nesting — simplify collapses through integer identity
+      When query
+        """
+        EXPLAIN SELECT ceil(floor(ceil(floor(ceil(v))))) FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
+        """
+      Then query plan matches snapshot
+
+  Rule: Adversarial — identity-on-subtype at type boundaries
+    # ceil(BIGINT) and floor(BIGINT) are identity by simplify rewrite.
+    # Exercise at BIGINT boundary to confirm no overflow in the identity path.
+
+    Scenario: ceil BIGINT_MAX is identity
+      When query
+        """
+        SELECT ceil(CAST(9223372036854775807 AS BIGINT)) AS result
+        """
+      Then query result
+        | result              |
+        | 9223372036854775807 |
+
+    Scenario: floor BIGINT_MIN is identity
+      When query
+        """
+        SELECT floor(CAST(-9223372036854775808 AS BIGINT)) AS result
+        """
+      Then query result
+        | result                |
+        | -9223372036854775808  |
+
+    @sail-only
+    Scenario: EXPLAIN ceil BIGINT column rewrites to cast (simplify int-identity)
+      When query
+        """
+        EXPLAIN SELECT ceil(v) FROM VALUES (CAST(9223372036854775807 AS BIGINT)) AS t(v)
+        """
+      Then query plan matches snapshot
+
+  Rule: Adversarial — preimage edge cases (floor-only filter pushdown)
+    # `preimage` on SparkFloor must handle: non-integer RHS (return None),
+    # BIGINT boundary RHS (watch for overflow in N+1), NULL RHS.
+
+    Scenario: floor with non-integer RHS — filter matches nothing
+      When query
+        """
+        SELECT v FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(2.5 AS DOUBLE)) AS t(v)
+        WHERE floor(v) = 2.5
+        """
+      Then query result
+        | v |
+
+    Scenario: floor equals BIGINT_MAX boundary — no rows match in sample
+      When query
+        """
+        SELECT v FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(2.5 AS DOUBLE)) AS t(v)
+        WHERE floor(v) = 9223372036854775807
+        """
+      Then query result
+        | v |
+
+    @sail-only
+    Scenario: EXPLAIN floor with non-integer RHS — preimage returns None, no rewrite
+      When query
+        """
+        EXPLAIN SELECT v FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(2.5 AS DOUBLE)) AS t(v)
+        WHERE floor(v) = 2.5
+        """
+      Then query plan matches snapshot
+
+  Rule: Adversarial — nested filter (propagate_constraints + evaluate_bounds paired)
+    # Nested `ceil(floor(v)) > K` exercises the forward (`evaluate_bounds` on
+    # inner `floor`) and backward (`propagate_constraints` on outer `ceil`)
+    # interval graph hooks as a pair. Without evaluate_bounds on floor,
+    # propagate_constraints on ceil would receive Unbounded — cardinality
+    # estimation degrades silently.
+
+    Scenario: nested filter ceil(floor(v)) > K returns correct rows
+      When query
+        """
+        SELECT v FROM VALUES (1.5), (2.5), (3.5), (4.5), (5.5) AS t(v)
+        WHERE ceil(floor(v)) > 3
+        ORDER BY v
+        """
+      Then query result ordered
+        | v   |
+        | 4.5 |
+        | 5.5 |
+
+    @sail-only
+    Scenario: EXPLAIN nested filter exercises both evaluate_bounds and propagate_constraints
+      When query
+        """
+        EXPLAIN SELECT v FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(4.5 AS DOUBLE)) AS t(v)
+        WHERE ceil(floor(v)) > 3
+        """
+      Then query plan matches snapshot
+
+  Rule: Adversarial — ORDER BY DESC (output_ordering preserves direction)
+    # output_ordering forwards child sort_properties without flipping. For a
+    # monotonic non-decreasing function, DESC input → DESC output, so no
+    # redundant SortExec should appear after projection.
+    #
+    # FINDING (captured as fixture): the DESC variant currently shows a
+    # redundant SortExec in the plan — the ASC variant at `Rule: Plan snapshot
+    # — output_ordering` does NOT. Investigation:
+    #
+    #   1) Our hooks expose the property correctly:
+    #      - `output_ordering` forwards `SortProperties` including `descending`.
+    #      - `preserves_lex_ordering = true` (explicitly overridden). Verified
+    #        empirically: setting it to true didn't change the DESC plan →
+    #        the gap is NOT in the equivalence inference path that consumes
+    #        this flag (see equivalence/properties/mod.rs:469).
+    #
+    #   2) Upstream DataFusion `CeilFunc`/`FloorFunc` have the same trivial
+    #      `output_ordering` impl and default `preserves_lex_ordering = false`
+    #      → reproducing this with vanilla DF would show the same DESC gap.
+    #
+    #   3) The gap lives in `datafusion-physical-optimizer/enforce_sorting/
+    #      sort_pushdown.rs` (`pushdown_sorts_helper`). Traced against DF v53.1:
+    #      - `options_compatible` (strict equality for nullable in
+    #        physical-expr-common/sort_expr.rs:210) does NOT discriminate ASC/DESC.
+    #      - `get_expr_properties` (physical-expr/equivalence/properties/mod.rs:1446)
+    #        recurses correctly through our `ScalarFunctionExpr::get_properties`,
+    #        forwarding `SortProperties` via `output_ordering`.
+    #      The asymmetry is in PLAN SHAPE, not in property inference:
+    #           ASC:  keeps inner `SortExec[v ASC]`, projection computes ceil
+    #                 after sort → outer ORDER BY satisfied via monotonicity.
+    #           DESC: eliminates inner `SortExec[v DESC]`, computes ceil+v in
+    #                 the projection, then adds outer `SortExec[ceil(v) DESC]`.
+    #      i.e. DF v53 chooses a different plan shape for DESC ORDER BY over a
+    #      monotonic UDF, bypassing the optimization that works for ASC. Not a
+    #      Sail bug.
+    #
+    # The snapshot below is a regression fixture: when upstream (or we) teach
+    # the planner to reuse DESC input order through monotonic UDFs, the
+    # SortExec will disappear and the snapshot diff will flag the improvement.
+
+    Scenario: ORDER BY ceil(v) DESC on reversed input preserves order
+      When query
+        """
+        SELECT v, ceil(v) AS c FROM VALUES (3.5), (1.5), (2.5) AS t(v)
+        ORDER BY ceil(v) DESC
+        """
+      Then query result ordered
+        | v   | c |
+        | 3.5 | 4 |
+        | 2.5 | 3 |
+        | 1.5 | 2 |
+
+    @sail-only
+    Scenario: EXPLAIN ORDER BY ceil DESC on already-sorted-DESC input avoids extra sort
+      When query
+        """
+        EXPLAIN SELECT ceil(v) AS c FROM (
+            SELECT v FROM VALUES (3.5), (2.5), (1.5) AS t(v) ORDER BY v DESC
+        ) ORDER BY ceil(v) DESC
+        """
+      Then query plan matches snapshot

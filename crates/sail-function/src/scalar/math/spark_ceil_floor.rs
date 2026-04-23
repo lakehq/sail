@@ -266,6 +266,13 @@ impl ScalarUDFImpl for SparkCeil {
             .unwrap_or(SortProperties::Unordered))
     }
 
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // ceil is monotonic non-decreasing → preserves lex order of its input.
+        // Default is false; opting in unlocks equivalence-based ordering
+        // inference (see equivalence/properties/mod.rs:469).
+        Ok(true)
+    }
+
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         simplify_ceil_floor("spark_ceil", args, info)
     }
@@ -276,6 +283,10 @@ impl ScalarUDFImpl for SparkCeil {
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         propagate_ceil_floor(CeilFloor::Ceil, interval, inputs)
+    }
+
+    fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        evaluate_bounds_ceil_floor(CeilFloor::Ceil, input)
     }
 
     // NOTE: no `preimage` hook for `ceil`. The preimage of `ceil(x) = N` is the
@@ -356,6 +367,12 @@ impl ScalarUDFImpl for SparkFloor {
             .unwrap_or(SortProperties::Unordered))
     }
 
+    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // floor is monotonic non-decreasing → preserves lex order of its input.
+        // See `SparkCeil::preserves_lex_ordering` for details.
+        Ok(true)
+    }
+
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         simplify_ceil_floor("spark_floor", args, info)
     }
@@ -366,6 +383,10 @@ impl ScalarUDFImpl for SparkFloor {
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         propagate_ceil_floor(CeilFloor::Floor, interval, inputs)
+    }
+
+    fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        evaluate_bounds_ceil_floor(CeilFloor::Floor, input)
     }
 
     fn preimage(
@@ -451,6 +472,40 @@ fn propagate_ceil_floor(
         out.extend(inputs.iter().skip(1).map(|i| (*i).clone()));
         out
     }))
+}
+
+/// Forward interval evaluation for `ceil` / `floor` (Rule 5, paired with
+/// `propagate_constraints`): given an input interval `[lo, hi]`, return a
+/// safe over-approximation of the output interval.
+///
+/// Math (both functions are monotonic non-decreasing, so `f([a, b]) ⊆ [f(a), f(b)]`):
+/// - `ceil(x)  ∈ [ceil(lo),  ceil(hi)]  ⊆ [lo,     hi + 1]`
+/// - `floor(x) ∈ [floor(lo), floor(hi)] ⊆ [lo - 1, hi]`
+///
+/// We return the simple over-approximation (`[lo, hi + 1]` / `[lo - 1, hi]`)
+/// rather than calling the kernel per scalar. This keeps the hook cheap and
+/// type-independent at the cost of one unit of precision. Over-approximation
+/// is sound: downstream `FilterExec` re-evaluates the UDF and prunes the
+/// spurious rows; missing rows would be a correctness bug.
+///
+/// Without this hook, `cp_solver.rs` returns `Interval::make_unbounded()` for
+/// the output, which breaks interval chaining through nested UDFs. For example,
+/// `ceil(floor(x))` without this hook on `floor` would feed Unbounded into
+/// `ceil.propagate_constraints`, preventing any refinement on `x`.
+fn evaluate_bounds_ceil_floor(kind: CeilFloor, input: &[&Interval]) -> Result<Interval> {
+    let Some(child) = input.first() else {
+        return Err(generic_internal_err(
+            "ceil/floor",
+            "evaluate_bounds called with zero inputs",
+        ));
+    };
+    let child_type = child.data_type();
+    let one = ScalarValue::new_one(&child_type)?;
+    let (lower, upper) = match kind {
+        CeilFloor::Ceil => (child.lower().clone(), child.upper().add(&one)?),
+        CeilFloor::Floor => (child.lower().sub(&one)?, child.upper().clone()),
+    };
+    Interval::try_new(lower, upper)
 }
 
 /// Algebraic simplifications for `ceil` and `floor`:
