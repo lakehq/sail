@@ -65,11 +65,7 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     }
 
     let file_extension = if let Some(extension_with_compression) = extension_with_compression {
-        resolve_listing_file_extension(
-            &file_groups,
-            base_extension,
-            extension_with_compression,
-        )
+        resolve_listing_file_extension(&file_groups, base_extension, extension_with_compression)
     } else {
         let result = infer_listing_file_extension(&file_groups, base_extension);
         if let Some(result) = result {
