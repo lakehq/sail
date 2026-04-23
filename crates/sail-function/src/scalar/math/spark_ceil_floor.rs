@@ -289,16 +289,14 @@ impl ScalarUDFImpl for SparkCeil {
         evaluate_bounds_ceil_floor(CeilFloor::Ceil, input)
     }
 
-    // NOTE: no `preimage` hook for `ceil`. The preimage of `ceil(x) = N` is the
-    // half-open interval `(N - 1, N]` (right-closed, left-open), but
-    // `PreimageResult::Range` is defined as `[lower, upper)` (left-closed,
-    // right-open) — see `udf_preimage::rewrite_with_preimage`, which rewrites
-    // `<expr> = x`  →  `<expr> >= lower AND <expr> < upper`. Any half-open
-    // interval we returned would either include `N - 1` (wrong: `ceil(N-1) =
-    // N-1`, not `N`) or exclude `N` (wrong: `ceil(N) = N`), producing an
-    // unsound filter rewrite. Upstream DataFusion v53 skips this hook on
-    // `CeilFunc` for the same reason. Filter pushdown for `ceil` would require
-    // extending `PreimageResult` to support right-closed intervals.
+    // NOTE: no `preimage` hook for `ceil`. The preimage of `ceil(x) = N` is
+    // `(N - 1, N]` (right-closed, left-open), but `PreimageResult::Range` is
+    // `[lower, upper)` (left-closed, right-open). There is no [lower, upper)
+    // that exactly represents (N - 1, N]: including N - 1 is wrong
+    // (`ceil(N - 1) = N - 1`, not N), excluding N is wrong (`ceil(N) = N`).
+    // Any rewrite would be unsound. Upstream DF v53 skips this on `CeilFunc`
+    // for the same reason. Filter pushdown for `ceil` would require extending
+    // `PreimageResult` to support right-closed intervals.
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -410,36 +408,42 @@ const PROPAGATE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     format_options: FormatOptions::new(),
 };
 
-/// Constraint propagation for `ceil` / `floor` (Rule 17): given a known output
-/// `interval` (e.g. from `WHERE ceil(col) > 5`), derive the widest safe interval
-/// on the input that can still produce that output.
+/// Constraint propagation for `ceil` / `floor` — given a known output interval
+/// from a filter (e.g. `WHERE ceil(col) > 5`), derive the widest safe input
+/// interval that can still produce that output.
 ///
-/// Math (both functions are monotonic non-decreasing):
-/// - `ceil(x) ∈ [a, b]`  ⇔  `x ∈ (a - 1, b]`   → safe over-approximation: `[a - 1, b]`
-/// - `floor(x) ∈ [a, b]` ⇔  `x ∈ [a, b + 1)`  → safe over-approximation: `[a, b + 1]`
+/// ## Math
 ///
-/// Over-approximating is sound: the final filter re-evaluates `ceil/floor(x)`
-/// so the extra rows are discarded; missing rows would be a correctness bug.
-/// The result is intersected with the current child interval to keep any
-/// tighter pre-existing bounds.
+/// Both functions are monotonic non-decreasing, so the preimage of `[a, b]` is:
+/// - `ceil(x)  ∈ [a, b]`  ⇔  `x ∈ (a - 1, b]`   → over-approximate as `[a - 1, b]`
+/// - `floor(x) ∈ [a, b]`  ⇔  `x ∈ [a, b + 1)`   → over-approximate as `[a, b + 1]`
 ///
-/// # Why both hooks?
+/// ## Implementation
 ///
-/// `floor` also exposes a `preimage()` hook (below), and the logical simplifier
-/// rewrites `WHERE floor(col) OP lit` into a literal column predicate *before*
-/// physical planning even sees the UDF. So for floor, `propagate_constraints`
-/// is rarely on the critical path — it kicks in only for the cases the
-/// simplifier can't reach (non-literal RHS, multi-arg forms, volatile contexts).
+/// Over-approximation is sound: the outer `FilterExec` re-evaluates
+/// `ceil/floor(x)` so spurious rows drop out; **missing** rows would be a
+/// correctness bug. The widened interval is intersected with the existing
+/// child interval to preserve any tighter pre-existing bounds.
 ///
-/// For `ceil`, preimage is not safe (the preimage of `ceil(x) = N` is the
-/// right-closed interval `(N - 1, N]`, which cannot be expressed as
-/// `[lower, upper)`), so `propagate_constraints` is the only forward-compat
-/// hook. Even so, the only DF v53 consumer today is
-/// `FilterExec::statistics_by_expr()` via `physical_expr::analysis::analyze`,
-/// which does not thread ScalarUDF children through `ExprIntervalGraph` — so
-/// the refined interval currently has no observable effect on `ceil` plans.
-/// Keeping the hook is cheap and becomes load-bearing the moment upstream
-/// wires UDFs into the interval graph.
+/// ## Why this hook AND `preimage` (for floor) / why this hook ALONE (for ceil)
+///
+/// `floor` exposes `preimage()` below; the logical simplifier uses it to
+/// rewrite `WHERE floor(col) OP lit` into a pure column predicate *before*
+/// physical planning. For floor, `propagate_constraints` is the fallback for
+/// shapes the simplifier can't reach (non-literal RHS, multi-arg, volatile
+/// contexts).
+///
+/// `ceil`'s preimage `(N - 1, N]` cannot be expressed as `[lower, upper)`, so
+/// `preimage` is unsafe for ceil — `propagate_constraints` is the only
+/// forward-compat hook. Keeping it is cheap and becomes load-bearing the
+/// moment upstream threads ScalarUDF children through `ExprIntervalGraph`.
+///
+/// ## Current DF v53 visibility
+///
+/// The only consumer is `FilterExec::statistics_by_expr()` via
+/// `physical_expr::analysis::analyze`. `ExprIntervalGraph` stops at the UDF
+/// node, so the refined interval never reaches `FilterExec.statistics` and
+/// `row_groups_pruned_statistics` stays 0 today.
 fn propagate_ceil_floor(
     kind: CeilFloor,
     interval: &Interval,
@@ -525,6 +529,11 @@ fn simplify_ceil_floor(
             return Ok(ExprSimplifyResult::Simplified(arg.clone()));
         }
     }
+    // Int-identity fold: ceil(int) = int, so rewrite to a cast (to get the
+    // BIGINT return type Spark expects). `coerce_types` runs before simplify
+    // and narrows UInt64 → Int64 (and the other unsigned → signed widenings),
+    // so `is_integer()` here only ever matches {Int8, Int16, Int32, Int64}.
+    // All four widen cleanly to Int64 — no overflow risk.
     if info.get_data_type(arg)?.is_integer() {
         return Ok(ExprSimplifyResult::Simplified(cast(
             arg.clone(),
@@ -1040,6 +1049,12 @@ fn decimal128_bounds(n: i128, precision: u8, scale: i8) -> Option<(ScalarValue, 
     ))
 }
 
+/// Scale a Decimal128 value and apply ceil/floor rounding. Uses
+/// `pow_wrapping` rather than `pow` because the caller is expected to guard
+/// exponents to ≤ 37 (see `return_field_from_args` which rejects
+/// `target_scale < -37`, and `DECIMAL128_MAX_SCALE = 38` which bounds input
+/// scale). 10^37 fits in i128, so the wrap branch is unreachable under those
+/// guards — any actual overflow would indicate a guard bypass (bug).
 #[inline]
 fn ceil_floor_with_target_scale(name: &str, decimal: i128, scale: i8, target_scale: i32) -> i128 {
     // Round to powers of 10 to the left of decimal point when target_scale < 0
