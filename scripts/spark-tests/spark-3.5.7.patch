@@ -49,17 +49,7 @@ index 7b1aafbefeb..ed0883891c3 100644
  
                  jvm = PySparkSession._instantiatedSession._jvm  # type: ignore[union-attr]
                  return getattr(
-@@ -229,6 +232,10 @@ class ChannelBuilder:
-         GRPC_DEFAULT_OPTIONS = [
-             ("grpc.max_send_message_length", ChannelBuilder.MAX_MESSAGE_LENGTH),
-             ("grpc.max_receive_message_length", ChannelBuilder.MAX_MESSAGE_LENGTH),
-+            # Increase the max metadata size to avoid errors when Sail returns large error
-+            # messages (e.g., long Python tracebacks) that exceed the default 16384-byte limit.
-+            ("grpc.max_metadata_size", 16 * 1024 * 1024),
-         ]
- 
-         if channelOptions is None:
-@@ -1005,6 +1012,8 @@ class SparkConnectClient(object):
+@@ -1005,6 +1008,8 @@ class SparkConnectClient(object):
          """
          Close the channel.
          """
