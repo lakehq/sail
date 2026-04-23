@@ -18,7 +18,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::{SparkIntegerDiv, SparkIntervalDiv};
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
@@ -395,6 +395,15 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
             let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new()));
             Expr::ScalarFunction(expr::ScalarFunction {
                 func: interval_div,
+                args: vec![dividend, divisor],
+            })
+        }
+        // Integer operands: delegate to SparkIntegerDiv which handles the
+        // LONG_MIN / -1 overflow edge according to ANSI mode.
+        (Ok(d), Ok(s)) if d.is_integer() && s.is_integer() => {
+            let integer_div = Arc::new(ScalarUDF::from(SparkIntegerDiv::new(ansi_mode)));
+            Expr::ScalarFunction(expr::ScalarFunction {
+                func: integer_div,
                 args: vec![dividend, divisor],
             })
         }

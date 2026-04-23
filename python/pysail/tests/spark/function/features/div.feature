@@ -132,11 +132,10 @@ Feature: div (integer division) comprehensive tests
         | NULL   |
 
   Rule: Overflow semantics — LONG_MIN div -1
+    # Two's-complement: BIGINT range is [-2^63, 2^63-1]; -LONG_MIN overflows
+    # BIGINT, so under ANSI=false Spark wraps to LONG_MIN (matches Java
+    # Math.floorDiv); ANSI=true raises ARITHMETIC_OVERFLOW.
 
-    @sail-bug
-    # JVM wraps under ANSI=false (LONG_MIN / -1 = LONG_MIN in two's-complement);
-    # Sail may propagate datafusion-style overflow handling. Mirrors the abs
-    # TINYINT MIN wrap pattern (feedback_planner_hook_ship_gate).
     Scenario: div LONG_MIN by -1 wraps under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -163,6 +162,35 @@ Feature: div (integer division) comprehensive tests
       Then query result
         | result     |
         | 2147483648 |
+
+    Scenario: div BIGINT column containing LONG_MIN with -1 wraps under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(a, b) AS result
+        FROM VALUES
+          (CAST(10 AS BIGINT), CAST(3 AS BIGINT)),
+          (CAST(-9223372036854775808 AS BIGINT), CAST(-1 AS BIGINT)),
+          (CAST(-10 AS BIGINT), CAST(2 AS BIGINT))
+        AS t(a, b)
+        """
+      Then query result
+        | result                |
+        | 3                     |
+        | -9223372036854775808  |
+        | -5                    |
+
+    Scenario: div BIGINT column containing LONG_MIN with -1 errors under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(a, b) AS result
+        FROM VALUES
+          (CAST(10 AS BIGINT), CAST(3 AS BIGINT)),
+          (CAST(-9223372036854775808 AS BIGINT), CAST(-1 AS BIGINT))
+        AS t(a, b)
+        """
+      Then query error .*
 
   Rule: Mixed numeric types
 
@@ -260,10 +288,6 @@ Feature: div (integer division) comprehensive tests
         | result |
         | 5      |
 
-    @sail-bug
-    # Known: Sail errors on interval div-by-zero even under ANSI=false.
-    # Fix path: honour plan_config.ansi_mode in interval division kernel
-    # (similar to how scalar div-by-zero is handled in divide_by_zero.feature).
     Scenario: div INTERVAL DAY by zero INTERVAL DAY returns NULL under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -282,6 +306,31 @@ Feature: div (integer division) comprehensive tests
         """
       Then query error .*
 
+    Scenario: div INTERVAL DAY multi-row with zero divisor returns NULL under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(a, b) AS result FROM VALUES
+          (INTERVAL '10' DAY, INTERVAL '2' DAY),
+          (INTERVAL '5' DAY, INTERVAL '0' DAY)
+        AS t(a, b)
+        """
+      Then query result
+        | result |
+        | 5      |
+        | NULL   |
+
+    Scenario: div INTERVAL DAY multi-row with zero divisor errors under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(a, b) AS result FROM VALUES
+          (INTERVAL '10' DAY, INTERVAL '2' DAY),
+          (INTERVAL '5' DAY, INTERVAL '0' DAY)
+        AS t(a, b)
+        """
+      Then query error .*
+
     Scenario: div NULL INTERVAL returns NULL
       When query
         """
@@ -292,13 +341,10 @@ Feature: div (integer division) comprehensive tests
         | NULL   |
 
   Rule: Type rejection
-    # Sail is more permissive than Spark with floating-point operands in div:
-    # Spark rejects FLOAT and DOUBLE at analysis time (BINARY_OP_WRONG_TYPE /
-    # BINARY_OP_DIFF_TYPES); Sail coerces and performs the division.
-    # Fix path: type-validate div args in sail-plan's `spark_div` dispatcher
-    # (reject FLOAT and DOUBLE at planning time to mirror Spark's analyzer).
+    # Spark's IntegralDivide rejects FLOAT and DOUBLE at analysis time
+    # (BINARY_OP_WRONG_TYPE / BINARY_OP_DIFF_TYPES). Sail mirrors that in
+    # the `spark_div` dispatcher — see workarounds below for valid patterns.
 
-    @sail-bug
     Scenario: div FLOAT/FLOAT errors
       When query
         """
@@ -306,7 +352,6 @@ Feature: div (integer division) comprehensive tests
         """
       Then query error .*
 
-    @sail-bug
     Scenario: div DOUBLE/DOUBLE errors
       When query
         """
@@ -314,7 +359,6 @@ Feature: div (integer division) comprehensive tests
         """
       Then query error .*
 
-    @sail-bug
     Scenario: div INT/DOUBLE errors
       When query
         """

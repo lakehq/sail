@@ -152,7 +152,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::{SparkIntegerDiv, SparkIntervalDiv};
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
@@ -1939,6 +1939,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
             }
+            UdfKind::SparkIntegerDiv(gen::SparkIntegerDivUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkIntegerDiv::new(ansi_mode))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -2323,6 +2326,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkNextDay>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkIntegerDiv>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkIntegerDiv(gen::SparkIntegerDivUdf { ansi_mode })
         } else {
             return Ok(());
         };
