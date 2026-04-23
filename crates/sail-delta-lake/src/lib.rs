@@ -12,6 +12,7 @@
 
 pub mod conversion;
 pub mod datasource;
+pub mod deletion_vector;
 mod delta_log;
 mod kernel;
 pub mod logical;

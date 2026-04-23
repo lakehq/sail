@@ -1767,7 +1767,7 @@ mod tests {
     async fn commit_writes_commit_info_first_monotonic_ict_and_checksum() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, true, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, true, false, &HashMap::new())?;
         let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
 
         let created = CommitBuilder::default()
@@ -1835,7 +1835,7 @@ mod tests {
     async fn finalize_attempt_actions_backfills_enablement_metadata() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -1862,7 +1862,7 @@ mod tests {
                 DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
             })?;
 
-        let upgrade_protocol = protocol_for_create(false, false, true, &HashMap::new())?;
+        let upgrade_protocol = protocol_for_create(false, false, true, false, &HashMap::new())?;
         let upgrade_metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
         let base_actions = CommitData::new(
             vec![
@@ -1919,11 +1919,13 @@ mod tests {
     async fn create_commit_rejects_unsupported_reader_features() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
+        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
+        // Use it to verify that the commit pipeline correctly rejects unsupported features.
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::DeletionVectors]),
-            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
         let metadata = test_metadata([]);
 
@@ -1955,7 +1957,7 @@ mod tests {
         assert!(matches!(
             err,
             DeltaError::Transaction(TransactionError::UnsupportedTableFeatures(features))
-                if features.contains(&TableFeature::DeletionVectors)
+                if features.contains(&TableFeature::VacuumProtocolCheck)
         ));
     }
 
@@ -1963,7 +1965,7 @@ mod tests {
     async fn commit_rejects_timestamp_ntz_schema_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -2021,7 +2023,7 @@ mod tests {
     async fn commit_rejects_domain_metadata_actions_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![

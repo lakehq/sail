@@ -378,18 +378,58 @@ impl PlanResolver<'_> {
                         python_version: f.python_version().to_string(),
                         eval_type: f.eval_type(),
                         command: f.command().to_vec(),
-                        return_type: f.output_type().clone(),
+                        return_type: f.output_type().cloned(),
                     };
                     let input = self.resolve_query_empty(true)?;
+                    // Combine positional arguments with named_arguments (SQL kwargs like a => 10).
+                    // Named arguments are appended after positional ones, wrapped as NamedArgument
+                    // expressions so that extract_kwargs can process them uniformly.
+                    let all_arguments: Vec<spec::Expr> = arguments
+                        .into_iter()
+                        .chain(named_arguments.into_iter().map(|(key, value)| {
+                            spec::Expr::NamedArgument {
+                                key: key.into(),
+                                value: Box::new(value),
+                            }
+                        }))
+                        .collect();
+                    let (positional_args, kwarg_names) = Self::extract_kwargs(all_arguments);
+                    // Validate: no duplicate kwarg names and no positional arg after a named arg.
+                    {
+                        let mut seen_kwarg_names = std::collections::HashSet::new();
+                        let mut seen_named = false;
+                        for kwarg in &kwarg_names {
+                            match kwarg {
+                                Some(name) => {
+                                    if !seen_kwarg_names.insert(name.as_str()) {
+                                        return Err(PlanError::AnalysisError(format!(
+                                            "[DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE] \
+                                             Duplicate named argument: '{name}' is assigned more than once."
+                                        )));
+                                    }
+                                    seen_named = true;
+                                }
+                                None => {
+                                    if seen_named {
+                                        return Err(PlanError::AnalysisError(
+                                            "[UNEXPECTED_POSITIONAL_ARGUMENT] \
+                                             Positional argument follows a named (keyword) argument."
+                                                .to_string(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let arguments = self
-                        .resolve_named_expressions(arguments, input.schema(), state)
+                        .resolve_named_expressions(positional_args, input.schema(), state)
                         .await?;
                     self.resolve_python_udtf_plan(
                         udtf,
                         &function_name,
                         input,
                         arguments,
-                        &[], // ReadUdtf kwargs come via named_arguments, not NamedArgument exprs
+                        &kwarg_names,
                         None,
                         None,
                         f.deterministic(),

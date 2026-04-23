@@ -8,8 +8,9 @@ use aws_sdk_glue::types::{
 use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewColumnOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -615,6 +616,20 @@ impl CatalogProvider for GlueCatalogProvider {
                 }
             }
         }
+    }
+
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        // The Glue catalog does not currently mirror table property changes into
+        // Glue's `Parameters`, but ALTER TABLE is still useful for Glue-tracked Delta
+        // tables where the property change is persisted by the Delta `TableFormat`.
+        // We therefore treat this as a no-op at the catalog layer so the storage-side
+        // commit is not rolled back.
+        Ok(())
     }
 
     async fn create_view(

@@ -163,6 +163,11 @@ pub struct SinkInfo {
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
     pub options: Vec<OptionLayer>,
+    /// The logical schema of the writer's input, if available. This schema can
+    /// preserve arrow field metadata that the physical planner may strip (e.g.
+    /// metadata attached via `Expr::Alias::with_metadata`). Table formats can use
+    /// this to recover column-level metadata such as `delta.generationExpression`.
+    pub logical_schema: Option<datafusion_common::DFSchemaRef>,
 }
 
 impl SinkInfo {
@@ -320,6 +325,27 @@ pub trait TableFormat: Send + Sync {
     /// Defaults to [`MergeStrategy::Eager`]. Override for Merge-on-Read formats.
     fn merge_strategy(&self) -> MergeStrategy {
         MergeStrategy::Eager
+    }
+
+    /// Alters table properties (SET/UNSET TBLPROPERTIES).
+    ///
+    /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
+    /// or `None` to unset/remove it. When `if_exists` is `false`, implementations MUST error if
+    /// an UNSET key is not present on the table; when `if_exists` is `true`, UNSET for a missing
+    /// key is a no-op. The implementation is responsible for committing these changes to the
+    /// underlying table storage (e.g., writing a new Delta log entry).
+    async fn alter_table_properties(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        changes: Vec<(String, Option<String>)>,
+        if_exists: bool,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, changes, if_exists);
+        not_impl_err!(
+            "Table properties alteration not supported for {} format",
+            self.name()
+        )
     }
 }
 
