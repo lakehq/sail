@@ -280,6 +280,20 @@ impl SparkThrowable {
     }
 }
 
+/// The maximum length of a gRPC status message in bytes.
+///
+/// gRPC has a hard limit of 16384 bytes for the total metadata size.
+/// The `grpc-message` and `grpc-status-details-bin` headers both encode the message:
+/// - `grpc-message`: percent-encoded (newlines expand from 1 to 3 bytes each)
+/// - `grpc-status-details-bin`: base64-encoded protobuf (adds ~33% base64 overhead)
+///
+/// Combined encoding overhead is approximately 2.9x the raw message length in the
+/// worst case (high density of newlines and non-ASCII characters). A limit of 4096
+/// bytes ensures the total metadata stays well within the 16384-byte gRPC limit.
+const MAX_GRPC_STATUS_MESSAGE_LEN: usize = 4096;
+
+const TRUNCATED_SUFFIX: &str = "\n[truncated]";
+
 impl From<SparkThrowable> for Status {
     fn from(throwable: SparkThrowable) -> Status {
         let class = throwable.class_name();
@@ -291,10 +305,28 @@ impl From<SparkThrowable> for Status {
         let mut details = ErrorDetails::new();
         details.set_error_info(class, "org.apache.spark", metadata);
 
+        // Truncate the message if it exceeds the maximum length.
+        // gRPC has a hard limit of 16384 bytes for total metadata size.
+        // Both `grpc-message` and `grpc-status-details-bin` encode the message,
+        // so long messages (e.g., Python tracebacks) can easily exceed the limit.
+        let message = throwable.message();
+        let message = if message.len() > MAX_GRPC_STATUS_MESSAGE_LEN {
+            // Truncate at a byte boundary that respects UTF-8 character boundaries.
+            let take = MAX_GRPC_STATUS_MESSAGE_LEN.saturating_sub(TRUNCATED_SUFFIX.len());
+            // Walk back from `take` bytes to find a valid UTF-8 char boundary.
+            let mut pos = take;
+            while pos > 0 && !message.is_char_boundary(pos) {
+                pos -= 1;
+            }
+            format!("{}{TRUNCATED_SUFFIX}", &message[..pos])
+        } else {
+            message.to_string()
+        };
+
         // The original Spark Connect server implementation uses the "INTERNAL" status code
         // for all Spark exceptions, so we do the same here.
         // Reference: org.apache.spark.sql.connect.utils.ErrorUtils#buildStatusFromThrowable
-        Status::with_error_details(Code::Internal, throwable.message(), details)
+        Status::with_error_details(Code::Internal, message, details)
     }
 }
 
