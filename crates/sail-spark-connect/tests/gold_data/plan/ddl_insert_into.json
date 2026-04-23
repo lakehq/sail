@@ -156,7 +156,7 @@
       "input": "INSERT INTO TABLE t1 BY NAME (c1,c2) SELECT * FROM tmp_view",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'c1'. SQLSTATE: 42601 (line 1, pos 30)\n\n== SQL ==\nINSERT INTO TABLE t1 BY NAME (c1,c2) SELECT * FROM tmp_view\n------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found c1 at 30:32 expected query"
+        "failure": "parse error: found c1 at 30:32 expected query"
       }
     },
     {

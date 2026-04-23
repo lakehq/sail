@@ -1376,7 +1376,7 @@
       "input": "CREATE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
       "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: CREATE TABLE ... SKEWED BY is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found SKEWED at 32:38 expected 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "parse error: found SKEWED at 32:38 expected 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
@@ -1439,7 +1439,7 @@
       "input": "CREATE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'",
       "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: STORED BY is not valid. SQLSTATE: 42601\n== SQL (line 2, position 1) ==\nSTORED BY 'handler'\n^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found BY at 50:52 expected 'AS'"
+        "failure": "parse error: found BY at 50:52 expected 'AS'"
       }
     },
     {
@@ -1912,7 +1912,7 @@
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 1, pos 54)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found ) at 54:55 expected expression"
+        "failure": "parse error: found ) at 54:55 expected expression"
       }
     },
     {
@@ -1926,7 +1926,7 @@
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'a'. SQLSTATE: 42601 (line 1, pos 53)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET\n-----------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found a at 53:54 expected '('"
+        "failure": "parse error: found a at 53:54 expected '('"
       }
     },
     {
@@ -2611,297 +2611,297 @@
       "input": "CREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ':'. SQLSTATE: 42601 (line 1, pos 21)\n\n== SQL ==\nCREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet\n---------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found : at 21:22 expected data type"
+        "failure": "parse error: found : at 21:22 expected data type"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "failure": "parse error: found IDENTITY at 50:58 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "failure": "parse error: found IDENTITY at 50:58 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "failure": "parse error: found IDENTITY at 50:58 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "failure": "parse error: found IDENTITY at 50:58 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "failure": "parse error: found IDENTITY at 50:58 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "failure": "parse error: found IDENTITY at 50:58 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "failure": "parse error: found IDENTITY at 50:58 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY , val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "failure": "parse error: found IDENTITY at 50:58 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 40:42 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 40:42 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 40:42 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 40:42 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 40:42 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 40:42 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 40:42 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY , val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 40:42 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "failure": "parse error: found IDENTITY at 47:55 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "failure": "parse error: found IDENTITY at 47:55 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "failure": "parse error: found IDENTITY at 47:55 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "failure": "parse error: found IDENTITY at 47:55 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "failure": "parse error: found IDENTITY at 47:55 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "failure": "parse error: found IDENTITY at 47:55 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "failure": "parse error: found IDENTITY at 47:55 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY , val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "failure": "parse error: found IDENTITY at 47:55 expected '('"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 37:39 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 37:39 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 37:39 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 37:39 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 37:39 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 37:39 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 37:39 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY , val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "failure": "parse error: found BY at 37:39 expected 'ALWAYS'"
       }
     },
     {
       "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "parse error: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr_ci_ai",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "parse error: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "parse error: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "parse error: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci_rtrim",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "parse error: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_binary",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "parse error: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_lcase",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "parse error: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "CREATE TABLE t DEFAULT COLLATION XD",
       "exception": "[COLLATION_INVALID_NAME] The value XD does not represent a correct collation name. Suggested valid collation names: [id, xh, af]. SQLSTATE: 42704",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 15:22 expected '.', '(', 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "parse error: found DEFAULT at 15:22 expected '.', '(', 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS 1 GENERATED ALWAYS AS IDENTITY, val INT) USING foo",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '1'. SQLSTATE: 42601 (line 1, pos 58)\n\n== SQL ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS 1 GENERATED ALWAYS AS IDENTITY, val INT) USING foo\n----------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found 1 at 58:59 expected '('"
+        "failure": "parse error: found 1 at 58:59 expected '('"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 INCREMENT BY 2), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: STEP. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 INCREMENT BY 2), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "failure": "parse error: found IDENTITY at 58:66 expected '('"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 START WITH 0 INCREMENT BY 2), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: STEP. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 START WITH 0 INCREMENT BY 2), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "failure": "parse error: found IDENTITY at 58:66 expected '('"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 INCREMENT BY 1 START WITH 1), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: START. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 INCREMENT BY 1 START WITH 1), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "failure": "parse error: found IDENTITY at 58:66 expected '('"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 START WITH 1), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: START. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 START WITH 1), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "failure": "parse error: found IDENTITY at 58:66 expected '('"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 0), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_ILLEGAL_STEP] IDENTITY column step cannot be 0. SQLSTATE: 42611\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 0), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "failure": "parse error: found IDENTITY at 58:66 expected '('"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id FLOAT GENERATED ALWAYS AS IDENTITY(), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_UNSUPPORTED_DATA_TYPE] DataType FloatType is not supported for IDENTITY columns. SQLSTATE: 428H2\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id FLOAT GENERATED ALWAYS AS IDENTITY(), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 57:65 expected '('"
+        "failure": "parse error: found IDENTITY at 57:65 expected '('"
       }
     },
     {
