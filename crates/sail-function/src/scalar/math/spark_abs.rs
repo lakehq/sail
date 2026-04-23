@@ -3,15 +3,16 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{
     ArrayRef, AsArray, DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
-    DurationSecondArray, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    DurationSecondArray, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray,
 };
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, TimeUnit,
+    DurationSecondType, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::math::expr_fn::abs;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
@@ -25,19 +26,25 @@ use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkAbs {
     signature: Signature,
+    ansi_mode: bool,
 }
 
 impl Default for SparkAbs {
     fn default() -> Self {
-        Self::new()
+        Self::new(true)
     }
 }
 
 impl SparkAbs {
-    pub fn new() -> Self {
+    pub fn new(ansi_mode: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            ansi_mode,
         }
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 }
 
@@ -87,7 +94,6 @@ impl ScalarUDFImpl for SparkAbs {
         }
     }
 
-    // TODO: ANSI mode
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
@@ -97,6 +103,61 @@ impl ScalarUDFImpl for SparkAbs {
             );
         };
         match arg {
+            // Signed integer abs: ANSI=true errors on overflow, ANSI=false wraps.
+            ColumnarValue::Scalar(ScalarValue::Int8(v)) => match v {
+                Some(x) => {
+                    let r = if self.ansi_mode {
+                        x.checked_abs().ok_or_else(|| {
+                            exec_datafusion_err!("[ARITHMETIC_OVERFLOW] byte overflow on abs({x})")
+                        })?
+                    } else {
+                        x.wrapping_abs()
+                    };
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int8(Some(r))))
+                }
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Int8(None))),
+            },
+            ColumnarValue::Scalar(ScalarValue::Int16(v)) => match v {
+                Some(x) => {
+                    let r = if self.ansi_mode {
+                        x.checked_abs().ok_or_else(|| {
+                            exec_datafusion_err!("[ARITHMETIC_OVERFLOW] short overflow on abs({x})")
+                        })?
+                    } else {
+                        x.wrapping_abs()
+                    };
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int16(Some(r))))
+                }
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Int16(None))),
+            },
+            ColumnarValue::Scalar(ScalarValue::Int32(v)) => match v {
+                Some(x) => {
+                    let r = if self.ansi_mode {
+                        x.checked_abs().ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "[ARITHMETIC_OVERFLOW] integer overflow on abs({x})"
+                            )
+                        })?
+                    } else {
+                        x.wrapping_abs()
+                    };
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(r))))
+                }
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Int32(None))),
+            },
+            ColumnarValue::Scalar(ScalarValue::Int64(v)) => match v {
+                Some(x) => {
+                    let r = if self.ansi_mode {
+                        x.checked_abs().ok_or_else(|| {
+                            exec_datafusion_err!("[ARITHMETIC_OVERFLOW] long overflow on abs({x})")
+                        })?
+                    } else {
+                        x.wrapping_abs()
+                    };
+                    Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(r))))
+                }
+                None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
+            },
             ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(interval)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(
                     interval.map(|x| x.wrapping_abs()),
@@ -134,6 +195,77 @@ impl ScalarUDFImpl for SparkAbs {
             }
             ColumnarValue::Array(array) => {
                 let result = match array.data_type() {
+                    DataType::Int8 => {
+                        if self.ansi_mode {
+                            let result: Int8Array =
+                                array.as_primitive::<Int8Type>().try_unary(|x| {
+                                    x.checked_abs().ok_or_else(|| {
+                                        exec_datafusion_err!(
+                                            "[ARITHMETIC_OVERFLOW] byte overflow on abs({x})"
+                                        )
+                                    })
+                                })?;
+                            Ok(Arc::new(result) as ArrayRef)
+                        } else {
+                            let result: Int8Array =
+                                array.as_primitive::<Int8Type>().unary(|x| x.wrapping_abs());
+                            Ok(Arc::new(result) as ArrayRef)
+                        }
+                    }
+                    DataType::Int16 => {
+                        if self.ansi_mode {
+                            let result: Int16Array =
+                                array.as_primitive::<Int16Type>().try_unary(|x| {
+                                    x.checked_abs().ok_or_else(|| {
+                                        exec_datafusion_err!(
+                                            "[ARITHMETIC_OVERFLOW] short overflow on abs({x})"
+                                        )
+                                    })
+                                })?;
+                            Ok(Arc::new(result) as ArrayRef)
+                        } else {
+                            let result: Int16Array = array
+                                .as_primitive::<Int16Type>()
+                                .unary(|x| x.wrapping_abs());
+                            Ok(Arc::new(result) as ArrayRef)
+                        }
+                    }
+                    DataType::Int32 => {
+                        if self.ansi_mode {
+                            let result: Int32Array =
+                                array.as_primitive::<Int32Type>().try_unary(|x| {
+                                    x.checked_abs().ok_or_else(|| {
+                                        exec_datafusion_err!(
+                                            "[ARITHMETIC_OVERFLOW] integer overflow on abs({x})"
+                                        )
+                                    })
+                                })?;
+                            Ok(Arc::new(result) as ArrayRef)
+                        } else {
+                            let result: Int32Array = array
+                                .as_primitive::<Int32Type>()
+                                .unary(|x| x.wrapping_abs());
+                            Ok(Arc::new(result) as ArrayRef)
+                        }
+                    }
+                    DataType::Int64 => {
+                        if self.ansi_mode {
+                            let result: Int64Array =
+                                array.as_primitive::<Int64Type>().try_unary(|x| {
+                                    x.checked_abs().ok_or_else(|| {
+                                        exec_datafusion_err!(
+                                            "[ARITHMETIC_OVERFLOW] long overflow on abs({x})"
+                                        )
+                                    })
+                                })?;
+                            Ok(Arc::new(result) as ArrayRef)
+                        } else {
+                            let result: Int64Array = array
+                                .as_primitive::<Int64Type>()
+                                .unary(|x| x.wrapping_abs());
+                            Ok(Arc::new(result) as ArrayRef)
+                        }
+                    }
                     DataType::Interval(IntervalUnit::YearMonth) => {
                         let result: IntervalYearMonthArray = array
                             .as_primitive::<IntervalYearMonthType>()
@@ -192,8 +324,18 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        match info.get_data_type(&args[0])? {
-            DataType::Interval(_) | DataType::Duration(_) => Ok(ExprSimplifyResult::Original(args)),
+        let dt = info.get_data_type(&args[0])?;
+        match dt {
+            // Keep in invoke_with_args: interval/duration, and signed integers
+            // (where invoke branches on self.ansi_mode between wrapping_abs and
+            // checked_abs to honour Spark's ANSI semantics).
+            DataType::Interval(_)
+            | DataType::Duration(_)
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64 => Ok(ExprSimplifyResult::Original(args)),
+            // Floats, decimals, unsigned, null: no ANSI overflow concern — delegate.
             _ => Ok(ExprSimplifyResult::Simplified(abs(args.one()?))),
         }
     }

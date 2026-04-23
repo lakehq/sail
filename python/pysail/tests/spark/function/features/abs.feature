@@ -255,6 +255,8 @@ Feature: abs comprehensive tests
     # Divergence lives in CAST, not abs: JVM applies half-up rounding during
     # CAST to DECIMAL(38,0) and rounds 37 nines up to 10^37; Sail preserves
     # precision and returns 37 nines (mathematically correct).
+    # Fix path: decimal CAST kernel (arrow-rs `cast_decimal` semantics or a
+    # Sail-side override) — out of scope for spark_abs.rs.
     Scenario: abs DECIMAL 38,0 near max
       When query
         """
@@ -325,7 +327,15 @@ Feature: abs comprehensive tests
         | -9223372036854775808  |
 
     @sail-bug
-    # Sail promotes the literal to BIGINT; JVM keeps INT and wraps to MIN
+    # Sail promotes the literal to BIGINT; JVM keeps INT and wraps to MIN.
+    # Root cause: Sail's SQL parses `-2147483648` as unary-minus + positive
+    # literal; the positive side overflows INT32 (max 2147483647) and gets
+    # widened to BIGINT. Spark has a special rule that recognises the whole
+    # `-INT32_MIN` (and `-LONG_MIN`) literal and keeps the narrow type.
+    # Fix path: `sail-sql-analyzer` (or parser) — add constant-folding rule
+    # for `UnaryMinus(IntegerLiteral(N))` that narrows when `-N` fits in a
+    # smaller signed type. Affects every expression with negative-MIN
+    # literals, not just abs.
     Scenario: abs INT literal MIN preserves INT type and wraps under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -363,8 +373,13 @@ Feature: abs comprehensive tests
       Then query error .*
 
   Rule: String coercion under ANSI=false
-    # JVM coerces STRING → DOUBLE before calling abs. Sail does not perform
-    # this implicit coercion, so every scenario in this rule currently fails.
+    # Sail now coerces STRING → DOUBLE (via `coerce_types` in spark_abs), but
+    # the inserted CAST does not honour `spark.sql.ansi.enabled`. Under
+    # ANSI=false, Spark returns NULL for unparseable strings (`'hello'`, `''`,
+    # whitespace-padded); Sail errors in both modes.
+    # Fix path: make Sail's CAST ANSI-aware (propagate `plan_config.ansi_mode`
+    # into `CastOptions { safe: !ansi }` when wrapping the coerced expr).
+    # Affects every UDF that coerces STRING → numeric, not just abs.
 
     @sail-bug
     Scenario: abs negative numeric string
@@ -449,6 +464,10 @@ Feature: abs comprehensive tests
     # happens even without abs (e.g. SELECT INTERVAL '-5' DAY returns DAY TO
     # SECOND). The scenarios below are tagged @sail-bug but blocked on the
     # Sail-wide interval subrange handling, not on abs itself.
+    # Fix path: preserve Spark subrange (DAY, HOUR, DAY TO SECOND, …) as
+    # `Field` metadata when converting Spark→Arrow, restore on the return
+    # trip in `sail-spark-connect`. Also requires analyzer changes in
+    # `sail-sql-analyzer`. Affects every expression returning intervals.
 
     @sail-bug
     Scenario: abs negative INTERVAL DAY

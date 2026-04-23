@@ -1939,6 +1939,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
             }
+            UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -2028,7 +2031,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_to_binary" | "try_to_binary" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
             }
-            "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
             "spark_bit_count" | "bit_count" => Ok(Arc::new(ScalarUDF::from(SparkBitCount::new()))),
             "spark_bit_get" | "bit_get" | "getbit" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
@@ -2147,7 +2149,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
             || node_inner.is::<RewriteLikePatternFunc>()
-            || node_inner.is::<SparkAbs>()
             || node_inner.is::<SparkAESDecrypt>()
             || node_inner.is::<SparkAESEncrypt>()
             || node_inner.is::<SparkArray>()
@@ -2323,6 +2324,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkNextDay>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkAbs>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
         } else {
             return Ok(());
         };
