@@ -55,18 +55,21 @@ impl PlanResolver<'_> {
             "transform" => self.resolve_hof_transform(arguments, schema, state).await,
             "exists" => self.resolve_hof_exists(arguments, schema, state).await,
             "forall" => self.resolve_hof_forall(arguments, schema, state).await,
-            "aggregate" | "reduce" => {
-                self.resolve_hof_aggregate(arguments, schema, state).await
-            }
+            "aggregate" | "reduce" => self.resolve_hof_aggregate(arguments, schema, state).await,
             "zip_with" => self.resolve_hof_zip_with(arguments, schema, state).await,
             "transform_keys" => {
-                self.resolve_hof_transform_keys(arguments, schema, state).await
+                self.resolve_hof_transform_keys(arguments, schema, state)
+                    .await
             }
             "transform_values" => {
-                self.resolve_hof_transform_values(arguments, schema, state).await
+                self.resolve_hof_transform_values(arguments, schema, state)
+                    .await
             }
             "map_filter" => self.resolve_hof_map_filter(arguments, schema, state).await,
-            "map_zip_with" => self.resolve_hof_map_zip_with(arguments, schema, state).await,
+            "map_zip_with" => {
+                self.resolve_hof_map_zip_with(arguments, schema, state)
+                    .await
+            }
             other => Err(PlanError::unsupported(format!(
                 "higher-order function: {other}"
             ))),
@@ -91,9 +94,7 @@ impl PlanResolver<'_> {
         let param = check_lambda_params(params, 1)?.remove(0);
 
         let lambda_schema = make_lambda_schema(&[(param.clone(), elem_type)])?;
-        let body_expr = self
-            .resolve_expression(body, &lambda_schema, state)
-            .await?;
+        let body_expr = self.resolve_expression(body, &lambda_schema, state).await?;
         let phys_expr = self.ctx.create_physical_expr(body_expr, &lambda_schema)?;
 
         let udf = SailArrayFilter::new(phys_expr, param, array_type.clone());
@@ -126,9 +127,7 @@ impl PlanResolver<'_> {
             schema_params.push((params[1].clone(), DataType::Int64));
         }
         let lambda_schema = make_lambda_schema(&schema_params)?;
-        let body_expr = self
-            .resolve_expression(body, &lambda_schema, state)
-            .await?;
+        let body_expr = self.resolve_expression(body, &lambda_schema, state).await?;
         let result_elem_type = body_expr.get_type(&lambda_schema)?;
         let phys_expr = self.ctx.create_physical_expr(body_expr, &lambda_schema)?;
 
@@ -161,9 +160,7 @@ impl PlanResolver<'_> {
         let param = check_lambda_params(params, 1)?.remove(0);
 
         let lambda_schema = make_lambda_schema(&[(param.clone(), elem_type)])?;
-        let body_expr = self
-            .resolve_expression(body, &lambda_schema, state)
-            .await?;
+        let body_expr = self.resolve_expression(body, &lambda_schema, state).await?;
         let phys_expr = self.ctx.create_physical_expr(body_expr, &lambda_schema)?;
 
         let udf = SailArrayExists::new(phys_expr, param);
@@ -189,9 +186,7 @@ impl PlanResolver<'_> {
         let param = check_lambda_params(params, 1)?.remove(0);
 
         let lambda_schema = make_lambda_schema(&[(param.clone(), elem_type)])?;
-        let body_expr = self
-            .resolve_expression(body, &lambda_schema, state)
-            .await?;
+        let body_expr = self.resolve_expression(body, &lambda_schema, state).await?;
         let phys_expr = self.ctx.create_physical_expr(body_expr, &lambda_schema)?;
 
         let udf = SailArrayForAll::new(phys_expr, param);
@@ -291,9 +286,7 @@ impl PlanResolver<'_> {
             (params[0].clone(), elem1_type),
             (params[1].clone(), elem2_type),
         ])?;
-        let body_expr = self
-            .resolve_expression(body, &lambda_schema, state)
-            .await?;
+        let body_expr = self.resolve_expression(body, &lambda_schema, state).await?;
         let result_elem_type = body_expr.get_type(&lambda_schema)?;
         let phys_expr = self.ctx.create_physical_expr(body_expr, &lambda_schema)?;
 
@@ -329,19 +322,13 @@ impl PlanResolver<'_> {
             (params[0].clone(), key_type),
             (params[1].clone(), val_type.clone()),
         ])?;
-        let body_expr = self
-            .resolve_expression(body, &lambda_schema, state)
-            .await?;
+        let body_expr = self.resolve_expression(body, &lambda_schema, state).await?;
         let new_key_type = body_expr.get_type(&lambda_schema)?;
         let phys_expr = self.ctx.create_physical_expr(body_expr, &lambda_schema)?;
 
         let return_type = build_map_type(new_key_type, val_type, false);
-        let udf = SailMapTransformKeys::new(
-            phys_expr,
-            params[0].clone(),
-            params[1].clone(),
-            return_type,
-        );
+        let udf =
+            SailMapTransformKeys::new(phys_expr, params[0].clone(), params[1].clone(), return_type);
         let func_expr = make_scalar_udf_expr(udf, vec![map_expr]);
         Ok(NamedExpr::new(
             vec!["transform_keys".to_string()],
@@ -370,9 +357,7 @@ impl PlanResolver<'_> {
             (params[0].clone(), key_type.clone()),
             (params[1].clone(), val_type),
         ])?;
-        let body_expr = self
-            .resolve_expression(body, &lambda_schema, state)
-            .await?;
+        let body_expr = self.resolve_expression(body, &lambda_schema, state).await?;
         let new_val_type = body_expr.get_type(&lambda_schema)?;
         let phys_expr = self.ctx.create_physical_expr(body_expr, &lambda_schema)?;
 
@@ -407,13 +392,9 @@ impl PlanResolver<'_> {
         let (params, body) = extract_lambda(lambda_arg)?;
         let params = check_lambda_params(params, 2)?;
 
-        let lambda_schema = make_lambda_schema(&[
-            (params[0].clone(), key_type),
-            (params[1].clone(), val_type),
-        ])?;
-        let body_expr = self
-            .resolve_expression(body, &lambda_schema, state)
-            .await?;
+        let lambda_schema =
+            make_lambda_schema(&[(params[0].clone(), key_type), (params[1].clone(), val_type)])?;
+        let body_expr = self.resolve_expression(body, &lambda_schema, state).await?;
         let phys_expr = self.ctx.create_physical_expr(body_expr, &lambda_schema)?;
 
         let return_type = map_type.clone();
@@ -448,9 +429,7 @@ impl PlanResolver<'_> {
             (params[1].clone(), val1_type),
             (params[2].clone(), val2_type),
         ])?;
-        let body_expr = self
-            .resolve_expression(body, &lambda_schema, state)
-            .await?;
+        let body_expr = self.resolve_expression(body, &lambda_schema, state).await?;
         let result_val_type = body_expr.get_type(&lambda_schema)?;
         let phys_expr = self.ctx.create_physical_expr(body_expr, &lambda_schema)?;
 

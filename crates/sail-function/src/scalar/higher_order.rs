@@ -155,11 +155,7 @@ fn array_filter_generic<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let values = list.values().clone();
     let offsets = list.offsets();
-    let mask = eval_predicate(
-        lambda_expr,
-        &[param_name.to_string()],
-        vec![values.clone()],
-    )?;
+    let mask = eval_predicate(lambda_expr, &[param_name.to_string()], vec![values.clone()])?;
 
     let mut new_offsets: Vec<O> = Vec::with_capacity(list.len() + 1);
     new_offsets.push(O::usize_as(0));
@@ -381,9 +377,7 @@ impl ScalarUDFImpl for SailArrayExists {
             .into_iter()
             .next()
             .ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution(
-                    "sail_array_exists: no args".into(),
-                )
+                datafusion_common::DataFusionError::Execution("sail_array_exists: no args".into())
             })?
             .into_array(1)?;
         match array.data_type() {
@@ -483,9 +477,7 @@ impl ScalarUDFImpl for SailArrayForAll {
             .into_iter()
             .next()
             .ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution(
-                    "sail_array_forall: no args".into(),
-                )
+                datafusion_common::DataFusionError::Execution("sail_array_forall: no args".into())
             })?
             .into_array(1)?;
         match array.data_type() {
@@ -597,9 +589,7 @@ impl ScalarUDFImpl for SailArrayAggregate {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let mut iter = args.args.into_iter();
         let list_cv = iter.next().ok_or_else(|| {
-            datafusion_common::DataFusionError::Execution(
-                "sail_array_aggregate: no args".into(),
-            )
+            datafusion_common::DataFusionError::Execution("sail_array_aggregate: no args".into())
         })?;
         let init_cv = iter.next().ok_or_else(|| {
             datafusion_common::DataFusionError::Execution(
@@ -638,9 +628,7 @@ impl ScalarUDFImpl for SailArrayAggregate {
                     &self.result_type,
                 )?
             }
-            other => {
-                return exec_err!("sail_array_aggregate: unsupported type {:?}", other)
-            }
+            other => return exec_err!("sail_array_aggregate: unsupported type {:?}", other),
         };
         Ok(ColumnarValue::Array(result))
     }
@@ -764,9 +752,7 @@ impl ScalarUDFImpl for SailArrayZipWith {
         let arr1 = iter
             .next()
             .ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution(
-                    "sail_array_zip_with: no args".into(),
-                )
+                datafusion_common::DataFusionError::Execution("sail_array_zip_with: no args".into())
             })?
             .into_array(1)?;
         let arr2 = iter
@@ -918,7 +904,12 @@ fn rebuild_map(
 ) -> Result<ColumnarValue> {
     let entries_field = match return_type {
         DataType::Map(f, _) => f.clone(),
-        _ => return exec_err!("rebuild_map: expected Map return type, got {:?}", return_type),
+        _ => {
+            return exec_err!(
+                "rebuild_map: expected Map return type, got {:?}",
+                return_type
+            )
+        }
     };
     let struct_fields = match entries_field.data_type() {
         DataType::Struct(fields) => fields.clone(),
@@ -1008,14 +999,11 @@ impl ScalarUDFImpl for SailMapTransformKeys {
                 )
             })?
             .into_array(1)?;
-        let map = array
-            .as_any()
-            .downcast_ref::<MapArray>()
-            .ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution(
-                    "sail_map_transform_keys: expected MapArray".into(),
-                )
-            })?;
+        let map = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+            datafusion_common::DataFusionError::Execution(
+                "sail_map_transform_keys: expected MapArray".into(),
+            )
+        })?;
 
         let (keys, values) = map_keys_values(map);
         let new_keys = eval_transform(
@@ -1103,14 +1091,11 @@ impl ScalarUDFImpl for SailMapTransformValues {
                 )
             })?
             .into_array(1)?;
-        let map = array
-            .as_any()
-            .downcast_ref::<MapArray>()
-            .ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution(
-                    "sail_map_transform_values: expected MapArray".into(),
-                )
-            })?;
+        let map = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+            datafusion_common::DataFusionError::Execution(
+                "sail_map_transform_values: expected MapArray".into(),
+            )
+        })?;
 
         let (keys, values) = map_keys_values(map);
         let new_values = eval_transform(
@@ -1193,19 +1178,14 @@ impl ScalarUDFImpl for SailMapFilter {
             .into_iter()
             .next()
             .ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution(
-                    "sail_map_filter: no args".into(),
-                )
+                datafusion_common::DataFusionError::Execution("sail_map_filter: no args".into())
             })?
             .into_array(1)?;
-        let map = array
-            .as_any()
-            .downcast_ref::<MapArray>()
-            .ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution(
-                    "sail_map_filter: expected MapArray".into(),
-                )
-            })?;
+        let map = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+            datafusion_common::DataFusionError::Execution(
+                "sail_map_filter: expected MapArray".into(),
+            )
+        })?;
 
         let (keys, values) = map_keys_values(map);
         let mask = eval_predicate(
