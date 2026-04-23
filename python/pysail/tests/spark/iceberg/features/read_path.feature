@@ -140,3 +140,43 @@ Feature: Iceberg read path (driver vs metadata-as-data)
         | name | value |
         | b    | 20    |
         | c    | 30    |
+
+  Rule: Identity-partition predicates remain correct on metadata-as-data path
+    Background:
+      Given variable location for temporary directory iceberg_read_metadata_part_filter
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_metadata_part_filter
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_metadata_part_filter (
+          id INT,
+          category STRING,
+          value INT
+        )
+        USING iceberg
+        PARTITIONED BY (category)
+        LOCATION {{ location.uri }}
+        OPTIONS (metadataAsDataRead 'true')
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_metadata_part_filter VALUES
+          (1, 'a', 10),
+          (2, 'a', 20),
+          (3, 'b', 30),
+          (4, 'b', 40),
+          (5, 'c', 50)
+        """
+
+    @sail-only
+    Scenario: Identity-partition equality predicate is honored, not dropped
+      When query
+        """
+        SELECT id, value FROM iceberg_metadata_part_filter WHERE category = 'b' ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 3  | 30    |
+        | 4  | 40    |

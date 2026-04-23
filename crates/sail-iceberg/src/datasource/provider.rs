@@ -806,13 +806,11 @@ impl TableProvider for IcebergTableProvider {
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> =
                 DataSourceExec::from_data_source(file_scan_config);
-            let data_file_absolute = store_ctx
-                .resolve_to_absolute_path(df.file_path())?
-                .to_string();
+            let data_file_raw_path = df.file_path().to_string();
             // Wrap with DeleteApply.
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 data_scan,
-                data_file_absolute,
+                data_file_raw_path,
                 pos_deletes,
                 eq_deletes,
                 self.table_uri.clone(),
@@ -878,6 +876,9 @@ impl TableProvider for IcebergTableProvider {
         &self,
         filter: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
+        if self.metadata_as_data_read {
+            return Ok(vec![TableProviderFilterPushDown::Unsupported; filter.len()]);
+        }
         Ok(filter
             .iter()
             .map(|e| self.classify_pushdown_for_expr(e))
@@ -1069,7 +1070,9 @@ impl IcebergTableProvider {
             log::debug!(
                 "metadata-as-data scan does not push down projection/filters/limit \
                  (projection_provided={}, num_filters={}, limit={:?}); relying on \
-                 the planner to apply them above the scan",
+                 the planner to apply them above the scan. Note: \
+                 `supports_filters_pushdown` returns Unsupported in this mode so \
+                 the planner does NOT drop filters from the outer plan.",
                 projection.is_some(),
                 filters.len(),
                 limit,
