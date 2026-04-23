@@ -521,6 +521,46 @@ Feature: abs comprehensive tests
 
   Rule: Multi-row vectorized path
 
+    Scenario: abs BIGINT column with mixed signs and NULL
+      When query
+        """
+        SELECT abs(v) AS result
+        FROM VALUES
+          (CAST(-7 AS BIGINT)),
+          (CAST(0 AS BIGINT)),
+          (CAST(42 AS BIGINT)),
+          (CAST(NULL AS BIGINT)),
+          (CAST(-100 AS BIGINT))
+        AS t(v)
+        """
+      Then query result
+        | result |
+        | 7      |
+        | 0      |
+        | 42     |
+        | NULL   |
+        | 100    |
+
+    Scenario: abs DOUBLE column with mixed signs and NULL
+      When query
+        """
+        SELECT abs(v) AS result
+        FROM VALUES
+          (CAST(-1.5 AS DOUBLE)),
+          (CAST(0.0 AS DOUBLE)),
+          (CAST(3.25 AS DOUBLE)),
+          (CAST(NULL AS DOUBLE)),
+          (CAST(-99.75 AS DOUBLE))
+        AS t(v)
+        """
+      Then query result
+        | result |
+        | 1.5    |
+        | 0.0    |
+        | 3.25   |
+        | NULL   |
+        | 99.75  |
+
     @sail-bug
     # Includes a row with INT MIN under ANSI=false — tests both vectorized path and wrap
     Scenario: abs INT column with NULL mix

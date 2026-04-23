@@ -12,7 +12,7 @@ use datafusion::arrow::datatypes::{
     IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::math::expr_fn::abs;
-use datafusion_common::{exec_datafusion_err, exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
@@ -64,14 +64,15 @@ impl ScalarUDFImpl for SparkAbs {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types[0].is_numeric()
             || arg_types[0].is_null()
-            || matches!(
-                arg_types[0],
-                DataType::Interval(_) | DataType::Duration(_)
-            )
+            || matches!(arg_types[0], DataType::Interval(_) | DataType::Duration(_))
         {
             Ok(arg_types[0].clone())
         } else {
-            internal_err!("Unsupported data type {} for function abs", arg_types[0])
+            Err(unsupported_data_type_exec_err(
+                "abs",
+                "Numeric, Interval, or Duration type",
+                &arg_types[0],
+            ))
         }
     }
 
@@ -97,10 +98,7 @@ impl ScalarUDFImpl for SparkAbs {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
-            return exec_err!(
-                "Spark `abs` function requires 1 argument, got {}",
-                args.len()
-            );
+            return Err(invalid_arg_count_exec_err("abs", (1, 1), args.len()));
         };
         match arg {
             // Signed integer abs: ANSI=true errors on overflow, ANSI=false wraps.
@@ -315,11 +313,19 @@ impl ScalarUDFImpl for SparkAbs {
                             .with_data_type(DataType::Duration(TimeUnit::Nanosecond));
                         Ok(Arc::new(result) as ArrayRef)
                     }
-                    other => exec_err!("Unsupported data type {other:?} for function abs"),
+                    other => Err(unsupported_data_type_exec_err(
+                        "abs",
+                        "Numeric, Interval, or Duration type",
+                        other,
+                    )),
                 }?;
                 Ok(ColumnarValue::Array(result))
             }
-            other => exec_err!("Unsupported arg {other:?} for function abs"),
+            other => Err(unsupported_data_type_exec_err(
+                "abs",
+                "Numeric, Interval, or Duration type",
+                &other.data_type(),
+            )),
         }
     }
 
