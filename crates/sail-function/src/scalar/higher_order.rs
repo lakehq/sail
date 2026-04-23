@@ -10,7 +10,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_physical_expr::PhysicalExpr;
@@ -71,7 +71,7 @@ fn eval_transform(
 pub struct SailArrayFilter {
     id: u64,
     lambda_expr: Arc<dyn PhysicalExpr>,
-    param_name: String,
+    param_names: Vec<String>,
     return_type: DataType,
     signature: Signature,
 }
@@ -79,13 +79,13 @@ pub struct SailArrayFilter {
 impl SailArrayFilter {
     pub fn new(
         lambda_expr: Arc<dyn PhysicalExpr>,
-        param_name: String,
+        param_names: Vec<String>,
         return_type: DataType,
     ) -> Self {
         Self {
             id: next_hof_id(),
             lambda_expr,
-            param_name,
+            param_names,
             return_type,
             signature: Signature::any(1, Volatility::Volatile),
         }
@@ -132,7 +132,7 @@ impl ScalarUDFImpl for SailArrayFilter {
                 Ok(ColumnarValue::Array(array_filter_generic::<i32>(
                     list,
                     &self.lambda_expr,
-                    &self.param_name,
+                    &self.param_names,
                 )?))
             }
             DataType::LargeList(_) => {
@@ -140,7 +140,7 @@ impl ScalarUDFImpl for SailArrayFilter {
                 Ok(ColumnarValue::Array(array_filter_generic::<i64>(
                     list,
                     &self.lambda_expr,
-                    &self.param_name,
+                    &self.param_names,
                 )?))
             }
             other => exec_err!("sail_array_filter: unsupported type {:?}", other),
@@ -151,16 +151,40 @@ impl ScalarUDFImpl for SailArrayFilter {
 fn array_filter_generic<O: OffsetSizeTrait>(
     list: &GenericListArray<O>,
     lambda_expr: &Arc<dyn PhysicalExpr>,
-    param_name: &str,
+    param_names: &[String],
 ) -> Result<ArrayRef> {
     let values = list.values().clone();
     let offsets = list.offsets();
-    let mask = eval_predicate(lambda_expr, &[param_name.to_string()], vec![values.clone()])?;
+    // If there is a second param (index), build an index array over all elements
+    let (mask, n_total) = if param_names.len() == 2 {
+        let n = values.len();
+        // Build per-row indices: within each list row, indices go 0..len(row)
+        let mut idx_values: Vec<Option<i64>> = Vec::with_capacity(n);
+        for i in 0..list.len() {
+            let start = offsets[i].as_usize();
+            let end = offsets[i + 1].as_usize();
+            if list.is_null(i) {
+                for _ in start..end {
+                    idx_values.push(None);
+                }
+            } else {
+                for j in 0..(end - start) {
+                    idx_values.push(Some(j as i64));
+                }
+            }
+        }
+        let idx: ArrayRef = Arc::new(Int64Array::from(idx_values));
+        let m = eval_predicate(lambda_expr, param_names, vec![values.clone(), idx])?;
+        (m, n)
+    } else {
+        let m = eval_predicate(lambda_expr, param_names, vec![values.clone()])?;
+        (m, values.len())
+    };
 
     let mut new_offsets: Vec<O> = Vec::with_capacity(list.len() + 1);
     new_offsets.push(O::usize_as(0));
     let mut total_kept: usize = 0;
-    let mut keep: Vec<bool> = Vec::with_capacity(values.len());
+    let mut keep: Vec<bool> = Vec::with_capacity(n_total);
 
     for i in 0..list.len() {
         let start = offsets[i].as_usize();
@@ -634,7 +658,6 @@ impl ScalarUDFImpl for SailArrayAggregate {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn array_aggregate_generic<O: OffsetSizeTrait>(
     list: &GenericListArray<O>,
     init_array: &dyn Array,
@@ -691,7 +714,7 @@ fn array_aggregate_generic<O: OffsetSizeTrait>(
         acc_values.push(acc);
     }
 
-    ScalarValue::iter_to_array(acc_values.into_iter())
+    ScalarValue::iter_to_array(acc_values)
 }
 
 // ============================================================
@@ -880,6 +903,201 @@ fn array_zip_with_generic<O: OffsetSizeTrait>(
         OffsetBuffer::new(new_offsets.into()),
         combined,
         list1.nulls().cloned(),
+    )?))
+}
+
+// ============================================================
+// SailArraySort
+// ============================================================
+#[derive(Debug)]
+pub struct SailArraySort {
+    id: u64,
+    lambda_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+    param_names: Vec<String>,
+    return_type: DataType,
+    signature: Signature,
+}
+
+impl SailArraySort {
+    pub fn new(
+        lambda_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+        param_names: Vec<String>,
+        return_type: DataType,
+    ) -> Self {
+        Self {
+            id: next_hof_id(),
+            lambda_expr,
+            param_names,
+            return_type,
+            signature: Signature::any(1, Volatility::Volatile),
+        }
+    }
+}
+
+impl PartialEq for SailArraySort {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for SailArraySort {}
+impl std::hash::Hash for SailArraySort {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl ScalarUDFImpl for SailArraySort {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "sail_array_sort"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(self.return_type.clone())
+    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let array = args
+            .args
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Execution("sail_array_sort: no args".into())
+            })?
+            .into_array(1)?;
+        match array.data_type() {
+            DataType::List(_) => {
+                let list = as_list_array(&array);
+                Ok(ColumnarValue::Array(array_sort_with_comparator::<i32>(
+                    list,
+                    &self.lambda_expr,
+                    &self.param_names,
+                )?))
+            }
+            DataType::LargeList(_) => {
+                let list = as_large_list_array(&array);
+                Ok(ColumnarValue::Array(array_sort_with_comparator::<i64>(
+                    list,
+                    &self.lambda_expr,
+                    &self.param_names,
+                )?))
+            }
+            other => exec_err!("sail_array_sort: unsupported type {:?}", other),
+        }
+    }
+}
+
+fn array_sort_with_comparator<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+    lambda_expr: &Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+    param_names: &[String],
+) -> Result<ArrayRef> {
+    let values = list.values();
+    let offsets = list.offsets();
+    let field = match list.data_type() {
+        DataType::List(f) | DataType::LargeList(f) => f.clone(),
+        _ => unreachable!(),
+    };
+
+    let mut new_values_parts: Vec<ArrayRef> = Vec::with_capacity(list.len());
+    let mut new_offsets: Vec<O> = Vec::with_capacity(list.len() + 1);
+    new_offsets.push(O::usize_as(0));
+    let mut total = 0usize;
+
+    for i in 0..list.len() {
+        let start = offsets[i].as_usize();
+        let end = offsets[i + 1].as_usize();
+        let len = end - start;
+        total += len;
+        new_offsets.push(O::usize_as(total));
+
+        if list.is_null(i) || len <= 1 {
+            new_values_parts.push(values.slice(start, len));
+            continue;
+        }
+
+        // Sort indices for this row using the comparator lambda
+        let mut indices: Vec<usize> = (0..len).collect();
+        let row_values = values.slice(start, len);
+        let mut error: Option<datafusion_common::DataFusionError> = None;
+
+        indices.sort_by(|&a, &b| {
+            if error.is_some() {
+                return std::cmp::Ordering::Equal;
+            }
+            let va = row_values.slice(a, 1);
+            let vb = row_values.slice(b, 1);
+            // Evaluate lambda(va, vb) -> Int
+            let fields: Vec<Field> = param_names
+                .iter()
+                .zip([va.as_ref(), vb.as_ref()].iter())
+                .map(|(name, arr)| Field::new(name.as_str(), arr.data_type().clone(), true))
+                .collect();
+            let schema = Schema::new(fields);
+            let batch = match RecordBatch::try_new(Arc::new(schema), vec![va.clone(), vb.clone()]) {
+                Ok(b) => b,
+                Err(e) => {
+                    error = Some(e.into());
+                    return std::cmp::Ordering::Equal;
+                }
+            };
+            let result = match lambda_expr.evaluate(&batch) {
+                Ok(r) => r,
+                Err(e) => {
+                    error = Some(e);
+                    return std::cmp::Ordering::Equal;
+                }
+            };
+            let arr = match result {
+                ColumnarValue::Array(a) => a,
+                ColumnarValue::Scalar(sv) => match sv.to_array_of_size(1) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        error = Some(e);
+                        return std::cmp::Ordering::Equal;
+                    }
+                },
+            };
+            let val = arr
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::Int32Array>()
+                .map(|a| a.value(0) as i64)
+                .or_else(|| {
+                    arr.as_any()
+                        .downcast_ref::<Int64Array>()
+                        .map(|a| a.value(0))
+                })
+                .unwrap_or(0i64);
+            val.cmp(&0)
+        });
+
+        if let Some(e) = error {
+            return Err(e);
+        }
+
+        // Apply sorted order
+        let index_arr = datafusion::arrow::array::UInt64Array::from(
+            indices.iter().map(|&i| i as u64).collect::<Vec<_>>(),
+        );
+        let sorted = datafusion::arrow::compute::take(row_values.as_ref(), &index_arr, None)?;
+        new_values_parts.push(sorted);
+    }
+
+    let new_values = if new_values_parts.is_empty() {
+        datafusion::arrow::array::new_empty_array(values.data_type())
+    } else {
+        let refs: Vec<&dyn Array> = new_values_parts.iter().map(|a| a.as_ref()).collect();
+        compute::concat(&refs)?
+    };
+
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        field,
+        OffsetBuffer::new(new_offsets.into()),
+        new_values,
+        list.nulls().cloned(),
     )?))
 }
 
@@ -1280,7 +1498,156 @@ impl ScalarUDFImpl for SailMapZipWith {
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
     }
-    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        exec_err!("sail_map_zip_with: not yet implemented")
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let mut args_iter = args.args.into_iter();
+        let arr1 = args_iter
+            .next()
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Execution(
+                    "sail_map_zip_with: missing first arg".into(),
+                )
+            })?
+            .into_array(1)?;
+        let arr2 = args_iter
+            .next()
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Execution(
+                    "sail_map_zip_with: missing second arg".into(),
+                )
+            })?
+            .into_array(1)?;
+        let map1 = arr1.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+            datafusion_common::DataFusionError::Execution(
+                "sail_map_zip_with: expected MapArray for arg1".into(),
+            )
+        })?;
+        let map2 = arr2.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+            datafusion_common::DataFusionError::Execution(
+                "sail_map_zip_with: expected MapArray for arg2".into(),
+            )
+        })?;
+        // Zip keys from map1 with values from map1 and map2. For each row, iterate keys of map1
+        // and look up the corresponding value in map2.
+        let (keys1, vals1) = map_keys_values(map1);
+        let (keys2, vals2) = map_keys_values(map2);
+
+        let n_rows = map1.len();
+        // Build result by iterating each row.
+        let mut result_vals: Vec<ArrayRef> = Vec::new();
+        let mut offsets: Vec<i32> = vec![0i32];
+        let mut total = 0i32;
+
+        // Use ScalarValue approach: extract scalars from keys/vals per row
+        for row in 0..n_rows {
+            if map1.is_null(row) {
+                offsets.push(total);
+                continue;
+            }
+            let start1 = map1.offsets()[row] as usize;
+            let end1 = map1.offsets()[row + 1] as usize;
+            let start2 = map2.offsets()[row] as usize;
+            let end2 = map2.offsets()[row + 1] as usize;
+
+            let row_keys1 = keys1.slice(start1, end1 - start1);
+            let row_vals1 = vals1.slice(start1, end1 - start1);
+            let row_keys2 = keys2.slice(start2, end2 - start2);
+            let row_vals2 = vals2.slice(start2, end2 - start2);
+
+            let row_len = end1 - start1;
+
+            // For each entry in map1, find the corresponding value in map2 (null if not present)
+            let mut val2_for_k1: Vec<Option<usize>> = Vec::with_capacity(row_len);
+            for i in 0..row_len {
+                let k1 = ScalarValue::try_from_array(row_keys1.as_ref(), i)?;
+                let mut found = None;
+                for j in 0..(end2 - start2) {
+                    let k2 = ScalarValue::try_from_array(row_keys2.as_ref(), j)?;
+                    if k1 == k2 {
+                        found = Some(j);
+                        break;
+                    }
+                }
+                val2_for_k1.push(found);
+            }
+
+            // Build indices into val2 (using null sentinel for missing)
+            // Collect aligned val2 slice with nulls for missing keys
+            let aligned_val2: Vec<ScalarValue> = val2_for_k1
+                .iter()
+                .map(|opt| {
+                    if let Some(j) = opt {
+                        ScalarValue::try_from_array(row_vals2.as_ref(), *j)
+                    } else {
+                        ScalarValue::try_from_array(
+                            &datafusion::arrow::array::new_null_array(vals2.data_type(), 1),
+                            0,
+                        )
+                    }
+                })
+                .collect::<std::result::Result<_, _>>()?;
+
+            let aligned_val2_arr = if row_len > 0 {
+                ScalarValue::iter_to_array(aligned_val2)?
+            } else {
+                datafusion::arrow::array::new_empty_array(vals2.data_type())
+            };
+
+            let transformed = eval_transform(
+                &self.lambda_expr,
+                &[
+                    self.key_param.clone(),
+                    self.val1_param.clone(),
+                    self.val2_param.clone(),
+                ],
+                vec![row_keys1, row_vals1, aligned_val2_arr],
+            )?;
+
+            total += row_len as i32;
+            offsets.push(total);
+            result_vals.push(transformed);
+        }
+
+        // Concat all result_vals
+        let result_val_arr = if result_vals.is_empty() {
+            let val_type = match &self.return_type {
+                DataType::Map(f, _) => match f.data_type() {
+                    DataType::Struct(fields) => fields[1].data_type().clone(),
+                    _ => return exec_err!("sail_map_zip_with: invalid return type"),
+                },
+                _ => return exec_err!("sail_map_zip_with: invalid return type"),
+            };
+            datafusion::arrow::array::new_empty_array(&val_type)
+        } else {
+            let refs: Vec<&dyn Array> = result_vals.iter().map(|a| a.as_ref()).collect();
+            datafusion::arrow::compute::concat(&refs)?
+        };
+
+        // Build result keys (all keys from map1 in order)
+        let result_key_arr = {
+            let key_slices: Vec<ArrayRef> = (0..n_rows)
+                .filter(|&row| !map1.is_null(row))
+                .map(|row| {
+                    let start = map1.offsets()[row] as usize;
+                    let end = map1.offsets()[row + 1] as usize;
+                    keys1.slice(start, end - start)
+                })
+                .collect();
+            if key_slices.is_empty() {
+                datafusion::arrow::array::new_empty_array(keys1.data_type())
+            } else {
+                let refs: Vec<&dyn Array> = key_slices.iter().map(|a| a.as_ref()).collect();
+                datafusion::arrow::compute::concat(&refs)?
+            }
+        };
+
+        rebuild_map(
+            map1,
+            result_key_arr,
+            result_val_arr,
+            &self.return_type,
+            offsets,
+            map1.nulls().cloned(),
+            false,
+        )
     }
 }

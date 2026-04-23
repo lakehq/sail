@@ -85,6 +85,7 @@ impl PlanResolver<'_> {
             "transform_keys",
             "transform_values",
             "zip_with",
+            "array_sort",
         ];
         if HOF_NAMES.contains(&canonical_function_name.as_str())
             && arguments

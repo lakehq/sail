@@ -132,6 +132,27 @@ impl PlanResolverState {
         self.register_field_info(name, false)
     }
 
+    /// Registers a lambda parameter using its name as the field ID.
+    /// Unlike [`Self::register_field_name`], this uses the name itself as the ID
+    /// so that schema fields can be looked up by the user-visible lambda parameter name.
+    /// Returns the name.
+    pub fn register_lambda_param(&mut self, name: impl Into<String>) -> String {
+        let name: String = name.into();
+        let info = FieldInfo {
+            plan_ids: HashSet::new(),
+            name: name.clone(),
+            hidden: false,
+        };
+        self.fields.insert(name.clone(), info);
+        name
+    }
+
+    /// Removes a field registration by its field ID.
+    /// Used to clean up lambda parameters after the lambda body has been resolved.
+    pub fn unregister_field(&mut self, field_id: &str) {
+        self.fields.remove(field_id);
+    }
+
     /// Registers a hidden field and returns a generated opaque string ID for the field.
     /// This is similar to [`Self::register_field_name`] but the field is marked as hidden.
     pub fn register_hidden_field_name(&mut self, name: impl Into<String>) -> String {

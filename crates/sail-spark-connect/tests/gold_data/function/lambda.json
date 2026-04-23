@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"acc\")])"
+        "success": "ok"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"acc\")])"
+        "success": "ok"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: lambda function cannot appear outside of a higher-order function call"
+        "success": "ok"
       }
     },
     {
@@ -119,7 +119,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: lambda function cannot appear outside of a higher-order function call"
+        "success": "ok"
       }
     },
     {
@@ -141,7 +141,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -163,7 +163,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -185,7 +185,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -229,7 +229,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -255,7 +255,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: expected lambda with 1 parameters, got 2"
+        "success": "ok"
       }
     },
     {
@@ -281,7 +281,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -307,7 +307,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -329,7 +329,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -351,7 +351,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -373,7 +373,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -395,7 +395,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -422,7 +422,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"k\")])"
+        "success": "ok"
       }
     },
     {
@@ -449,7 +449,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"v1\")])"
+        "success": "ok"
       }
     },
     {
@@ -476,7 +476,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"v1\")])"
+        "success": "ok"
       }
     },
     {
@@ -498,7 +498,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"acc\")])"
+        "success": "ok"
       }
     },
     {
@@ -520,7 +520,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"acc\")])"
+        "success": "ok"
       }
     },
     {
@@ -546,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -572,7 +572,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -599,7 +599,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"k\")])"
+        "success": "ok"
       }
     },
     {
@@ -626,7 +626,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"k\")])"
+        "success": "ok"
       }
     },
     {
@@ -653,7 +653,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"k\")])"
+        "success": "ok"
       }
     },
     {
@@ -680,7 +680,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"v\")])"
+        "success": "ok"
       }
     },
     {
@@ -706,7 +706,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -732,7 +732,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {
@@ -774,7 +774,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"y\")])"
+        "success": "ok"
       }
     }
   ]
