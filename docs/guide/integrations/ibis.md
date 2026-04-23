@@ -13,7 +13,7 @@ Because Sail is a Spark Connect server, Ibis can run your existing PySpark-backe
 Install Ibis with the PySpark backend, along with a Spark Connect client.
 
 ```bash
-pip install "ibis-framework[pyspark]>=12,<13" "pyspark-client==4.1.1"
+pip install "ibis-framework[pyspark]>=12,<13"
 ```
 
 Then install and run Sail by following the [Getting Started](/introduction/getting-started/) guide.
