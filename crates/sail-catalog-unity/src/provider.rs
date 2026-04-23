@@ -533,6 +533,7 @@ impl CatalogProvider for UnityCatalogProvider {
             replace,
             options,
             properties,
+            defer_materialize: _,
         } = options;
 
         if replace {

@@ -1053,7 +1053,7 @@ impl DeltaWriterExec {
 /// means a downstream `StructType::try_from(arrow_schema)` loses per-field
 /// generation expressions. This helper re-attaches them from a map resolved at
 /// plan-build time from the logical schema.
-fn inject_generation_expressions(
+pub(crate) fn inject_generation_expressions(
     schema: StructType,
     generation_expressions: &HashMap<String, String>,
 ) -> StructType {

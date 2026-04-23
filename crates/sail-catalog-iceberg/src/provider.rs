@@ -738,6 +738,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             replace,
             options,
             properties,
+            defer_materialize: _,
         } = options;
 
         if if_not_exists {

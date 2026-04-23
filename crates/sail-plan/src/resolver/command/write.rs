@@ -402,6 +402,11 @@ impl PlanResolver<'_> {
                             replace,
                             options: create_table_options,
                             properties: table_properties,
+                            // CTAS / write-to-create emits a single v0 commit from the writer
+                            // that includes both the CREATE operation and the data AddFiles.
+                            // Skip the catalog-layer storage materialization hook here to avoid
+                            // splitting CTAS into two commits (v0 = metadata, v1 = data).
+                            defer_materialize: true,
                         },
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));

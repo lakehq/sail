@@ -166,6 +166,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             replace,
             options,
             properties,
+            defer_materialize: _,
         } = options;
         if !format.eq_ignore_ascii_case("iceberg")
             && partition_by.iter().any(|f| f.transform.is_some())

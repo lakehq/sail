@@ -103,6 +103,7 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         replace,
         options: table_options,
         properties,
+        defer_materialize: _,
     } = options;
 
     if replace {

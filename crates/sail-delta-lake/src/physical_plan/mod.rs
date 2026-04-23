@@ -58,6 +58,7 @@ pub use planner::{
 pub use relaxed_tz_exec::RelaxedTzCastExec;
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
+pub(crate) use writer_exec::inject_generation_expressions;
 pub use writer_exec::DeltaWriterExec;
 pub use writer_options::DeltaWriterExecOptions;
 

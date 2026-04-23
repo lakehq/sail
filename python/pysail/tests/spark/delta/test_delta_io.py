@@ -191,7 +191,7 @@ class TestDeltaIO:
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
         spark.sql(
-            f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
+            f"CREATE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
         )
 
         try:
@@ -233,7 +233,7 @@ class TestDeltaIO:
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
         spark.sql(
-            f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
+            f"CREATE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
         )
 
         try:

@@ -672,6 +672,7 @@ async fn test_create_table() {
                 replace: false,
                 options: vec![],
                 properties: vec![],
+                defer_materialize: false,
             },
         )
         .await
@@ -806,6 +807,7 @@ async fn test_create_table() {
                 replace: false,
                 options: vec![],
                 properties: vec![],
+                defer_materialize: false,
             },
         )
         .await;
@@ -828,6 +830,7 @@ async fn test_create_table() {
                 replace: false,
                 options: vec![],
                 properties: vec![],
+                defer_materialize: false,
             },
         )
         .await;
@@ -882,6 +885,7 @@ async fn test_create_table() {
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                defer_materialize: false,
             },
         )
         .await
@@ -1047,6 +1051,7 @@ async fn test_get_table() {
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                defer_materialize: false,
             },
         )
         .await
@@ -1199,6 +1204,7 @@ async fn test_list_tables() {
                 replace: false,
                 options: vec![],
                 properties: vec![],
+                defer_materialize: false,
             },
         )
         .await
@@ -1221,6 +1227,7 @@ async fn test_list_tables() {
                 replace: false,
                 options: vec![],
                 properties: vec![],
+                defer_materialize: false,
             },
         )
         .await
@@ -1292,6 +1299,7 @@ async fn test_drop_table() {
                 replace: false,
                 options: vec![],
                 properties: vec![],
+                defer_materialize: false,
             },
         )
         .await

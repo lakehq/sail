@@ -37,6 +37,13 @@ pub struct CreateTableOptions {
     pub replace: bool,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+    /// When `true`, the `CREATE TABLE` command handler MUST NOT invoke the
+    /// format-specific materialization hook (e.g., writing the initial Delta
+    /// transaction log entry). Used by `CREATE TABLE AS SELECT` where the
+    /// subsequent write path atomically creates the table in a single commit
+    /// so that data and metadata land together at version 0.
+    #[serde(default)]
+    pub defer_materialize: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]

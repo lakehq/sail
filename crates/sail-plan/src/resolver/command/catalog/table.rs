@@ -74,6 +74,7 @@ impl PlanResolver<'_> {
                 replace,
                 options,
                 properties,
+                defer_materialize: false,
             },
         };
         self.resolve_catalog_command(command)

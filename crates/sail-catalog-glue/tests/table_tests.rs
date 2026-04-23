@@ -72,6 +72,7 @@ async fn test_create_table() {
                 replace: false,
                 options: vec![],
                 properties: vec![("owner".to_string(), "test_user".to_string())],
+                defer_materialize: false,
             },
         )
         .await
@@ -193,6 +194,7 @@ async fn test_get_table() {
                 replace: false,
                 options: vec![],
                 properties: vec![("key1".to_string(), "value1".to_string())],
+                defer_materialize: false,
             },
         )
         .await
@@ -422,6 +424,7 @@ async fn test_storage_formats() {
                     replace: false,
                     options: vec![],
                     properties: vec![],
+                    defer_materialize: false,
                 },
             )
             .await
@@ -600,6 +603,7 @@ async fn test_partition_transforms() {
                 replace: false,
                 options: vec![],
                 properties: vec![],
+                defer_materialize: false,
             },
         )
         .await
@@ -663,6 +667,7 @@ async fn test_hive_rejects_transforms() {
                 replace: false,
                 options: vec![],
                 properties: vec![],
+                defer_materialize: false,
             },
         )
         .await;
@@ -707,6 +712,7 @@ async fn test_iceberg_requires_location() {
                 replace: false,
                 options: vec![],
                 properties: vec![],
+                defer_materialize: false,
             },
         )
         .await;

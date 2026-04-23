@@ -31,13 +31,14 @@ Feature: Delta Lake SQL time travel
         """
         INSERT OVERWRITE TABLE delta_sql_time_travel_test VALUES (3, 'v2')
         """
-      Given delta log JSON files for versions 0 in delta_log are backdated by 5 seconds
-      Given delta log JSON files for versions 1 in delta_log are backdated by 3 seconds
+      Given delta log JSON files for versions 0 in delta_log are backdated by 7 seconds
+      Given delta log JSON files for versions 1 in delta_log are backdated by 5 seconds
+      Given delta log JSON files for versions 2 in delta_log are backdated by 3 seconds
 
     Scenario: SQL supports version, timestamp, and scalar-subquery time travel on Delta
       When query
         """
-        SELECT * FROM delta_sql_time_travel_test VERSION AS OF 1 ORDER BY id
+        SELECT * FROM delta_sql_time_travel_test VERSION AS OF 2 ORDER BY id
         """
       Then query result ordered
         | id | value |
@@ -55,7 +56,7 @@ Feature: Delta Lake SQL time travel
 
       When query template
         """
-        SELECT * FROM delta.`{{ location.string }}` VERSION AS OF 0
+        SELECT * FROM delta.`{{ location.string }}` VERSION AS OF 1
         """
       Then query result ordered
         | id | value |

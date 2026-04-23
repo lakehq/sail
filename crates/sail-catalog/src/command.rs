@@ -291,6 +291,65 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::CreateTable { table, options } => {
+                // For lakehouse formats (Delta/Iceberg), materialize the physical
+                // table (write the initial transaction log) before recording the
+                // table in the catalog. When both layers succeed the catalog reflects
+                // reality, and if storage fails we never record a phantom table.
+                //
+                // `defer_materialize=true` means a subsequent writer (CTAS, first
+                // INSERT through the write-to-create path) will atomically create
+                // the physical table in a single commit, so we skip the metadata-
+                // only pre-commit here.
+                if !options.defer_materialize {
+                    if let (Some(location), format) =
+                        (options.location.clone(), options.format.clone())
+                    {
+                        if !format.is_empty() {
+                            if let Ok(registry) = ctx.extension::<TableFormatRegistry>() {
+                                if let Ok(table_format) = registry.get(&format) {
+                                    let schema = create_table_schema_from_columns(&options.columns);
+                                    let partition_by = options
+                                        .partition_by
+                                        .iter()
+                                        .map(|p| p.column.clone())
+                                        .collect::<Vec<_>>();
+                                    let properties: std::collections::HashMap<String, String> =
+                                        options
+                                            .properties
+                                            .iter()
+                                            .map(|(k, v)| (k.clone(), v.clone()))
+                                            .collect();
+                                    let generated_columns: std::collections::HashMap<
+                                        String,
+                                        String,
+                                    > = options
+                                        .columns
+                                        .iter()
+                                        .filter_map(|c| {
+                                            c.generated_always_as
+                                                .as_ref()
+                                                .map(|expr| (c.name.clone(), expr.clone()))
+                                        })
+                                        .collect();
+                                    let info =
+                                        sail_common_datafusion::datasource::CreateTableInfo {
+                                            path: location,
+                                            schema,
+                                            partition_by,
+                                            properties,
+                                            if_not_exists: options.if_not_exists,
+                                            replace: options.replace,
+                                            generated_columns,
+                                        };
+                                    table_format
+                                        .create_table(ctx.runtime_env(), info)
+                                        .await
+                                        .map_err(|e| CatalogError::External(e.to_string()))?;
+                                }
+                            }
+                        }
+                    }
+                }
                 manager.create_table(&table, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
@@ -585,4 +644,19 @@ struct ShowTableExtendedRow {
     table_name: String,
     is_temporary: bool,
     information: String,
+}
+
+/// Build an Arrow [`SchemaRef`] from the catalog column descriptors used by
+/// `CREATE TABLE`. The resulting schema is passed to
+/// [`sail_common_datafusion::datasource::TableFormat::create_table`] so that
+/// lakehouse formats can materialize the initial table metadata commit.
+fn create_table_schema_from_columns(
+    columns: &[crate::provider::CreateTableColumnOptions],
+) -> SchemaRef {
+    use datafusion::arrow::datatypes::{Field, Schema};
+    let fields: Vec<Field> = columns
+        .iter()
+        .map(|c| Field::new(&c.name, c.data_type.clone(), c.nullable))
+        .collect();
+    std::sync::Arc::new(Schema::new(fields))
 }

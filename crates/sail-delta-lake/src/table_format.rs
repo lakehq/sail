@@ -462,6 +462,219 @@ impl TableFormat for DeltaTableFormat {
 
         Ok(())
     }
+
+    async fn create_table(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        info: sail_common_datafusion::datasource::CreateTableInfo,
+    ) -> Result<()> {
+        use chrono::Utc;
+
+        use crate::kernel::transaction::CommitBuilder;
+        use crate::kernel::SaveMode;
+        use crate::physical_plan::inject_generation_expressions;
+        use crate::schema::{
+            annotate_for_column_mapping, compute_max_column_id,
+            metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
+            schema_has_generated_columns,
+        };
+        use crate::spec::{
+            contains_timestampntz_arrow, Action, ColumnMappingMode, StructType, TableProperties,
+        };
+        use crate::table::create_delta_table_with_object_store;
+
+        let sail_common_datafusion::datasource::CreateTableInfo {
+            path,
+            schema,
+            partition_by,
+            properties,
+            if_not_exists,
+            replace,
+            generated_columns,
+        } = info;
+
+        let url = parse_location_to_url(&path)?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Detect whether a Delta table already exists at this location.
+        // When REPLACE is requested, load the full snapshot so we can tombstone
+        // the existing file actions.
+        let existing_snapshot_config = DeltaSnapshotConfig {
+            require_files: replace,
+            ..Default::default()
+        };
+        let existing_table = match open_table_with_object_store_and_table_config(
+            url.clone(),
+            object_store.clone(),
+            Default::default(),
+            existing_snapshot_config,
+        )
+        .await
+        {
+            Ok(table) => Some(table),
+            Err(DeltaTableError::InvalidTableLocation(_))
+            | Err(DeltaTableError::FileNotFound(_)) => None,
+            Err(err) => return Err(DataFusionError::External(Box::new(err))),
+        };
+
+        // Canonicalize properties before building Metadata/Protocol.
+        let configuration = canonicalize_and_validate_table_properties(
+            properties.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Fast-path: adopt an existing table when the caller only asked us to
+        // ensure it exists (IF NOT EXISTS), or did not declare any schema
+        // (external table with no column list). If a schema IS declared,
+        // validate that it matches the on-disk schema.
+        if let Some(table) = &existing_table {
+            if !replace {
+                if !if_not_exists && !schema.fields().is_empty() {
+                    let existing_schema = table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .arrow_schema()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    if !delta_schemas_compatible(&existing_schema, &schema) {
+                        return plan_err!(
+                            "Delta table already exists at {path} with a different schema"
+                        );
+                    }
+                }
+                // Adopt the existing table.
+                return Ok(());
+            }
+        }
+
+        // Build Protocol + Metadata for the new (or replaced) table.
+        let normalized = normalize_delta_schema(&schema);
+        let has_timestamp_ntz = contains_timestampntz_arrow(normalized.as_ref());
+        let mut kernel_schema = StructType::try_from(normalized.as_ref())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if !generated_columns.is_empty() {
+            kernel_schema = inject_generation_expressions(kernel_schema, &generated_columns);
+        }
+
+        let effective_mode = configuration
+            .get("delta.columnMapping.mode")
+            .and_then(|v| ColumnMappingMode::try_from(v.as_str()).ok())
+            .unwrap_or_default();
+
+        let mut configuration = configuration;
+        let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
+            let annotated = annotate_for_column_mapping(&kernel_schema);
+            configuration.insert(
+                "delta.columnMapping.mode".to_string(),
+                effective_mode.as_ref().to_string(),
+            );
+            configuration.insert(
+                "delta.columnMapping.maxColumnId".to_string(),
+                compute_max_column_id(&annotated).to_string(),
+            );
+            annotated
+        } else {
+            kernel_schema
+        };
+
+        let protocol = protocol_for_create(
+            !matches!(effective_mode, ColumnMappingMode::None),
+            has_timestamp_ntz,
+            TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
+            schema_has_generated_columns(&metadata_schema),
+            &configuration,
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata = metadata_for_create_with_struct_type(
+            metadata_schema,
+            partition_by.clone(),
+            Utc::now().timestamp_millis(),
+            configuration,
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let mut actions: Vec<CommitAction> = vec![
+            CommitAction::Protocol(protocol.clone()),
+            CommitAction::Metadata(metadata.clone()),
+        ];
+
+        // REPLACE: tombstone all existing active files before writing the new metadata.
+        let (save_mode, reference, log_store) = match existing_table {
+            Some(table) if replace => {
+                let snapshot = table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .clone();
+                let deletion_timestamp = Utc::now().timestamp_millis();
+                for add in snapshot.adds() {
+                    actions.push(CommitAction::Remove(
+                        add.clone().into_remove(deletion_timestamp),
+                    ));
+                }
+                (SaveMode::Overwrite, Some(snapshot), table.log_store())
+            }
+            Some(_) => {
+                // This path should not be reachable given the earlier fast-path,
+                // but being defensive for `replace=false` + existing: adopt.
+                return Ok(());
+            }
+            None => {
+                let fresh = create_delta_table_with_object_store(
+                    url.clone(),
+                    object_store,
+                    Default::default(),
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                (SaveMode::ErrorIfExists, None, fresh.log_store())
+            }
+        };
+
+        let operation = DeltaOperation::Create {
+            mode: save_mode,
+            location: url.to_string(),
+            protocol: Box::new(protocol),
+            metadata: Box::new(metadata),
+        };
+        // Silence unused-import warnings when Action is only referenced transitively.
+        let _ = std::marker::PhantomData::<Action>;
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(reference, log_store, operation)
+            .await
+            .map(|_| ())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        Ok(())
+    }
+}
+
+/// Returns true if the declared `new` Arrow schema is compatible with the
+/// `existing` Delta table schema. Two schemas are considered compatible when
+/// they have the same top-level columns with matching names (case-sensitive) and
+/// matching data types. Nullability of declared fields may be looser than the
+/// on-disk fields (Spark allows declaring a NOT NULL column as nullable and
+/// vice versa at `CREATE TABLE` time). Nested struct fields and partitioning
+/// checks are deferred to future iterations.
+fn delta_schemas_compatible(
+    existing: &datafusion::arrow::datatypes::Schema,
+    declared: &datafusion::arrow::datatypes::Schema,
+) -> bool {
+    if existing.fields().len() != declared.fields().len() {
+        return false;
+    }
+    for (a, b) in existing.fields().iter().zip(declared.fields().iter()) {
+        if a.name() != b.name() {
+            return false;
+        }
+        if a.data_type() != b.data_type() {
+            return false;
+        }
+    }
+    true
 }
 
 /// Merge an existing protocol with a desired one. The result preserves every feature and

@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::provider_as_source;
@@ -276,6 +276,28 @@ pub struct RowLevelWriteInfo {
 // - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
 // - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
 
+/// Information passed to [`TableFormat::create_table`] so a format implementation
+/// can materialize the physical table.
+#[derive(Debug, Clone)]
+pub struct CreateTableInfo {
+    /// Target table location (filesystem path or URI).
+    pub path: String,
+    /// Declared table schema. May be empty for external tables that should
+    /// inherit their schema from the existing on-disk table.
+    pub schema: SchemaRef,
+    /// Partition column names (top-level).
+    pub partition_by: Vec<String>,
+    /// Table properties/configuration (e.g. `delta.*` keys).
+    pub properties: HashMap<String, String>,
+    /// CREATE TABLE IF NOT EXISTS.
+    pub if_not_exists: bool,
+    /// CREATE OR REPLACE TABLE.
+    pub replace: bool,
+    /// Per-column generation expressions by column name. Used for GENERATED
+    /// ALWAYS AS columns (Delta generated columns table feature).
+    pub generated_columns: HashMap<String, String>,
+}
+
 /// A trait for preparing physical execution for a specific format.
 #[async_trait]
 pub trait TableFormat: Send + Sync {
@@ -346,6 +368,15 @@ pub trait TableFormat: Send + Sync {
             "Table properties alteration not supported for {} format",
             self.name()
         )
+    }
+
+    async fn create_table(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        info: CreateTableInfo,
+    ) -> Result<()> {
+        let _ = (runtime_env, info);
+        Ok(())
     }
 }
 
