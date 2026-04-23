@@ -1,8 +1,9 @@
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ExprSchemable};
+use datafusion_expr::{expr, lit, ExprSchemable, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -36,11 +37,81 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn is_string_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
+fn needs_spark_string_cast(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Date32
+            | DataType::Date64
+            | DataType::Timestamp(_, _)
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+    )
+}
+
+fn cast_to_string(expr: expr::Expr, target: &DataType) -> expr::Expr {
+    match target {
+        DataType::LargeUtf8 => ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr]),
+        DataType::Utf8View => ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr]),
+        _ => ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr]),
+    }
+}
+
+/// Spark-compatible coalesce that handles mixed String and Date/Timestamp arguments.
+///
+/// In Spark, when String is mixed with Date or Timestamp types in `coalesce`,
+/// all arguments are cast to String. DataFusion does not do this automatically.
+fn spark_coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+
+    let schema = function_context.schema;
+    let types: Vec<DataType> = arguments
+        .iter()
+        .map(|arg| arg.get_type(schema.as_ref()))
+        .collect::<Result<_, _>>()?;
+
+    let has_string = types.iter().any(is_string_type);
+    let has_temporal = types.iter().any(needs_spark_string_cast);
+
+    let arguments = if has_string && has_temporal {
+        let target_string = types
+            .iter()
+            .find(|t| is_string_type(t))
+            .cloned()
+            .unwrap_or(DataType::Utf8);
+
+        arguments
+            .into_iter()
+            .zip(types.iter())
+            .map(|(arg, dt)| {
+                if is_string_type(dt) {
+                    arg
+                } else {
+                    cast_to_string(arg, &target_string)
+                }
+            })
+            .collect()
+    } else {
+        arguments
+    };
+
+    Ok(expr_fn::coalesce(arguments))
+}
+
 pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("coalesce", F::var_arg(expr_fn::coalesce)),
+        ("coalesce", F::custom(spark_coalesce)),
         ("if", F::custom(if_expr)),
         ("ifnull", F::binary(expr_fn::nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
