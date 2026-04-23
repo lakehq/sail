@@ -6,10 +6,13 @@ use datafusion::arrow::datatypes::{
     DataType, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType,
 };
-use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
+use datafusion::arrow::error::ArrowError;
+use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-use crate::error::{generic_exec_err, invalid_arg_count_exec_err};
+use crate::error::{
+    invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
+};
 use crate::functions_nested_utils::make_scalar_function;
 
 /// Spark's div operator for intervals.
@@ -55,15 +58,21 @@ impl ScalarUDFImpl for SparkIntervalDiv {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
+        let [dividend, divisor] = arg_types else {
             return Err(invalid_arg_count_exec_err(
                 "spark_interval_div",
                 (2, 2),
                 arg_types.len(),
             ));
+        };
+        match (dividend, divisor) {
+            (DataType::Interval(d), DataType::Interval(s)) if d == s => Ok(arg_types.to_vec()),
+            _ => Err(unsupported_data_types_exec_err(
+                "spark_interval_div",
+                "Interval / Interval of the same unit",
+                arg_types,
+            )),
         }
-
-        Ok(arg_types.to_vec())
     }
 }
 
@@ -127,102 +136,73 @@ impl ScalarUDFImpl for SparkIntegerDiv {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [dividend, divisor] = args.args.as_slice() else {
-            return Err(invalid_arg_count_exec_err(
-                "spark_integer_div",
-                (2, 2),
-                args.args.len(),
-            ));
-        };
         let ansi = self.ansi_mode;
-        let compute = |d: i64, s: i64| -> Result<i64> {
-            if d == i64::MIN && s == -1 {
-                if ansi {
-                    Err(exec_datafusion_err!(
-                        "[ARITHMETIC_OVERFLOW] long overflow on div({d}, {s})"
-                    ))
-                } else {
-                    Ok(i64::MIN)
-                }
-            } else {
-                Ok(d.wrapping_div(s))
-            }
-        };
-
-        match (dividend, divisor) {
-            (ColumnarValue::Scalar(d), ColumnarValue::Scalar(s)) => {
-                let d_val = match d {
-                    ScalarValue::Int64(v) => *v,
-                    _ => return Err(exec_datafusion_err!("expected Int64 dividend")),
-                };
-                let s_val = match s {
-                    ScalarValue::Int64(v) => *v,
-                    _ => return Err(exec_datafusion_err!("expected Int64 divisor")),
-                };
-                let out = match (d_val, s_val) {
-                    (Some(d), Some(s)) => Some(compute(d, s)?),
-                    _ => None,
-                };
-                Ok(ColumnarValue::Scalar(ScalarValue::Int64(out)))
-            }
-            (ColumnarValue::Array(d_arr), ColumnarValue::Array(s_arr)) => {
-                let d = d_arr.as_primitive::<Int64Type>();
-                let s = s_arr.as_primitive::<Int64Type>();
-                let mut builder = Int64Array::builder(d.len());
-                for i in 0..d.len() {
-                    if d.is_null(i) || s.is_null(i) {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(compute(d.value(i), s.value(i))?);
-                    }
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-            }
-            (ColumnarValue::Scalar(d), ColumnarValue::Array(s_arr)) => {
-                let d_val = match d {
-                    ScalarValue::Int64(v) => *v,
-                    _ => return Err(exec_datafusion_err!("expected Int64 dividend")),
-                };
-                let s = s_arr.as_primitive::<Int64Type>();
-                let mut builder = Int64Array::builder(s.len());
-                for i in 0..s.len() {
-                    match (d_val, s.is_null(i)) {
-                        (Some(d), false) => builder.append_value(compute(d, s.value(i))?),
-                        _ => builder.append_null(),
-                    }
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-            }
-            (ColumnarValue::Array(d_arr), ColumnarValue::Scalar(s)) => {
-                let s_val = match s {
-                    ScalarValue::Int64(v) => *v,
-                    _ => return Err(exec_datafusion_err!("expected Int64 divisor")),
-                };
-                let d = d_arr.as_primitive::<Int64Type>();
-                let mut builder = Int64Array::builder(d.len());
-                for i in 0..d.len() {
-                    match (d.is_null(i), s_val) {
-                        (false, Some(s)) => builder.append_value(compute(d.value(i), s)?),
-                        _ => builder.append_null(),
-                    }
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-            }
-        }
+        make_scalar_function(move |arrs: &[ArrayRef]| integer_div_inner(arrs, ansi))(&args.args)
     }
 }
 
+fn integer_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
+    let [dividend, divisor] = args else {
+        return Err(invalid_arg_count_exec_err(
+            "spark_integer_div",
+            (2, 2),
+            args.len(),
+        ));
+    };
+    if !matches!(dividend.data_type(), DataType::Int64) {
+        return Err(unsupported_data_type_exec_err(
+            "spark_integer_div",
+            "Int64",
+            dividend.data_type(),
+        ));
+    }
+    if !matches!(divisor.data_type(), DataType::Int64) {
+        return Err(unsupported_data_type_exec_err(
+            "spark_integer_div",
+            "Int64",
+            divisor.data_type(),
+        ));
+    }
+    let d = dividend.as_primitive::<Int64Type>();
+    let s = divisor.as_primitive::<Int64Type>();
+    // Zero-divisor positions are masked to NULL upstream by `make_safe_divisor`
+    // (see `spark_div` dispatcher), but `arrow::compute::binary` still invokes
+    // the closure at those indices before applying the null mask — guard `y == 0`
+    // to avoid a wrapping_div panic on the masked slot.
+    let result: Int64Array = if ansi {
+        datafusion::arrow::compute::try_binary(d, s, |x, y| {
+            if y == 0 {
+                Ok(0)
+            } else if x == i64::MIN && y == -1 {
+                Err(ArrowError::ComputeError(format!(
+                    "[ARITHMETIC_OVERFLOW] long overflow on div({x}, {y})"
+                )))
+            } else {
+                Ok(x.wrapping_div(y))
+            }
+        })?
+    } else {
+        datafusion::arrow::compute::binary(d, s, |x, y| {
+            if y == 0 {
+                0
+            } else if x == i64::MIN && y == -1 {
+                i64::MIN
+            } else {
+                x.wrapping_div(y)
+            }
+        })?
+    };
+    Ok(Arc::new(result))
+}
+
 fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
+    let [dividend, divisor] = args else {
         return Err(invalid_arg_count_exec_err(
             "spark_interval_div",
             (2, 2),
             args.len(),
         ));
-    }
-
-    let dividend = &args[0];
-    let divisor = &args[1];
+    };
 
     let result: Int64Array = match (dividend.data_type(), divisor.data_type()) {
         (
@@ -293,9 +273,10 @@ fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .collect()
         }
         _ => {
-            return Err(generic_exec_err(
+            return Err(unsupported_data_types_exec_err(
                 "spark_interval_div",
-                "unsupported interval types for division",
+                "Interval / Interval of the same unit",
+                &[dividend.data_type().clone(), divisor.data_type().clone()],
             ))
         }
     };
@@ -310,6 +291,7 @@ mod tests {
     use datafusion::arrow::array::{Array, Int64Array, IntervalYearMonthArray};
 
     use super::*;
+    use crate::error::generic_exec_err;
 
     #[test]
     fn test_interval_year_month_division() -> Result<()> {
