@@ -10,7 +10,7 @@ use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit};
 use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
-    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
+    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Collate, Cube, Current, CurrentDate,
     CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Div, Else, End, Escape, Exists,
     Extract, False, Filter, First, Following, For, From, Group, Grouping, Hour, Hours, Identifier,
     Ignore, Ilike, In, Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond,
@@ -94,6 +94,7 @@ pub enum Expr {
         Box<Expr>,
         Option<PatternEscape>,
     ),
+    Collate(Box<Expr>, Collate, Ident),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
@@ -386,12 +387,40 @@ pub struct FunctionArgumentList {
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "Expr")]
 pub enum FunctionArgument {
+    TableArg {
+        table: Table,
+        left: LeftParenthesis,
+        expr: ObjectName,
+        right: RightParenthesis,
+        #[parser(function = |e, o| compose(e, o))]
+        partition: Option<TableArgPartition>,
+    },
     Named(
         Ident,
         operator::FatArrow,
         #[parser(function = |e, _| e)] Expr,
     ),
     Unnamed(#[parser(function = |e, _| e)] Expr),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub enum TableArgPartition {
+    PartitionBy {
+        partition: Partition,
+        by: By,
+        #[parser(function = |e, o| sequence(e, unit(o)))]
+        exprs: Sequence<Expr, Comma>,
+        #[parser(function = |e, o| compose(e, o))]
+        order_by: Option<OrderByClause>,
+    },
+    WithSinglePartition {
+        with: With,
+        single: Single,
+        partition: Partition,
+        #[parser(function = |e, o| compose(e, o))]
+        order_by: Option<OrderByClause>,
+    },
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
@@ -661,6 +690,7 @@ enum ExprPostfixPredicate {
         #[parser(function = |(_, q), _| q)] Query,
         RightParenthesis,
     ),
+    Collate(Collate, Ident),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
@@ -775,6 +805,9 @@ where
                     }
                     ExprPostfixPredicate::InSubquery(x1, x2, x3, x4, x5) => {
                         Ok(Expr::InSubquery(Box::new(expr), x1, x2, x3, x4, x5))
+                    }
+                    ExprPostfixPredicate::Collate(x1, x2) => {
+                        Ok(Expr::Collate(Box::new(expr), x1, x2))
                     }
                 }
             }
