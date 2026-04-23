@@ -7,7 +7,7 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, RecordBatch};
 use datafusion::arrow::compute::filter_record_batch;
-use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, SortField};
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
@@ -63,6 +63,16 @@ impl IcebergDeleteApplyExec {
         table_url: String,
         iceberg_schema: IcebergSchema,
     ) -> Self {
+        let input_partitions =
+            datafusion::physical_plan::ExecutionPlanProperties::output_partitioning(&input)
+                .partition_count();
+        if input_partitions != 1 {
+            log::warn!(
+                "IcebergDeleteApplyExec: child scan has {} partitions; \
+                 positional deletes may be incorrect",
+                input_partitions
+            );
+        }
         let output_schema = input.schema();
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(output_schema.clone()),
@@ -458,29 +468,18 @@ fn compute_delete_mask(
             .converter
             .convert_columns(&cols)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+        let owned_rows: Vec<OwnedRow> = (0..n).map(|i| rows.row(i).owned()).collect();
         for (i, keep_slot) in keep.iter_mut().enumerate().take(n) {
             if !*keep_slot {
                 continue;
             }
-            if eq.rows.contains(&rows.row(i).owned()) {
+            if eq.rows.contains(&owned_rows[i]) {
                 *keep_slot = false;
             }
         }
     }
 
     Ok(datafusion::arrow::array::BooleanArray::from(keep))
-}
-
-/// Sanity check: schema helper that the caller may use to assert the child's
-/// schema matches the declared output schema.
-#[expect(dead_code)]
-fn schemas_match(lhs: &ArrowSchema, rhs: &ArrowSchema) -> bool {
-    lhs.fields().len() == rhs.fields().len()
-        && lhs
-            .fields()
-            .iter()
-            .zip(rhs.fields().iter())
-            .all(|(a, b)| a.name() == b.name() && a.data_type() == b.data_type())
 }
 
 #[cfg(test)]

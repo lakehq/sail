@@ -224,7 +224,7 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                 record_counts.push(df.record_count());
                                 file_sizes.push(df.file_size_in_bytes());
                                 partition_spec_ids.push(partition_spec_id);
-                                content_types.push(format!("{:?}", df.content_type()));
+                                content_types.push(df.content_type().as_action_str().to_string());
                             }
 
                             if file_paths.is_empty() {

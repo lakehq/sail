@@ -417,10 +417,7 @@ impl IcebergTableProvider {
     fn object_store_url(&self) -> Result<ObjectStoreUrl> {
         let table_url = Url::parse(&self.table_uri)
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-        let base_url = format!("{}://{}", table_url.scheme(), table_url.authority());
-        let base_url_parsed = Url::parse(&base_url)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-        ObjectStoreUrl::parse(base_url_parsed)
+        ObjectStoreUrl::parse(&table_url[..url::Position::BeforePath])
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))
     }
 
@@ -645,7 +642,9 @@ impl TableProvider for IcebergTableProvider {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
         if self.metadata_as_data_read {
-            return self.scan_metadata_as_data(session, projection, filters, limit);
+            return self
+                .scan_metadata_as_data(session, projection, filters, limit)
+                .await;
         }
 
         let table_url = Url::parse(&self.table_uri)
@@ -1038,25 +1037,50 @@ impl IcebergTableProvider {
     ///   ↓
     /// Data output (actual table rows)
     /// ```
-    fn scan_metadata_as_data(
+    async fn scan_metadata_as_data(
         &self,
-        _session: &dyn Session,
-        _projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         log::trace!(
             "Using metadata-as-data scan path for table: {}",
             self.table_uri
         );
 
-        // Step 1: Build the manifest scan node (lazy metadata producer).
+        let table_url = Url::parse(&self.table_uri)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        let base_store = get_object_store_from_session(session, &table_url)?;
+        let store_ctx = StoreContext::new(base_store, &table_url)?;
+        let manifest_list = self.load_manifest_list(&store_ctx).await?;
+        if manifest_list
+            .entries()
+            .iter()
+            .any(|mf| mf.content == ManifestContentType::Deletes)
+        {
+            return plan_err!(
+                "metadata-as-data read path does not yet support tables with delete files; \
+                 disable the `metadataAsDataRead` option to use the driver-based read path"
+            );
+        }
+
+        if projection.is_some() || !filters.is_empty() || limit.is_some() {
+            log::debug!(
+                "metadata-as-data scan does not push down projection/filters/limit \
+                 (projection_provided={}, num_filters={}, limit={:?}); relying on \
+                 the planner to apply them above the scan",
+                projection.is_some(),
+                filters.len(),
+                limit,
+            );
+        }
+
         let manifest_scan: Arc<dyn ExecutionPlan> = Arc::new(IcebergManifestScanExec::new(
             self.table_uri.clone(),
             self.snapshot.clone(),
         ));
 
-        // Step 2: Annotate with discovery metadata (partition_scan flag).
         let discovery: Arc<dyn ExecutionPlan> = Arc::new(IcebergDiscoveryExec::new(
             manifest_scan,
             self.table_uri.clone(),
@@ -1064,7 +1088,6 @@ impl IcebergTableProvider {
             false, // full data file scan, not partition-only
         )?);
 
-        // Step 3: Build the scan-by-data-files node (streaming data consumer).
         let scan_exec = Arc::new(
             crate::physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec::new(
                 discovery,

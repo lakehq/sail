@@ -94,3 +94,49 @@ Feature: Iceberg read path (driver vs metadata-as-data)
         EXPLAIN SELECT * FROM iceberg_metadata_partitioned
         """
       Then query plan matches snapshot
+
+  Rule: Metadata-as-data path returns the same rows as the driver path
+    Background:
+      Given variable location for temporary directory iceberg_read_metadata_rows
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_metadata_rows
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_metadata_rows (
+          id INT,
+          name STRING,
+          value INT
+        )
+        USING iceberg LOCATION {{ location.uri }}
+        OPTIONS (metadataAsDataRead 'true')
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_metadata_rows
+        SELECT * FROM VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30)
+        """
+
+    @sail-only
+    Scenario: SELECT through metadata-as-data path returns all rows
+      When query
+        """
+        SELECT * FROM iceberg_metadata_rows ORDER BY id
+        """
+      Then query result ordered
+        | id | name | value |
+        | 1  | a    | 10    |
+        | 2  | b    | 20    |
+        | 3  | c    | 30    |
+
+    @sail-only
+    Scenario: Filter and projection work on metadata-as-data path
+      When query
+        """
+        SELECT name, value FROM iceberg_metadata_rows WHERE id >= 2 ORDER BY id
+        """
+      Then query result ordered
+        | name | value |
+        | b    | 20    |
+        | c    | 30    |

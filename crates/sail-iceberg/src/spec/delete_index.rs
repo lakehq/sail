@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
-use crate::spec::manifest::{DataContentType, DataFile};
+use crate::spec::manifest::{DataContentType, DataFile, DataFileFormat};
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 
 /// A single delete file, augmented with the sequence number inherited from its
@@ -27,6 +27,7 @@ impl DeleteFileRef {
     /// Whether this ref describes a v3 deletion vector (Puffin blob).
     pub fn is_deletion_vector(&self) -> bool {
         self.data_file.content == DataContentType::PositionDeletes
+            && self.data_file.file_format == DataFileFormat::Puffin
             && self.data_file.content_offset.is_some()
             && self.data_file.content_size_in_bytes.is_some()
     }
@@ -517,6 +518,7 @@ mod tests {
             5,
             true,
         );
+        dv.data_file.file_format = DataFileFormat::Puffin;
         dv.data_file.content_offset = Some(64);
         dv.data_file.content_size_in_bytes = Some(128);
         assert!(dv.is_deletion_vector());
@@ -527,6 +529,26 @@ mod tests {
             err,
             DeleteIndexError::DeletionVectorUnsupported(_)
         ));
+    }
+
+    #[test]
+    fn parquet_pos_delete_with_content_offset_is_not_dv() {
+        let mut pos = make_delete(
+            DataContentType::PositionDeletes,
+            "s3://t/pos-deletes.parquet",
+            vec![],
+            0,
+            Some("s3://t/d.parquet".to_string()),
+            5,
+            true,
+        );
+        assert_eq!(pos.data_file.file_format, DataFileFormat::Parquet);
+        pos.data_file.content_offset = Some(64);
+        pos.data_file.content_size_in_bytes = Some(128);
+        assert!(!pos.is_deletion_vector());
+
+        let mut idx = DeleteFileIndex::new();
+        assert!(idx.insert(pos).is_ok());
     }
 
     #[test]

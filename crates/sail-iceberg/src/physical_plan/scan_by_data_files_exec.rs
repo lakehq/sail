@@ -145,14 +145,7 @@ impl ScanByDataFilesState {
 
         let file_groups = vec![FileGroup::from(partitioned_files)];
 
-        let base_url = format!(
-            "{}://{}",
-            self.table_url.scheme(),
-            self.table_url.authority()
-        );
-        let base_url_parsed =
-            Url::parse(&base_url).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let object_store_url = ObjectStoreUrl::parse(base_url_parsed)
+        let object_store_url = ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         // Use session Parquet options for parity with the driver-based scan path.
