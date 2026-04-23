@@ -333,7 +333,7 @@ fn arrays_zip_fixed_size(
     )?;
 
     Ok(Arc::new(FixedSizeListArray::try_new(
-        struct_result_field(&inner_fields),
+        struct_result_field_with_names(&inner_fields, Some(&field_names)),
         *fixed_size,
         values,
         combine_validity_masks(args),
@@ -480,7 +480,7 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(
     };
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        struct_result_field(&inner_fields),
+        struct_result_field_with_names(&inner_fields, Some(&field_names)),
         OffsetBuffer::<O>::new(offsets.into()),
         values,
         validity_mask_opt,

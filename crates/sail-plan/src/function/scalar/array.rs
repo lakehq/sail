@@ -233,12 +233,22 @@ fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         arguments,
         function_context,
     } = input;
-    // Use argument display names as struct field names, matching Spark's behavior
-    // where arrays_zip(df.col1, df.col2) produces struct fields named "col1", "col2".
-    let field_names: Vec<String> = function_context
-        .argument_display_names
+    // Use argument display names as struct field names only when the argument is a
+    // column reference, matching Spark's behavior:
+    //   arrays_zip(df.col1, df.col2)            -> fields "col1", "col2"
+    //   arrays_zip(array(1,2), array(3,4))      -> fields "0", "1"
+    //   arrays_zip(array(1,2), df.col1)         -> fields "0", "col1"
+    let field_names: Vec<String> = arguments
         .iter()
-        .map(|s| s.to_owned())
+        .zip(function_context.argument_display_names.iter())
+        .enumerate()
+        .map(|(i, (arg, display_name))| {
+            if matches!(arg, expr::Expr::Column(_)) {
+                display_name.clone()
+            } else {
+                i.to_string()
+            }
+        })
         .collect();
     Ok(ScalarUDF::from(ArraysZip::with_field_names(field_names)).call(arguments))
 }
