@@ -116,7 +116,9 @@ fn finalize_chunked_artifact(
     let is_crc_successful = chunked.is_crc_successful;
     if is_crc_successful {
         store_artifact(&name, &chunked.data, artifact_dir).unwrap_or_else(|e| {
-            log::warn!("Failed to store artifact {name}: {e}");
+            log::warn!(
+                "Failed to store artifact {name}: {e}; the artifact is still tracked but may not be accessible"
+            );
         });
     }
     spark.add_artifact(name.clone())?;
@@ -151,7 +153,9 @@ pub(crate) async fn handle_add_artifacts(
                         let is_crc_successful = validate_crc(&chunk.data, chunk.crc);
                         if is_crc_successful {
                             store_artifact(&name, &chunk.data, &artifact_dir).unwrap_or_else(|e| {
-                                log::warn!("Failed to store artifact {name}: {e}");
+                                log::warn!(
+                                    "Failed to store artifact {name}: {e}; the artifact is still tracked but may not be accessible"
+                                );
                             });
                         }
                         spark.add_artifact(name.clone())?;

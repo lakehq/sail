@@ -1,11 +1,13 @@
 """Tests for artifact handling via SparkSession.addArtifact."""
 
+_ARTIFACT_CONSTANT_VALUE = 42
+
 
 def test_add_artifact_python_file(spark, tmp_path):
     """Adding a Python file artifact should make it importable."""
     # Create a simple Python module
     module_file = tmp_path / "my_artifact_module.py"
-    module_file.write_text("MY_CONSTANT = 42\n")
+    module_file.write_text(f"MY_CONSTANT = {_ARTIFACT_CONSTANT_VALUE}\n")
 
     spark.addArtifact(str(module_file))
 
@@ -21,7 +23,7 @@ def test_add_artifact_python_file(spark, tmp_path):
 
     df = spark.createDataFrame([(1,), (2,)], ["id"])
     result = df.select(get_constant("id")).collect()
-    assert all(row[0] == 42 for row in result)  # noqa: PLR2004
+    assert all(row[0] == _ARTIFACT_CONSTANT_VALUE for row in result)
 
 
 def test_add_artifact_zip_file(spark, tmp_path):
