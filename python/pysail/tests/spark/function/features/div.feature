@@ -322,6 +322,41 @@ Feature: div (integer division) comprehensive tests
         """
       Then query error .*
 
+  Rule: Workarounds for FLOAT and DOUBLE operands
+    # Spark rejects FLOAT/DOUBLE in div by design (IntegralDivide requires
+    # integral or decimal types). Users can still perform integer division
+    # on floating-point values by casting first. These scenarios document
+    # the valid workarounds.
+
+    Scenario: div accepts DOUBLE values cast to DECIMAL
+      When query
+        """
+        SELECT div(CAST(CAST(1.5 AS DOUBLE) AS DECIMAL(10,2)),
+                   CAST(CAST(0.3 AS DOUBLE) AS DECIMAL(10,2))) AS result
+        """
+      Then query result
+        | result |
+        | 5      |
+
+    Scenario: div accepts DOUBLE values cast to BIGINT
+      When query
+        """
+        SELECT div(CAST(CAST(10.7 AS DOUBLE) AS BIGINT),
+                   CAST(CAST(3.2 AS DOUBLE) AS BIGINT)) AS result
+        """
+      Then query result
+        | result |
+        | 3      |
+
+    Scenario: regular division plus cast works with DOUBLE
+      When query
+        """
+        SELECT CAST(CAST(1.5 AS DOUBLE) / CAST(0.3 AS DOUBLE) AS BIGINT) AS result
+        """
+      Then query result
+        | result |
+        | 5      |
+
     Scenario: div STRING/STRING errors
       When query
         """
