@@ -47,7 +47,7 @@ impl PlanResolver<'_> {
         }
         let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
             return Err(PlanError::AnalysisError(format!(
-                "cannot resolve attribute: {name:?}"
+                "attribute {name:?} is missing from the schema"
             )));
         };
         match self.resolve_outer_field(&name, &outer_schema, state)? {
