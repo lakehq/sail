@@ -78,7 +78,18 @@ impl PlanResolver<'_> {
                             expr: Box::new(value),
                             data_type: field.data_type().clone(),
                         });
-                        when(column_expr.clone().is_null(), value).otherwise(column_expr)?
+                        // For floating-point columns, also replace NaN values (Spark behavior).
+                        let is_null_or_nan = match field.data_type() {
+                            DataType::Float16 => column_expr
+                                .clone()
+                                .is_null()
+                                .or(isnan(cast(column_expr.clone(), DataType::Float32))),
+                            DataType::Float32 | DataType::Float64 => {
+                                column_expr.clone().is_null().or(isnan(column_expr.clone()))
+                            }
+                            _ => column_expr.clone().is_null(),
+                        };
+                        when(is_null_or_nan, value).otherwise(column_expr)?
                     } else {
                         column_expr
                     }

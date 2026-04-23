@@ -1,7 +1,12 @@
+import math
+from datetime import date
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
+from pyspark.sql import functions as F
+from pyspark.sql import types as T
 from pyspark.sql.functions import col, lit
 
 
@@ -110,3 +115,79 @@ def test_dataframe_with_column_alias(spark):
             }
         ).astype({"id": "int32", "col1": "int32", "col3": "int32"}),
     )
+
+
+def test_fillna_replaces_nan_in_double_column(spark):
+    """fillna(0) should replace NaN values in DoubleType columns (Spark parity)."""
+    schema = T.StructType([T.StructField("value", T.DoubleType(), True)])
+    df = spark.createDataFrame([(float("nan"),), (2.5,), (None,)], schema)
+    result = df.fillna(0).collect()
+    # NaN and NULL should both be replaced with 0.0
+    assert result[0]["value"] == 0.0, f"NaN should be replaced with 0.0, got {result[0]['value']}"
+    assert result[1]["value"] == 2.5
+    assert result[2]["value"] == 0.0, f"None should be replaced with 0.0, got {result[2]['value']}"
+
+
+def test_fillna_replaces_nan_in_float_column(spark):
+    """fillna(0) should replace NaN values in FloatType columns (Spark parity)."""
+    schema = T.StructType([T.StructField("value", T.FloatType(), True)])
+    df = spark.createDataFrame([(float("nan"),), (1.5,)], schema)
+    result = df.fillna(0).collect()
+    assert result[0]["value"] == 0.0, f"NaN should be replaced with 0.0, got {result[0]['value']}"
+    assert result[1]["value"] == pytest.approx(1.5)
+
+
+def test_fillna_does_not_replace_nan_in_non_float_column(spark):
+    """fillna(0) should not affect non-NaN values."""
+    schema = T.StructType([T.StructField("value", T.DoubleType(), True)])
+    df = spark.createDataFrame([(1.5,), (None,)], schema)
+    result = df.fillna(0).collect()
+    assert result[0]["value"] == 1.5
+    assert result[1]["value"] == 0.0
+
+
+def test_withcolumn_dotted_name_creates_top_level_column(spark):
+    """withColumn with a dotted name should create a new top-level column (Spark parity)."""
+    schema = T.StructType(
+        [
+            T.StructField("id", T.IntegerType(), False),
+            T.StructField(
+                "struct_col",
+                T.StructType([T.StructField("nested_field", T.StringType(), True)]),
+                True,
+            ),
+        ]
+    )
+    df = spark.createDataFrame([(1, ("x",))], schema)
+    result = df.withColumn("struct_col.nested_field", lit("y")).collect()
+    # The original struct column should be unchanged
+    assert result[0]["struct_col"]["nested_field"] == "x"
+    # A new top-level column with the dotted name should be added
+    assert result[0]["struct_col.nested_field"] == "y"
+
+
+def test_concat_ws_coerces_non_string_columns(spark):
+    """concat_ws should coerce non-string column types to string (Spark parity)."""
+    schema = T.StructType(
+        [
+            T.StructField("string_col", T.StringType(), True),
+            T.StructField("int_col", T.IntegerType(), True),
+            T.StructField("date_col", T.DateType(), True),
+        ]
+    )
+    df = spark.createDataFrame([("a", 1, date(2024, 1, 15))], schema)
+    result = df.select(F.concat_ws("-", F.col("string_col"), F.col("int_col"), F.col("date_col"))).collect()
+    assert result[0][0] == "a-1-2024-01-15"
+
+
+def test_concat_ws_coerces_null_non_string_columns(spark):
+    """concat_ws should skip null non-string values (Spark parity)."""
+    schema = T.StructType(
+        [
+            T.StructField("string_col", T.StringType(), True),
+            T.StructField("int_col", T.IntegerType(), True),
+        ]
+    )
+    df = spark.createDataFrame([("a", None)], schema)
+    result = df.select(F.concat_ws("-", F.col("string_col"), F.col("int_col"))).collect()
+    assert result[0][0] == "a"

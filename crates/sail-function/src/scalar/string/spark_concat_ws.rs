@@ -8,6 +8,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, OffsetSizeTrait, StringArray};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{exec_err, Result, ScalarValue};
@@ -160,8 +161,13 @@ fn collect_parts_from_array(arr: &ArrayRef, row_idx: usize, parts: &mut Vec<Stri
         DataType::LargeList(_) => {
             collect_parts_from_list::<i64>(arr.as_list(), row_idx, parts)?;
         }
-        other => {
-            return exec_err!("concat_ws does not support data type {:?}", other);
+        _ => {
+            // For any other type, cast to string (Spark behavior: coerce all types to string)
+            let str_arr = cast(arr, &DataType::Utf8)?;
+            let str_arr = str_arr.as_string::<i32>();
+            if !str_arr.is_null(row_idx) {
+                parts.push(str_arr.value(row_idx).to_string());
+            }
         }
     }
     Ok(())
