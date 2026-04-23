@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pysail import _native
+from pysail.spark import _patch as _patch
 
 __all__ = [
     "SparkConnectServer",

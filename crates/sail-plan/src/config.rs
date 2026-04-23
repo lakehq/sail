@@ -16,6 +16,11 @@ pub enum DefaultTimestampType {
 pub struct PlanConfig {
     /// The time zone of the session.
     pub session_timezone: Arc<str>,
+    /// The user time zone for interpreting naive Python `datetime` objects.
+    /// An empty string means no override (use the OS local timezone).
+    /// This is the analog of `-Duser.timezone` in OSS Spark.
+    /// It corresponds to the `sail.user.timeZone` session configuration.
+    pub user_timezone: Arc<str>,
     /// The default timestamp type.
     pub default_timestamp_type: DefaultTimestampType,
     /// Whether to use large variable types in Arrow.
@@ -45,6 +50,7 @@ impl Default for PlanConfig {
     fn default() -> Self {
         Self {
             session_timezone: Arc::from("UTC"),
+            user_timezone: Arc::from(""),
             default_timestamp_type: DefaultTimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),

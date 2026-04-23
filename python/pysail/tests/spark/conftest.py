@@ -160,6 +160,23 @@ def local_timezone(request):
     time.tzset()
 
 
+@pytest.fixture
+def sail_user_timezone(spark, request):
+    """Fixture to set and restore the ``sail.user.timeZone`` session configuration.
+
+    Sets ``sail.user.timeZone`` on the Spark session (which also applies the
+    timezone override to the current process via the pysail patch) and restores
+    the previous value after the test.
+    """
+    previous = spark.conf.get("sail.user.timeZone")
+    spark.conf.set("sail.user.timeZone", request.param)
+    yield
+    if previous is None:
+        spark.conf.unset("sail.user.timeZone")
+    else:
+        spark.conf.set("sail.user.timeZone", previous)
+
+
 @dataclass
 class DoctestMarker:
     keywords: list[str]

@@ -18,6 +18,15 @@ use crate::spark::config::{
 };
 use crate::spark::connect;
 
+/// The Sail-specific session configuration key for the user timezone.
+///
+/// This controls the timezone used to interpret naive Python `datetime` objects
+/// during ingestion and collection, analogous to `-Duser.timezone` in OSS Spark.
+///
+/// When set, the Sail Python client will use this timezone instead of the OS
+/// local timezone for naive datetime conversions.
+pub const SAIL_USER_TIME_ZONE: &str = "sail.user.timeZone";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ConfigKeyValue {
     pub key: String,
@@ -90,6 +99,10 @@ impl SparkRuntimeConfig {
         if let Some(entry) = entry {
             return Ok(entry.default_value);
         }
+        // Sail-specific configurations (sail.*) are always valid but have no default value.
+        if key.starts_with("sail.") {
+            return Ok(None);
+        }
         Err(SparkError::invalid(format!(
             "configuration not found: {key}"
         )))
@@ -150,6 +163,10 @@ impl SparkRuntimeConfig {
     }
 
     pub(crate) fn is_modifiable(key: &str) -> bool {
+        // Sail-specific configurations (sail.*) are always modifiable.
+        if key.starts_with("sail.") {
+            return true;
+        }
         SPARK_CONFIG
             .get(key)
             .map(|entry| !entry.is_static && entry.removed.is_none())
@@ -237,6 +254,13 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.cross_join_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SAIL_USER_TIME_ZONE)
+            .map(|x| x.to_string())
+        {
+            output.user_timezone = Arc::from(value);
         }
 
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
