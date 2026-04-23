@@ -24,6 +24,8 @@ In the instructions about test setup and test logs, replace `${hatch_env}` with 
 
 All the commands mentioned in the instructions should be run in the project directory unless otherwise specified.
 
+Please always use MCP tools to access workflow runs and artifacts, since API requests initiated by the `gh` command are often blocked by firewall rules.
+
 ## Accessing Existing Test Logs
 
 GitHub Actions runs these tests on every push to the `main` branch. Follow the steps below to access the test logs.
