@@ -44,6 +44,7 @@ fn is_string_type(dt: &DataType) -> bool {
     )
 }
 
+/// Types that Spark implicitly casts to String in coalesce when mixed with String arguments.
 fn needs_spark_string_cast(dt: &DataType) -> bool {
     matches!(
         dt,
