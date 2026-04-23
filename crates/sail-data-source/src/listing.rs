@@ -195,7 +195,8 @@ pub async fn list_all_files<'a>(
     let exec_options = &ctx.config_options().execution;
     let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
     // If the prefix is a file, use a head request, otherwise list
-    let list = match url.is_collection() {
+    let is_collection = url.is_collection();
+    let list = match is_collection {
         true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
             None => store.list(Some(url.prefix())),
             Some(cache) => {
@@ -239,7 +240,16 @@ pub async fn list_all_files<'a>(
                 extension_match
             };
             let glob_match = url.contains(path, ignore_subdirectory);
-            futures::future::ready(extension_match && glob_match)
+            // For collections (directories), exclude hidden files following the Hadoop convention.
+            // Files whose names start with '.' or '_' are treated as hidden or metadata files
+            // (e.g., '_SUCCESS', '.part-xxx.crc') and should be excluded from the listing.
+            // This matches Spark's behavior when reading from a directory.
+            let is_visible = !is_collection
+                || path
+                    .filename()
+                    .map(|name| !name.starts_with('.') && !name.starts_with('_'))
+                    .unwrap_or(true);
+            futures::future::ready(is_visible && extension_match && glob_match)
         })
         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
         .boxed())
