@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 
 import pyspark.sql.functions as F  # noqa: N812
-import pyspark.sql.types as T
+import pyspark.sql.types as T  # noqa: N812
 
 
 def test_coalesce_null_string_with_date(spark):
