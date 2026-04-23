@@ -320,21 +320,22 @@ fn to_timestamp(args: Vec<Expr>) -> PlanResult<Expr> {
     }
 }
 
-fn to_timestamp_ntz(args: Vec<Expr>) -> PlanResult<Expr> {
-    if args.len() == 1 {
+fn to_timestamp_ntz(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    if input.arguments.len() == 1 {
+        let expr = input.arguments.one()?;
         // For TZ-aware (LTZ) input, `to_local_time` converts to NTZ using the annotated
         // timezone's wall clock time, which is the correct Spark semantics for
         // `to_timestamp_ntz` on a LTZ column (session timezone wall clock as NTZ).
-        // For NTZ input, `to_local_time` is a no-op (returns as-is).
-        // For strings and dates, DataFusion coerces to Timestamp first (NTZ), then
-        // `to_local_time` returns the value unchanged.
-        // The outer cast to `Timestamp(Microsecond, None)` normalizes the time unit.
-        Ok(cast(
-            expr_fn::to_local_time(vec![args.one()?]),
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-        ))
-    } else if args.len() == 2 {
-        let (expr, format) = args.two()?;
+        // For strings, dates, and NTZ timestamps, DataFusion does not coerce Utf8 into
+        // Timestamp for `to_local_time`, so we skip it and let the outer cast handle
+        // parsing/coercion to `Timestamp(Microsecond, None)`.
+        let expr = match expr.get_type(input.function_context.schema) {
+            Ok(DataType::Timestamp(_, Some(_))) => expr_fn::to_local_time(vec![expr]),
+            _ => expr,
+        };
+        Ok(cast(expr, DataType::Timestamp(TimeUnit::Microsecond, None)))
+    } else if input.arguments.len() == 2 {
+        let (expr, format) = input.arguments.two()?;
         let format = to_chrono_fmt(format);
         Ok(expr_fn::to_timestamp_micros(vec![expr, format]))
     } else {
@@ -794,7 +795,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ltz.html
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
         ("to_timestamp_ltz", F::var_arg(to_timestamp)),
-        ("to_timestamp_ntz", F::var_arg(to_timestamp_ntz)),
+        ("to_timestamp_ntz", F::custom(to_timestamp_ntz)),
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
         ("trunc", F::binary(trunc)),

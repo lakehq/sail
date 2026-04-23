@@ -67,7 +67,7 @@ impl ScalarUDFImpl for ConvertTz {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() != 3 {
-            return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
+            return plan_err!("`{}` takes 3 arguments: from, to, timestamp", self.name());
         }
         let time_unit = match &arg_types[2] {
             DataType::Timestamp(unit, _) => *unit,
