@@ -212,10 +212,7 @@ pub(crate) async fn handle_analyze_same_semantics(
     })
 }
 
-async fn resolve_plan_repr(
-    ctx: &SessionContext,
-    plan: Option<sc::Plan>,
-) -> SparkResult<String> {
+async fn resolve_plan_repr(ctx: &SessionContext, plan: Option<sc::Plan>) -> SparkResult<String> {
     let Some(plan) = plan else {
         return Ok(String::new());
     };

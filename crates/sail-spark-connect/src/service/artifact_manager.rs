@@ -37,12 +37,10 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &PathBuf) -> SparkResul
                 ))
             })?;
         }
-        let mut file = std::fs::File::create(dest).map_err(|e| {
-            SparkError::internal(format!("failed to create file {dest_path}: {e}"))
-        })?;
-        file.write_all(data).map_err(|e| {
-            SparkError::internal(format!("failed to write file {dest_path}: {e}"))
-        })?;
+        let mut file = std::fs::File::create(dest)
+            .map_err(|e| SparkError::internal(format!("failed to create file {dest_path}: {e}")))?;
+        file.write_all(data)
+            .map_err(|e| SparkError::internal(format!("failed to write file {dest_path}: {e}")))?;
         return Ok(());
     }
 
@@ -53,12 +51,10 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &PathBuf) -> SparkResul
             SparkError::internal(format!("failed to create artifact subdirectory: {e}"))
         })?;
     }
-    let mut file = std::fs::File::create(&target_path).map_err(|e| {
-        SparkError::internal(format!("failed to create artifact file: {e}"))
-    })?;
-    file.write_all(data).map_err(|e| {
-        SparkError::internal(format!("failed to write artifact file: {e}"))
-    })?;
+    let mut file = std::fs::File::create(&target_path)
+        .map_err(|e| SparkError::internal(format!("failed to create artifact file: {e}")))?;
+    file.write_all(data)
+        .map_err(|e| SparkError::internal(format!("failed to write artifact file: {e}")))?;
 
     // For Python files, add to sys.path
     if name.starts_with(PYFILES_PREFIX) {
@@ -88,7 +84,9 @@ fn add_to_sys_path(path: &str) -> SparkResult<()> {
     Python::attach(|py| {
         let sys = PyModule::import(py, "sys")?;
         let path_list = sys.getattr("path")?;
-        let contains: bool = path_list.call_method1("__contains__", (&path,))?.extract()?;
+        let contains: bool = path_list
+            .call_method1("__contains__", (&path,))?
+            .extract()?;
         if !contains {
             path_list.call_method1("insert", (0, &path))?;
         }
@@ -155,11 +153,9 @@ pub(crate) async fn handle_add_artifacts(
                     if let Some(chunk) = artifact.data {
                         let is_crc_successful = validate_crc(&chunk.data, chunk.crc);
                         if is_crc_successful {
-                            store_artifact(&name, &chunk.data, &artifact_dir).unwrap_or_else(
-                                |e| {
-                                    log::warn!("Failed to store artifact {name}: {e}");
-                                },
-                            );
+                            store_artifact(&name, &chunk.data, &artifact_dir).unwrap_or_else(|e| {
+                                log::warn!("Failed to store artifact {name}: {e}");
+                            });
                         }
                         spark.add_artifact(name.clone())?;
                         summaries.push(ArtifactSummary {
