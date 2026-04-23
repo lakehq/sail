@@ -47,7 +47,7 @@ fn is_string_type(dt: &DataType) -> bool {
 /// Returns `true` for temporal types whose presence, together with at least
 /// one String argument, triggers Spark-compatible coercion of *all* non-string
 /// arguments to String in `coalesce`.
-fn has_temporal_type(dt: &DataType) -> bool {
+fn is_temporal_type(dt: &DataType) -> bool {
     matches!(
         dt,
         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
@@ -79,7 +79,7 @@ fn spark_coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .collect::<Result<_, _>>()?;
 
     let has_string = types.iter().any(is_string_type);
-    let has_temporal = types.iter().any(has_temporal_type);
+    let has_temporal = types.iter().any(is_temporal_type);
 
     // When String and temporal types are mixed, cast all non-string arguments
     // to String to match Spark's implicit type coercion behavior.

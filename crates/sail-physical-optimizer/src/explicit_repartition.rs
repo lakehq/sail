@@ -46,6 +46,11 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
                         CoalescePartitionsExec::new(node.input().clone()),
                     ))),
                     Partitioning::UnknownPartitioning(n) => {
+                        // User-requested coalesce with n > 1 partitions (shuffle=false).
+                        // This uses RoundRobinBatch to distribute data without hash
+                        // partitioning. Unlike the automatic round-robin insertion by
+                        // EnforceDistribution (disabled via enable_round_robin_repartition),
+                        // this is an explicit user operation that must be preserved.
                         Ok(Transformed::yes(Arc::new(RepartitionExec::try_new(
                             node.input().clone(),
                             Partitioning::RoundRobinBatch(n),
