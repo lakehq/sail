@@ -193,8 +193,6 @@ pub async fn create_iceberg_provider(
     Ok(create_iceberg_provider_concrete(ctx, table_url, options).await?)
 }
 
-/// Like [`create_iceberg_provider`] but returns the concrete provider type so
-/// callers that need it (e.g. [`IcebergTableSource`]) can avoid a downcast.
 pub(crate) async fn create_iceberg_provider_concrete(
     ctx: &dyn Session,
     table_url: Url,
