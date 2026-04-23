@@ -91,7 +91,6 @@ Feature: abs comprehensive tests
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: abs NULL typed INTERVAL DAY TO SECOND
       When query
         """
@@ -252,11 +251,13 @@ Feature: abs comprehensive tests
         | 0.001  |
 
     @sail-bug
-    # Divergence lives in CAST, not abs: JVM applies half-up rounding during
-    # CAST to DECIMAL(38,0) and rounds 37 nines up to 10^37; Sail preserves
-    # precision and returns 37 nines (mathematically correct).
-    # Fix path: decimal CAST kernel (arrow-rs `cast_decimal` semantics or a
-    # Sail-side override) — out of scope for spark_abs.rs.
+    # Tagged @sail-bug purely for Spark-compat tracking — Sail's behaviour here
+    # is arguably MORE correct mathematically. Divergence lives in CAST, not abs:
+    # JVM applies half-up rounding during CAST to DECIMAL(38,0) and rounds 37
+    # nines up to 10^37; Sail preserves precision and returns 37 nines. Whether
+    # to "fix" this (align with Spark) or keep Sail's precise behaviour is a
+    # policy call. Out of scope for `abs` either way — fix path is the decimal
+    # CAST kernel (arrow-rs `cast_decimal` semantics or a Sail-side override).
     Scenario: abs DECIMAL 38,0 near max
       When query
         """
@@ -267,8 +268,10 @@ Feature: abs comprehensive tests
         | 10000000000000000000000000000000000000  |
 
     @sail-bug
-    # Same root cause: JVM's CAST rounds 38 nines up to 10^38 and errors on
-    # overflow; Sail keeps 38 nines (within DECIMAL(38,0) max) and succeeds.
+    # Same root cause and same caveat as the scenario above: JVM's CAST rounds
+    # 38 nines up to 10^38 and errors on overflow; Sail keeps 38 nines (which
+    # fits in DECIMAL(38,0) max = 10^38 - 1) and succeeds. Sail is mathematically
+    # correct here; the "bug" label is purely Spark-compat framing.
     Scenario: abs DECIMAL 38,0 exceeds range errors
       When query
         """
@@ -282,7 +285,6 @@ Feature: abs comprehensive tests
     # under ANSI=false matches Java's Math.abs(int) and returns MIN itself
     # (wrap-around) instead of erroring. ANSI=true raises ARITHMETIC_OVERFLOW.
 
-    @sail-bug
     Scenario: abs TINYINT MIN wraps to MIN under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -293,7 +295,6 @@ Feature: abs comprehensive tests
         | result |
         | -128   |
 
-    @sail-bug
     Scenario: abs SMALLINT MIN wraps to MIN under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -304,7 +305,6 @@ Feature: abs comprehensive tests
         | result |
         | -32768 |
 
-    @sail-bug
     Scenario: abs INT MIN via CAST wraps to MIN under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -315,7 +315,6 @@ Feature: abs comprehensive tests
         | result      |
         | -2147483648 |
 
-    @sail-bug
     Scenario: abs BIGINT MIN wraps to MIN under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -381,7 +380,6 @@ Feature: abs comprehensive tests
     # into `CastOptions { safe: !ansi }` when wrapping the coerced expr).
     # Affects every UDF that coerces STRING → numeric, not just abs.
 
-    @sail-bug
     Scenario: abs negative numeric string
       Given config spark.sql.ansi.enabled = false
       When query
@@ -392,7 +390,6 @@ Feature: abs comprehensive tests
         | result |
         | 5.0    |
 
-    @sail-bug
     Scenario: abs numeric string with decimal
       Given config spark.sql.ansi.enabled = false
       When query
@@ -436,7 +433,6 @@ Feature: abs comprehensive tests
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: abs NaN string
       Given config spark.sql.ansi.enabled = false
       When query
@@ -447,7 +443,6 @@ Feature: abs comprehensive tests
         | result |
         | NaN    |
 
-    @sail-bug
     Scenario: abs Infinity string
       Given config spark.sql.ansi.enabled = false
       When query
@@ -499,7 +494,6 @@ Feature: abs comprehensive tests
         | result           |
         | INTERVAL '0' DAY |
 
-    @sail-bug
     Scenario: abs negative INTERVAL DAY TO SECOND
       When query
         """
