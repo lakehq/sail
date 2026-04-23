@@ -1,9 +1,8 @@
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ExprSchemable, ScalarUDF};
+use datafusion_expr::{expr, lit, try_cast, ExprSchemable};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -45,8 +44,7 @@ fn is_string_type(dt: &DataType) -> bool {
 }
 
 /// Returns `true` for temporal types whose presence, together with at least
-/// one String argument, triggers Spark-compatible coercion of *all* non-string
-/// arguments to String in `coalesce`.
+/// one String argument, triggers Spark-compatible coercion in `coalesce`.
 fn is_temporal_type(dt: &DataType) -> bool {
     matches!(
         dt,
@@ -54,18 +52,11 @@ fn is_temporal_type(dt: &DataType) -> bool {
     )
 }
 
-fn cast_to_string(expr: expr::Expr, target: &DataType) -> expr::Expr {
-    match target {
-        DataType::LargeUtf8 => ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr]),
-        DataType::Utf8View => ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr]),
-        _ => ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr]),
-    }
-}
-
 /// Spark-compatible coalesce that handles mixed String and Date/Timestamp arguments.
 ///
-/// In Spark, when String is mixed with Date or Timestamp types in `coalesce`,
-/// all arguments are cast to String. DataFusion does not do this automatically.
+/// In Spark, `coalesce(string_col, date_col)` coerces all arguments to the temporal
+/// type (the tightest common type). String values that cannot be cast to the temporal
+/// type are treated as null via `TryCast`, matching Spark's non-ANSI cast semantics.
 fn spark_coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -81,23 +72,25 @@ fn spark_coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let has_string = types.iter().any(is_string_type);
     let has_temporal = types.iter().any(is_temporal_type);
 
-    // When String and temporal types are mixed, cast all non-string arguments
-    // to String to match Spark's implicit type coercion behavior.
+    // When String and temporal types are mixed, cast all string arguments to the
+    // temporal type so the result preserves the temporal type. This matches
+    // Spark's coercion behavior where the tightest common type wins.
+    // Invalid strings become null via TryCast (Spark non-ANSI cast semantics).
     let arguments = if has_string && has_temporal {
-        let target_string = types
+        let target_temporal = types
             .iter()
-            .find(|t| is_string_type(t))
+            .find(|t| is_temporal_type(t))
             .cloned()
-            .unwrap_or(DataType::Utf8);
+            .unwrap_or(DataType::Date32);
 
         arguments
             .into_iter()
             .zip(types.iter())
             .map(|(arg, dt)| {
                 if is_string_type(dt) {
-                    arg
+                    try_cast(arg, target_temporal.clone())
                 } else {
-                    cast_to_string(arg, &target_string)
+                    arg
                 }
             })
             .collect()

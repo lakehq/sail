@@ -63,7 +63,7 @@ Feature: coalesce returns the first non-null argument
         | result     |
         | 2024-01-15 |
 
-    Scenario: Non-null string with date column returns string value
+    Scenario: Non-null string with date column returns date value
       Given statement
         """
         CREATE OR REPLACE TEMPORARY VIEW coalesce_test AS
@@ -74,10 +74,10 @@ Feature: coalesce returns the first non-null argument
         SELECT coalesce(string_col, date_col) AS result FROM coalesce_test
         """
       Then query result
-        | result |
-        | hello  |
+        | result     |
+        | 2024-01-15 |
 
-    Scenario: String literal with date column
+    Scenario: String literal with date column returns date value
       Given statement
         """
         CREATE OR REPLACE TEMPORARY VIEW coalesce_test AS
@@ -88,8 +88,8 @@ Feature: coalesce returns the first non-null argument
         SELECT coalesce('default', date_col) AS result FROM coalesce_test
         """
       Then query result
-        | result  |
-        | default |
+        | result     |
+        | 2024-01-15 |
 
     Scenario: Null string literal with date column returns date as string
       Given statement
@@ -121,7 +121,7 @@ Feature: coalesce returns the first non-null argument
         | result              |
         | 2024-01-15 10:30:00 |
 
-    Scenario: Non-null string with timestamp column returns string value
+    Scenario: Non-null string with timestamp column returns timestamp value
       Given statement
         """
         CREATE OR REPLACE TEMPORARY VIEW coalesce_test AS
@@ -132,10 +132,10 @@ Feature: coalesce returns the first non-null argument
         SELECT coalesce(string_col, ts_col) AS result FROM coalesce_test
         """
       Then query result
-        | result |
-        | hello  |
+        | result              |
+        | 2024-01-15 10:30:00 |
 
-    Scenario: String literal with timestamp column
+    Scenario: String literal with timestamp column returns timestamp value
       Given statement
         """
         CREATE OR REPLACE TEMPORARY VIEW coalesce_test AS
@@ -146,8 +146,8 @@ Feature: coalesce returns the first non-null argument
         SELECT coalesce('default', ts_col) AS result FROM coalesce_test
         """
       Then query result
-        | result  |
-        | default |
+        | result              |
+        | 2024-01-15 10:30:00 |
 
   Rule: Multiple arguments with mixed types
 

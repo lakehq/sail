@@ -106,6 +106,13 @@ impl ExecutionPlan for SparkPartitionIdExec {
         )?))
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        // Adding more input partitions would change the partition IDs assigned by this
+        // operator, so we explicitly opt out of automatic round-robin repartitioning.
+        // The optimizer must not insert RoundRobinBatch between this node and its input.
+        vec![false]
+    }
+
     fn execute(
         &self,
         partition: usize,
