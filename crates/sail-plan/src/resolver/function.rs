@@ -47,7 +47,11 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
-        let output_type = self.resolve_data_type(&output_type, state)?;
+        let output_type = output_type
+            .as_ref()
+            .map(|t| self.resolve_data_type(t, state))
+            .transpose()?
+            .unwrap_or(DataType::Null);
         Ok(PythonUdf {
             python_version,
             eval_type,

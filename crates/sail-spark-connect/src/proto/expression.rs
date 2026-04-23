@@ -445,9 +445,8 @@ impl TryFrom<udf::Function> for spec::FunctionDefinition {
                 python_ver,
                 additional_includes,
             }) => {
-                let output_type = output_type.required("Python UDF output type")?;
                 Ok(spec::FunctionDefinition::PythonUdf {
-                    output_type: output_type.try_into()?,
+                    output_type: output_type.map(|t| t.try_into()).transpose()?,
                     eval_type: spec::PySparkUdfType::try_from(eval_type)?,
                     command,
                     python_version: python_ver,
