@@ -1,0 +1,16 @@
+>>> import pandas as pd
+>>> from typing import Iterator
+>>>
+>>> def double_v(batches: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
+...     for batch in batches:
+...         yield batch.assign(v=batch.v * 2)
+...
+>>> df = spark.createDataFrame([(1, 1.0), (1, 2.0), (2, 3.0)], ["id", "v"])
+>>> df.groupby("id").applyInPandas(double_v, schema="id long, v double").sort("id", "v").show()
++---+---+
+| id|  v|
++---+---+
+|  1|2.0|
+|  1|4.0|
+|  2|6.0|
++---+---+
