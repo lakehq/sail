@@ -98,7 +98,7 @@ fn array_position(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Ex
                 element,
                 lit(1_i32),
             ),
-            when(array.clone().is_not_null(), lit(0_i64)).end()?,
+            when(array.clone().is_not_null(), lit(0_i32)).end()?,
         ]),
         DataType::Int64,
     ))
