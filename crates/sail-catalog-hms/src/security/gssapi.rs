@@ -210,6 +210,20 @@ impl GssBuf<'_> {
     fn to_vec(&self) -> Vec<u8> {
         self.deref().to_vec()
     }
+
+    /// Releases a GSSAPI-allocated buffer by calling `gss_release_buffer`.
+    /// Must be called after `to_vec()` or `deref()` when the buffer was
+    /// allocated by a GSSAPI function (e.g. `gss_init_sec_context` output,
+    /// `gss_wrap`/`gss_unwrap` output, or `gss_display_status` message).
+    fn release(&mut self) {
+        if !self.0.value.is_null() {
+            let mut minor = bindings::GSS_S_COMPLETE;
+            let _ =
+                unsafe { libgssapi().map(|gss| gss.gss_release_buffer(&mut minor, &mut self.0)) };
+            self.0.value = ptr::null_mut();
+            self.0.length = 0;
+        }
+    }
 }
 
 impl Deref for GssBuf<'_> {
@@ -355,7 +369,10 @@ impl GssClientContext {
             if out.value.is_null() {
                 None
             } else {
-                Some(slice::from_raw_parts(out.value.cast(), out.length).to_vec())
+                let vec = slice::from_raw_parts(out.value.cast(), out.length).to_vec();
+                let mut out_buf = GssBuf(out, PhantomData);
+                out_buf.release();
+                Some(vec)
             }
         };
 
@@ -378,7 +395,9 @@ impl GssClientContext {
             )
         };
         check_gss_ok(major, minor)?;
-        Ok(buf_out.to_vec())
+        let result = buf_out.to_vec();
+        buf_out.release();
+        Ok(result)
     }
 
     fn unwrap(&mut self, buf: &[u8]) -> CatalogResult<Vec<u8>> {
@@ -396,7 +415,9 @@ impl GssClientContext {
             )
         };
         check_gss_ok(major, minor)?;
-        Ok(buf_out.to_vec())
+        let result = buf_out.to_vec();
+        buf_out.release();
+        Ok(result)
     }
 }
 
@@ -433,7 +454,9 @@ fn check_gss_ok(mut major: u32, mut minor: u32) -> CatalogResult<()> {
         )
     };
     let error_message = if ret == bindings::GSS_S_COMPLETE {
-        String::from_utf8_lossy(message.as_ref()).to_string()
+        let s = String::from_utf8_lossy(message.as_ref()).to_string();
+        message.release();
+        s
     } else {
         String::new()
     };

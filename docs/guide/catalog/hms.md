@@ -26,14 +26,6 @@ The following areas are not implemented yet:
 - Iceberg-in-HMS behavior.
 - Delegation-token authentication.
 
-This provider supports Hive Metastore in its pure form:
-
-- Flat databases only. Nested namespaces are not supported.
-- Tables and views stored in Hive Metastore.
-- Generic Hive storage formats: `parquet`, `csv` or `textfile`, `json`, `orc`, `avro`, and `delta` with the alias `deltalake`.
-
-The provider does not implement Iceberg-in-HMS behavior. If you need Iceberg catalog support, use the dedicated [Iceberg REST](./iceberg-rest) catalog provider instead.
-
 Hive Metastore can be configured using the following options:
 
 - `type` (required): The string `hive_metastore` or the alias `hms`.

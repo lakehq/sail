@@ -356,11 +356,12 @@ impl HmsCatalogProvider {
         &self,
         failed_index: usize,
     ) -> CatalogResult<(usize, ThriftHiveMetastoreClient)> {
-        let mut state = self.state.lock().await;
-
-        if state.active_index != failed_index {
-            if let Some(client) = &state.client {
-                return Ok((state.active_index, client.clone()));
+        {
+            let state = self.state.lock().await;
+            if state.active_index != failed_index {
+                if let Some(client) = &state.client {
+                    return Ok((state.active_index, client.clone()));
+                }
             }
         }
 
@@ -370,6 +371,7 @@ impl HmsCatalogProvider {
             let next_index = (failed_index + step) % endpoint_count;
             match self.build_client_for_endpoint(next_index).await {
                 Ok(client) => {
+                    let mut state = self.state.lock().await;
                     state.active_index = next_index;
                     state.client = Some(client.clone());
                     return Ok((next_index, client));
@@ -380,7 +382,10 @@ impl HmsCatalogProvider {
             }
         }
 
-        state.client = None;
+        {
+            let mut state = self.state.lock().await;
+            state.client = None;
+        }
         Err(last_error.unwrap_or_else(|| {
             CatalogError::External("No HMS endpoints are available after failover".to_string())
         }))

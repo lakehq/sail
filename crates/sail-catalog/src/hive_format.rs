@@ -147,10 +147,11 @@ impl HiveDetectedFormat {
             Self::Avro
         } else if haystack.contains("OpenCSVSerde") {
             Self::Csv
-        } else if haystack.contains("LazySimpleSerDe") || haystack.contains("LazySimpleSerde") {
+        } else if haystack.contains("LazySimpleSerDe")
+            || haystack.contains("LazySimpleSerde")
+            || haystack.contains("TextInputFormat")
+        {
             Self::TextFile
-        } else if haystack.contains("TextInputFormat") {
-            Self::Csv
         } else {
             Self::Unknown
         }
