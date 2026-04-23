@@ -1,12 +1,11 @@
-import math
 from datetime import date
 
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
-from pyspark.sql import functions as F
-from pyspark.sql import types as T
+from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql import types as T  # noqa: N812
 from pyspark.sql.functions import col, lit
 
 
@@ -119,12 +118,13 @@ def test_dataframe_with_column_alias(spark):
 
 def test_fillna_replaces_nan_in_double_column(spark):
     """fillna(0) should replace NaN values in DoubleType columns (Spark parity)."""
+    double_value = 2.5
     schema = T.StructType([T.StructField("value", T.DoubleType(), True)])
-    df = spark.createDataFrame([(float("nan"),), (2.5,), (None,)], schema)
+    df = spark.createDataFrame([(float("nan"),), (double_value,), (None,)], schema)
     result = df.fillna(0).collect()
     # NaN and NULL should both be replaced with 0.0
     assert result[0]["value"] == 0.0, f"NaN should be replaced with 0.0, got {result[0]['value']}"
-    assert result[1]["value"] == 2.5
+    assert result[1]["value"] == double_value
     assert result[2]["value"] == 0.0, f"None should be replaced with 0.0, got {result[2]['value']}"
 
 
@@ -139,10 +139,11 @@ def test_fillna_replaces_nan_in_float_column(spark):
 
 def test_fillna_does_not_replace_nan_in_non_float_column(spark):
     """fillna(0) should not affect non-NaN values."""
+    float_value = 1.5
     schema = T.StructType([T.StructField("value", T.DoubleType(), True)])
-    df = spark.createDataFrame([(1.5,), (None,)], schema)
+    df = spark.createDataFrame([(float_value,), (None,)], schema)
     result = df.fillna(0).collect()
-    assert result[0]["value"] == 1.5
+    assert result[0]["value"] == float_value
     assert result[1]["value"] == 0.0
 
 
