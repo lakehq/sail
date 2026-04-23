@@ -444,15 +444,13 @@ impl TryFrom<udf::Function> for spec::FunctionDefinition {
                 command,
                 python_ver,
                 additional_includes,
-            }) => {
-                Ok(spec::FunctionDefinition::PythonUdf {
-                    output_type: output_type.map(|t| t.try_into()).transpose()?,
-                    eval_type: spec::PySparkUdfType::try_from(eval_type)?,
-                    command,
-                    python_version: python_ver,
-                    additional_includes,
-                })
-            }
+            }) => Ok(spec::FunctionDefinition::PythonUdf {
+                output_type: output_type.map(|t| t.try_into()).transpose()?,
+                eval_type: spec::PySparkUdfType::try_from(eval_type)?,
+                command,
+                python_version: python_ver,
+                additional_includes,
+            }),
             Function::ScalarScalaUdf(ScalarScalaUdf {
                 payload,
                 input_types,

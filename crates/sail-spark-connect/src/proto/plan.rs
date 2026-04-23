@@ -2236,4 +2236,34 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn test_streaming_foreach_function_python_without_output_type() -> SparkResult<()> {
+        use crate::spark::connect::streaming_foreach_function::Function;
+
+        // A foreachBatch Python callback does not have an output_type in the proto.
+        // This test verifies that the absence of output_type is handled gracefully.
+        let function = sc::StreamingForeachFunction {
+            function: Some(Function::PythonFunction(sc::PythonUdf {
+                output_type: None,
+                eval_type: 0,
+                command: vec![],
+                python_ver: "3.11".to_string(),
+                additional_includes: vec![],
+            })),
+        };
+
+        let result: spec::FunctionDefinition = function.try_into()?;
+        match result {
+            spec::FunctionDefinition::PythonUdf { output_type, .. } => {
+                assert_eq!(output_type, None);
+            }
+            _ => {
+                return Err(SparkError::internal(
+                    "expected PythonUdf function definition",
+                ))
+            }
+        }
+        Ok(())
+    }
 }

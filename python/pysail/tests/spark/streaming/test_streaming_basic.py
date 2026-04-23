@@ -40,3 +40,19 @@ def test_streaming_query_manager(spark):
     assert all(query.id != x.id for x in spark.streams.active)
     spark.streams.awaitAnyTermination()
     spark.streams.resetTerminated()
+
+
+def test_foreach_batch_proto_parsing(spark):
+    # Regression test: Python UDF output_type must be optional for foreachBatch.
+    # Previously, this would fail with "Python UDF output type is required" during
+    # proto parsing because the foreachBatch callback PythonUDF has no output_type.
+    # The expected behavior is to fail with "unsupported" rather than a proto error.
+    df = spark.readStream.format("rate").load()
+
+    def batch_fn(batch_df, batch_id):
+        pass
+
+    import re
+
+    with pytest.raises(Exception, match=re.compile("unsupported|not support", re.IGNORECASE)):
+        df.writeStream.foreachBatch(batch_fn).start()
