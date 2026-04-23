@@ -416,6 +416,8 @@ impl ExecutionPlan for DeltaCommitExec {
             };
             let reference = snapshot.cloned();
 
+            operation_metrics.finalize_for(&operation);
+
             let finalized_commit = CommitBuilder::from(
                 CommitProperties::default().with_operation_metrics(operation_metrics),
             )

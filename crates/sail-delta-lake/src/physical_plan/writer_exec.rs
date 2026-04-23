@@ -684,6 +684,12 @@ impl DeltaWriterExec {
 
             let operation = operation_override.or(operation);
 
+            // TODO: for MERGE, populate numSourceRows / numTargetRowsInserted /
+            // numTargetRowsUpdated / numTargetRowsDeleted / numTargetRowsCopied by
+            // counting rows per OPERATION_COLUMN value in the writer input stream
+            // (copy=0, insert=1, update=2, delete=3). The column is currently stripped
+            // before this point — plumb it through as side metrics without writing it
+            // to disk.
             let operation_metrics = OperationMetrics {
                 num_files: Some(num_added_files),
                 num_output_rows: Some(total_rows),

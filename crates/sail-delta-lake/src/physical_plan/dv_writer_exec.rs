@@ -237,8 +237,10 @@ impl ExecutionPlan for DeletionVectorWriterExec {
             let mut total_deleted_rows: u64 = 0;
             let mut num_dv_added: u64 = 0;
             let mut num_dv_updated: u64 = 0;
+            let mut scan_time_ms: u64 = 0;
 
             for add in &adds_to_process {
+                let scan_start = Instant::now();
                 let matching_rows = scan_file_for_matching_rows(
                     add,
                     &table_url,
@@ -247,6 +249,7 @@ impl ExecutionPlan for DeletionVectorWriterExec {
                     &context,
                 )
                 .await?;
+                scan_time_ms = scan_time_ms.saturating_add(scan_start.elapsed().as_millis() as u64);
 
                 if matching_rows.is_empty() {
                     continue;
@@ -351,8 +354,16 @@ impl ExecutionPlan for DeletionVectorWriterExec {
 
             let operation_metrics = OperationMetrics {
                 execution_time_ms: Some(exec_start.elapsed().as_millis() as u64),
+                scan_time_ms: Some(scan_time_ms),
                 num_removed_files: Some(num_affected_files),
                 num_added_files: Some(num_affected_files),
+                num_deleted_rows: Some(total_deleted_rows),
+                num_copied_rows: Some(0),
+                num_deletion_vectors_added: Some(num_dv_added),
+                num_deletion_vectors_updated: Some(num_dv_updated),
+                // TODO: numDeletionVectorsRemoved is not populated here because MoR DELETE
+                // only updates/adds DVs. It should be emitted from MERGE/UPDATE paths that
+                // physically drop files previously carrying DVs.
                 ..Default::default()
             };
 
