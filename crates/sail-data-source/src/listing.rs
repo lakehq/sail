@@ -22,7 +22,6 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     ctx: &dyn Session,
     urls: &[ListingTableUrl],
     options: &mut ListingOptions,
-    base_extension: &str,
     extension_with_compression: &Option<String>,
     options_vec: Vec<OptionLayer>,
     listing_format: &ListingTableFormat<T>,
@@ -36,9 +35,6 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
             url,
             ctx,
             &store,
-            // Use `options.file_extension` (which is "") so all files are listed regardless
-            // of extension, matching Spark's behavior. The `base_extension` is used separately
-            // for compression inference below.
             &options.file_extension,
             extension_with_compression.as_deref(),
         )
@@ -65,9 +61,13 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     }
 
     let file_extension = if let Some(extension_with_compression) = extension_with_compression {
-        resolve_listing_file_extension(&file_groups, base_extension, extension_with_compression)
+        resolve_listing_file_extension(
+            &file_groups,
+            &options.file_extension,
+            extension_with_compression,
+        )
     } else {
-        let result = infer_listing_file_extension(&file_groups, base_extension);
+        let result = infer_listing_file_extension(&file_groups, &options.file_extension);
         if let Some(result) = result {
             let (file_extension, compression_type) = result;
             let file_compression_type = CompressionTypeVariant::from_str(

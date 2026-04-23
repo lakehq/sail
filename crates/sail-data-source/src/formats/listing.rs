@@ -121,8 +121,6 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
 
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
         let file_format = self.inner.create_read_format(ctx, options.clone(), None)?;
-        // Keep the original format extension for compression inference.
-        let base_extension = file_format.get_ext();
         let extension_with_compression =
             file_format.compression_type().and_then(|compression_type| {
                 match file_format.get_ext_with_compression(&compression_type) {
@@ -133,14 +131,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             });
 
         let config = ctx.config();
-        // Spark does not filter files by extension when reading from a path,
-        // so we set the file extension to an empty string to match Spark's behavior.
-        // All files under the given path (or the file itself if the path points to a file)
-        // are included in the listing regardless of their extension.
         let mut listing_options = ListingOptions::new(file_format)
             .with_target_partitions(config.target_partitions())
-            .with_collect_stat(config.collect_statistics())
-            .with_file_extension("");
+            .with_collect_stat(config.collect_statistics());
 
         let (schema, partition_by) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
@@ -153,15 +146,11 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                     ctx,
                     &urls,
                     &mut listing_options,
-                    &base_extension,
                     &extension_with_compression,
                     options,
                     self,
                 )
                 .await?;
-                // Reset file extension to "" after schema/compression inference so the
-                // ListingTable continues to scan all files regardless of extension.
-                listing_options.file_extension = String::new();
                 let partition_by = partition_by
                     .into_iter()
                     .map(|col| (col, DataType::Utf8))
