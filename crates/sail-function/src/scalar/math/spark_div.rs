@@ -17,22 +17,29 @@ use crate::functions_nested_utils::make_scalar_function;
 
 /// Spark's div operator for intervals.
 /// Performs integer division between two intervals of the same type.
+/// Under ANSI=true, zero divisor raises an error; under ANSI=false, returns NULL.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkIntervalDiv {
     signature: Signature,
+    ansi_mode: bool,
 }
 
 impl Default for SparkIntervalDiv {
     fn default() -> Self {
-        Self::new()
+        Self::new(true)
     }
 }
 
 impl SparkIntervalDiv {
-    pub fn new() -> Self {
+    pub fn new(ansi_mode: bool) -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            ansi_mode,
         }
+    }
+
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 }
 
@@ -54,7 +61,8 @@ impl ScalarUDFImpl for SparkIntervalDiv {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(interval_div_inner)(&args.args)
+        let ansi = self.ansi_mode;
+        make_scalar_function(move |arrs: &[ArrayRef]| interval_div_inner(arrs, ansi))(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -195,7 +203,7 @@ fn integer_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
-fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn interval_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
     let [dividend, divisor] = args else {
         return Err(invalid_arg_count_exec_err(
             "spark_interval_div",
@@ -204,6 +212,8 @@ fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         ));
     };
 
+    let divide_by_zero = || Err::<Option<i64>, _>(ArrowError::DivideByZero);
+
     let result: Int64Array = match (dividend.data_type(), divisor.data_type()) {
         (
             DataType::Interval(IntervalUnit::YearMonth),
@@ -211,22 +221,28 @@ fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         ) => {
             let dividend_arr = dividend.as_primitive::<IntervalYearMonthType>();
             let divisor_arr = divisor.as_primitive::<IntervalYearMonthType>();
-
             dividend_arr
                 .iter()
                 .zip(divisor_arr.iter())
                 .map(|(d, s)| match (d, s) {
-                    (Some(d_val), Some(s_val)) if s_val != 0 => {
-                        Some((d_val as i64) / (s_val as i64))
+                    (Some(d_val), Some(s_val)) => {
+                        if s_val == 0 {
+                            if ansi {
+                                divide_by_zero()
+                            } else {
+                                Ok(None)
+                            }
+                        } else {
+                            Ok(Some((d_val as i64) / (s_val as i64)))
+                        }
                     }
-                    _ => None,
+                    _ => Ok(None),
                 })
-                .collect()
+                .collect::<std::result::Result<Int64Array, ArrowError>>()?
         }
         (DataType::Interval(IntervalUnit::DayTime), DataType::Interval(IntervalUnit::DayTime)) => {
             let dividend_arr = dividend.as_primitive::<IntervalDayTimeType>();
             let divisor_arr = divisor.as_primitive::<IntervalDayTimeType>();
-
             dividend_arr
                 .iter()
                 .zip(divisor_arr.iter())
@@ -234,15 +250,19 @@ fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                     (Some(d_val), Some(s_val)) => {
                         let d_millis = d_val.days as i64 * 86_400_000 + d_val.milliseconds as i64;
                         let s_millis = s_val.days as i64 * 86_400_000 + s_val.milliseconds as i64;
-                        if s_millis != 0 {
-                            Some(d_millis / s_millis)
+                        if s_millis == 0 {
+                            if ansi {
+                                divide_by_zero()
+                            } else {
+                                Ok(None)
+                            }
                         } else {
-                            None
+                            Ok(Some(d_millis / s_millis))
                         }
                     }
-                    _ => None,
+                    _ => Ok(None),
                 })
-                .collect()
+                .collect::<std::result::Result<Int64Array, ArrowError>>()?
         }
         (
             DataType::Interval(IntervalUnit::MonthDayNano),
@@ -250,7 +270,6 @@ fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         ) => {
             let dividend_arr = dividend.as_primitive::<IntervalMonthDayNanoType>();
             let divisor_arr = divisor.as_primitive::<IntervalMonthDayNanoType>();
-
             dividend_arr
                 .iter()
                 .zip(divisor_arr.iter())
@@ -262,15 +281,19 @@ fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                         let s_nanos = s_val.months as i64 * 2_592_000_000_000_000
                             + s_val.days as i64 * 86_400_000_000_000
                             + s_val.nanoseconds;
-                        if s_nanos != 0 {
-                            Some(d_nanos / s_nanos)
+                        if s_nanos == 0 {
+                            if ansi {
+                                divide_by_zero()
+                            } else {
+                                Ok(None)
+                            }
                         } else {
-                            None
+                            Ok(Some(d_nanos / s_nanos))
                         }
                     }
-                    _ => None,
+                    _ => Ok(None),
                 })
-                .collect()
+                .collect::<std::result::Result<Int64Array, ArrowError>>()?
         }
         _ => {
             return Err(unsupported_data_types_exec_err(
@@ -299,7 +322,7 @@ mod tests {
         let dividend = Arc::new(IntervalYearMonthArray::from(vec![13])) as ArrayRef;
         let divisor = Arc::new(IntervalYearMonthArray::from(vec![-1])) as ArrayRef;
 
-        let result = interval_div_inner(&[dividend, divisor])?;
+        let result = interval_div_inner(&[dividend, divisor], false)?;
         let Some(int_array) = result.as_any().downcast_ref::<Int64Array>() else {
             return Err(generic_exec_err("test", "Expected Int64Array"));
         };
@@ -313,7 +336,7 @@ mod tests {
         let dividend = Arc::new(IntervalYearMonthArray::from(vec![30])) as ArrayRef;
         let divisor = Arc::new(IntervalYearMonthArray::from(vec![3])) as ArrayRef;
 
-        let result = interval_div_inner(&[dividend, divisor])?;
+        let result = interval_div_inner(&[dividend, divisor], false)?;
         let Some(int_array) = result.as_any().downcast_ref::<Int64Array>() else {
             return Err(generic_exec_err("test", "Expected Int64Array"));
         };
@@ -327,7 +350,7 @@ mod tests {
         let dividend = Arc::new(IntervalYearMonthArray::from(vec![12])) as ArrayRef;
         let divisor = Arc::new(IntervalYearMonthArray::from(vec![12])) as ArrayRef;
 
-        let result = interval_div_inner(&[dividend, divisor])?;
+        let result = interval_div_inner(&[dividend, divisor], false)?;
         let Some(int_array) = result.as_any().downcast_ref::<Int64Array>() else {
             return Err(generic_exec_err("test", "Expected Int64Array"));
         };
@@ -341,7 +364,7 @@ mod tests {
         let dividend = Arc::new(IntervalYearMonthArray::from(vec![5])) as ArrayRef;
         let divisor = Arc::new(IntervalYearMonthArray::from(vec![2])) as ArrayRef;
 
-        let result = interval_div_inner(&[dividend, divisor])?;
+        let result = interval_div_inner(&[dividend, divisor], false)?;
         let Some(int_array) = result.as_any().downcast_ref::<Int64Array>() else {
             return Err(generic_exec_err("test", "Expected Int64Array"));
         };
@@ -355,7 +378,7 @@ mod tests {
         let dividend = Arc::new(IntervalYearMonthArray::from(vec![10])) as ArrayRef;
         let divisor = Arc::new(IntervalYearMonthArray::from(vec![0])) as ArrayRef;
 
-        let result = interval_div_inner(&[dividend, divisor])?;
+        let result = interval_div_inner(&[dividend, divisor], false)?;
         let Some(int_array) = result.as_any().downcast_ref::<Int64Array>() else {
             return Err(generic_exec_err("test", "Expected Int64Array"));
         };

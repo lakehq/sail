@@ -1942,6 +1942,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkIntegerDiv(gen::SparkIntegerDivUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkIntegerDiv::new(ansi_mode))));
             }
+            UdfKind::SparkIntervalDiv(gen::SparkIntervalDivUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new(ansi_mode))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -2013,7 +2016,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             ))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
-            "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
@@ -2173,7 +2175,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkFloor>()
             || node_inner.is::<SparkFromCSV>()
             || node_inner.is::<SparkHex>()
-            || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkJsonToVariantUdf>()
@@ -2329,6 +2330,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkIntegerDiv>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkIntegerDiv(gen::SparkIntegerDivUdf { ansi_mode })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkIntervalDiv>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkIntervalDiv(gen::SparkIntervalDivUdf { ansi_mode })
         } else {
             return Ok(());
         };

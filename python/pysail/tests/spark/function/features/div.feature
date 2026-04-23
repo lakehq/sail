@@ -320,6 +320,24 @@ Feature: div (integer division) comprehensive tests
         | 5      |
         | NULL   |
 
+    Scenario: div INTERVAL YEAR by zero INTERVAL YEAR returns NULL under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(INTERVAL '10' YEAR, INTERVAL '0' YEAR) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: div INTERVAL YEAR by zero INTERVAL YEAR errors under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(INTERVAL '10' YEAR, INTERVAL '0' YEAR) AS result
+        """
+      Then query error .*
+
     Scenario: div INTERVAL DAY multi-row with zero divisor errors under ANSI true
       Given config spark.sql.ansi.enabled = true
       When query

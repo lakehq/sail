@@ -90,6 +90,7 @@ message ExtendedScalarUdf {
     SparkNextDayUdf spark_next_day = 15;
     SparkTimeUdf spark_time = 16;
     SparkIntegerDivUdf spark_integer_div = 17;
+    SparkIntervalDivUdf spark_interval_div = 18;
   }
 }
 
@@ -181,6 +182,10 @@ message SparkNextDayUdf {
 }
 
 message SparkIntegerDivUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkIntervalDivUdf {
   bool ansi_mode = 1;
 }
 

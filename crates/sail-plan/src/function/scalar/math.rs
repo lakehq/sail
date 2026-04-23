@@ -392,7 +392,7 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         }
         // Handle Interval / Interval division using custom UDF
         (Ok(DataType::Interval(_)), Ok(DataType::Interval(_))) => {
-            let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new()));
+            let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new(ansi_mode)));
             Expr::ScalarFunction(expr::ScalarFunction {
                 func: interval_div,
                 args: vec![dividend, divisor],
