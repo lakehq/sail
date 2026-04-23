@@ -44,15 +44,13 @@ fn is_string_type(dt: &DataType) -> bool {
     )
 }
 
-/// Types that Spark implicitly casts to String in coalesce when mixed with String arguments.
-fn needs_spark_string_cast(dt: &DataType) -> bool {
+/// Returns `true` for temporal types whose presence, together with at least
+/// one String argument, triggers Spark-compatible coercion of *all* non-string
+/// arguments to String in `coalesce`.
+fn has_temporal_type(dt: &DataType) -> bool {
     matches!(
         dt,
-        DataType::Date32
-            | DataType::Date64
-            | DataType::Timestamp(_, _)
-            | DataType::Time32(_)
-            | DataType::Time64(_)
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
     )
 }
 
@@ -81,8 +79,10 @@ fn spark_coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .collect::<Result<_, _>>()?;
 
     let has_string = types.iter().any(is_string_type);
-    let has_temporal = types.iter().any(needs_spark_string_cast);
+    let has_temporal = types.iter().any(has_temporal_type);
 
+    // When String and temporal types are mixed, cast all non-string arguments
+    // to String to match Spark's implicit type coercion behavior.
     let arguments = if has_string && has_temporal {
         let target_string = types
             .iter()
