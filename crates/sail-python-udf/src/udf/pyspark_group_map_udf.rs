@@ -19,6 +19,15 @@ use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
+/// Mode flags describing the variant of a GroupMap UDF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PySparkGroupMapMode {
+    /// Whether the UDF uses pandas DataFrames (true) or Arrow RecordBatches (false).
+    pub is_pandas: bool,
+    /// Whether the UDF is the iterator variant that receives/yields multiple batches.
+    pub is_iter: bool,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkGroupMapUDF {
     signature: Signature,
@@ -28,7 +37,7 @@ pub struct PySparkGroupMapUDF {
     input_names: Vec<String>,
     input_types: Vec<DataType>,
     output_type: DataType,
-    is_pandas: bool,
+    mode: PySparkGroupMapMode,
     config: Arc<PySparkUdfConfig>,
     udf: LazyPyObject,
 }
@@ -41,7 +50,7 @@ impl PySparkGroupMapUDF {
         input_names: Vec<String>,
         input_types: Vec<DataType>,
         output_type: DataType,
-        is_pandas: bool,
+        mode: PySparkGroupMapMode,
         config: Arc<PySparkUdfConfig>,
     ) -> Self {
         let signature = Signature::exact(
@@ -60,7 +69,7 @@ impl PySparkGroupMapUDF {
             input_types,
             output_type,
             config,
-            is_pandas,
+            mode,
             udf: LazyPyObject::new(),
         }
     }
@@ -86,7 +95,11 @@ impl PySparkGroupMapUDF {
     }
 
     pub fn is_pandas(&self) -> bool {
-        self.is_pandas
+        self.mode.is_pandas
+    }
+
+    pub fn is_iter(&self) -> bool {
+        self.mode.is_iter
     }
 
     pub fn config(&self) -> &Arc<PySparkUdfConfig> {
@@ -101,6 +114,7 @@ impl PySparkGroupMapUDF {
                 udf,
                 self.input_names.clone(),
                 self.is_pandas(),
+                self.is_iter(),
                 &self.config,
             )?
             .unbind())

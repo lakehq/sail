@@ -216,7 +216,7 @@ use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_python_udf::config::PySparkUdfConfig;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
+use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
@@ -2403,6 +2403,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_type,
                 is_pandas,
                 config,
+                is_iter,
             })) => {
                 let input_types = input_types
                     .iter()
@@ -2420,7 +2421,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_names,
                     input_types,
                     output_type,
-                    is_pandas,
+                    PySparkGroupMapMode { is_pandas, is_iter },
                     Arc::new(config),
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
@@ -2495,6 +2496,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 is_pandas: func.is_pandas(),
+                is_iter: func.is_iter(),
                 config: Some(config),
             })
         } else if let Some(func) = node
