@@ -84,20 +84,24 @@ fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
 }
 
 fn array_position(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Expr> {
-    Ok(coalesce(vec![
-        datafusion_array_position(
-            // datafusion panics if from_index > array_len
-            // So if the inner array_len == 0, search in NULL array instead
-            when(
-                expr_fn::cardinality(array.clone()).gt(lit(0)),
-                array.clone(),
-            )
-            .end()?,
-            element,
-            lit(1_i32),
-        ),
-        when(array.clone().is_not_null(), lit(0_i32)).end()?,
-    ]))
+    // Spark returns LongType (Int64); DataFusion returns UInt64, so we cast.
+    Ok(cast(
+        coalesce(vec![
+            datafusion_array_position(
+                // datafusion panics if from_index > array_len
+                // So if the inner array_len == 0, search in NULL array instead
+                when(
+                    expr_fn::cardinality(array.clone()).gt(lit(0)),
+                    array.clone(),
+                )
+                .end()?,
+                element,
+                lit(1_i32),
+            ),
+            when(array.clone().is_not_null(), lit(0_i64)).end()?,
+        ]),
+        DataType::Int64,
+    ))
 }
 
 fn array_insert(
@@ -224,6 +228,21 @@ fn flatten(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    // Use argument display names as struct field names, matching Spark's behavior
+    // where arrays_zip(df.col1, df.col2) produces struct fields named "col1", "col2".
+    let field_names: Vec<String> = function_context
+        .argument_display_names
+        .iter()
+        .map(|s| s.to_owned())
+        .collect();
+    Ok(ScalarUDF::from(ArraysZip::with_field_names(field_names)).call(arguments))
+}
+
 /// Convert an array type to its nullable equivalent (all nested fields become nullable)
 fn make_nullable_array_type(data_type: &DataType) -> DataType {
     match data_type {
@@ -280,7 +299,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ),
         ("array_union", F::binary(expr_fn::array_union)),
         ("arrays_overlap", F::custom(arrays_overlap)),
-        ("arrays_zip", F::udf(ArraysZip::new())),
+        ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::udf(SparkSequence::new())),

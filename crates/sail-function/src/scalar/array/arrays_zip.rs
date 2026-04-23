@@ -21,6 +21,9 @@ use crate::scalar::struct_function::to_struct_array;
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArraysZip {
     signature: Signature,
+    /// Optional field names for the output struct, derived from input column names.
+    /// When present, the struct fields use these names instead of positional indices.
+    field_names: Option<Vec<String>>,
 }
 
 impl Default for ArraysZip {
@@ -36,6 +39,18 @@ impl ArraysZip {
                 vec![TypeSignature::Nullary, TypeSignature::VariadicAny],
                 Volatility::Immutable,
             ),
+            field_names: None,
+        }
+    }
+
+    /// Create an `ArraysZip` that uses the given names for the output struct fields.
+    pub fn with_field_names(field_names: Vec<String>) -> Self {
+        Self {
+            signature: Signature::one_of(
+                vec![TypeSignature::Nullary, TypeSignature::VariadicAny],
+                Volatility::Immutable,
+            ),
+            field_names: Some(field_names),
         }
     }
 }
@@ -59,11 +74,14 @@ impl ScalarUDFImpl for ArraysZip {
             .map(get_list_params)
             .collect::<Result<Vec<_>>>()?;
 
-        let struct_field = struct_result_field(
-            &params
-                .iter()
-                .map(|row| row.inner_field.clone())
-                .collect::<Vec<_>>(),
+        let inner_fields = params
+            .iter()
+            .map(|row| row.inner_field.clone())
+            .collect::<Vec<_>>();
+
+        let struct_field = struct_result_field_with_names(
+            &inner_fields,
+            self.field_names.as_deref(),
         );
 
         let is_large = params.iter().any(|row| row.is_large);
@@ -117,14 +135,28 @@ impl ScalarUDFImpl for ArraysZip {
                 args.number_rows,
             )));
         }
+        // Extract field names from the return type so the runtime output
+        // matches the expected schema (including user-supplied column names).
+        let field_names = extract_field_names_from_return_type(args.return_field.data_type());
         match args.return_field.data_type() {
             DataType::LargeList(_) => {
-                make_scalar_function(arrays_zip_generic::<i64>, vec![])(&args.args)
+                let names = field_names.clone();
+                make_scalar_function(
+                    move |arr_args| arrays_zip_generic::<i64>(arr_args, &names),
+                    vec![],
+                )(&args.args)
             }
             DataType::FixedSizeList(_, size) => {
-                make_scalar_function(|args| arrays_zip_fixed_size(args, size), vec![])(&args.args)
+                let names = field_names.clone();
+                make_scalar_function(
+                    move |arr_args| arrays_zip_fixed_size(arr_args, size, &names),
+                    vec![],
+                )(&args.args)
             }
-            _ => make_scalar_function(arrays_zip_generic::<i32>, vec![])(&args.args),
+            _ => make_scalar_function(
+                move |arr_args| arrays_zip_generic::<i32>(arr_args, &field_names),
+                vec![],
+            )(&args.args),
         }
     }
 }
@@ -183,9 +215,30 @@ fn struct_result_field_names(count: usize) -> Vec<String> {
     (0..count).map(|i| format!("{i}")).collect::<Vec<_>>()
 }
 
+/// Extract struct field names from an arrays_zip return type.
+/// Falls back to numeric indices if the type doesn't contain named struct fields.
+fn extract_field_names_from_return_type(data_type: &DataType) -> Vec<String> {
+    let inner = match data_type {
+        DataType::List(f) | DataType::LargeList(f) => f.data_type(),
+        DataType::FixedSizeList(f, _) => f.data_type(),
+        _ => return vec![],
+    };
+    match inner {
+        DataType::Struct(fields) => fields.iter().map(|f| f.name().clone()).collect(),
+        _ => vec![],
+    }
+}
+
 /// Build the struct field for the list result, preserving metadata from inner fields.
-fn struct_result_field(inner_fields: &[Arc<Field>]) -> Arc<Field> {
-    let field_names = struct_result_field_names(inner_fields.len());
+/// Uses the provided field names, or falls back to positional indices.
+fn struct_result_field_with_names(
+    inner_fields: &[Arc<Field>],
+    names: Option<&[String]>,
+) -> Arc<Field> {
+    let field_names: Vec<String> = match names {
+        Some(n) if n.len() == inner_fields.len() => n.to_vec(),
+        _ => struct_result_field_names(inner_fields.len()),
+    };
     let fields = field_names
         .iter()
         .zip(inner_fields)
@@ -193,11 +246,19 @@ fn struct_result_field(inner_fields: &[Arc<Field>]) -> Arc<Field> {
             Field::new(name, f.data_type().clone(), true).with_metadata(f.metadata().clone())
         })
         .collect::<Vec<_>>();
-    Arc::new(Field::new_struct(SAIL_LIST_FIELD_NAME, fields, true))
+    // containsNull = false: the struct element itself is never null in arrays_zip;
+    // only the individual fields within a struct row may be null (due to length padding).
+    Arc::new(Field::new_struct(SAIL_LIST_FIELD_NAME, fields, false))
+}
+
+/// Build the struct field for the list result using positional index names.
+fn struct_result_field(inner_fields: &[Arc<Field>]) -> Arc<Field> {
+    struct_result_field_with_names(inner_fields, None)
 }
 
 fn num_rows_inner_fields_and_names(
     args: &[ArrayRef],
+    field_names_hint: &[String],
 ) -> Result<(usize, Vec<Arc<Field>>, Vec<String>)> {
     let num_rows = args[0].len();
     for arg in args {
@@ -209,7 +270,11 @@ fn num_rows_inner_fields_and_names(
         .iter()
         .map(|arg| Ok(get_list_params(arg.data_type())?.inner_field))
         .collect::<Result<Vec<_>>>()?;
-    let field_names = struct_result_field_names(inner_fields.len());
+    let field_names = if field_names_hint.len() == inner_fields.len() {
+        field_names_hint.to_vec()
+    } else {
+        struct_result_field_names(inner_fields.len())
+    };
     Ok((num_rows, inner_fields, field_names))
 }
 
@@ -235,8 +300,9 @@ fn combine_validity_masks(arrays: &[ArrayRef]) -> Option<NullBuffer> {
     Some(NullBuffer::new(combined_validity))
 }
 
-fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32) -> Result<ArrayRef> {
-    let (_num_rows, inner_fields, field_names) = num_rows_inner_fields_and_names(args)?;
+fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32, field_names_hint: &[String]) -> Result<ArrayRef> {
+    let (_num_rows, inner_fields, field_names) =
+        num_rows_inner_fields_and_names(args, field_names_hint)?;
 
     let lists = args
         .iter()
@@ -272,8 +338,9 @@ fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32) -> Result<ArrayRef
     )?))
 }
 
-fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let (num_rows, inner_fields, field_names) = num_rows_inner_fields_and_names(args)?;
+fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef], field_names_hint: &[String]) -> Result<ArrayRef> {
+    let (num_rows, inner_fields, field_names) =
+        num_rows_inner_fields_and_names(args, field_names_hint)?;
 
     // Create fields with nullable=true, preserving metadata from inner fields
     let arg_fields: Vec<Arc<Field>> = inner_fields
