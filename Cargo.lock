@@ -7068,6 +7068,7 @@ name = "sail-iceberg"
 version = "0.6.0"
 dependencies = [
  "apache-avro",
+ "async-stream",
  "async-trait",
  "bytes",
  "chrono",

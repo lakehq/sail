@@ -197,8 +197,8 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
 use sail_iceberg::physical_plan::{
-    IcebergCommitExec, IcebergDiscoveryExec, IcebergManifestScanExec, IcebergScanByDataFilesExec,
-    IcebergWriterExec,
+    IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec, IcebergManifestScanExec,
+    IcebergScanByDataFilesExec, IcebergWriterExec,
 };
 use sail_iceberg::IcebergWriterExecOptions;
 use sail_logical_plan::range::Range;
@@ -1126,6 +1126,36 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     output_schema,
                 )))
             }
+            NodeKind::IcebergDeleteApply(gen::IcebergDeleteApplyExecNode {
+                input,
+                data_file_path,
+                positional_deletes_json,
+                equality_deletes_json,
+                table_url,
+                iceberg_schema_json,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let positional_deletes: Vec<sail_iceberg::spec::delete_index::DeleteFileRef> =
+                    serde_json::from_str(&positional_deletes_json).map_err(|e| {
+                        plan_datafusion_err!("failed to decode positional delete refs: {e}")
+                    })?;
+                let equality_deletes: Vec<sail_iceberg::spec::delete_index::DeleteFileRef> =
+                    serde_json::from_str(&equality_deletes_json).map_err(|e| {
+                        plan_datafusion_err!("failed to decode equality delete refs: {e}")
+                    })?;
+                let iceberg_schema: sail_iceberg::spec::Schema =
+                    serde_json::from_str(&iceberg_schema_json).map_err(|e| {
+                        plan_datafusion_err!("failed to decode Iceberg schema: {e}")
+                    })?;
+                Ok(Arc::new(IcebergDeleteApplyExec::new(
+                    input,
+                    data_file_path,
+                    positional_deletes,
+                    equality_deletes,
+                    table_url,
+                    iceberg_schema,
+                )))
+            }
             NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
                 pickled_reader,
                 schema,
@@ -1804,6 +1834,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url: scan_by_files.table_url().to_string(),
                 output_schema,
+            })
+        } else if let Some(delete_apply) = node.as_any().downcast_ref::<IcebergDeleteApplyExec>() {
+            let input = self.try_encode_plan(delete_apply.input().clone())?;
+            let positional_deletes_json = serde_json::to_string(delete_apply.positional_deletes())
+                .map_err(|e| {
+                    plan_datafusion_err!("failed to encode positional delete refs: {e}")
+                })?;
+            let equality_deletes_json = serde_json::to_string(delete_apply.equality_deletes())
+                .map_err(|e| plan_datafusion_err!("failed to encode equality delete refs: {e}"))?;
+            let iceberg_schema_json = serde_json::to_string(delete_apply.iceberg_schema())
+                .map_err(|e| plan_datafusion_err!("failed to encode Iceberg schema: {e}"))?;
+            NodeKind::IcebergDeleteApply(gen::IcebergDeleteApplyExecNode {
+                input,
+                data_file_path: delete_apply.data_file_path().to_string(),
+                positional_deletes_json,
+                equality_deletes_json,
+                table_url: delete_apply.table_url().to_string(),
+                iceberg_schema_json,
             })
         } else if let Some(python_exec) = node.as_any().downcast_ref::<PythonDataSourceExec>() {
             let schema = self.try_encode_schema(python_exec.schema().as_ref())?;

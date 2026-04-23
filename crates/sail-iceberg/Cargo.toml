@@ -26,6 +26,7 @@ datafusion-common = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }
+async-stream = { workspace = true }
 object_store = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }

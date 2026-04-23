@@ -12,6 +12,7 @@
 
 pub mod action_schema;
 pub mod commit;
+pub mod delete_apply_exec;
 pub mod discovery_exec;
 pub mod manifest_scan_exec;
 pub mod plan_builder;
@@ -20,6 +21,7 @@ mod writer_exec;
 mod writer_options;
 
 pub use commit::commit_exec::IcebergCommitExec;
+pub use delete_apply_exec::IcebergDeleteApplyExec;
 pub use discovery_exec::IcebergDiscoveryExec;
 pub use manifest_scan_exec::IcebergManifestScanExec;
 pub use plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
