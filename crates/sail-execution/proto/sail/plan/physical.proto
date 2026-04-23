@@ -494,6 +494,7 @@ message DeltaCommitExecNode {
   bool table_exists = 4;
   bytes sink_schema = 5;
   PhysicalSinkMode sink_mode = 6;
+  optional string user_metadata = 7;
 }
 
 message DeltaScanByAddsExecNode {

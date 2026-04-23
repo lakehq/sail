@@ -63,6 +63,7 @@ pub fn assemble_commit_plan(
     table_exists: bool,
     table_schema: SchemaRef,
     operation: Option<DeltaOperation>,
+    user_metadata: Option<String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -90,6 +91,7 @@ pub fn assemble_commit_plan(
         table_exists,
         table_schema,
         PhysicalSinkMode::Append,
+        user_metadata,
     )))
 }
 
