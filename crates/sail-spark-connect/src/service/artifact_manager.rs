@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
 
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
@@ -23,12 +22,11 @@ fn validate_crc(data: &[u8], expected_crc: i64) -> bool {
 }
 
 /// Processes a complete artifact (name + assembled data) and stores it appropriately.
-fn store_artifact(name: &str, data: &[u8], artifact_dir: &PathBuf) -> SparkResult<()> {
+fn store_artifact(name: &str, data: &[u8], artifact_dir: &std::path::Path) -> SparkResult<()> {
     use std::path::Path;
 
-    if name.starts_with(FORWARD_TO_FS_PREFIX) {
+    if let Some(dest_path) = name.strip_prefix(FORWARD_TO_FS_PREFIX) {
         // forward_to_fs/absolute/path → write data to the absolute path
-        let dest_path = &name[FORWARD_TO_FS_PREFIX.len()..];
         let dest = Path::new(dest_path);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -57,8 +55,7 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &PathBuf) -> SparkResul
         .map_err(|e| SparkError::internal(format!("failed to write artifact file: {e}")))?;
 
     // For Python files, add to sys.path
-    if name.starts_with(PYFILES_PREFIX) {
-        let file_name = &name[PYFILES_PREFIX.len()..];
+    if let Some(file_name) = name.strip_prefix(PYFILES_PREFIX) {
         if file_name.ends_with(".py") {
             // Add the directory containing the .py file to sys.path
             let dir = target_path.parent().unwrap_or(artifact_dir);
@@ -111,7 +108,7 @@ fn process_chunk(artifact: &mut ChunkedArtifact, chunk: &ArtifactChunk) {
 
 fn finalize_chunked_artifact(
     chunked: ChunkedArtifact,
-    artifact_dir: &PathBuf,
+    artifact_dir: &std::path::Path,
     spark: &SparkSession,
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {

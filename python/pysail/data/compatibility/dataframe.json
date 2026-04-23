@@ -207,8 +207,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "inputFiles",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/481"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -355,8 +354,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "sameSemantics",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/472"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -391,7 +389,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "semanticHash",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
