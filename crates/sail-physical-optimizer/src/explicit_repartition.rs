@@ -1,7 +1,6 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
@@ -47,7 +46,10 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
                         CoalescePartitionsExec::new(node.input().clone()),
                     ))),
                     Partitioning::UnknownPartitioning(n) => {
-                        internal_err!("unknown explicit repartitioning with {n} partitions")
+                        Ok(Transformed::yes(Arc::new(RepartitionExec::try_new(
+                            node.input().clone(),
+                            Partitioning::RoundRobinBatch(n),
+                        )?)))
                     }
                 }
             } else {

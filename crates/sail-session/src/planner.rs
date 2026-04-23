@@ -342,7 +342,7 @@ fn plan_explicit_partitioning(
 ) -> datafusion_common::Result<Partitioning> {
     match (num_partitions, expressions) {
         (Some(0), _) => internal_err!("number of explicit partitions cannot be zero"),
-        (Some(1), _) => Ok(Partitioning::UnknownPartitioning(1)),
+        (Some(n), []) => Ok(Partitioning::UnknownPartitioning(n)),
         (Some(_) | None, expressions) => {
             if expressions.is_empty() {
                 return internal_err!(

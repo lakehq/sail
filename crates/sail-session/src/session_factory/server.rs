@@ -214,6 +214,14 @@ impl ServerSessionFactory {
     fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
         let optimizer = &mut config.options_mut().optimizer;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
+        // Disable round-robin repartitioning added by EnforceDistribution.
+        // In Spark, user-specified partitioning (via coalesce/repartition) is preserved
+        // and the optimizer does not insert additional repartitioning for parallelism.
+        // Sail uses ExplicitRepartitionExec for user-specified partitioning, which is
+        // converted to the appropriate physical operators after all other optimizer rules.
+        // Enabling round-robin repartitioning would insert extra repartition nodes that
+        // undo the effect of user-specified coalesce operations.
+        optimizer.enable_round_robin_repartition = false;
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {

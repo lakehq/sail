@@ -13,19 +13,30 @@ impl PlanResolver<'_> {
         &self,
         input: spec::QueryPlan,
         num_partitions: usize,
+        shuffle: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let expr = input.schema().columns().into_iter().map(col).collect();
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(ExplicitRepartitionNode::new(
-                Arc::new(input),
-                Some(num_partitions),
-                expr,
-            )),
-        }))
+        if shuffle {
+            let expr = input.schema().columns().into_iter().map(col).collect();
+            Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(ExplicitRepartitionNode::new(
+                    Arc::new(input),
+                    Some(num_partitions),
+                    expr,
+                )),
+            }))
+        } else {
+            Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(ExplicitRepartitionNode::new(
+                    Arc::new(input),
+                    Some(num_partitions),
+                    vec![],
+                )),
+            }))
+        }
     }
 
     pub(super) async fn resolve_query_repartition_by_expression(

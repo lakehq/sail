@@ -137,10 +137,9 @@ impl PlanResolver<'_> {
             QueryNode::Repartition {
                 input,
                 num_partitions,
-                // TODO: avoid unnecessary repartition if `shuffle` is false
-                shuffle: _,
+                shuffle,
             } => {
-                self.resolve_query_repartition(*input, num_partitions, state)
+                self.resolve_query_repartition(*input, num_partitions, shuffle, state)
                     .await?
             }
             QueryNode::ToDf {
