@@ -1,9 +1,7 @@
 """Shared fixtures for catalog integration tests.
 
-These tests validate catalog providers by running SQL through Sail's
-Spark Connect interface. Each sub-directory (glue/, iceberg_rest/, unity/)
-provides fixtures that spin up the relevant infrastructure containers and
-a dedicated Sail server.
+Each sub-directory (glue/, iceberg_rest/, unity/) provides fixtures that
+spin up the relevant infrastructure containers and a dedicated Sail server.
 
 These tests are **deselected by default**. To run them, pass
 ``-m catalog_integration`` explicitly::
