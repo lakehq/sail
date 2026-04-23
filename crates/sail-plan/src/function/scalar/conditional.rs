@@ -77,11 +77,10 @@ fn spark_coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // Spark's coercion behavior where the tightest common type wins.
     // Invalid strings become null via TryCast (Spark non-ANSI cast semantics).
     let arguments = if has_string && has_temporal {
-        let target_temporal = types
-            .iter()
-            .find(|t| is_temporal_type(t))
-            .cloned()
-            .unwrap_or(DataType::Date32);
+        let Some(target_temporal) = types.iter().find(|t| is_temporal_type(t)).cloned() else {
+            // This branch is unreachable: `has_temporal` is true so a temporal type must exist.
+            return Ok(expr_fn::coalesce(arguments));
+        };
 
         arguments
             .into_iter()
