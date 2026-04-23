@@ -7335,7 +7335,9 @@ name = "sail-spark-connect"
 version = "0.6.0"
 dependencies = [
  "async-stream",
+ "crc32fast",
  "datafusion",
+ "datafusion-datasource",
  "fastrace",
  "futures",
  "lazy_static",
