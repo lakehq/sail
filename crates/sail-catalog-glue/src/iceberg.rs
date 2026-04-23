@@ -7,7 +7,7 @@ use aws_sdk_glue::types::{
     OpenTableFormatInput,
 };
 use aws_sdk_glue::Client;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
     Namespace, PartitionTransform,
@@ -37,7 +37,7 @@ pub(crate) async fn create_iceberg_table(
     table: &str,
     options: CreateTableOptions,
 ) -> CatalogResult<TableStatus> {
-    let db_name = database.to_string();
+    let database_name = GlueCatalogProvider::database_name(database)?;
 
     let ValidatedIcebergOptions {
         columns,
@@ -87,7 +87,7 @@ pub(crate) async fn create_iceberg_table(
 
     let result = client
         .create_table()
-        .database_name(&db_name)
+        .database_name(&database_name)
         .name(table)
         .open_table_format_input(open_format_input)
         .send()
@@ -101,7 +101,10 @@ pub(crate) async fn create_iceberg_table(
                 if if_not_exists {
                     provider.get_table(database, table).await
                 } else {
-                    Err(CatalogError::AlreadyExists("table", table.to_string()))
+                    Err(CatalogError::AlreadyExists(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
                 }
             } else {
                 Err(CatalogError::External(format!(

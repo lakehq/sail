@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.5.1"
+version = "0.6.0"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -49,12 +49,21 @@ test = [
     "PyYAML>=6.0,<7",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
+    "pyarrow>=19.0,<20",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
 ]
 jdbc = [
     "connectorx>=0.3,<1",
+    "pyarrow>=10.0,<20",
+]
+vortex = [
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
     "pyarrow>=10.0,<20",
 ]
 
@@ -102,8 +111,13 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "pyarrow>=19.0,<20",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
 ]
 path = ".venvs/default"
 
@@ -151,8 +165,13 @@ dependencies = [
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "pyarrow>=19.0,<20",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
+    "connectorx>=0.3,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -247,10 +266,8 @@ line-length = 120
 "crates/**/*.py" = ["INP001", "PLC0415"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
-"python/pysail/datasources/**/*.py" = ["PLC0415"]
+"python/pysail/testing/**/*.py" = ["S101"]
 "python/pysail/tests/**/*.py" = ["S101", "PLC0415"]
-"python/pysail/tests/**/manual_*.py" = ["S106", "PLR2004"]
-"python/pysail/utils/pyspark_function_scanner.py" = ["N802"]
 "scripts/**/*.py" = ["SLF001", "PLC0415"]
 
 [tool.pytest.ini_options]

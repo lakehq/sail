@@ -3,7 +3,7 @@
 mod common;
 
 use arrow::datatypes::DataType;
-use sail_catalog::error::CatalogError;
+use sail_catalog::error::{CatalogError, CatalogObject};
 use sail_catalog::provider::{CatalogProvider, CreateViewColumnOptions, CreateViewOptions};
 use sail_common_datafusion::catalog::TableKind;
 
@@ -129,7 +129,10 @@ async fn test_get_table_not_found_for_view() {
         .unwrap();
 
     let error = catalog.get_table(namespace, "v_items").await.unwrap_err();
-    assert!(matches!(error, CatalogError::NotFound("table", _)));
+    assert!(matches!(
+        error,
+        CatalogError::NotFound(CatalogObject::Table, _)
+    ));
 }
 
 #[tokio::test]

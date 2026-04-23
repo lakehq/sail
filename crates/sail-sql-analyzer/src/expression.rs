@@ -110,8 +110,8 @@ pub(crate) fn from_ast_function_arguments(
             }
             FunctionArgument::Unnamed(expr) => {
                 if !named_arguments.is_empty() {
-                    return Err(SqlError::invalid(
-                        "positional argument after named argument",
+                    return Err(SqlError::analysis(
+                        "[UNEXPECTED_POSITIONAL_ARGUMENT] Positional argument follows a named (keyword) argument.",
                     ));
                 }
                 let expr = from_ast_expression(expr)?;
@@ -602,7 +602,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             let operand = operand.map(|x| from_ast_expression(*x)).transpose()?;
             let mut arguments = vec![];
             once(*first_condition)
-                .chain(other_conditions.into_iter())
+                .chain(other_conditions)
                 .try_for_each::<_, SqlResult<_>>(|x| {
                     let CaseWhen {
                         when: _,

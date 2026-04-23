@@ -1,7 +1,7 @@
 use std::ffi::CString;
 
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
-use pyo3::prelude::PyModule;
+use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::sync::PyOnceLock;
 use pyo3::{intern, Bound, Py, PyAny, PyResult, Python};
 
@@ -83,6 +83,32 @@ impl PySpark {
         )
     }
 
+    // Arrow-native scalar UDF: user function receives pyarrow.Array directly
+    pub fn scalar_arrow_udf<'py>(
+        py: Python<'py>,
+        udf: Bound<'py, PyAny>,
+        config: &PySparkUdfConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkScalarArrowUdf"),
+            (udf, config.clone()),
+        )
+    }
+
+    // Arrow-native scalar iterator UDF: user function is Iterator[pa.Array] → Iterator[pa.Array]
+    pub fn scalar_arrow_iter_udf<'py>(
+        py: Python<'py>,
+        udf: Bound<'py, PyAny>,
+        config: &PySparkUdfConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkScalarArrowIterUdf"),
+            (udf, config.clone()),
+        )
+    }
+
     pub fn group_agg_udf<'py>(
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
@@ -93,6 +119,19 @@ impl PySpark {
             Self::module(py)?,
             intern!(py, "PySparkGroupAggUdf"),
             (udf, input_names, config.clone()),
+        )
+    }
+
+    // Arrow-native grouped aggregate UDF: user receives pa.Arrays, returns scalar
+    pub fn group_agg_arrow_udf<'py>(
+        py: Python<'py>,
+        udf: Bound<'py, PyAny>,
+        config: &PySparkUdfConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        py_init_object(
+            Self::module(py)?,
+            intern!(py, "PySparkGroupAggArrowUdf"),
+            (udf, config.clone()),
         )
     }
 
@@ -174,6 +213,7 @@ impl PySpark {
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
         input_names: &[String],
+        input_types: &[DataType],
         passthrough_columns: usize,
         output_schema: &SchemaRef,
         config: &PySparkUdfConfig,
@@ -184,10 +224,21 @@ impl PySpark {
             (
                 udf,
                 input_names.to_vec(),
+                input_types.try_to_py(py)?,
                 passthrough_columns,
                 output_schema.try_to_py(py)?,
                 config.clone(),
             ),
         )
+    }
+
+    pub fn analyze_udtf<'py>(
+        py: Python<'py>,
+        handler: Bound<'py, PyAny>,
+        arguments: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Self::module(py)?
+            .getattr(intern!(py, "analyze_udtf"))?
+            .call1((handler, arguments))
     }
 }

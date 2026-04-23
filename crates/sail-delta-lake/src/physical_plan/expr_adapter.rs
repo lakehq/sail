@@ -38,16 +38,16 @@ impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
         let (column_mapping, default_values) =
             Self::create_column_mapping(&logical_file_schema, &physical_file_schema);
 
-        Arc::new(DeltaPhysicalExprAdapter {
+        Ok(Arc::new(DeltaPhysicalExprAdapter {
             logical_file_schema,
             physical_file_schema,
             column_mapping,
             default_values,
-        })
+        }))
     }
 }
 

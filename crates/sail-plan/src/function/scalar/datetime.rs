@@ -5,6 +5,7 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_functions::expr_fn::to_time;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
@@ -12,9 +13,12 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
+use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
@@ -29,6 +33,10 @@ fn integer_part(expr: Expr, part: &str) -> Expr {
         expr_fn::date_part(lit(part.to_uppercase()), expr),
         DataType::Int32,
     )
+}
+
+fn years(arg: Expr) -> Expr {
+    integer_part(arg, "YEAR")
 }
 
 fn trunc_part_conversion(part: Expr) -> Expr {
@@ -67,11 +75,19 @@ fn trunc(date: Expr, part: Expr) -> Expr {
     )
 }
 
-fn date_trunc(part: Expr, timestamp: Expr) -> Expr {
-    cast(
-        expr_fn::date_trunc(trunc_part_conversion(part), timestamp),
-        DataType::Timestamp(TimeUnit::Microsecond, None),
-    )
+fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let (part, timestamp) = input.arguments.two()?;
+    let truncated = expr_fn::date_trunc(trunc_part_conversion(part), timestamp);
+    match truncated.get_type(input.function_context.schema)? {
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(truncated),
+        DataType::Timestamp(_, tz) => Ok(cast(
+            truncated,
+            DataType::Timestamp(TimeUnit::Microsecond, tz),
+        )),
+        other => Err(PlanError::InternalError(format!(
+            "date_trunc expected a timestamp result, got {other:?}"
+        ))),
+    }
 }
 
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
@@ -277,6 +293,17 @@ fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } else {
         unix_timestamp(input)
     }
+}
+
+/// Dispatch for `next_day(date, day_of_week)`.
+///
+/// Reads `PlanConfig::ansi_mode` at planning time and bakes it into the UDF
+/// so the runtime path chooses between erroring (ANSI=true) and returning
+/// NULL (ANSI=false) on malformed day-of-week strings.
+fn next_day(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let udf = ScalarUDF::from(SparkNextDay::new(ansi_mode));
+    Ok(udf.call(input.arguments))
 }
 
 fn date_format(expr: Expr, format: Expr) -> Expr {
@@ -609,7 +636,8 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     };
 
     let seconds_in_day = |dt: Expr, tu: TimeUnit| {
-        (cast(dt.clone(), DataType::Int64) - cast(date_trunc(lit("DAY"), dt), DataType::Int64))
+        (cast(dt.clone(), DataType::Int64)
+            - cast(expr_fn::date_trunc(lit("DAY"), dt), DataType::Int64))
             / lit(time_unit_to_multiplier(&tu))
     };
 
@@ -666,6 +694,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("convert_timezone", F::custom(convert_timezone)),
         ("curdate", F::nullary(expr_fn::current_date)),
         ("current_date", F::nullary(expr_fn::current_date)),
+        ("current_time", F::nullary(expr_fn::current_time)),
         (
             "current_timestamp",
             F::custom(current_timestamp_microseconds),
@@ -683,7 +712,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
         ),
-        ("date_trunc", F::binary(date_trunc)),
+        ("date_trunc", F::custom(date_trunc)),
         (
             "dateadd",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
@@ -710,6 +739,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("make_date", F::ternary(make_date)),
         ("make_dt_interval", F::udf(SparkMakeDtInterval::new())),
         ("make_interval", F::udf(SparkMakeInterval::new())),
+        ("make_time", F::udf(SparkMakeTime::new())),
         ("make_timestamp", F::custom(make_timestamp)),
         ("make_timestamp_ltz", F::custom(make_timestamp_ltz)),
         ("make_timestamp_ntz", F::custom(make_timestamp_ntz)),
@@ -721,7 +751,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::unary(|arg| expr_fn::to_char(arg, lit("%b"))),
         ),
         ("months_between", F::custom(months_between)),
-        ("next_day", F::udf(SparkNextDay::new())),
+        ("next_day", F::custom(next_day)),
         ("now", F::custom(current_timestamp_microseconds)),
         ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
         ("second", F::unary(|arg| integer_part(arg, "SECOND"))),
@@ -752,6 +782,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             }),
         ),
         ("to_date", F::custom(to_date)),
+        ("to_time", F::var_arg(to_time)),
         ("to_timestamp", F::var_arg(to_timestamp)),
         // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
         //  "Parses the timestamp with the format to a timestamp without time zone. Returns null with invalid input."
@@ -767,6 +798,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("try_make_timestamp_ltz", F::custom(try_make_timestamp_ltz)),
         ("try_make_timestamp_ntz", F::custom(try_make_timestamp_ntz)),
         ("try_to_timestamp", F::custom(try_to_timestamp)),
+        ("time_diff", F::udf(SparkTimeDiff::new())),
+        ("time_trunc", F::udf(SparkTimeTrunc::new())),
         (
             "unix_date",
             F::unary(|arg| cast(cast(arg, DataType::Date32), DataType::Int32)),
@@ -792,5 +825,6 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
         ("year", F::unary(|arg| integer_part(arg, "YEAR"))),
+        ("years", F::unary(years)),
     ]
 }

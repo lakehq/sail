@@ -11,7 +11,6 @@ use datafusion_common::{internal_datafusion_err, internal_err, DFSchema, ToDFSch
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
 use sail_catalog::manager::CatalogManager;
-use sail_catalog_system::logical_rewriter::RewriteSystemTableSource;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
@@ -22,6 +21,7 @@ use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
 use sail_delta_lake::logical::RewriteDeltaTableSource;
+use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
@@ -32,11 +32,14 @@ use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
+use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
 use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
+use sail_physical_plan::barrier::BarrierExec;
+use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
@@ -45,10 +48,12 @@ use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
+use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
+use sail_plan::catalog::CatalogCommandNode;
 use sail_plan_lakehouse::new_lakehouse_extension_planners;
 
 #[derive(Debug)]
@@ -62,10 +67,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // TODO: show rewriters and the final logical plan in `EXPLAIN`
-        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
-            Box::new(RewriteSystemTableSource),
-            Box::new(RewriteDeltaTableSource),
-        ];
+        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![Box::new(RewriteDeltaTableSource)];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan)?.data
@@ -128,6 +130,15 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 return internal_err!("MonotonicIdExec requires exactly one physical input");
             };
             Arc::new(MonotonicIdExec::try_new(
+                input.clone(),
+                node.column_name().to_string(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+            )?)
+        } else if let Some(node) = node.as_any().downcast_ref::<SparkPartitionIdNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("SparkPartitionIdExec requires exactly one physical input");
+            };
+            Arc::new(SparkPartitionIdExec::try_new(
                 input.clone(),
                 node.column_name().to_string(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
@@ -231,8 +242,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node,
             );
             return internal_err!(
-                "MERGE planning expects a pre-expanded logical plan (MergeIntoWriteNode). \
-Ensure expand_merge is enabled; MERGE is currently only supported for Delta tables."
+                "MERGE planning expects a pre-expanded logical plan (RowLevelWriteNode). \
+Ensure expand_row_level_op is enabled; MERGE is currently only supported for lakehouse tables."
             );
         } else if let Some(node) = node.as_any().downcast_ref::<ExplicitRepartitionNode>() {
             let [input] = physical_inputs else {
@@ -299,6 +310,21 @@ Ensure expand_merge is enabled; MERGE is currently only supported for Delta tabl
                 return internal_err!("StreamCollectorExec requires exactly one physical input");
             };
             Arc::new(StreamCollectorExec::try_new(input.clone())?)
+        } else if let Some(node) = node.as_any().downcast_ref::<CatalogCommandNode>() {
+            let schema = node.schema().inner().clone();
+            Arc::new(CatalogCommandExec::new(node.command().clone(), schema))
+        } else if let Some(_node) = node.as_any().downcast_ref::<BarrierNode>() {
+            let (plan, preconditions) = physical_inputs.split_last().ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(format!(
+                    "{} requires at least one physical input",
+                    BarrierExec::static_name()
+                ))
+            })?;
+            if preconditions.is_empty() {
+                plan.clone()
+            } else {
+                Arc::new(BarrierExec::new(preconditions.to_vec(), plan.clone()))
+            }
         } else {
             return internal_err!("unsupported logical extension node: {:?}", node);
         };

@@ -9,7 +9,10 @@ use sail_catalog::provider::{
     CreateDatabaseOptions, CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions,
     Namespace,
 };
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_catalog::utils::quote_namespace_if_needed;
+use sail_common_datafusion::catalog::{
+    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
 
 use crate::data_type::{arrow_to_hive_type, hive_type_to_arrow};
 
@@ -31,7 +34,7 @@ pub(crate) fn validate_namespace(namespace: &Namespace) -> CatalogResult<String>
     if !namespace.tail.is_empty() {
         return Err(CatalogError::InvalidArgument(format!(
             "Hive Metastore only supports flat databases, got namespace '{}'",
-            namespace
+            quote_namespace_if_needed(namespace)
         )));
     }
     Ok(namespace.head.to_string())
@@ -84,11 +87,7 @@ pub(crate) fn table_to_status(
     let partition_by = table
         .partition_keys
         .as_ref()
-        .map(|keys| {
-            keys.iter()
-                .filter_map(|field| field.name.as_ref().map(ToString::to_string))
-                .collect()
-        })
+        .map(|keys| identity_partition_fields(&field_names(keys)))
         .unwrap_or_default();
 
     Ok(TableStatus {
@@ -108,6 +107,12 @@ pub(crate) fn table_to_status(
             properties,
         },
     })
+}
+
+fn field_names(keys: &[FieldSchema]) -> Vec<String> {
+    keys.iter()
+        .filter_map(|field| field.name.as_ref().map(ToString::to_string))
+        .collect()
 }
 
 pub(crate) fn view_to_status(
@@ -602,6 +607,56 @@ mod tests {
         match status.kind {
             sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
                 assert_eq!(format, "textfile");
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_table_to_status_converts_partition_columns_to_identity_fields() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let table = build_generic_table(
+            "default",
+            "items",
+            vec![
+                CreateTableColumnOptions {
+                    name: "id".to_string(),
+                    data_type: DataType::Int64,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                },
+                CreateTableColumnOptions {
+                    name: "day".to_string(),
+                    data_type: DataType::Utf8,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                },
+            ],
+            vec!["day".to_string()],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { partition_by, .. } => {
+                assert_eq!(
+                    partition_by,
+                    vec![sail_common_datafusion::catalog::CatalogPartitionField {
+                        column: "day".to_string(),
+                        transform: None,
+                    }]
+                );
             }
             other => panic!("expected table, got {other:?}"),
         }

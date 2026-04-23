@@ -60,6 +60,13 @@ pub fn cast_record_batch_relaxed_tz(
     batch: &RecordBatch,
     target: &SchemaRef,
 ) -> Result<RecordBatch> {
+    if target.fields().is_empty() {
+        return Ok(RecordBatch::try_new_with_options(
+            target.clone(),
+            vec![],
+            &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+        )?);
+    }
     let mut cols: Vec<ArrayRef> = Vec::with_capacity(target.fields().len());
 
     for field in target.fields() {

@@ -10,11 +10,12 @@ use hive_metastore::{
     ThriftHiveMetastoreGetTableReqException,
 };
 use pilota::{AHashMap, FastStr};
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    PartitionTransform,
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
@@ -438,7 +439,7 @@ impl HmsCatalogProvider {
                     Ok(MaybeException::Exception(ThriftHiveMetastoreCreateTableException::O1(
                         _,
                     ))) => Err(CatalogError::AlreadyExists(
-                        "table",
+                        CatalogObject::Table,
                         format!("{db_name}.{table_name}"),
                     )),
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
@@ -469,7 +470,7 @@ impl HmsCatalogProvider {
                 {
                     Ok(MaybeException::Ok(table)) => Ok(table),
                     Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => {
-                        Err(CatalogError::NotFound("table", format!("{db_name}.{table_name}")))
+                        Err(CatalogError::NotFound(CatalogObject::Table, format!("{db_name}.{table_name}")))
                     }
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to fetch HMS table '{db_name}.{table_name}': {err:?}"
@@ -487,7 +488,7 @@ impl HmsCatalogProvider {
                             Ok(MaybeException::Exception(
                                 ThriftHiveMetastoreGetTableReqException::O2(_),
                             )) => Err(CatalogError::NotFound(
-                                "table",
+                                CatalogObject::Table,
                                 format!("{db_name}.{table_name}"),
                             )),
                             Ok(MaybeException::Exception(err)) => {
@@ -560,7 +561,7 @@ impl HmsCatalogProvider {
                     }
                     Ok(MaybeException::Exception(ThriftHiveMetastoreDropTableException::O1(_))) => {
                         Err(CatalogError::NotFound(
-                            "table",
+                            CatalogObject::Table,
                             format!("{db_name}.{table}"),
                         ))
                     }
@@ -608,7 +609,7 @@ impl HmsCatalogProvider {
                         Ok(MaybeException::Exception(
                             ThriftHiveMetastoreDropTableWithEnvironmentContextException::O1(_),
                         )) => Err(CatalogError::NotFound(
-                            "table",
+                            CatalogObject::Table,
                             format!("{db_name}.{table}"),
                         )),
                         Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
@@ -668,7 +669,10 @@ impl CatalogProvider for HmsCatalogProvider {
                     )) if if_not_exists || attempt > 0 => Ok(()),
                     Ok(MaybeException::Exception(
                         ThriftHiveMetastoreCreateDatabaseException::O1(_),
-                    )) => Err(CatalogError::AlreadyExists("database", db_name)),
+                    )) => Err(CatalogError::AlreadyExists(
+                        CatalogObject::Database,
+                        db_name,
+                    )),
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to create HMS database: {err:?}"
                     ))),
@@ -694,7 +698,7 @@ impl CatalogProvider for HmsCatalogProvider {
                         Ok(MaybeException::Ok(database)) => Ok(database),
                         Ok(MaybeException::Exception(
                             ThriftHiveMetastoreGetDatabaseException::O1(_),
-                        )) => Err(CatalogError::NotFound("database", db_name)),
+                        )) => Err(CatalogError::NotFound(CatalogObject::Database, db_name)),
                         Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                             "Failed to fetch HMS database '{db_name}': {err:?}"
                         ))),
@@ -768,7 +772,7 @@ impl CatalogProvider for HmsCatalogProvider {
                     )) if options.if_exists || attempt > 0 => Ok(()),
                     Ok(MaybeException::Exception(
                         ThriftHiveMetastoreDropDatabaseException::O1(_),
-                    )) => Err(CatalogError::NotFound("database", db_name)),
+                    )) => Err(CatalogError::NotFound(CatalogObject::Database, db_name)),
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to drop HMS database '{db_name}': {err:?}"
                     ))),
@@ -853,7 +857,7 @@ impl CatalogProvider for HmsCatalogProvider {
         let table_value = self.fetch_hms_table(database, table).await?;
         if is_view_table(&table_value) {
             return Err(CatalogError::NotFound(
-                "table",
+                CatalogObject::Table,
                 format!("{}.{}", validate_namespace(database)?, table),
             ));
         }
@@ -896,6 +900,15 @@ impl CatalogProvider for HmsCatalogProvider {
         }
     }
 
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        Ok(())
+    }
+
     async fn create_view(
         &self,
         database: &Namespace,
@@ -926,7 +939,7 @@ impl CatalogProvider for HmsCatalogProvider {
                     Ok(MaybeException::Exception(ThriftHiveMetastoreCreateTableException::O1(
                         _,
                     ))) => Err(CatalogError::AlreadyExists(
-                        "view",
+                        CatalogObject::View,
                         format!("{db_name}.{view}"),
                     )),
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
@@ -947,7 +960,7 @@ impl CatalogProvider for HmsCatalogProvider {
         let table_value = self.fetch_hms_table(database, view).await?;
         if !is_view_table(&table_value) {
             return Err(CatalogError::NotFound(
-                "view",
+                CatalogObject::View,
                 format!("{}.{}", validate_namespace(database)?, view),
             ));
         }
@@ -979,7 +992,7 @@ impl CatalogProvider for HmsCatalogProvider {
         )
         .await
         .map_err(|error| match error {
-            CatalogError::NotFound(_, value) => CatalogError::NotFound("view", value),
+            CatalogError::NotFound(_, value) => CatalogError::NotFound(CatalogObject::View, value),
             other => other,
         })
     }
@@ -993,7 +1006,7 @@ mod tests {
 
     use arrow::datatypes::DataType;
     use pilota::FastStr;
-    use sail_catalog::error::CatalogError;
+    use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{
         CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
     };
@@ -1006,7 +1019,6 @@ mod tests {
         let runtime = RuntimeHandle::new(
             tokio::runtime::Handle::current(),
             tokio::runtime::Handle::current(),
-            false,
         );
         let provider = HmsCatalogProvider::new(
             "hms".to_string(),
@@ -1251,8 +1263,10 @@ mod tests {
         let retry_context_expired = super::HmsCatalogProvider::should_retry(
             &CatalogError::External("Kerberos GSSAPI error GSS_S_CONTEXT_EXPIRED".to_string()),
         );
-        let dont_retry =
-            super::HmsCatalogProvider::should_retry(&CatalogError::NotFound("table", "x".into()));
+        let dont_retry = super::HmsCatalogProvider::should_retry(&CatalogError::NotFound(
+            CatalogObject::Table,
+            "x".into(),
+        ));
 
         assert!(retry);
         assert!(retry_context_expired);

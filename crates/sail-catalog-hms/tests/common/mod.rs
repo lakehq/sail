@@ -368,7 +368,6 @@ fn runtime_handle() -> RuntimeHandle {
     RuntimeHandle::new(
         tokio::runtime::Handle::current(),
         tokio::runtime::Handle::current(),
-        false,
     )
 }
 

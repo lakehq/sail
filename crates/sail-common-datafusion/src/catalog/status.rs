@@ -1,9 +1,20 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 
-use crate::catalog::{CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort};
+use crate::catalog::{
+    CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+};
+use crate::column_features::ColumnFeaturesBuilder;
+use crate::session::plan::PlanFormatter;
+
+/// Metadata key used by Spark Connect's column protocol for generation
+/// expressions. This is an input/output boundary value translated to the
+/// engine's canonical [`crate::column_features::ColumnFeatureKey`] at the
+/// protocol layer.
+pub const SPARK_GENERATION_EXPRESSION_METADATA_KEY: &str = "GENERATION_EXPRESSION";
 
 #[derive(Debug, Clone)]
 pub struct DatabaseStatus {
@@ -30,7 +41,7 @@ pub enum TableKind {
         constraints: Vec<CatalogTableConstraint>,
         location: Option<String>,
         format: String,
-        partition_by: Vec<String>,
+        partition_by: Vec<CatalogPartitionField>,
         sort_by: Vec<CatalogTableSort>,
         bucket_by: Option<CatalogTableBucketBy>,
         options: Vec<(String, String)>,
@@ -82,6 +93,13 @@ impl TableKind {
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
         }
+    }
+
+    pub fn is_temporary(&self) -> bool {
+        matches!(
+            self,
+            TableKind::TemporaryView { .. } | TableKind::GlobalTemporaryView { .. }
+        )
     }
 
     pub fn properties(&self) -> &[(String, String)] {
@@ -167,6 +185,28 @@ impl TableStatus {
 
         rows
     }
+
+    pub fn show_table_extended_information(&self, formatter: &dyn PlanFormatter) -> Result<String> {
+        let mut output = String::new();
+
+        for (key, value) in self.describe_extended_metadata() {
+            output.push_str(&format!("{key}: {value}\n"));
+        }
+
+        output.push_str("Schema: root\n");
+        for column in self.kind.columns() {
+            let data_type = formatter
+                .data_type_to_simple_string(&column.data_type)
+                .unwrap_or_else(|_| "invalid".to_string());
+            let nullable = if column.nullable { "true" } else { "false" };
+            output.push_str(&format!(
+                " |-- {}: {} (nullable = {})\n",
+                column.name, data_type, nullable
+            ));
+        }
+
+        Ok(output)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,6 +224,30 @@ pub struct TableColumnStatus {
 
 impl TableColumnStatus {
     pub fn field(&self) -> Field {
-        Field::new(self.name.clone(), self.data_type.clone(), self.nullable)
+        let mut metadata = std::collections::HashMap::new();
+        if let Some(expr) = &self.generated_always_as {
+            let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(comment) = &self.comment {
+            metadata.insert("comment".to_string(), comment.clone());
+        }
+        let field = Field::new(self.name.clone(), self.data_type.clone(), self.nullable);
+        if metadata.is_empty() {
+            field
+        } else {
+            field.with_metadata(metadata)
+        }
     }
+}
+
+pub fn identity_partition_fields(columns: &[String]) -> Vec<CatalogPartitionField> {
+    columns
+        .iter()
+        .cloned()
+        .map(|column| CatalogPartitionField {
+            column,
+            transform: None,
+        })
+        .collect()
 }

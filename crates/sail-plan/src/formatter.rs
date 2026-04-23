@@ -410,6 +410,9 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
+            ScalarValue::RunEndEncoded(_, _, _) => {
+                not_impl_err!("RunEndEncoded scalar value is not supported in SQL")
+            }
         }
     }
 
@@ -594,9 +597,9 @@ impl PlanFormatter for SparkPlanFormatter {
             "stack" => Ok("col0".to_string()),
             "current_database" => Ok("current_schema()".to_string()),
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "exp"
-            | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "signum" | "sqrt"
-            | "cos" | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"
-            | "tanh" | "pi" | "expm1" | "hypot" | "e" | "sec" | "csc" => {
+            | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "rlike"
+            | "signum" | "sqrt" | "cos" | "cosh" | "cot" | "degrees" | "power" | "radians"
+            | "sin" | "sinh" | "tan" | "tanh" | "pi" | "expm1" | "hypot" | "e" | "sec" | "csc" => {
                 let name = name.to_uppercase();
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))
@@ -606,6 +609,7 @@ impl PlanFormatter for SparkPlanFormatter {
             //   SELECT count(`*`) FROM VALUES 1 AS t(`*`)
             //   ```
             "count" => {
+                let name = name.to_lowercase();
                 let arguments = arguments.join(", ");
                 if is_distinct {
                     Ok(format!("{name}(DISTINCT {arguments})"))

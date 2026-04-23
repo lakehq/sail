@@ -1,8 +1,8 @@
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan};
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -42,11 +42,35 @@ impl PlanResolver<'_> {
         let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
             return Err(PlanError::unsupported("qualified function name"));
         };
-        if !named_arguments.is_empty() {
-            return Err(PlanError::todo("named function arguments"));
+        // Extract any NamedArgument entries embedded in arguments (Spark Connect inline path).
+        // PySpark encodes kwargs as NamedArgumentExpression inside the arguments[] repeated field,
+        // which are converted to spec::Expr::NamedArgument. extract_kwargs peels those out before
+        // resolve_expressions_and_names, which would otherwise reject them as standalone expressions.
+        let (mut arguments, mut kwarg_names) = Self::extract_kwargs(arguments);
+        // Also merge named_arguments from spec::UnresolvedFunction (SQL analyzer path).
+        // PySpark sends registered-UDF kwargs here rather than as embedded NamedArgument entries.
+        for (key, value) in named_arguments {
+            kwarg_names.push(Some(key.into()));
+            arguments.push(value);
         }
+
+        // Validate named arguments: reject duplicate kwarg names early so we surface
+        // a proper AnalysisException instead of letting it crash in the Python worker.
+        {
+            let mut seen_kwarg_names = std::collections::HashSet::new();
+            for name in kwarg_names.iter().flatten() {
+                if !seen_kwarg_names.insert(name.as_str()) {
+                    return Err(PlanError::AnalysisError(format!(
+                        "[DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE] \
+                         Duplicate named argument: '{name}' is assigned more than once."
+                    )));
+                }
+            }
+        }
+
         let canonical_function_name = function_name.to_ascii_lowercase();
-        if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
             if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
@@ -67,22 +91,33 @@ impl PlanResolver<'_> {
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
-        let func = if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
+        let func = if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
             if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                 return Err(PlanError::invalid("invalid scalar function clause"));
             }
             if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+                if f.eval_type().is_table_function() {
+                    return Err(PlanError::AnalysisError(format!(
+                        "user-defined table function cannot be used as a scalar function: {function_name}"
+                    )));
+                }
+                let output_type = f.output_type().cloned().ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "unresolved UDF {function_name} has no scalar return type"
+                    ))
+                })?;
                 let function = PythonUdf {
                     python_version: f.python_version().to_string(),
                     eval_type: f.eval_type(),
                     command: f.command().to_vec(),
-                    output_type: f.output_type().clone(),
+                    output_type,
                 };
                 self.resolve_python_udf_expr(
                     function,
                     &function_name,
                     arguments,
                     &argument_display_names,
+                    &kwarg_names, // pass kwargs from named_arguments
                     schema,
                     f.deterministic(),
                     is_distinct,
@@ -90,7 +125,7 @@ impl PlanResolver<'_> {
                 )?
             } else {
                 expr::Expr::ScalarFunction(ScalarFunction {
-                    func: udf,
+                    func: std::sync::Arc::new(udf),
                     args: arguments,
                 })
             }
@@ -117,6 +152,32 @@ impl PlanResolver<'_> {
                 Some(x) => self.resolve_sort_orders(x, true, schema, state).await?,
                 None => vec![],
             };
+            // For DISTINCT aggregate functions with a wildcard argument (e.g., COUNT(DISTINCT *)),
+            // expand the wildcard to visible column references here in the resolver where we have
+            // access to `state` for hidden-column filtering. This ensures hidden columns (e.g.,
+            // join keys) are excluded from the distinct count.
+            #[expect(deprecated)]
+            let arguments = if is_distinct
+                && matches!(
+                    arguments.as_slice(),
+                    [expr::Expr::Wildcard {
+                        qualifier: None,
+                        options: _
+                    }]
+                ) {
+                schema
+                    .columns()
+                    .into_iter()
+                    .filter(|c| {
+                        state
+                            .get_field_info(&c.name)
+                            .is_ok_and(|info| !info.is_hidden())
+                    })
+                    .map(expr::Expr::Column)
+                    .collect()
+            } else {
+                arguments
+            };
             let input = AggFunctionInput {
                 arguments,
                 distinct: is_distinct,
@@ -137,13 +198,48 @@ impl PlanResolver<'_> {
             )));
         };
 
+        // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
+        // to individual column names so the output header matches Spark JVM behavior
+        // (e.g., `count(DISTINCT a, b, c)` instead of `count(DISTINCT *)`).
+        let argument_display_names =
+            if is_distinct && argument_display_names.iter().any(|n| n == "*") {
+                schema
+                    .columns()
+                    .iter()
+                    .filter_map(|c| {
+                        let info = state.get_field_info(&c.name).ok()?;
+                        if info.is_hidden() {
+                            None
+                        } else {
+                            Some(info.name().to_string())
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                argument_display_names
+            };
         let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             &function_name,
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
-        Ok(NamedExpr::new(vec![name], func))
+
+        // Extract metadata from UDF if it implements return_field_from_args
+        let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {
+            func: udf, args, ..
+        }) = &func
+        {
+            extract_metadata_from_udf(udf, args)?
+        } else {
+            vec![]
+        };
+
+        if !metadata.is_empty() {
+            Ok(NamedExpr::new(vec![name], func).with_metadata(metadata))
+        } else {
+            Ok(NamedExpr::new(vec![name], func))
+        }
     }
 
     pub(super) async fn resolve_expression_call_function(
@@ -275,5 +371,60 @@ impl PlanResolver<'_> {
             }
         }
         arguments
+    }
+}
+
+/// Extract metadata from a UDF by calling return_field_from_args with real argument information
+fn extract_metadata_from_udf(
+    udf: &std::sync::Arc<datafusion_expr::ScalarUDF>,
+    args: &[expr::Expr],
+) -> PlanResult<Vec<(String, String)>> {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ExprSchemable, ReturnFieldArgs};
+
+    // Extract real field types from the resolved expressions
+    let empty_schema = datafusion_common::DFSchema::empty();
+    let arg_fields: Vec<Arc<Field>> = args
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| {
+            let data_type = arg.get_type(&empty_schema).unwrap_or(DataType::Null);
+            Arc::new(Field::new(format!("arg_{}", i), data_type, true))
+        })
+        .collect();
+
+    // Extract literal scalar values from expressions
+    let mut scalar_values = Vec::new();
+
+    for arg in args {
+        if let expr::Expr::Literal(scalar_value, _) = arg {
+            scalar_values.push(scalar_value.clone());
+        } else {
+            scalar_values.push(ScalarValue::Null);
+        }
+    }
+
+    let scalar_refs: Vec<Option<&ScalarValue>> = scalar_values
+        .iter()
+        .map(|v| if v.is_null() { None } else { Some(v) })
+        .collect();
+
+    let return_field_args = ReturnFieldArgs {
+        arg_fields: &arg_fields,
+        scalar_arguments: &scalar_refs,
+    };
+
+    // Try to extract metadata, but don't fail if it doesn't work
+    if let Ok(field) = udf.return_field_from_args(return_field_args) {
+        Ok(field
+            .metadata()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect())
+    } else {
+        Ok(vec![])
     }
 }

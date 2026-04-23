@@ -67,6 +67,76 @@
           }
         }
       }
+    },
+    {
+      "input": "DESCRIBE TABLE EXTENDED a.b",
+      "output": {
+        "success": {
+          "command": {
+            "describeTable": {
+              "table": [
+                "a",
+                "b"
+              ],
+              "extended": true,
+              "partition": [],
+              "column": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "DESCRIBE EXTENDED a.b",
+      "output": {
+        "success": {
+          "command": {
+            "describeTable": {
+              "table": [
+                "a",
+                "b"
+              ],
+              "extended": true,
+              "partition": [],
+              "column": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "DESCRIBE QUERY SELECT 1",
+      "output": {
+        "success": {
+          "command": {
+            "describeQuery": {
+              "query": {
+                "project": {
+                  "input": {
+                    "empty": {
+                      "produceOneRow": true
+                    },
+                    "planId": null
+                  },
+                  "expressions": [
+                    {
+                      "literal": {
+                        "int32": {
+                          "value": 1
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null
+              }
+            },
+            "planId": null
+          }
+        }
+      }
     }
   ]
 }

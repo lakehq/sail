@@ -5,7 +5,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{col, lit, Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
 use sail_function::scalar::array::spark_sequence::SparkSequence;

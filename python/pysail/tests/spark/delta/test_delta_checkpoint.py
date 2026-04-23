@@ -4,60 +4,66 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from pyspark.sql import Row
 
-from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-def test_delta_checkpoint_created_and_metrics_exposed(spark, tmp_path: Path):
-    if is_jvm_spark():
-        pytest.skip("Sail-only: checkpoint creation and DataFusion metrics are Sail-specific")
+def _read_first_commit_metadata(table_path: Path) -> dict:
+    log_file = table_path / "_delta_log" / "00000000000000000000.json"
+    with log_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            if "metaData" in obj:
+                return obj["metaData"]
+    msg = f"metaData action not found in first delta log: {log_file}"
+    raise AssertionError(msg)
 
-    # NOTE: `TBLPROPERTIES(delta.checkpointInterval)` isn't plumbed into Delta metadata yet.
-    # Default interval (100) means only v0 checkpoints are guaranteed in short tests.
 
-    base = tmp_path / "delta_checkpoint"
-    table_name = "delta_checkpoint_test"
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
+def test_delta_write_to_table_properties_materialize_metadata(spark, tmp_path: Path):
+    """Test that .writeTo().tableProperty() materializes Delta table properties on first commit.
+
+    This exercises the DataFrame API code path (.writeTo + .tableProperty), which is distinct
+    from the SQL DDL path (TBLPROPERTIES) covered by checkpoint_properties.feature.
+    """
+    base = tmp_path / "delta_write_to_checkpoint"
+    table_name = "delta_write_to_checkpoint"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.createDataFrame([Row(id=1), Row(id=2)]).writeTo(table_name).using("delta").option(
+            "path",
+            str(base),
+        ).tableProperty("delta.checkpointInterval", "3").create()
 
-    delta_path = escape_sql_string_literal(str(base))
-    spark.sql(f"CREATE TABLE {table_name} (id INT) USING DELTA LOCATION '{delta_path}'")
+        actual = spark.sql(f"SELECT * FROM {table_name} ORDER BY id").collect()  # noqa: S608
+        assert [row.id for row in actual] == [1, 2]
 
-    spark.sql(f"INSERT INTO {table_name} VALUES (1), (2)")  # noqa: S608
+        metadata = _read_first_commit_metadata(base)
+        assert metadata.get("configuration", {}).get("delta.checkpointInterval") == "3"
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
-    log_dir = base / "_delta_log"
-    assert log_dir.exists(), f"missing delta log dir: {log_dir}"
 
-    # We should always create a checkpoint at v0 (0 % interval == 0).
-    assert list(log_dir.glob(f"{0:020}.checkpoint*.parquet")), (
-        f"expected v0 checkpoint parquet in {log_dir}, found none"
-    )
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
+def test_delta_write_option_routes_table_property_to_metadata(spark, tmp_path: Path):
+    """Test that Delta table properties can be passed through DataFrame write options.
 
-    last_checkpoint_file = log_dir / "_last_checkpoint"
-    assert last_checkpoint_file.exists(), f"missing _last_checkpoint: {last_checkpoint_file}"
-    last_checkpoint = json.loads(last_checkpoint_file.read_text(encoding="utf-8"))
-    assert last_checkpoint.get("version") == 0
+    This covers the path-based DataFrame API (`.write.option(...).save(...)`), where Delta table
+    properties arrive mixed in with transient write options and must be routed into the first
+    `metaData.configuration` action for a new table.
+    """
+    base = tmp_path / "delta_write_option_checkpoint"
 
-    # Prove checkpoints are actually usable (not just created):
-    # delete the v0 JSON commit and ensure we can still read via checkpoint + remaining logs.
-    v0_json = log_dir / f"{0:020}.json"
-    assert v0_json.exists(), f"missing v0 delta log file: {v0_json}"
-    v0_json.unlink()
+    df = spark.createDataFrame([Row(id=1), Row(id=2)])
+    (df.write.format("delta").mode("overwrite").option("delta.checkpointInterval", "3").save(str(base)))
 
-    # Latest snapshot read should still work (uses checkpoint v0 + v1 json).
-    assert spark.read.format("delta").load(str(base)).count() == 2  # noqa: PLR2004
+    actual = spark.read.format("delta").load(str(base)).orderBy("id").collect()
+    assert [row.id for row in actual] == [1, 2]
 
-    # Time travel to version 0 should still work without the v0 JSON file.
-    assert (
-        spark.read.format("delta").option("versionAsOf", "0").load(str(base)).count() == 2  # noqa: PLR2004
-    )
-
-    # Verify plan includes our custom commit metrics labels.
-    plan = spark.sql(f"EXPLAIN ANALYZE INSERT INTO {table_name} VALUES (3)").collect()[0][0]  # noqa: S608
-    assert "DeltaCommitExec" in plan
-    assert "num_commit_retries" in plan
-    assert "checkpoint_created" in plan
-    assert "log_files_cleaned" in plan
+    metadata = _read_first_commit_metadata(base)
+    assert metadata.get("configuration", {}).get("delta.checkpointInterval") == "3"

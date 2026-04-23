@@ -33,7 +33,6 @@ async fn test_failover_from_dead_primary_endpoint() {
         RuntimeHandle::new(
             tokio::runtime::Handle::current(),
             tokio::runtime::Handle::current(),
-            false,
         ),
     );
 

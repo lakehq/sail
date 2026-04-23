@@ -103,6 +103,7 @@ impl From<SqlError> for PlanError {
             SqlError::NotImplemented(message) => PlanError::NotImplemented(message),
             SqlError::NotSupported(message) => PlanError::NotSupported(message),
             SqlError::InternalError(message) => PlanError::InternalError(message),
+            SqlError::AnalysisError(message) => PlanError::AnalysisError(message),
         }
     }
 }
@@ -116,6 +117,7 @@ impl From<PyUdfError> for PlanError {
             PyUdfError::IoError(e) => PlanError::DataFusionError(DataFusionError::IoError(e)),
             PyUdfError::InvalidArgument(message) => PlanError::InvalidArgument(message),
             PyUdfError::InternalError(message) => PlanError::InternalError(message),
+            PyUdfError::AnalysisError(message) => PlanError::AnalysisError(message),
         }
     }
 }

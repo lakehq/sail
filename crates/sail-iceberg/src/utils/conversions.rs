@@ -86,6 +86,11 @@ fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveTyp
         (PrimitiveType::Fixed(_), PL::Binary(b)) | (PrimitiveType::Binary, PL::Binary(b)) => {
             SV::Binary(Some(b.clone()))
         }
+        // Iceberg encodes String lower/upper bounds as raw bytes (UTF-8) in file metrics.
+        // Decode them so pruning predicates comparing against Utf8 literals work.
+        (PrimitiveType::String, PL::Binary(b)) => {
+            SV::Utf8(Some(String::from_utf8_lossy(b).into_owned()))
+        }
         // Fallback to basic conversion for other combinations
         _ => primitive_to_scalar_default(prim),
     }

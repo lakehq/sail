@@ -24,6 +24,7 @@ mod write_v1;
 mod write_v2;
 
 impl PlanResolver<'_> {
+    /// Resolves a command plan into a logical plan.
     pub(super) async fn resolve_command_plan(
         &self,
         plan: spec::CommandPlan,
@@ -45,6 +46,18 @@ impl PlanResolver<'_> {
             CommandNode::ListDatabases { qualifier, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ListDatabases {
                     qualifier: qualifier.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ShowTables { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ShowTables {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ShowTableExtended { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ShowTableExtended {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
                     pattern,
                 })
             }
@@ -256,7 +269,14 @@ impl PlanResolver<'_> {
                 };
                 self.resolve_command_delete(delete, state).await
             }
-            CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
+            CommandNode::AlterTable {
+                table,
+                if_exists,
+                operation,
+            } => {
+                self.resolve_catalog_alter_table(table, if_exists, operation, state)
+                    .await
+            }
             CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),
             CommandNode::LoadData { .. } => Err(PlanError::todo("CommandNode::LoadData")),
             CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),
