@@ -69,6 +69,33 @@ impl PlanResolver<'_> {
         }
 
         let canonical_function_name = function_name.to_ascii_lowercase();
+
+        // Check if this is a higher-order function with lambda arguments.
+        // HOFs must be resolved before normal argument resolution because their
+        // lambda arguments cannot be resolved in the normal expression context.
+        const HOF_NAMES: &[&str] = &[
+            "aggregate",
+            "exists",
+            "filter",
+            "forall",
+            "map_filter",
+            "map_zip_with",
+            "reduce",
+            "transform",
+            "transform_keys",
+            "transform_values",
+            "zip_with",
+        ];
+        if HOF_NAMES.contains(&canonical_function_name.as_str())
+            && arguments
+                .iter()
+                .any(|a| matches!(a, spec::Expr::LambdaFunction { .. }))
+        {
+            return self
+                .resolve_higher_order_function(&canonical_function_name, arguments, schema, state)
+                .await;
+        }
+
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
             if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
