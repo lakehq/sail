@@ -22,6 +22,7 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     ctx: &dyn Session,
     urls: &[ListingTableUrl],
     options: &mut ListingOptions,
+    base_extension: &str,
     extension_with_compression: &Option<String>,
     options_vec: Vec<OptionLayer>,
     listing_format: &ListingTableFormat<T>,
@@ -35,6 +36,9 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
             url,
             ctx,
             &store,
+            // Use `options.file_extension` (which is "") so all files are listed regardless
+            // of extension, matching Spark's behavior. The `base_extension` is used separately
+            // for compression inference below.
             &options.file_extension,
             extension_with_compression.as_deref(),
         )
@@ -63,11 +67,11 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     let file_extension = if let Some(extension_with_compression) = extension_with_compression {
         resolve_listing_file_extension(
             &file_groups,
-            &options.file_extension,
+            base_extension,
             extension_with_compression,
         )
     } else {
-        let result = infer_listing_file_extension(&file_groups, &options.file_extension);
+        let result = infer_listing_file_extension(&file_groups, base_extension);
         if let Some(result) = result {
             let (file_extension, compression_type) = result;
             let file_compression_type = CompressionTypeVariant::from_str(
@@ -240,15 +244,15 @@ pub async fn list_all_files<'a>(
                 extension_match
             };
             let glob_match = url.contains(path, ignore_subdirectory);
-            // For collections (directories), exclude hidden files following the Hadoop convention.
-            // Files whose names start with '.' or '_' are treated as hidden or metadata files
-            // (e.g., '_SUCCESS', '.part-xxx.crc') and should be excluded from the listing.
+            // For collections (directories), exclude hidden paths following the Hadoop
+            // convention. Any path segment starting with '.' or '_' is treated as hidden or
+            // metadata (for example '_SUCCESS', '.part-xxx.crc', or
+            // '_temporary/part-0000.parquet') and should be excluded from the listing.
             // This matches Spark's behavior when reading from a directory.
             let is_visible = !is_collection
                 || path
-                    .filename()
-                    .map(|name| !name.starts_with('.') && !name.starts_with('_'))
-                    .unwrap_or(true);
+                    .parts()
+                    .all(|part| !part.as_ref().starts_with('.') && !part.as_ref().starts_with('_'));
             futures::future::ready(is_visible && extension_match && glob_match)
         })
         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
