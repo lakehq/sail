@@ -52,7 +52,5 @@ def test_foreach_batch_proto_parsing(spark):
     def batch_fn(batch_df, batch_id):
         pass
 
-    import re
-
-    with pytest.raises(Exception, match=re.compile("unsupported|not support", re.IGNORECASE)):
+    with pytest.raises(Exception, match=r"(?i)not support"):
         df.writeStream.foreachBatch(batch_fn).start()
