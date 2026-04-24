@@ -413,7 +413,104 @@ fn finalize_attempt_actions(
         }
     }
 
+    stamp_row_tracking_actions(&mut finalized_actions, read_snapshot, version)?;
+
     Ok(finalized_actions)
+}
+
+/// When Row Tracking is active (supported & not suspended), stamp
+/// `defaultRowCommitVersion = version` on every `Add` that already has a `baseRowId`
+/// assigned by the writer but no commit version, and emit/merge a
+/// `domainMetadata(domain = "delta.rowTracking")` action with the new
+/// `rowIdHighWaterMark`. Per the Delta protocol, every add action in a commit on a
+/// row-tracking-enabled table MUST carry both fields.
+fn stamp_row_tracking_actions(
+    actions: &mut Vec<CommitAction>,
+    read_snapshot: Option<&Arc<DeltaSnapshot>>,
+    version: i64,
+) -> DeltaResult<()> {
+    let actions_as_actions = actions
+        .iter()
+        .cloned()
+        .map(Action::from)
+        .collect::<Vec<_>>();
+    let Some((protocol, metadata)) = resolve_effective_protocol_and_metadata(
+        read_snapshot.map(|snapshot| snapshot.protocol()),
+        read_snapshot.map(|snapshot| snapshot.metadata()),
+        &actions_as_actions,
+    ) else {
+        return Ok(());
+    };
+    let row_tracking_supported = protocol_has_writer_feature(&protocol, &TableFeature::RowTracking);
+    let suspended = table_property_enabled(&metadata, "delta.rowTrackingSuspended");
+    if !row_tracking_supported || suspended {
+        return Ok(());
+    }
+
+    let mut max_assigned: Option<i64> = None;
+    let mut any_assigned = false;
+    for action in actions.iter_mut() {
+        if let CommitAction::Add(add) = action {
+            if let Some(base_row_id) = add.base_row_id {
+                any_assigned = true;
+                let stats = add
+                    .stats
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok());
+                let num_records = stats
+                    .as_ref()
+                    .and_then(|v| v.get("numRecords"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let last = base_row_id.saturating_add(num_records.saturating_sub(1).max(0));
+                max_assigned = Some(max_assigned.map_or(last, |current| current.max(last)));
+                if add.default_row_commit_version.is_none() {
+                    add.default_row_commit_version = Some(version);
+                }
+            }
+        }
+    }
+
+    if !any_assigned {
+        return Ok(());
+    }
+
+    let previous_high_water_mark = read_snapshot
+        .and_then(|snapshot| snapshot.domain_metadata().get("delta.rowTracking").cloned())
+        .and_then(|domain| {
+            serde_json::from_str::<Value>(&domain.configuration)
+                .ok()
+                .and_then(|v| {
+                    v.as_object()
+                        .and_then(|o| o.get("rowIdHighWaterMark").cloned())
+                })
+                .and_then(|v| v.as_i64())
+        });
+    let new_high_water_mark = match (previous_high_water_mark, max_assigned) {
+        (Some(prev), Some(cur)) => prev.max(cur),
+        (None, Some(cur)) => cur,
+        (Some(prev), None) => prev,
+        (None, None) => return Ok(()),
+    };
+
+    let configuration =
+        serde_json::json!({ "rowIdHighWaterMark": new_high_water_mark }).to_string();
+
+    let existing = actions.iter_mut().find_map(|action| match action {
+        CommitAction::DomainMetadata(dm) if dm.domain == "delta.rowTracking" => Some(dm),
+        _ => None,
+    });
+    if let Some(dm) = existing {
+        dm.configuration = configuration;
+        dm.removed = false;
+    } else {
+        actions.push(CommitAction::DomainMetadata(crate::spec::DomainMetadata {
+            domain: "delta.rowTracking".to_string(),
+            configuration,
+            removed: false,
+        }));
+    }
+    Ok(())
 }
 
 fn table_property_enabled(metadata: &Metadata, key: &str) -> bool {
@@ -504,9 +601,9 @@ fn validate_effective_commit_target(
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
 
-    // TODO(row-tracking-writes): We still rely on commit-time protocol rejection for tables that
-    // advertise rowTracking/domainMetadata. When row-tracking writes are implemented, this needs
-    // to grow into explicit validation of baseRowId/defaultRowCommitVersion assignment.
+    // Row Tracking writer requirement: when the writer feature is supported and the
+    // table is not suspended, every Add action in the commit MUST carry baseRowId and
+    // defaultRowCommitVersion (Delta protocol, "Row IDs" section).
     let row_tracking_requested = table_property_enabled(&metadata, "delta.enableRowTracking")
         || table_property_enabled(&metadata, "delta.rowTrackingSuspended");
     if row_tracking_requested && !protocol_has_writer_feature(&protocol, &TableFeature::RowTracking)
@@ -517,6 +614,19 @@ fn validate_effective_commit_target(
         && !protocol_has_writer_feature(&protocol, &TableFeature::DomainMetadata)
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DomainMetadata).into());
+    }
+    let row_tracking_supported = protocol_has_writer_feature(&protocol, &TableFeature::RowTracking);
+    let row_tracking_suspended = table_property_enabled(&metadata, "delta.rowTrackingSuspended");
+    if row_tracking_supported && !row_tracking_suspended {
+        for action in &actions_as_actions {
+            if let Action::Add(add) = action {
+                if add.base_row_id.is_none() || add.default_row_commit_version.is_none() {
+                    return Err(DeltaError::generic(
+                        "Row Tracking is active on this table but an Add action is missing baseRowId or defaultRowCommitVersion",
+                    ));
+                }
+            }
+        }
     }
 
     Ok(())

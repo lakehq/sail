@@ -45,5 +45,7 @@ pub use schema::{
     MetadataValue, PrimitiveType, Schema, StructField, StructType,
 };
 pub(crate) use statistics::stats_schema;
-pub use statistics::{ColumnCountStat, ColumnValueStat, MaxStat, MinStat, StatValue, Stats};
+pub use statistics::{
+    parse_stats_json_array, ColumnCountStat, ColumnValueStat, MaxStat, MinStat, StatValue, Stats,
+};
 pub(crate) use utils::{contains_timestampntz, contains_timestampntz_arrow};

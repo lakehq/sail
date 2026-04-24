@@ -612,7 +612,47 @@ impl DeltaWriterExec {
             );
 
             let writer_path = object_store::path::Path::from(table_url.path());
-            let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
+            let row_tracking = if let Some(table) = &table {
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .get_row_tracking_state()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+            } else {
+                // New-table path (CREATE or CTAS): derive the row tracking state from
+                // the target table configuration so the first commit's Add actions are
+                // stamped when the table is being created with rowTracking already in
+                // writerFeatures. `next_row_id` starts at 0 for a new table.
+                let cfg = &metadata_configuration;
+                let rt_supported = cfg
+                    .get("delta.feature.rowTracking")
+                    .is_some_and(|v| !v.is_empty());
+                let rt_suspended = cfg
+                    .get("delta.rowTrackingSuspended")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+                let rt_enabled = cfg
+                    .get("delta.enableRowTracking")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+                if rt_supported && rt_suspended {
+                    crate::table::features::RowTrackingToken::Suspended
+                } else if rt_enabled {
+                    crate::table::features::RowTrackingToken::Enabled(
+                        crate::table::features::EnabledRowTrackingToken { next_row_id: 0 },
+                    )
+                } else if rt_supported {
+                    crate::table::features::RowTrackingToken::SupportedOnly(
+                        crate::table::features::SupportedRowTrackingToken { next_row_id: 0 },
+                    )
+                } else {
+                    crate::table::features::RowTrackingToken::Unsupported
+                }
+            };
+            let mut writer = DeltaWriter::new_with_row_tracking(
+                object_store.clone(),
+                writer_path,
+                writer_config,
+                row_tracking,
+            );
 
             // Compute physical-to-logical mapping once before the loop
             let phys_to_logical = logical_kernel_for_mapping.as_ref().map(|logical_kernel| {

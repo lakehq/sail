@@ -548,3 +548,268 @@ def _latest_effective_protocol_and_metadata_from_variables(variables: dict) -> d
                 if "metaData" in obj:
                     result["metaData"] = obj["metaData"]
     return result
+
+
+def _checkpoint_row_to_dict(table, row_index: int) -> dict:
+    """Convert a single row of a pyarrow checkpoint Table to nested Python dicts."""
+    row = {}
+    for col_name in table.column_names:
+        col = table.column(col_name)
+        value = col[row_index].as_py()
+        row[col_name] = value
+    return row
+
+
+def _load_checkpoint_parquet(location: Path, filename: str) -> list[dict]:
+    """Load a checkpoint parquet file and return a list of nested dict rows."""
+    try:
+        import pyarrow.parquet as pq
+    except ModuleNotFoundError as e:  # pragma: no cover
+        msg = "pyarrow is required for checkpoint parquet assertions"
+        raise RuntimeError(msg) from e
+
+    log_dir = location / "_delta_log"
+    cp_path = log_dir / filename
+    assert cp_path.exists(), f"checkpoint parquet not found: {cp_path}"
+    table = pq.read_table(cp_path)
+    rows: list[dict] = []
+    for i in range(table.num_rows):
+        rows.append(_checkpoint_row_to_dict(table, i))
+    return rows
+
+
+@then(parsers.parse("checkpoint parquet file {filename} in {location_var} contains add fields"))
+def checkpoint_parquet_contains_add_fields(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    datatable,
+) -> None:
+    """Assert fields inside the ``add`` struct of a checkpoint parquet file match expected values.
+
+    The datatable must have two columns ``path`` and ``value``. ``path`` is a JSONPath
+    expression into the ``add`` struct — for example ``stats_parsed.minValues.id``,
+    ``partitionValues_parsed.year``, ``baseRowId``, or ``defaultRowCommitVersion``.
+    """
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    rows = _load_checkpoint_parquet(Path(location.path), filename)
+    add_rows = [r.get("add") for r in rows if r.get("add") is not None]
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *dtable_rows = datatable
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+        "expected datatable with columns: | path | value |"
+    )
+    for drow in dtable_rows:
+        if not drow or len(drow) < 2:  # noqa: PLR2004
+            continue
+        path, raw_value = drow[0], drow[1]
+        expected = _parse_expected_value(raw_value)
+        # Try each add row until one satisfies the path; report last actual on failure.
+        last_actual: object = None
+        matched = False
+        for add in add_rows:
+            try:
+                actual = _get_by_path(add, path)
+            except KeyError:
+                actual = None
+            last_actual = actual
+            if actual == expected:
+                matched = True
+                break
+        assert matched, f"field {path!r}: expected {expected!r}, got {last_actual!r} across {len(add_rows)} add rows"
+
+
+@then(
+    parsers.parse(
+        "checkpoint parquet file {filename} in {location_var} does not contain add sub-field {field}"
+    )
+)
+def checkpoint_parquet_add_missing_field(
+    filename: str,
+    location_var: str,
+    field: str,
+    variables: dict,
+) -> None:
+    """Assert that the ``add`` struct does NOT have a direct sub-field named ``field``.
+
+    Useful to check that ``stats_parsed`` / ``partitionValues_parsed`` are absent when
+    the corresponding property is off.
+    """
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    try:
+        import pyarrow.parquet as pq
+    except ModuleNotFoundError as e:  # pragma: no cover
+        msg = "pyarrow is required for checkpoint parquet assertions"
+        raise RuntimeError(msg) from e
+
+    log_dir = Path(location.path) / "_delta_log"
+    cp_path = log_dir / filename
+    assert cp_path.exists(), f"checkpoint parquet not found: {cp_path}"
+    schema = pq.read_schema(cp_path)
+    add_field = schema.field("add") if "add" in schema.names else None
+    assert add_field is not None, "checkpoint schema must have an 'add' column"
+    sub_names = {f.name for f in add_field.type}
+    assert field not in sub_names, (
+        f"expected 'add' struct to NOT have sub-field {field!r}; found fields: {sorted(sub_names)}"
+    )
+
+
+def _load_delta_log_actions(location: Path, filename: str) -> list[dict]:
+    """Parse an NDJSON Delta commit log file and return the list of action objects."""
+    file_path = location / filename
+    if not file_path.exists():
+        candidate = location / "_delta_log" / filename
+        if candidate.exists():
+            file_path = candidate
+    assert file_path.exists(), f"delta log file does not exist: {file_path}"
+    actions: list[dict] = []
+    with file_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            actions.append(json.loads(stripped))
+    return actions
+
+
+@then(parsers.parse("delta log commit {filename} in {location_var} contains action"))
+def delta_log_commit_action_contains(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    datatable,
+) -> None:
+    """Assert that at least one action object in the NDJSON commit log has a specific
+    JSONPath-addressable field equal to an expected value.
+
+    The datatable must have two columns ``path`` and ``value``. ``path`` is a JSONPath
+    expression applied to each action object — for example ``add.baseRowId`` or
+    ``domainMetadata.configuration``. The assertion passes when ANY action in the file
+    yields a match; use separate rows to assert multiple invariants.
+    """
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    actions = _load_delta_log_actions(Path(location.path), filename)
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+        "expected datatable with columns: | path | value |"
+    )
+    for drow in rows:
+        if not drow or len(drow) < 2:  # noqa: PLR2004
+            continue
+        path, raw_value = drow[0], drow[1]
+        expected = _parse_expected_value(raw_value)
+        last_actual: object = None
+        matched = False
+        for action in actions:
+            try:
+                actual = _get_by_path(action, path)
+            except KeyError:
+                continue
+            last_actual = actual
+            if actual == expected:
+                matched = True
+                break
+        assert matched, (
+            f"field {path!r}: expected {expected!r}, no action matched (last seen {last_actual!r} over {len(actions)} actions)"
+        )
+
+
+@then(
+    parsers.parse(
+        "delta log commit {filename} in {location_var} has no action with sub-field {field} set"
+    )
+)
+def delta_log_commit_no_action_with_subfield_set(
+    filename: str,
+    location_var: str,
+    field: str,
+    variables: dict,
+) -> None:
+    """Assert no NDJSON action has the given dot-path set to a non-null value.
+
+    ``field`` is a dotted path such as ``add.baseRowId``.
+    """
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    actions = _load_delta_log_actions(Path(location.path), filename)
+    parts = field.split(".")
+    for action in actions:
+        cursor: object = action
+        found = True
+        for part in parts:
+            if isinstance(cursor, dict) and part in cursor:
+                cursor = cursor[part]
+            else:
+                found = False
+                break
+        if found and cursor is not None:
+            raise AssertionError(
+                f"expected no action to carry {field!r} set; found value {cursor!r} in action {action!r}"
+            )
+
+
+@then(
+    parsers.parse(
+        "delta log commit {filename} in {location_var} has rowTracking high-water-mark {hwm:d}"
+    )
+)
+def delta_log_commit_row_tracking_hwm(
+    filename: str,
+    location_var: str,
+    hwm: int,
+    variables: dict,
+) -> None:
+    """Assert an NDJSON commit contains a ``delta.rowTracking`` domainMetadata action whose
+    (JSON-encoded) ``configuration.rowIdHighWaterMark`` equals the given integer.
+    """
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    actions = _load_delta_log_actions(Path(location.path), filename)
+    for action in actions:
+        dm = action.get("domainMetadata") if isinstance(action, dict) else None
+        if not isinstance(dm, dict):
+            continue
+        if dm.get("domain") != "delta.rowTracking":
+            continue
+        cfg = dm.get("configuration")
+        if isinstance(cfg, str):
+            try:
+                cfg_obj = json.loads(cfg)
+            except json.JSONDecodeError as e:
+                raise AssertionError(f"domainMetadata.configuration is not valid JSON: {cfg!r}") from e
+        else:
+            cfg_obj = cfg
+        actual = cfg_obj.get("rowIdHighWaterMark") if isinstance(cfg_obj, dict) else None
+        assert actual == hwm, (
+            f"rowIdHighWaterMark: expected {hwm!r}, got {actual!r} (configuration={cfg!r})"
+        )
+        return
+    raise AssertionError(
+        f"no domainMetadata action with domain 'delta.rowTracking' found in {filename}"
+    )
