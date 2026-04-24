@@ -245,19 +245,17 @@ impl HmsCatalogProvider {
     }
 
     /// Determines whether an error is retryable by failing over to the next endpoint.
-    /// Checks for known transport-level failures that indicate the endpoint is unavailable.
+    /// Matches on stable prefixes injected at each error source:
+    /// - "transport error" from `hms_client_error` for volo-thrift transport failures
+    /// - "gssapi error" from `check_gss_ok` for Kerberos/GSSAPI failures
+    /// - "dns error" from `build_client_for_endpoint` for DNS resolution failures
     fn should_retry(error: &CatalogError) -> bool {
         match error {
             CatalogError::External(message) => {
                 let message = message.to_ascii_lowercase();
                 message.contains("transport error")
-                    || message.contains("transport exception")
-                    || message.contains("connection refused")
-                    || message.contains("connection reset")
-                    || message.contains("broken pipe")
-                    || message.contains("timed out")
-                    || message.contains("gss_s_context_expired")
-                    || message.contains("context expired")
+                    || message.contains("gssapi error")
+                    || message.contains("dns error")
             }
             _ => false,
         }
@@ -286,14 +284,14 @@ impl HmsCatalogProvider {
             .await
             .map_err(|error| {
                 CatalogError::External(format!(
-                    "Failed to resolve HMS URI '{}': {error}",
+                    "dns error: failed to resolve HMS URI '{}': {error}",
                     endpoint.uri
                 ))
             })?
             .next()
             .ok_or_else(|| {
                 CatalogError::External(format!(
-                    "HMS URI '{}' did not resolve to an address",
+                    "dns error: HMS URI '{}' did not resolve to an address",
                     endpoint.uri
                 ))
             })?;
@@ -1325,18 +1323,22 @@ mod tests {
     #[test]
     fn test_should_retry_transport_errors() {
         let retry = super::HmsCatalogProvider::should_retry(&CatalogError::External(
-            "Transport exception: connection reset by peer".to_string(),
+            "context: transport error: connection reset by peer".to_string(),
         ));
-        let retry_context_expired = super::HmsCatalogProvider::should_retry(
-            &CatalogError::External("Kerberos GSSAPI error GSS_S_CONTEXT_EXPIRED".to_string()),
-        );
+        let retry_gssapi = super::HmsCatalogProvider::should_retry(&CatalogError::External(
+            "context: transport error: gssapi error: GSS_S_CONTEXT_EXPIRED".to_string(),
+        ));
+        let retry_dns = super::HmsCatalogProvider::should_retry(&CatalogError::External(
+            "dns error: failed to resolve HMS URI 'hms:9083': connection refused".to_string(),
+        ));
         let dont_retry = super::HmsCatalogProvider::should_retry(&CatalogError::NotFound(
             CatalogObject::Table,
             "x".into(),
         ));
 
         assert!(retry);
-        assert!(retry_context_expired);
+        assert!(retry_gssapi);
+        assert!(retry_dns);
         assert!(!dont_retry);
     }
 

@@ -462,7 +462,7 @@ fn check_gss_ok(mut major: u32, mut minor: u32) -> CatalogResult<()> {
     };
 
     Err(CatalogError::External(format!(
-        "Kerberos GSSAPI error {:?} (minor {minor}): {error_message}",
+        "gssapi error: {:?} (minor {minor}): {error_message}",
         GssMajorCodes::from_bits_retain(major)
     )))
 }
