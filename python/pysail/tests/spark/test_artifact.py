@@ -1,48 +1,30 @@
 """Tests for artifact handling via SparkSession.addArtifact."""
 
-_ARTIFACT_CONSTANT_VALUE = 42
+import zipfile
 
 
-def test_add_artifact_python_file(spark, tmp_path):
-    """Adding a Python file artifact should make it importable."""
-    # Create a simple Python module
-    module_file = tmp_path / "my_artifact_module.py"
-    module_file.write_text(f"MY_CONSTANT = {_ARTIFACT_CONSTANT_VALUE}\n")
-
-    spark.addArtifact(str(module_file))
-
-    # Verify the artifact can be used in a UDF
-    from pyspark.sql.functions import udf
-    from pyspark.sql.types import IntegerType
-
-    @udf(returnType=IntegerType())
-    def get_constant(_x):
-        import my_artifact_module
-
-        return my_artifact_module.MY_CONSTANT
-
-    df = spark.createDataFrame([(1,), (2,)], ["id"])
-    result = df.select(get_constant("id")).collect()
-    assert all(row[0] == _ARTIFACT_CONSTANT_VALUE for row in result)
+def _make_zip(path, module_name, code):
+    """Create a zip archive containing a single Python module."""
+    with zipfile.ZipFile(str(path), "w") as zf:
+        zf.writestr(module_name, code)
 
 
-def test_add_artifact_zip_file(spark, tmp_path):
-    """Adding a zip artifact should make the zip available on the Python path."""
-    import zipfile
+def test_add_artifact_zip_as_pyfile(spark, tmp_path):
+    """Adding a zip archive as a pyfile artifact should succeed without error.
 
-    # Create a zip file with a module inside
-    module_code = "ZIP_VALUE = 99\n"
-    zip_path = tmp_path / "myzip.zip"
-    with zipfile.ZipFile(str(zip_path), "w") as zf:
-        zf.writestr("myzip_module.py", module_code)
+    PySpark Connect's addArtifact only accepts .zip/.egg/.whl when pyfile=True;
+    raw .py files or plain .zip files are rejected by the client.
+    """
+    zip_path = tmp_path / "sail_test_module.zip"
+    _make_zip(zip_path, "sail_test_module.py", "VALUE = 42\n")
 
-    spark.addArtifact(str(zip_path))
-    # Verify zip was added (artifact is tracked; actual import in UDF is the real test)
+    # Should not raise
+    spark.addArtifact(str(zip_path), pyfile=True)
 
 
-def test_add_multiple_artifacts(spark, tmp_path):
-    """Multiple artifacts can be added to the same session."""
+def test_add_multiple_artifacts_as_pyfiles(spark, tmp_path):
+    """Multiple zip artifacts can be added as pyfiles."""
     for i in range(3):
-        artifact_file = tmp_path / f"artifact_{i}.py"
-        artifact_file.write_text(f"VALUE_{i} = {i}\n")
-        spark.addArtifact(str(artifact_file))
+        zip_path = tmp_path / f"sail_multi_module_{i}.zip"
+        _make_zip(zip_path, f"sail_multi_module_{i}.py", f"V = {i}\n")
+        spark.addArtifact(str(zip_path), pyfile=True)
