@@ -1,0 +1,8 @@
+>>> sorted(spark.catalog.listCatalogs(), key=lambda c: c.name)
+[CatalogMetadata(name='spark_catalog', description=None), CatalogMetadata(name='system', description=None)]
+
+>>> spark.catalog.listCatalogs("spark*")
+[CatalogMetadata(name='spark_catalog', description=None)]
+
+>>> spark.catalog.listCatalogs("hive*")
+[]
