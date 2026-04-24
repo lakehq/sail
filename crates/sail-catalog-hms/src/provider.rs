@@ -245,20 +245,34 @@ impl HmsCatalogProvider {
     }
 
     /// Determines whether an error is retryable by failing over to the next endpoint.
-    /// The volo-thrift client wraps all transport and Thrift errors as
-    /// `CatalogError::External(String)`, so string matching is the only option.
+    /// Checks for known transport-level failures that indicate the endpoint is unavailable.
     fn should_retry(error: &CatalogError) -> bool {
-        let CatalogError::External(message) = error else {
-            return false;
-        };
-        let message = message.to_ascii_lowercase();
-        message.contains("transport exception")
-            || message.contains("connection refused")
-            || message.contains("connection reset")
-            || message.contains("broken pipe")
-            || message.contains("timed out")
-            || message.contains("gss_s_context_expired")
-            || message.contains("context expired")
+        match error {
+            CatalogError::External(message) => {
+                let message = message.to_ascii_lowercase();
+                message.contains("transport error")
+                    || message.contains("transport exception")
+                    || message.contains("connection refused")
+                    || message.contains("connection reset")
+                    || message.contains("broken pipe")
+                    || message.contains("timed out")
+                    || message.contains("gss_s_context_expired")
+                    || message.contains("context expired")
+            }
+            _ => false,
+        }
+    }
+
+    /// Converts a volo-thrift `ClientError` into a `CatalogError`,
+    /// preserving transport-level classification for retry logic.
+    fn hms_client_error(context: &str, error: volo_thrift::ClientError) -> CatalogError {
+        use volo_thrift::ClientError;
+        match &error {
+            ClientError::Transport(_) => {
+                CatalogError::External(format!("{context}: transport error: {error}"))
+            }
+            _ => CatalogError::External(format!("{context}: {error}")),
+        }
     }
 
     async fn build_client_for_endpoint(
@@ -453,9 +467,10 @@ impl HmsCatalogProvider {
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to create HMS table '{db_name}.{table_name}': {err:?}"
                     ))),
-                    Err(err) => Err(CatalogError::External(format!(
-                        "Failed to create HMS table '{db_name}.{table_name}': {err}"
-                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        &format!("Failed to create HMS table '{db_name}.{table_name}'"),
+                        err,
+                    )),
                 }
             }
         })
@@ -504,14 +519,18 @@ impl HmsCatalogProvider {
                                     "Failed to fetch HMS table '{db_name}.{table_name}' via get_table_req: {err:?}"
                                 )))
                             }
-                            Err(err) => Err(CatalogError::External(format!(
-                                "Failed to fetch HMS table '{db_name}.{table_name}' via get_table_req: {err}"
-                            ))),
+                            Err(err) => Err(Self::hms_client_error(
+                                &format!(
+                                    "Failed to fetch HMS table '{db_name}.{table_name}' via get_table_req"
+                                ),
+                                err,
+                            )),
                         }
                     }
-                    Err(err) => Err(CatalogError::External(format!(
-                        "Failed to fetch HMS table '{db_name}.{table_name}': {err}"
-                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        &format!("Failed to fetch HMS table '{db_name}.{table_name}'"),
+                        err,
+                    )),
                 }
             }
         })
@@ -530,15 +549,16 @@ impl HmsCatalogProvider {
                         Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                             "Failed to list HMS tables for '{db_name}': {err:?}"
                         ))),
-                        Err(err) => Err(CatalogError::External(format!(
-                            "Failed to list HMS tables for '{db_name}': {err}"
-                        ))),
+                        Err(err) => Err(Self::hms_client_error(
+                            &format!("Failed to list HMS tables for '{db_name}'"),
+                            err,
+                        )),
                     }
                 }
             })
             .await?;
 
-        let tbl_names: Vec<pilota::FastStr> = names.iter().map(|n| n.clone().into()).collect();
+        let tbl_names = names.to_vec();
         self.with_failover(|client| {
             let db_name = db_name_owned.clone();
             let tbl_names = tbl_names.clone();
@@ -551,9 +571,10 @@ impl HmsCatalogProvider {
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to batch-fetch HMS tables: {err:?}"
                     ))),
-                    Err(err) => Err(CatalogError::External(format!(
-                        "Failed to batch-fetch HMS tables: {err}"
-                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        "Failed to batch-fetch HMS tables",
+                        err,
+                    )),
                 }
             }
         })
@@ -592,9 +613,10 @@ impl HmsCatalogProvider {
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to drop HMS table '{db_name}.{table}': {err:?}"
                     ))),
-                    Err(err) => Err(CatalogError::External(format!(
-                        "Failed to drop HMS table '{db_name}.{table}': {err}"
-                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        &format!("Failed to drop HMS table '{db_name}.{table}'"),
+                        err,
+                    )),
                 }
             }
         })
@@ -648,9 +670,10 @@ impl HmsCatalogProvider {
                                 "drop_table_with_environment_context_unavailable".to_string(),
                             ))
                         }
-                        Err(err) => Err(CatalogError::External(format!(
-                            "Failed to drop HMS table '{db_name}.{table}': {err}"
-                        ))),
+                        Err(err) => Err(Self::hms_client_error(
+                            &format!("Failed to drop HMS table '{db_name}.{table}'"),
+                            err,
+                        )),
                     }
                 }
             })
@@ -700,9 +723,7 @@ impl CatalogProvider for HmsCatalogProvider {
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to create HMS database: {err:?}"
                     ))),
-                    Err(err) => Err(CatalogError::External(format!(
-                        "Failed to create HMS database: {err}"
-                    ))),
+                    Err(err) => Err(Self::hms_client_error("Failed to create HMS database", err)),
                 }
             }
         })
@@ -726,9 +747,10 @@ impl CatalogProvider for HmsCatalogProvider {
                         Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                             "Failed to fetch HMS database '{db_name}': {err:?}"
                         ))),
-                        Err(err) => Err(CatalogError::External(format!(
-                            "Failed to fetch HMS database '{db_name}': {err}"
-                        ))),
+                        Err(err) => Err(Self::hms_client_error(
+                            &format!("Failed to fetch HMS database '{db_name}'"),
+                            err,
+                        )),
                     }
                 }
             })
@@ -756,9 +778,9 @@ impl CatalogProvider for HmsCatalogProvider {
                             Ok(MaybeException::Exception(err)) => Err(CatalogError::External(
                                 format!("Failed to list HMS databases: {err:?}"),
                             )),
-                            Err(err) => Err(CatalogError::External(format!(
-                                "Failed to list HMS databases: {err}"
-                            ))),
+                            Err(err) => {
+                                Err(Self::hms_client_error("Failed to list HMS databases", err))
+                            }
                         }
                     }
                 })
@@ -771,9 +793,9 @@ impl CatalogProvider for HmsCatalogProvider {
                         Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                             "Failed to list HMS databases: {err:?}"
                         ))),
-                        Err(err) => Err(CatalogError::External(format!(
-                            "Failed to list HMS databases: {err}"
-                        ))),
+                        Err(err) => {
+                            Err(Self::hms_client_error("Failed to list HMS databases", err))
+                        }
                     }
                 })
                 .await?
@@ -815,9 +837,10 @@ impl CatalogProvider for HmsCatalogProvider {
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to drop HMS database '{db_name}': {err:?}"
                     ))),
-                    Err(err) => Err(CatalogError::External(format!(
-                        "Failed to drop HMS database '{db_name}': {err}"
-                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        &format!("Failed to drop HMS database '{db_name}'"),
+                        err,
+                    )),
                 }
             }
         })
@@ -987,9 +1010,10 @@ impl CatalogProvider for HmsCatalogProvider {
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to create HMS view '{db_name}.{view}': {err:?}"
                     ))),
-                    Err(err) => Err(CatalogError::External(format!(
-                        "Failed to create HMS view '{db_name}.{view}': {err}"
-                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        &format!("Failed to create HMS view '{db_name}.{view}'"),
+                        err,
+                    )),
                 }
             }
         })

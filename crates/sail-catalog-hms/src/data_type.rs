@@ -21,8 +21,8 @@ pub fn arrow_to_hive_type(data_type: &DataType) -> CatalogResult<String> {
         | DataType::Decimal64(precision, scale)
         | DataType::Decimal128(precision, scale)
         | DataType::Decimal256(precision, scale) => {
-            let precision = *precision as u8;
-            let scale = *scale as i8;
+            let precision = *precision;
+            let scale = *scale;
             if precision > 38 {
                 return Err(CatalogError::InvalidArgument(format!(
                     "Hive Metastore supports decimal precision up to 38, got {precision}"
