@@ -156,18 +156,78 @@ Feature: Glue catalog database operations
       """
     Then query result
       | name        | catalog | description | locationUri |
-      | list_db_one | sail    | NULL | NULL |
+      | list_db_one | sail    | NULL        | NULL        |
     When query
       """
       SHOW DATABASES LIKE 'list_db_two'
       """
     Then query result
       | name        | catalog | description | locationUri |
-      | list_db_two | sail    | NULL | NULL |
+      | list_db_two | sail    | NULL        | NULL        |
     When query
       """
       SHOW DATABASES LIKE 'list_other_db'
       """
     Then query result
       | name          | catalog | description | locationUri |
-      | list_other_db | sail    | NULL | NULL |
+      | list_other_db | sail    | NULL        | NULL        |
+
+  Scenario: Database with only properties and no location is retrievable
+    Given statement
+      """
+      CREATE DATABASE props_only_db
+      WITH DBPROPERTIES (env = 'test', team = 'data')
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS props_only_db
+      """
+    When query
+      """
+      DESCRIBE DATABASE EXTENDED props_only_db
+      """
+    Then query result row where "info_name" is "Namespace Name" has "info_value" equal to "props_only_db"
+    Then query result row where "info_name" is "Properties" has "info_value" containing "env,test"
+    Then query result row where "info_name" is "Properties" has "info_value" containing "team,data"
+
+  Scenario: Dropping a non-empty database without CASCADE fails
+    Given statement
+      """
+      CREATE DATABASE non_empty_db
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS non_empty_db CASCADE
+      """
+    Given statement
+      """
+      CREATE TABLE non_empty_db.some_table (id INT)
+      USING parquet
+      LOCATION 's3://bucket/non_empty_db_table'
+      """
+    Given statement with error .*
+      """
+      DROP DATABASE non_empty_db
+      """
+
+  Scenario: Dropping a non-empty database with CASCADE removes it
+    Given statement
+      """
+      CREATE DATABASE cascade_drop_db
+      """
+    Given statement
+      """
+      CREATE TABLE cascade_drop_db.inner_tbl (id INT)
+      USING parquet
+      LOCATION 's3://bucket/cascade_drop_db_inner'
+      """
+    Given statement
+      """
+      DROP DATABASE cascade_drop_db CASCADE
+      """
+    When query
+      """
+      SHOW DATABASES LIKE 'cascade_drop_db'
+      """
+    Then query result
+      | name | catalog | description | locationUri |

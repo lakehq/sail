@@ -265,3 +265,42 @@ Feature: Iceberg REST catalog table operations
     Then query result
       | database           | tableName    | isTemporary |
       | iceberg_table_test | trunc_part_t | false       |
+
+  Scenario: DESCRIBE TABLE EXTENDED reports table comment, provider and location
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.desc_ext_t (
+        id INT,
+        category STRING
+      )
+      USING iceberg
+      COMMENT 'extended describe table'
+      PARTITIONED BY (category)
+      """
+    When query
+      """
+      DESCRIBE TABLE EXTENDED iceberg_table_test.desc_ext_t
+      """
+    Then query result row where "col_name" is "Comment" has "data_type" equal to "extended describe table"
+    Then query result row where "col_name" is "Provider" has "data_type" equal to "iceberg"
+    Then query result has row where "col_name" is "Location"
+
+  Scenario: DESCRIBE TABLE EXTENDED returns TBLPROPERTIES set on create
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.props_t (id INT)
+      USING iceberg
+      TBLPROPERTIES (owner = 'mr. meow', team = 'data-eng')
+      """
+    When query
+      """
+      DESCRIBE TABLE EXTENDED iceberg_table_test.props_t
+      """
+    Then query result row where "col_name" is "Table Properties" has "data_type" containing "owner=mr. meow"
+    Then query result row where "col_name" is "Table Properties" has "data_type" containing "team=data-eng"
+
+  Scenario: Drop non-existent table with IF EXISTS and PURGE does not raise error
+    Given statement
+      """
+      DROP TABLE IF EXISTS iceberg_table_test.nonexistent_purge_t PURGE
+      """

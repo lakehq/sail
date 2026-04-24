@@ -265,3 +265,93 @@ Feature: Unity Catalog table operations
     Then query result
       | database                           | tableName | isTemporary |
       | sail_test_catalog.unity_table_test | opts_t    | false       |
+
+  Scenario: Create table with primitive numeric and boolean types
+    Given statement
+      """
+      CREATE TABLE unity_table_test.prim_num_t (
+        c_int INT,
+        c_bigint BIGINT,
+        c_float FLOAT,
+        c_double DOUBLE,
+        c_bool BOOLEAN
+      )
+      USING delta
+      LOCATION 's3://deltadata/custom/path/prim_num'
+      """
+    When query
+      """
+      DESCRIBE TABLE unity_table_test.prim_num_t
+      """
+    Then query result row where "col_name" is "c_int" has "data_type" equal to "int"
+    Then query result row where "col_name" is "c_bigint" has "data_type" equal to "bigint"
+    Then query result row where "col_name" is "c_float" has "data_type" equal to "float"
+    Then query result row where "col_name" is "c_double" has "data_type" equal to "double"
+    Then query result row where "col_name" is "c_bool" has "data_type" equal to "boolean"
+
+  Scenario: Create table with string, binary, and decimal types
+    Given statement
+      """
+      CREATE TABLE unity_table_test.prim_str_t (
+        c_str STRING,
+        c_bin BINARY,
+        c_dec DECIMAL(10, 2)
+      )
+      USING delta
+      LOCATION 's3://deltadata/custom/path/prim_str'
+      """
+    When query
+      """
+      DESCRIBE TABLE unity_table_test.prim_str_t
+      """
+    Then query result row where "col_name" is "c_str" has "data_type" equal to "string"
+    Then query result row where "col_name" is "c_bin" has "data_type" equal to "binary"
+    Then query result row where "col_name" is "c_dec" has "data_type" containing "decimal"
+
+  Scenario: Create table with date and timestamp types
+    Given statement
+      """
+      CREATE TABLE unity_table_test.prim_time_t (
+        c_date DATE,
+        c_ts TIMESTAMP
+      )
+      USING delta
+      LOCATION 's3://deltadata/custom/path/prim_time'
+      """
+    When query
+      """
+      DESCRIBE TABLE unity_table_test.prim_time_t
+      """
+    Then query result row where "col_name" is "c_date" has "data_type" equal to "date"
+    Then query result row where "col_name" is "c_ts" has "data_type" containing "timestamp"
+
+  Scenario: Dropping one table does not affect sibling tables
+    Given statement
+      """
+      CREATE TABLE unity_table_test.sib_a (id INT)
+      USING delta
+      LOCATION 's3://deltadata/sib_a'
+      """
+    Given statement
+      """
+      CREATE TABLE unity_table_test.sib_b (id INT)
+      USING delta
+      LOCATION 's3://deltadata/sib_b'
+      """
+    Given statement
+      """
+      DROP TABLE unity_table_test.sib_a
+      """
+    When query
+      """
+      SHOW TABLES IN unity_table_test LIKE 'sib_a'
+      """
+    Then query result
+      | database | tableName | isTemporary |
+    When query
+      """
+      SHOW TABLES IN unity_table_test LIKE 'sib_b'
+      """
+    Then query result
+      | database                           | tableName | isTemporary |
+      | sail_test_catalog.unity_table_test | sib_b     | false       |

@@ -4,9 +4,9 @@ Each sub-directory (glue/, iceberg_rest/, unity/) provides fixtures that
 spin up the relevant infrastructure containers and a dedicated Sail server.
 
 These tests are **deselected by default**. To run them, pass
-``-m catalog_integration`` explicitly::
+``--run-catalog-integration`` explicitly::
 
-    hatch run pytest -m catalog_integration
+    hatch run pytest --run-catalog-integration
 """
 
 from __future__ import annotations
@@ -81,17 +81,34 @@ def create_spark_session(remote: str, app_name: str = "catalog_test") -> SparkSe
     return spark
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register the CLI flag that opts in to catalog integration tests."""
+    parser.addoption(
+        "--run-catalog-integration",
+        action="store_true",
+        default=False,
+        help="Run catalog integration tests (deselected by default).",
+    )
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Auto-mark catalog_integration tests and deselect them unless explicitly requested."""
+    """Auto-mark catalog_integration tests and deselect them unless explicitly opted in.
+
+    Catalog integration tests are skipped by default. They are only collected when the
+    user passes ``--run-catalog-integration`` or an explicit marker expression that
+    positively selects the ``catalog_integration`` marker (e.g. ``-m catalog_integration``).
+    Expressions such as ``-m 'not catalog_integration'`` or ``-m 'not slow'`` will
+    deselect catalog integration tests.
+    """
     this_dir = os.path.dirname(os.path.abspath(__file__))
-    markexpr: str = getattr(config.option, "markexpr", "") or ""
+    opted_in = bool(config.getoption("--run-catalog-integration", default=False))
 
     remaining: list[pytest.Item] = []
     deselected: list[pytest.Item] = []
     for item in items:
         if str(item.fspath).startswith(this_dir):
             item.add_marker(pytest.mark.catalog_integration)
-            if "catalog_integration" not in markexpr:
+            if not opted_in:
                 deselected.append(item)
                 continue
         remaining.append(item)

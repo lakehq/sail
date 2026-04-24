@@ -227,3 +227,56 @@ Feature: Unity Catalog schema (database) operations
     Then query result has row where "info_name" is "Namespace Name"
     Then query result row where "info_name" is "Namespace Name" has "info_value" containing "describe_schema_unity"
     Then query result row where "info_name" is "Comment" has "info_value" equal to "describe test"
+
+  Scenario: Drop non-empty schema without CASCADE fails
+    Given statement
+      """
+      CREATE SCHEMA no_cascade_drop_unity
+      """
+    Given final statement
+      """
+      DROP SCHEMA IF EXISTS no_cascade_drop_unity CASCADE
+      """
+    Given statement
+      """
+      CREATE TABLE no_cascade_drop_unity.t1 (id INT)
+      USING delta
+      LOCATION 's3://deltadata/no_cascade_test'
+      """
+    Given statement with error .*
+      """
+      DROP SCHEMA no_cascade_drop_unity
+      """
+
+  Scenario: Drop empty schema without CASCADE succeeds
+    Given statement
+      """
+      CREATE SCHEMA empty_drop_unity
+      """
+    Given statement
+      """
+      DROP SCHEMA empty_drop_unity
+      """
+    When query
+      """
+      SHOW SCHEMAS LIKE 'sail_test_catalog.empty_drop_unity'
+      """
+    Then query result
+      | name | catalog | description | locationUri |
+
+  Scenario: Create schema without COMMENT or DBPROPERTIES
+    Given statement
+      """
+      CREATE SCHEMA minimal_schema_unity
+      """
+    Given final statement
+      """
+      DROP SCHEMA IF EXISTS minimal_schema_unity
+      """
+    When query
+      """
+      SHOW SCHEMAS LIKE 'sail_test_catalog.minimal_schema_unity'
+      """
+    Then query result
+      | name                                  | catalog | description | locationUri |
+      | sail_test_catalog.minimal_schema_unity | sail    | NULL        | NULL        |

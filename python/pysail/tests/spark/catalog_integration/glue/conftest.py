@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 @pytest.fixture(scope="module")
 def moto_container() -> Generator[DockerContainer, None, None]:
     """Start a Moto container for mocking AWS Glue."""
-    container = DockerContainer("motoserver/moto:latest")
+    container = DockerContainer("motoserver/moto:5.1.22")
     container.with_exposed_ports(5000)
     container.start()
     wait_for_logs(container, "Running on", timeout=120)

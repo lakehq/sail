@@ -27,7 +27,8 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
-        "catalog_integration: mark test as requiring external catalog services (deselected by default; use -m catalog_integration to run)",
+        "catalog_integration: mark test as requiring external catalog services "
+        "(deselected by default; use --run-catalog-integration to run)",
     )
     # Load all pytest-bdd step modules.
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")

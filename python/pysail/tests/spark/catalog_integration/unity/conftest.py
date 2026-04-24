@@ -42,7 +42,7 @@ def docker_network() -> Generator[Network, None, None]:
 def postgres_container(docker_network: Network) -> Generator[DockerContainer, None, None]:
     """Start a PostgreSQL container for Unity Catalog backend."""
     container = (
-        DockerContainer("postgres:latest")
+        DockerContainer("postgres:18.3")
         .with_env("POSTGRES_USER", "test")
         .with_env("POSTGRES_PASSWORD", "test")
         .with_env("POSTGRES_DB", "test")

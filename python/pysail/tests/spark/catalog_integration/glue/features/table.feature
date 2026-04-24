@@ -165,7 +165,7 @@ Feature: Glue catalog table operations
       """
     Then query error .*
 
-  Scenario Outline: Create table with <fmt> storage format
+  Scenario Outline: Create table with storage format
     Given final statement
       """
       DROP TABLE IF EXISTS test_<fmt>_table
@@ -263,3 +263,184 @@ Feature: Glue catalog table operations
       CREATE TABLE iceberg_no_loc (id INT)
       USING iceberg
       """
+
+  Scenario Outline: Round-trip primitive column types via DESCRIBE
+    Given final statement
+      """
+      DROP TABLE IF EXISTS rt_<col>_table
+      """
+    Given statement
+      """
+      CREATE TABLE rt_<col>_table (c <spark_type>)
+      USING parquet
+      LOCATION 's3://bucket/rt_<col>_table'
+      """
+    When query
+      """
+      DESCRIBE TABLE rt_<col>_table
+      """
+    Then query result row where "col_name" is "c" has "data_type" equal to "<expected>"
+
+    Examples:
+      | col       | spark_type | expected  |
+      | boolean   | BOOLEAN    | boolean   |
+      | tinyint   | TINYINT    | tinyint   |
+      | smallint  | SMALLINT   | smallint  |
+      | int       | INT        | int       |
+      | bigint    | BIGINT     | bigint    |
+      | float     | FLOAT      | float     |
+      | double    | DOUBLE     | double    |
+      | string    | STRING     | string    |
+      | binary    | BINARY     | binary    |
+      | date      | DATE       | date      |
+      | timestamp | TIMESTAMP  | timestamp |
+
+  Scenario: Decimal with precision and scale round-trips via DESCRIBE
+    Given statement
+      """
+      CREATE TABLE dec_types (
+        d_default DECIMAL,
+        d_small DECIMAL(10, 2),
+        d_large DECIMAL(38, 18)
+      )
+      USING parquet
+      LOCATION 's3://bucket/dec_types'
+      """
+    When query
+      """
+      DESCRIBE TABLE dec_types
+      """
+    Then query result row where "col_name" is "d_small" has "data_type" equal to "decimal(10,2)"
+    Then query result row where "col_name" is "d_large" has "data_type" equal to "decimal(38,18)"
+    Then query result row where "col_name" is "d_default" has "data_type" containing "decimal"
+
+  Scenario: Array of primitive round-trips via DESCRIBE
+    Given statement
+      """
+      CREATE TABLE arr_prim (ids ARRAY<INT>)
+      USING parquet
+      LOCATION 's3://bucket/arr_prim'
+      """
+    When query
+      """
+      DESCRIBE TABLE arr_prim
+      """
+    Then query result row where "col_name" is "ids" has "data_type" containing "array<int>"
+
+  Scenario: Nested array of array round-trips via DESCRIBE
+    Given statement
+      """
+      CREATE TABLE arr_nested (matrix ARRAY<ARRAY<STRING>>)
+      USING parquet
+      LOCATION 's3://bucket/arr_nested'
+      """
+    When query
+      """
+      DESCRIBE TABLE arr_nested
+      """
+    Then query result row where "col_name" is "matrix" has "data_type" containing "array<array<string>>"
+
+  Scenario: Struct with multiple fields round-trips via DESCRIBE
+    Given statement
+      """
+      CREATE TABLE struct_cols (person STRUCT<name: STRING, age: INT>)
+      USING parquet
+      LOCATION 's3://bucket/struct_cols'
+      """
+    When query
+      """
+      DESCRIBE TABLE struct_cols
+      """
+    Then query result row where "col_name" is "person" has "data_type" containing "struct<"
+    Then query result row where "col_name" is "person" has "data_type" containing "name:string"
+    Then query result row where "col_name" is "person" has "data_type" containing "age:int"
+
+  Scenario: Map with primitive key and value round-trips via DESCRIBE
+    Given statement
+      """
+      CREATE TABLE map_prim (props MAP<STRING, INT>)
+      USING parquet
+      LOCATION 's3://bucket/map_prim'
+      """
+    When query
+      """
+      DESCRIBE TABLE map_prim
+      """
+    Then query result row where "col_name" is "props" has "data_type" containing "map<string,int>"
+
+  Scenario: Map with array value round-trips via DESCRIBE
+    Given statement
+      """
+      CREATE TABLE map_of_array (tags MAP<STRING, ARRAY<INT>>)
+      USING parquet
+      LOCATION 's3://bucket/map_of_array'
+      """
+    When query
+      """
+      DESCRIBE TABLE map_of_array
+      """
+    Then query result row where "col_name" is "tags" has "data_type" containing "map<string,array<int>>"
+
+  Scenario: Deeply nested array of struct with inner list round-trips via DESCRIBE
+    Given statement
+      """
+      CREATE TABLE deep_nested (
+        items ARRAY<STRUCT<id: BIGINT, tags: ARRAY<STRING>>>
+      )
+      USING parquet
+      LOCATION 's3://bucket/deep_nested'
+      """
+    When query
+      """
+      DESCRIBE TABLE deep_nested
+      """
+    Then query result row where "col_name" is "items" has "data_type" containing "array<struct<"
+    Then query result row where "col_name" is "items" has "data_type" containing "id:bigint"
+    Then query result row where "col_name" is "items" has "data_type" containing "tags:array<string>"
+
+  Scenario: NOT NULL column constraint is preserved through Glue round-trip
+    Given statement
+      """
+      CREATE TABLE nn_table (
+        id BIGINT NOT NULL COMMENT 'required',
+        name STRING
+      )
+      USING parquet
+      LOCATION 's3://bucket/nn_table'
+      """
+    When query
+      """
+      DESCRIBE TABLE nn_table
+      """
+    Then query result row where "col_name" is "id" has "data_type" equal to "bigint"
+    Then query result row where "col_name" is "id" has "comment" equal to "required"
+    Then query result row where "col_name" is "name" has "data_type" equal to "string"
+
+  Scenario: Lowercase Spark type keywords are accepted
+    Given statement
+      """
+      CREATE TABLE lower_case_types (a int, b bigint, c string)
+      USING parquet
+      LOCATION 's3://bucket/lower_case_types'
+      """
+    When query
+      """
+      DESCRIBE TABLE lower_case_types
+      """
+    Then query result row where "col_name" is "a" has "data_type" equal to "int"
+    Then query result row where "col_name" is "b" has "data_type" equal to "bigint"
+    Then query result row where "col_name" is "c" has "data_type" equal to "string"
+
+  Scenario: SELECT from empty Glue-registered table returns no rows
+    Given statement
+      """
+      CREATE TABLE empty_select (id BIGINT, name STRING)
+      USING parquet
+      LOCATION 's3://bucket/empty_select'
+      """
+    When query
+      """
+      SELECT id, name FROM empty_select
+      """
+    Then query result
+      | id | name |

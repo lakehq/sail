@@ -132,15 +132,68 @@ Feature: Iceberg REST catalog view operations
       """
     When query
       """
-      SELECT * FROM iceberg_view_test.list_v1
+      SHOW VIEWS IN iceberg_view_test LIKE 'list_v1'
       """
     Then query result
-      | id |
-      | 1  |
+      | namespace         | viewName | isTemporary |
+      | iceberg_view_test | list_v1  | false       |
     When query
       """
-      SELECT * FROM iceberg_view_test.list_v2
+      SHOW VIEWS IN iceberg_view_test LIKE 'list_v2'
       """
     Then query result
-      | id |
-      | 2  |
+      | namespace         | viewName | isTemporary |
+      | iceberg_view_test | list_v2  | false       |
+
+  Scenario: SHOW VIEWS without filter lists created views
+    Given statement
+      """
+      CREATE VIEW iceberg_view_test.all_v1 AS SELECT 1 AS id
+      """
+    Given statement
+      """
+      CREATE VIEW iceberg_view_test.all_v2 AS SELECT 2 AS id
+      """
+    When query
+      """
+      SHOW VIEWS IN iceberg_view_test
+      """
+    Then query result has row where "viewName" is "all_v1"
+    Then query result has row where "viewName" is "all_v2"
+
+  Scenario: View with WHERE clause round-trips stored SQL definition
+    Given statement
+      """
+      CREATE TABLE iceberg_view_test.base_t (id INT, data STRING) USING iceberg
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_view_test.base_t VALUES (50, 'low'), (150, 'high'), (200, 'higher')
+      """
+    Given statement
+      """
+      CREATE VIEW iceberg_view_test.filter_view
+      AS SELECT id, data FROM iceberg_view_test.base_t WHERE id > 100
+      """
+    When query
+      """
+      SELECT id, data FROM iceberg_view_test.filter_view ORDER BY id
+      """
+    Then query result ordered
+      | id  | data   |
+      | 150 | high   |
+      | 200 | higher |
+
+  Scenario: DESCRIBE TABLE EXTENDED on a view reports view text and comment
+    Given statement
+      """
+      CREATE VIEW iceberg_view_test.ext_view
+      COMMENT 'view comment'
+      AS SELECT 1 AS id, 'hello' AS value
+      """
+    When query
+      """
+      DESCRIBE TABLE EXTENDED iceberg_view_test.ext_view
+      """
+    Then query result row where "col_name" is "Comment" has "data_type" equal to "view comment"
+    Then query result row where "col_name" is "View Text" has "data_type" containing "SELECT"

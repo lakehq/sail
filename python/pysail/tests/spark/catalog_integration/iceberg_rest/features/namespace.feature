@@ -259,3 +259,45 @@ Feature: Iceberg REST catalog namespace (database) operations
       DESCRIBE DATABASE nonexistent_describe_ns
       """
     Then query error .*
+
+  Scenario: DBPROPERTIES round-trip through DESCRIBE DATABASE EXTENDED
+    Given statement
+      """
+      CREATE DATABASE props_ns_iceberg
+      WITH DBPROPERTIES (owner = 'Lake', team = 'data-eng')
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS props_ns_iceberg
+      """
+    When query
+      """
+      DESCRIBE DATABASE EXTENDED props_ns_iceberg
+      """
+    Then query result row where "info_name" is "Namespace Name" has "info_value" equal to "props_ns_iceberg"
+    Then query result row where "info_name" is "Properties" has "info_value" containing "owner,Lake"
+    Then query result row where "info_name" is "Properties" has "info_value" containing "team,data-eng"
+
+  Scenario: SHOW DATABASES without filter lists created namespaces
+    Given statement
+      """
+      CREATE DATABASE IF NOT EXISTS all_ns_iceberg_a
+      """
+    Given statement
+      """
+      CREATE DATABASE IF NOT EXISTS all_ns_iceberg_b
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS all_ns_iceberg_a
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS all_ns_iceberg_b
+      """
+    When query
+      """
+      SHOW DATABASES
+      """
+    Then query result has row where "name" is "all_ns_iceberg_a"
+    Then query result has row where "name" is "all_ns_iceberg_b"

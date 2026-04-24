@@ -57,7 +57,7 @@ Feature: Glue catalog view operations
       """
     Then query error .*
 
-  Scenario: Describe existing view shows view type
+  Scenario: Query from an existing view returns its rows
     Given statement
       """
       CREATE VIEW test_view
@@ -73,7 +73,7 @@ Feature: Glue catalog view operations
       | id | value |
       | 1  | hello |
 
-  Scenario: Views and tables both appear in listings
+  Scenario: Views coexist with tables in the same database
     Given statement
       """
       CREATE VIEW view_alpha AS SELECT 1 AS id
@@ -99,7 +99,7 @@ Feature: Glue catalog view operations
       """
     Then query result
       | database     | tableName | isTemporary |
-      | view_test_db  | a_table   | false       |
+      | view_test_db | a_table   | false       |
 
   Scenario: Drop existing view removes it
     Given statement
@@ -132,14 +132,14 @@ Feature: Glue catalog view operations
       DROP VIEW IF EXISTS nonexistent_drop_view
       """
 
-  Scenario: Describe table returns table not view
+  Scenario: Describe table returns table schema not view schema
     Given statement
       """
       CREATE TABLE get_view_table (id INT) USING parquet LOCATION 's3://bucket/get_view_table'
       """
     Given statement
       """
-      CREATE VIEW get_view_target AS SELECT 1 AS id
+      CREATE VIEW get_view_target AS SELECT CAST(1 AS BIGINT) AS id
       """
     When query
       """

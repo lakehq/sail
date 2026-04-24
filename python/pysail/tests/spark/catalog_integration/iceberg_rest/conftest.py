@@ -52,7 +52,7 @@ def seaweedfs_container(
     config_path.write_text(s3_config)
 
     container = (
-        DockerContainer("chrislusf/seaweedfs:latest")
+        DockerContainer("chrislusf/seaweedfs:4.21")
         .with_command("server -s3 -s3.port=8333 -master.volumeSizeLimitMB=64 -s3.config=/etc/seaweedfs/s3_config.json")
         .with_volume_mapping(str(config_path), "/etc/seaweedfs/s3_config.json", "ro")
         .with_exposed_ports(8333)
