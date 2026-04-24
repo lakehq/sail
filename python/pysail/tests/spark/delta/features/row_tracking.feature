@@ -120,3 +120,34 @@ Feature: Delta Lake Row Tracking writer (baseRowId, defaultRowCommitVersion, row
         | add.baseRowId                | 0     |
         | add.defaultRowCommitVersion  | 2     |
         | domainMetadata.domain        | "delta.rowTracking" |
+
+  @sail-only
+  Rule: delta.enableRowTracking=true alone auto-activates features and materialized column names
+
+    Background:
+      Given variable location for temporary directory delta_rt_enable_only
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_rt_enable_only_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_rt_enable_only_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableRowTracking' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_rt_enable_only_test VALUES (1), (2), (3)
+        """
+
+    Scenario: Protocol and metadata are auto-upgraded; add stamps baseRowId
+      Then delta log commit 00000000000000000000.json in location contains action
+        | path                                                                                 | value               |
+        | metaData.configuration["delta.enableRowTracking"]                                    | "true"              |
+        | add.baseRowId                                                                        | 0                   |
+        | add.defaultRowCommitVersion                                                          | 0                   |
+        | domainMetadata.domain                                                                | "delta.rowTracking" |
+      Then delta log commit 00000000000000000000.json in location has rowTracking high-water-mark 2

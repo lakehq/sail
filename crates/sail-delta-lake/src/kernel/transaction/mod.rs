@@ -418,12 +418,8 @@ fn finalize_attempt_actions(
     Ok(finalized_actions)
 }
 
-/// When Row Tracking is active (supported & not suspended), stamp
-/// `defaultRowCommitVersion = version` on every `Add` that already has a `baseRowId`
-/// assigned by the writer but no commit version, and emit/merge a
-/// `domainMetadata(domain = "delta.rowTracking")` action with the new
-/// `rowIdHighWaterMark`. Per the Delta protocol, every add action in a commit on a
-/// row-tracking-enabled table MUST carry both fields.
+/// Stamp `defaultRowCommitVersion` on row-tracked `Add` actions and merge the
+/// `delta.rowTracking` domain metadata high-water-mark for this commit.
 fn stamp_row_tracking_actions(
     actions: &mut Vec<CommitAction>,
     read_snapshot: Option<&Arc<DeltaSnapshot>>,
@@ -601,9 +597,8 @@ fn validate_effective_commit_target(
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
 
-    // Row Tracking writer requirement: when the writer feature is supported and the
-    // table is not suspended, every Add action in the commit MUST carry baseRowId and
-    // defaultRowCommitVersion (Delta protocol, "Row IDs" section).
+    // Row Tracking: every Add in a commit on a supported, non-suspended table MUST
+    // carry baseRowId and defaultRowCommitVersion.
     let row_tracking_requested = table_property_enabled(&metadata, "delta.enableRowTracking")
         || table_property_enabled(&metadata, "delta.rowTrackingSuspended");
     if row_tracking_requested && !protocol_has_writer_feature(&protocol, &TableFeature::RowTracking)

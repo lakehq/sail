@@ -38,12 +38,14 @@ use crate::spec::{
     Add, ColumnCountStat, ColumnValueStat, DeltaError as DeltaTableError, StatValue, Stats,
 };
 
-/// Creates an [`Add`] log action struct with statistics.
+/// Build an [`Add`] log action with row-group-derived stats.
 ///
-/// When `row_tracking` is active (Enabled / SupportedOnly), this reserves a contiguous
-/// range of row ids `[baseRowId, baseRowId + num_records)` and stamps `baseRowId` on the
-/// add. `defaultRowCommitVersion` is left `None` here — it is filled in post-finalize by
-/// the transaction layer once the commit version is known.
+/// Reserves `[baseRowId, baseRowId + num_records)` when row tracking is active.
+/// `defaultRowCommitVersion` is stamped post-commit by `finalize_attempt_actions`.
+//
+// TODO(row-tracking-preserve): UPDATE/MERGE rewrites currently re-stamp baseRowId,
+// which breaks row-id stability across rewrites. Preserve per-row row_ids via the
+// PreservedRowTrackingTag or row-by-row propagation once the rewriter is available.
 pub fn create_add(
     partition_values: &IndexMap<String, ScalarValue>,
     path: String,
@@ -91,12 +93,8 @@ pub fn create_add(
         data_change: true,
         stats: Some(stats_string),
         tags: None,
-        // Writer features not yet exercised by this writer keep these fields `None`, which
-        // is spec-compliant when the corresponding feature is not used.
         deletion_vector: None,
         base_row_id,
-        // defaultRowCommitVersion is stamped post-commit by `finalize_attempt_actions`
-        // once the version number is known.
         default_row_commit_version: None,
         clustering_provider: None,
         commit_version: None,

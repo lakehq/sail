@@ -421,7 +421,7 @@ impl TableFormat for DeltaTableFormat {
         // Derive the desired protocol from the new configuration and merge it with the
         // existing protocol. We only ever upgrade: features already present on the table
         // are preserved, and new feature requirements are added.
-        let new_config = new_metadata.configuration().clone();
+        let mut new_config = new_metadata.configuration().clone();
         let desired_protocol = protocol_for_create(
             false,
             false,
@@ -430,6 +430,17 @@ impl TableFormat for DeltaTableFormat {
             &new_config,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let existing_config = snapshot.metadata().configuration();
+        crate::schema::ensure_row_tracking_materialized_column_names(
+            &mut new_config,
+            Some(existing_config),
+        );
+        for (key, value) in &new_config {
+            if new_metadata.configuration().get(key) != Some(value) {
+                new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+            }
+        }
 
         let existing_protocol = snapshot.protocol();
         let (merged_protocol, protocol_upgraded) =

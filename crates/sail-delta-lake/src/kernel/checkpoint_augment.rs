@@ -1,12 +1,5 @@
-// Post-processing for checkpoint Arrow batches that augments the `add`
-// struct column with optional `stats_parsed` and `partitionValues_parsed`
-// substructs when the table property `delta.checkpoint.writeStatsAsStruct`
-// is enabled, and/or removes the `stats` JSON column when
-// `delta.checkpoint.writeStatsAsJson` is disabled.
-//
-// The Delta protocol requires `partitionValues_parsed` to be present when
-// the table is partitioned and `writeStatsAsStruct=true`; for unpartitioned
-// tables the column is omitted.
+// Augments checkpoint Arrow batches with struct-typed `stats_parsed` /
+// `partitionValues_parsed` columns when enabled by table properties.
 
 use std::sync::Arc;
 

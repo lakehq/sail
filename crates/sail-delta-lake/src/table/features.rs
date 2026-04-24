@@ -48,8 +48,7 @@ impl EnabledRowTrackingToken {
         id
     }
 
-    /// Reserve `num_records` contiguous row ids for a single file write, returning the
-    /// `baseRowId`. Each file covers the range `[base_row_id, base_row_id + num_records)`.
+    /// Reserve a contiguous `[base, base + num_records)` row-id range.
     pub fn reserve_row_ids(&mut self, num_records: i64) -> i64 {
         let base = self.next_row_id;
         self.next_row_id = self.next_row_id.saturating_add(num_records.max(0));
@@ -70,8 +69,7 @@ impl SupportedRowTrackingToken {
         id
     }
 
-    /// Reserve `num_records` contiguous row ids for a single file write, returning the
-    /// `baseRowId`.
+    /// Reserve a contiguous `[base, base + num_records)` row-id range.
     pub fn reserve_row_ids(&mut self, num_records: i64) -> i64 {
         let base = self.next_row_id;
         self.next_row_id = self.next_row_id.saturating_add(num_records.max(0));
@@ -80,9 +78,7 @@ impl SupportedRowTrackingToken {
 }
 
 impl RowTrackingToken {
-    /// Reserve `num_records` contiguous row ids when row tracking is active and not
-    /// suspended. Returns `None` when the feature is unsupported or suspended, signalling
-    /// the writer should emit `baseRowId = None`.
+    /// Reserve a row-id range, or return `None` when the feature is unsupported or suspended.
     pub fn reserve_row_ids(&mut self, num_records: i64) -> Option<i64> {
         match self {
             RowTrackingToken::Enabled(t) => Some(t.reserve_row_ids(num_records)),
@@ -91,8 +87,7 @@ impl RowTrackingToken {
         }
     }
 
-    /// Returns `true` when writers must stamp baseRowId / defaultRowCommitVersion on
-    /// every add (per Delta protocol).
+    /// Whether writers must stamp baseRowId / defaultRowCommitVersion on every add.
     pub fn is_active(&self) -> bool {
         matches!(
             self,
@@ -100,7 +95,7 @@ impl RowTrackingToken {
         )
     }
 
-    /// Current high-water-mark (= next_row_id - 1) if row tracking is active.
+    /// Current high-water-mark (= next_row_id - 1) when row tracking is active.
     pub fn high_water_mark(&self) -> Option<i64> {
         match self {
             RowTrackingToken::Enabled(t) => Some(t.next_row_id.saturating_sub(1)),

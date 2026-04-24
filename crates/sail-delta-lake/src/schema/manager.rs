@@ -148,6 +148,23 @@ pub fn protocol_for_create(
         }
     }
 
+    // `delta.enableRowTracking = "true"` (or `delta.rowTrackingSuspended = "true"`)
+    // implicitly requires the RowTracking + DomainMetadata writer features.
+    let row_tracking_requested = configuration
+        .get("delta.enableRowTracking")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+        || configuration
+            .get("delta.rowTrackingSuspended")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    if row_tracking_requested {
+        if !writer_features.contains(&TableFeature::RowTracking) {
+            writer_features.push(TableFeature::RowTracking);
+        }
+        if !writer_features.contains(&TableFeature::DomainMetadata) {
+            writer_features.push(TableFeature::DomainMetadata);
+        }
+    }
+
     // `delta.checkpointPolicy = "v2"` implicitly activates V2Checkpoint
     if configuration
         .get("delta.checkpointPolicy")
@@ -176,11 +193,48 @@ pub fn protocol_for_create(
     ))
 }
 
+/// Auto-assign Row Tracking materialized column names when `delta.enableRowTracking = true`.
+///
+/// Delta protocol requires `delta.rowTracking.materializedRowIdColumnName` and
+/// `delta.rowTracking.materializedRowCommitVersionColumnName` to be set in the metadata
+/// configuration whenever Row Tracking is enabled. Existing values are preserved
+/// (e.g. carried over on ALTER TABLE) to keep parquet on-disk column names stable.
+pub fn ensure_row_tracking_materialized_column_names(
+    configuration: &mut HashMap<String, String>,
+    existing: Option<&HashMap<String, String>>,
+) {
+    let enabled = configuration
+        .get("delta.enableRowTracking")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    if !enabled {
+        return;
+    }
+    for (key, prefix) in [
+        (
+            "delta.rowTracking.materializedRowIdColumnName",
+            "_row-id-col-",
+        ),
+        (
+            "delta.rowTracking.materializedRowCommitVersionColumnName",
+            "_row-commit-version-col-",
+        ),
+    ] {
+        if configuration.get(key).map(|v| v.is_empty()).unwrap_or(true) {
+            let value = existing
+                .and_then(|cfg| cfg.get(key))
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("{prefix}{}", uuid::Uuid::new_v4()));
+            configuration.insert(key.to_string(), value);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use super::protocol_for_create;
+    use super::{ensure_row_tracking_materialized_column_names, protocol_for_create};
     use crate::spec::{DeltaResult, TableFeature};
 
     #[test]
@@ -319,5 +373,76 @@ mod tests {
         assert!(!protocol.has_reader_feature(&TableFeature::DeletionVectors));
         assert!(!protocol.has_writer_feature(&TableFeature::DeletionVectors));
         Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_activates_row_tracking_from_enable_row_tracking() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert("delta.enableRowTracking".to_string(), "true".to_string());
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        assert!(protocol.has_writer_feature(&TableFeature::RowTracking));
+        assert!(protocol.has_writer_feature(&TableFeature::DomainMetadata));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_activates_row_tracking_from_suspended_flag() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert("delta.rowTrackingSuspended".to_string(), "true".to_string());
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        assert!(protocol.has_writer_feature(&TableFeature::RowTracking));
+        assert!(protocol.has_writer_feature(&TableFeature::DomainMetadata));
+        Ok(())
+    }
+
+    #[test]
+    fn ensure_materialized_column_names_noop_without_enable() {
+        let mut cfg = HashMap::new();
+        ensure_row_tracking_materialized_column_names(&mut cfg, None);
+        assert!(cfg.is_empty());
+    }
+
+    #[test]
+    fn ensure_materialized_column_names_generates_when_missing() {
+        let mut cfg = HashMap::new();
+        cfg.insert("delta.enableRowTracking".to_string(), "true".to_string());
+        ensure_row_tracking_materialized_column_names(&mut cfg, None);
+        let id = cfg
+            .get("delta.rowTracking.materializedRowIdColumnName")
+            .cloned()
+            .unwrap_or_default();
+        let cv = cfg
+            .get("delta.rowTracking.materializedRowCommitVersionColumnName")
+            .cloned()
+            .unwrap_or_default();
+        assert!(id.starts_with("_row-id-col-"));
+        assert!(cv.starts_with("_row-commit-version-col-"));
+        assert_ne!(id, cv);
+    }
+
+    #[test]
+    fn ensure_materialized_column_names_preserves_existing() {
+        let mut cfg = HashMap::new();
+        cfg.insert("delta.enableRowTracking".to_string(), "true".to_string());
+        let mut existing = HashMap::new();
+        existing.insert(
+            "delta.rowTracking.materializedRowIdColumnName".to_string(),
+            "_row-id-col-kept".to_string(),
+        );
+        existing.insert(
+            "delta.rowTracking.materializedRowCommitVersionColumnName".to_string(),
+            "_row-commit-version-col-kept".to_string(),
+        );
+        ensure_row_tracking_materialized_column_names(&mut cfg, Some(&existing));
+        assert_eq!(
+            cfg.get("delta.rowTracking.materializedRowIdColumnName")
+                .map(String::as_str),
+            Some("_row-id-col-kept")
+        );
+        assert_eq!(
+            cfg.get("delta.rowTracking.materializedRowCommitVersionColumnName")
+                .map(String::as_str),
+            Some("_row-commit-version-col-kept")
+        );
     }
 }

@@ -500,6 +500,10 @@ impl DeltaWriterExec {
                     &configuration,
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                crate::schema::ensure_row_tracking_materialized_column_names(
+                    &mut configuration,
+                    None,
+                );
                 let metadata = metadata_for_create_with_struct_type(
                     metadata_schema,
                     partition_columns.clone(),
@@ -619,14 +623,17 @@ impl DeltaWriterExec {
                     .get_row_tracking_state()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
             } else {
-                // New-table path (CREATE or CTAS): derive the row tracking state from
-                // the target table configuration so the first commit's Add actions are
-                // stamped when the table is being created with rowTracking already in
-                // writerFeatures. `next_row_id` starts at 0 for a new table.
+                // New-table CREATE/CTAS: derive row-tracking state from config (next_row_id = 0).
                 let cfg = &metadata_configuration;
                 let rt_supported = cfg
                     .get("delta.feature.rowTracking")
-                    .is_some_and(|v| !v.is_empty());
+                    .is_some_and(|v| !v.is_empty())
+                    || cfg
+                        .get("delta.enableRowTracking")
+                        .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+                    || cfg
+                        .get("delta.rowTrackingSuspended")
+                        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
                 let rt_suspended = cfg
                     .get("delta.rowTrackingSuspended")
                     .is_some_and(|v| v.eq_ignore_ascii_case("true"));

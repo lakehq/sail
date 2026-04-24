@@ -136,10 +136,8 @@ pub struct DeltaWriter {
     current_writer: Option<PartitionWriter>,
     /// Actions produced by completed partition writers
     completed_actions: Vec<Add>,
-    /// Row tracking allocator. When active, every flushed file reserves a contiguous
-    /// range of row ids via [`RowTrackingToken::reserve_row_ids`] and stamps `baseRowId`
-    /// on the produced add action. `defaultRowCommitVersion` is set later by the commit
-    /// layer when the commit version is known.
+    /// Row tracking allocator. Each flushed file reserves a contiguous range via
+    /// [`RowTrackingToken::reserve_row_ids`] when row tracking is active.
     row_tracking: crate::table::features::RowTrackingToken,
     /// Partition keys that have been closed (debug-only contract enforcement)
     #[cfg(debug_assertions)]
@@ -175,9 +173,7 @@ impl DeltaWriter {
         }
     }
 
-    /// Returns the row tracking high-water-mark to publish as a
-    /// `domainMetadata(delta.rowTracking)` action after the write completes. `None` when
-    /// row tracking is not active on this table.
+    /// Final row-id high-water-mark, or `None` when row tracking is inactive.
     pub fn row_tracking_high_water_mark(&self) -> Option<i64> {
         self.row_tracking.high_water_mark()
     }
