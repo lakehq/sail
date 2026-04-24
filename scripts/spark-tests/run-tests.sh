@@ -58,22 +58,48 @@ export COLUMNS="120"
 # Make the plugins available on `PYTHONPATH`.
 export PYTHONPATH="${project_path}/scripts/spark-tests"
 
+pytest_test_timeout="${PYTEST_TEST_TIMEOUT:-120}"
+pytest_overall_timeout="${PYTEST_OVERALL_TIMEOUT:-540}"
+
 function run_pytest() {
   name="$1"
   args=("${@:2}")
 
   echo "Test suite: ${name}"
-  # We ignore the pytext exit code so that the command can complete successfully.
-  pytest \
+
+  local timeout_cmd=()
+  if [ "${pytest_overall_timeout}" != "0" ]; then
+    local timeout_bin
+    if command -v timeout > /dev/null 2>&1; then
+      timeout_bin="timeout"
+    elif command -v gtimeout > /dev/null 2>&1; then
+      timeout_bin="gtimeout"
+    else
+      timeout_bin=""
+    fi
+    if [ -n "${timeout_bin}" ]; then
+      timeout_cmd=("${timeout_bin}" --preserve-status --kill-after=30 --signal=TERM "${pytest_overall_timeout}")
+    else
+      echo "Warning: neither 'timeout' nor 'gtimeout' is available; skipping overall pytest timeout wrapper."
+    fi
+  fi
+
+  # We ignore the pytest exit code so that the command can complete successfully.
+  # Note: `${timeout_cmd[@]+...}` is the bash-safe way to expand a possibly-empty
+  # array under `set -u`.
+  ${timeout_cmd[@]+"${timeout_cmd[@]}"} \
+    pytest \
     "${plugin_args[@]}" \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL NUMBER" \
     -o "faulthandler_timeout=30" \
+    --timeout="${pytest_test_timeout}" \
+    --timeout-method=thread \
     --basetemp="${pytest_tmp_dir}" \
     --disable-warnings \
     --strict-markers \
     --report-log="${logs_dir}/${name}.jsonl" \
     "${args[@]}" \
-    | tee "${logs_dir}/${name}.log" || true
+    2>&1 | tee "${logs_dir}/${name}.log" || true
 
   # Failed tests are acceptable, but we return a non-zero exit code when there are errors,
   # which indicate issues with the test setup.

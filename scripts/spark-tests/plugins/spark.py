@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
+import faulthandler
 import importlib
 import os
 import re
 import shlex
 import shutil
+import signal
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +21,16 @@ import pytest
 
 def _is_spark_testing():
     return os.environ.get("SPARK_TESTING") == "1"
+
+
+def _install_sigterm_traceback_dumper():
+    if not hasattr(faulthandler, "register"):
+        # Not available on this platform (e.g. Windows).
+        return
+    with contextlib.suppress(RuntimeError, ValueError):
+        faulthandler.enable()
+    with contextlib.suppress(RuntimeError, ValueError):
+        faulthandler.register(signal.SIGTERM, file=sys.__stderr__, all_threads=True, chain=True)
 
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
@@ -492,5 +506,6 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
 
 
 def pytest_sessionstart(session: pytest.Session):  # noqa: ARG001
+    _install_sigterm_traceback_dumper()
     if _is_spark_testing():
         patch_pyspark_doctest_output_checker()
