@@ -20,6 +20,23 @@ To work around this issue, you can run the following command on the host:
 sudo timedatectl set-timezone UTC
 ```
 
+## Local Time Zone Configuration
+
+Sail uses the system local time zone when evaluating expressions that depend on the local time zone, such as converting timestamps.
+On Linux and macOS, you can change the local time zone at runtime by setting the `TZ` environment variable in Python and calling [`time.tzset()`](https://docs.python.org/3/library/time.html#time.tzset):
+
+```python
+import os
+import time
+
+os.environ["TZ"] = "America/New_York"
+time.tzset()
+```
+
+On Windows, `time.tzset()` is not available, so the local time zone cannot be changed at runtime from Python.
+However, you can still configure the local time zone by setting the `TZ` environment variable at the OS level _before_ starting Python.
+Note that the `TZ` environment variable may also affect other programs using the system time zone, so be mindful of any unintended side effects.
+
 ## Protobuf Version Mismatch
 
 When you run PySpark 4.0 in Spark Connect mode, you may see a lot of warnings like this:
