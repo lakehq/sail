@@ -23,7 +23,6 @@ async fn test_failover_from_dead_primary_endpoint() {
         "hms_failover".to_string(),
         HmsCatalogConfig {
             uris: vec!["127.0.0.1:1".to_string(), format!("{host}:{port}")],
-            warehouse: None,
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,

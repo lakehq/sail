@@ -2,6 +2,11 @@ use std::io;
 use std::time::Duration;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
+
+/// Maximum allowed SASL frame size (16 MB).
+/// Matches the negotiated max buffer from the SASL security layer exchange
+/// (`0x00FF_FFFF` cap in `select_security_layer`).
+const MAX_SASL_FRAME_SIZE: usize = 0x00FF_FFFF;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, Ready};
 use tokio::net::tcp;
 use volo::net::conn::{OwnedReadHalf, OwnedWriteHalf};
@@ -182,6 +187,14 @@ impl AsyncRead for SaslReadHalf {
                                     eprintln!(
                                         "kerberos thrift sasl data read frame_len={frame_len}"
                                     );
+                                }
+                                if frame_len > MAX_SASL_FRAME_SIZE {
+                                    return std::task::Poll::Ready(Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!(
+                                            "SASL frame too large: {frame_len} bytes (max {MAX_SASL_FRAME_SIZE})"
+                                        ),
+                                    )));
                                 }
                                 self.state = ReadState::Frame {
                                     buf: vec![0; frame_len],

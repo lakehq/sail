@@ -23,6 +23,8 @@ pub(crate) const SPARK_DATASOURCE_PROVIDER_KEY: &str = "spark.sql.sources.provid
 pub(crate) const MANAGED_TABLE_TYPE: &str = "MANAGED_TABLE";
 pub(crate) const EXTERNAL_TABLE_TYPE: &str = "EXTERNAL_TABLE";
 pub(crate) const VIRTUAL_VIEW_TYPE: &str = "VIRTUAL_VIEW";
+/// Placeholder owner matching Spark/Hive convention for unauthenticated contexts.
+/// Used as a literal owner name when no authenticated principal is available.
 pub(crate) const DEFAULT_OWNER: &str = "user.name";
 
 pub(crate) struct GenericTableFormat<'a> {
@@ -437,6 +439,7 @@ fn view_column_to_field_schema(column: CreateViewColumnOptions) -> CatalogResult
 }
 
 fn current_time_secs() -> CatalogResult<i32> {
+    // HMS Thrift uses i32 timestamps (same 2038 limitation as the HMS protocol itself).
     Utc::now().timestamp().try_into().map_err(|_| {
         CatalogError::Internal("Current time is out of range for HMS i32 timestamps".to_string())
     })

@@ -7001,6 +7001,7 @@ dependencies = [
  "bitflags",
  "chrono",
  "datafusion",
+ "futures",
  "hive_metastore",
  "libloading 0.8.9",
  "pilota",

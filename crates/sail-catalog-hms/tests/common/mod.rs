@@ -154,7 +154,6 @@ pub async fn setup_hms_catalog(test_name: &str) -> HmsTestContext {
         test_name.to_string(),
         HmsCatalogConfig {
             uris: vec![format!("{host}:{port}")],
-            warehouse: None,
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,
@@ -341,7 +340,6 @@ async fn setup_kerberos_hms_catalog_inner(
         test_name.to_string(),
         HmsCatalogConfig {
             uris: vec![format!("{canonical_host}:{hms_port}")],
-            warehouse: None,
             thrift_transport: None,
             auth: Some("kerberos".to_string()),
             kerberos_service_principal: Some(service_principal),

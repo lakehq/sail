@@ -11,6 +11,9 @@ pub fn arrow_to_hive_type(data_type: &DataType) -> CatalogResult<String> {
         DataType::Int16 => Ok("smallint".to_string()),
         DataType::Int32 => Ok("int".to_string()),
         DataType::Int64 => Ok("bigint".to_string()),
+        // Note: Hive has no unsigned integer types. Unsigned Arrow types map to
+        // the equivalent signed Hive type. Values exceeding the signed range will
+        // be misinterpreted (lossy but intentional mapping).
         DataType::UInt8 => Ok("tinyint".to_string()),
         DataType::UInt16 => Ok("smallint".to_string()),
         DataType::UInt32 => Ok("int".to_string()),

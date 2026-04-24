@@ -22,6 +22,8 @@ mod bindings {
     )]
     include!("./gssapi_bindings.rs");
 
+    // SAFETY: Function pointers from libloading::Library are stateless (pure FFI calls).
+    // gss_OID globals are immutable once loaded through `LazyLock<Option<GSSAPI>>`.
     unsafe impl Send for GSSAPI {}
     unsafe impl Sync for GSSAPI {}
 }
@@ -218,6 +220,9 @@ impl GssBuf<'_> {
     fn release(&mut self) {
         if !self.0.value.is_null() {
             let mut minor = bindings::GSS_S_COMPLETE;
+            // SAFETY: Error is intentionally swallowed because:
+            // (a) libgssapi() cannot fail with LazyLock, and
+            // (b) the null/length reset below prevents double-free regardless.
             let _ =
                 unsafe { libgssapi().map(|gss| gss.gss_release_buffer(&mut minor, &mut self.0)) };
             self.0.value = ptr::null_mut();
@@ -303,6 +308,9 @@ struct GssClientContext {
     flags: u32,
 }
 
+// SAFETY: GssClientContext is only accessed through `&mut self` methods.
+// At the provider level, the context is wrapped in `Arc<Mutex<...>>` via
+// `GssapiFrameProtector`, ensuring exclusive access across threads.
 unsafe impl Send for GssClientContext {}
 unsafe impl Sync for GssClientContext {}
 

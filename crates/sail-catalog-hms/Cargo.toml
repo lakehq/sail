@@ -16,6 +16,7 @@ async-trait = { workspace = true }
 bitflags = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true }
+futures = { workspace = true }
 hive_metastore = { workspace = true }
 libloading = { workspace = true }
 pilota = { workspace = true }

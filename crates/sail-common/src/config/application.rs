@@ -496,7 +496,6 @@ pub enum CatalogType {
     HiveMetastore {
         name: String,
         uris: Vec<String>,
-        warehouse: Option<String>,
         thrift_transport: Option<String>,
         auth: Option<String>,
         kerberos_service_principal: Option<String>,

@@ -9,7 +9,6 @@ fn test_deserialize_hive_metastore_catalog_type() {
             "type": "hive_metastore",
             "name": "hms",
             "uris": ["127.0.0.1:9083"],
-            "warehouse": "s3://warehouse",
             "thrift_transport": "framed",
             "auth": "kerberos",
             "kerberos_service_principal": "hive-metastore/_HOST@EXAMPLE.COM",
@@ -23,7 +22,6 @@ fn test_deserialize_hive_metastore_catalog_type() {
         CatalogType::HiveMetastore {
             name,
             uris,
-            warehouse,
             thrift_transport,
             auth,
             kerberos_service_principal,
@@ -32,7 +30,6 @@ fn test_deserialize_hive_metastore_catalog_type() {
         } => {
             assert_eq!(name, "hms");
             assert_eq!(uris, vec!["127.0.0.1:9083"]);
-            assert_eq!(warehouse.as_deref(), Some("s3://warehouse"));
             assert_eq!(thrift_transport.as_deref(), Some("framed"));
             assert_eq!(auth.as_deref(), Some("kerberos"));
             assert_eq!(

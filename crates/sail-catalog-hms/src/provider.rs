@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use futures::future::try_join_all;
 use hive_metastore::{
     EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
     ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
@@ -31,7 +32,6 @@ use crate::security::{KerberosMakeTransport, SaslQop};
 #[derive(Debug, Clone, Default)]
 pub struct HmsCatalogConfig {
     pub uris: Vec<String>,
-    pub warehouse: Option<String>,
     pub thrift_transport: Option<String>,
     pub auth: Option<String>,
     pub kerberos_service_principal: Option<String>,
@@ -800,14 +800,16 @@ impl CatalogProvider for HmsCatalogProvider {
             }
         };
 
-        let mut result = Vec::new();
-        for database_name in databases {
-            let database_name = database_name.to_string();
-            let database = self
-                .get_database(&Namespace::try_from(vec![database_name])?)
-                .await?;
-            result.push(database);
-        }
+        // HMS has no batch database fetch API (unlike get_table_objects_by_name for tables),
+        // so we must call get_database() individually. Fetch concurrently to avoid
+        // serial N+1 latency — the tokio::sync::Mutex in with_failover is held only
+        // briefly to clone the client, never across .await points.
+        let namespaces: Vec<Namespace> = databases
+            .into_iter()
+            .map(|name| Namespace::try_from(vec![name.to_string()]))
+            .collect::<CatalogResult<Vec<_>>>()?;
+        let fetches: Vec<_> = namespaces.iter().map(|ns| self.get_database(ns)).collect();
+        let result = try_join_all(fetches).await?;
         Ok(result)
     }
 
@@ -1166,7 +1168,6 @@ mod tests {
             "hms".to_string(),
             HmsCatalogConfig {
                 uris: vec!["127.0.0.1:9083".to_string()],
-                warehouse: None,
                 thrift_transport: None,
                 auth: None,
                 kerberos_service_principal: None,
@@ -1237,7 +1238,6 @@ mod tests {
         let auth_mode = super::catalog_auth_mode(
             &HmsCatalogConfig {
                 uris: vec!["127.0.0.1:9083".to_string()],
-                warehouse: None,
                 thrift_transport: None,
                 auth: None,
                 kerberos_service_principal: None,
@@ -1276,7 +1276,6 @@ mod tests {
         let error = super::catalog_auth_mode(
             &HmsCatalogConfig {
                 uris: vec!["127.0.0.1:9083".to_string()],
-                warehouse: None,
                 thrift_transport: None,
                 auth: Some("kerberos".to_string()),
                 kerberos_service_principal: None,
@@ -1296,7 +1295,6 @@ mod tests {
         let error = super::catalog_auth_mode(
             &HmsCatalogConfig {
                 uris: vec!["127.0.0.1:9083".to_string()],
-                warehouse: None,
                 thrift_transport: None,
                 auth: Some("ldap".to_string()),
                 kerberos_service_principal: None,
@@ -1315,7 +1313,6 @@ mod tests {
     fn test_default_min_sasl_qop_is_auth() {
         let qop_min = super::parse_min_sasl_qop(&HmsCatalogConfig {
             uris: vec!["127.0.0.1:9083".to_string()],
-            warehouse: None,
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,
@@ -1331,7 +1328,6 @@ mod tests {
     fn test_invalid_min_sasl_qop_is_rejected() {
         let error = super::parse_min_sasl_qop(&HmsCatalogConfig {
             uris: vec!["127.0.0.1:9083".to_string()],
-            warehouse: None,
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,
@@ -1380,7 +1376,6 @@ mod tests {
                 "hms1.internal:9083".to_string(),
                 "hms2.internal:9083".to_string(),
             ],
-            warehouse: None,
             thrift_transport: None,
             auth: Some("kerberos".to_string()),
             kerberos_service_principal: Some("hive-metastore/_HOST@EXAMPLE.COM".to_string()),
@@ -1424,7 +1419,6 @@ mod tests {
     fn test_default_connect_timeout_is_five_seconds() {
         let timeout = super::connect_timeout(&HmsCatalogConfig {
             uris: vec!["127.0.0.1:9083".to_string()],
-            warehouse: None,
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,
@@ -1439,7 +1433,6 @@ mod tests {
     fn test_custom_connect_timeout_is_applied() {
         let timeout = super::connect_timeout(&HmsCatalogConfig {
             uris: vec!["127.0.0.1:9083".to_string()],
-            warehouse: None,
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,

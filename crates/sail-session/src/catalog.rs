@@ -147,7 +147,6 @@ pub fn create_catalog_manager(
                 CatalogType::HiveMetastore {
                     name,
                     uris,
-                    warehouse,
                     thrift_transport,
                     auth,
                     kerberos_service_principal,
@@ -156,7 +155,6 @@ pub fn create_catalog_manager(
                 } => {
                     let config = HmsCatalogConfig {
                         uris: uris.clone(),
-                        warehouse: warehouse.clone(),
                         thrift_transport: thrift_transport.clone(),
                         auth: auth.clone(),
                         kerberos_service_principal: kerberos_service_principal.clone(),
