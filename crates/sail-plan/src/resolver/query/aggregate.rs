@@ -280,6 +280,7 @@ impl PlanResolver<'_> {
         if let Some(udf_name) = pyspark_agg_name {
             if has_regular_agg {
                 return Err(PlanError::AnalysisError(format!(
+                    // Spark tests expect this error message. Typo is intended.
                     "The group aggregate pandas UDF `{udf_name}` cannot be invoked \
                      together with as other, non-pandas aggregate functions."
                 )));
