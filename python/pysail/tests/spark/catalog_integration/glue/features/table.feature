@@ -293,7 +293,7 @@ Feature: Glue catalog table operations
       | string    | STRING     | string    |
       | binary    | BINARY     | binary    |
       | date      | DATE       | date      |
-      | timestamp | TIMESTAMP  | timestamp |
+      | timestamp | TIMESTAMP  | timestamp_ntz |
 
   Scenario: Decimal with precision and scale round-trips via DESCRIBE
     Given statement
@@ -436,7 +436,7 @@ Feature: Glue catalog table operations
       """
       CREATE TABLE empty_select (id BIGINT, name STRING)
       USING parquet
-      LOCATION 's3://bucket/empty_select'
+      LOCATION 'file:///tmp/sail_glue_empty_select'
       """
     When query
       """

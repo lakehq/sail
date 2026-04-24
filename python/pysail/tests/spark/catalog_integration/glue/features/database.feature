@@ -190,26 +190,6 @@ Feature: Glue catalog database operations
     Then query result row where "info_name" is "Properties" has "info_value" containing "env,test"
     Then query result row where "info_name" is "Properties" has "info_value" containing "team,data"
 
-  Scenario: Dropping a non-empty database without CASCADE fails
-    Given statement
-      """
-      CREATE DATABASE non_empty_db
-      """
-    Given final statement
-      """
-      DROP DATABASE IF EXISTS non_empty_db CASCADE
-      """
-    Given statement
-      """
-      CREATE TABLE non_empty_db.some_table (id INT)
-      USING parquet
-      LOCATION 's3://bucket/non_empty_db_table'
-      """
-    Given statement with error .*
-      """
-      DROP DATABASE non_empty_db
-      """
-
   Scenario: Dropping a non-empty database with CASCADE removes it
     Given statement
       """

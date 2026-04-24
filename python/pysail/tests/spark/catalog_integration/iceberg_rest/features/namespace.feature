@@ -301,3 +301,72 @@ Feature: Iceberg REST catalog namespace (database) operations
       """
     Then query result has row where "name" is "all_ns_iceberg_a"
     Then query result has row where "name" is "all_ns_iceberg_b"
+
+  Scenario: Create a child namespace under a parent
+    Given statement
+      """
+      CREATE DATABASE multi_parent_ns
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS multi_parent_ns CASCADE
+      """
+    Given statement
+      """
+      CREATE DATABASE multi_parent_ns.child_a
+      """
+    When query
+      """
+      DESCRIBE DATABASE multi_parent_ns.child_a
+      """
+    Then query result row where "info_name" is "Namespace Name" has "info_value" equal to "multi_parent_ns.child_a"
+
+  Scenario: Describe a multi-level namespace
+    Given statement
+      """
+      CREATE DATABASE multi_desc_ns
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS multi_desc_ns CASCADE
+      """
+    Given statement
+      """
+      CREATE DATABASE multi_desc_ns.leaf
+      WITH DBPROPERTIES (owner = 'Lake')
+      """
+    When query
+      """
+      DESCRIBE DATABASE EXTENDED multi_desc_ns.leaf
+      """
+    Then query result row where "info_name" is "Namespace Name" has "info_value" equal to "multi_desc_ns.leaf"
+    Then query result row where "info_name" is "Properties" has "info_value" containing "owner,Lake"
+
+  Scenario: Drop a child namespace without affecting the parent
+    Given statement
+      """
+      CREATE DATABASE multi_drop_ns
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS multi_drop_ns CASCADE
+      """
+    Given statement
+      """
+      CREATE DATABASE multi_drop_ns.temp
+      """
+    Given statement
+      """
+      DROP DATABASE multi_drop_ns.temp
+      """
+    When query
+      """
+      SHOW DATABASES LIKE 'multi_drop_ns'
+      """
+    Then query result has row where "name" is "multi_drop_ns"
+    When query
+      """
+      SHOW DATABASES LIKE 'multi_drop_ns.%'
+      """
+    Then query result
+      | name | catalog | description | locationUri |
