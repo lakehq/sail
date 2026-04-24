@@ -72,7 +72,8 @@ impl ScalarUDFImpl for SparkConcatWs {
                     Ok(DataType::List(field.clone()))
                 }
                 DataType::LargeListView(field) => Ok(DataType::LargeList(field.clone())),
-                other => Ok(other.clone()),
+                //Attempt to coerce other types to Utf8.
+                _other => Ok(DataType::Utf8),
             })
             .collect()
     }
