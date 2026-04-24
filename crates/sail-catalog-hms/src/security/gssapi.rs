@@ -90,7 +90,7 @@ impl SaslQop {
             "auth_int" | "auth-int" => Ok(Self::AuthInt),
             "auth_conf" | "auth-conf" => Ok(Self::AuthConf),
             other => Err(CatalogError::InvalidArgument(format!(
-                "Unsupported HMS sasl_qop_min '{other}', expected 'auth', 'auth_int', or 'auth_conf'"
+                "Unsupported HMS min_sasl_qop '{other}', expected 'auth', 'auth_int', or 'auth_conf'"
             ))),
         }
     }
@@ -488,7 +488,7 @@ fn select_security_layer(
                 SecurityLayer::Confidentiality
             } else {
                 return Err(CatalogError::NotSupported(
-                    "Kerberos-secured HMS cannot satisfy `sasl_qop_min = auth_conf` because the server did not advertise auth-conf"
+                    "Kerberos-secured HMS cannot satisfy `min_sasl_qop = auth_conf` because the server did not advertise auth-conf"
                         .to_string(),
                 ));
             }
@@ -500,7 +500,7 @@ fn select_security_layer(
                 SecurityLayer::Integrity
             } else {
                 return Err(CatalogError::NotSupported(
-                    "Kerberos-secured HMS cannot satisfy `sasl_qop_min = auth_int` because the server advertised only auth"
+                    "Kerberos-secured HMS cannot satisfy `min_sasl_qop = auth_int` because the server advertised only auth"
                         .to_string(),
                 ));
             }

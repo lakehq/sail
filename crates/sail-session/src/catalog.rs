@@ -151,7 +151,7 @@ pub fn create_catalog_manager(
                     thrift_transport,
                     auth,
                     kerberos_service_principal,
-                    sasl_qop_min,
+                    min_sasl_qop,
                     connect_timeout_secs,
                 } => {
                     let config = HmsCatalogConfig {
@@ -160,7 +160,7 @@ pub fn create_catalog_manager(
                         thrift_transport: thrift_transport.clone(),
                         auth: auth.clone(),
                         kerberos_service_principal: kerberos_service_principal.clone(),
-                        sasl_qop_min: sasl_qop_min.clone(),
+                        min_sasl_qop: min_sasl_qop.clone(),
                         connect_timeout_secs: *connect_timeout_secs,
                     };
                     let provider =

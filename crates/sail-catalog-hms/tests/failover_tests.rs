@@ -27,7 +27,7 @@ async fn test_failover_from_dead_primary_endpoint() {
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,
-            sasl_qop_min: None,
+            min_sasl_qop: None,
             connect_timeout_secs: None,
         },
         RuntimeHandle::new(

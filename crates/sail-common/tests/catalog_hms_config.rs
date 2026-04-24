@@ -13,7 +13,7 @@ fn test_deserialize_hive_metastore_catalog_type() {
             "thrift_transport": "framed",
             "auth": "kerberos",
             "kerberos_service_principal": "hive-metastore/_HOST@EXAMPLE.COM",
-            "sasl_qop_min": "auth_int",
+            "min_sasl_qop": "auth_int",
             "connect_timeout_secs": 9
         }"#,
     )
@@ -27,7 +27,7 @@ fn test_deserialize_hive_metastore_catalog_type() {
             thrift_transport,
             auth,
             kerberos_service_principal,
-            sasl_qop_min,
+            min_sasl_qop,
             connect_timeout_secs,
         } => {
             assert_eq!(name, "hms");
@@ -39,7 +39,7 @@ fn test_deserialize_hive_metastore_catalog_type() {
                 kerberos_service_principal.as_deref(),
                 Some("hive-metastore/_HOST@EXAMPLE.COM")
             );
-            assert_eq!(sasl_qop_min.as_deref(), Some("auth_int"));
+            assert_eq!(min_sasl_qop.as_deref(), Some("auth_int"));
             assert_eq!(connect_timeout_secs, Some(9));
         }
         other => panic!("unexpected catalog type: {other:?}"),
@@ -80,12 +80,12 @@ fn test_deserialize_hms_catalog_defaults_to_none_auth() {
     match catalog {
         CatalogType::HiveMetastore {
             auth,
-            sasl_qop_min,
+            min_sasl_qop,
             connect_timeout_secs,
             ..
         } => {
             assert!(auth.is_none());
-            assert!(sasl_qop_min.is_none());
+            assert!(min_sasl_qop.is_none());
             assert!(connect_timeout_secs.is_none());
         }
         other => panic!("unexpected catalog type: {other:?}"),
@@ -105,4 +105,24 @@ fn test_deserialize_hms_catalog_rejects_legacy_uri_field() {
 
     assert!(error.to_string().contains("unknown field"));
     assert!(error.to_string().contains("uri"));
+}
+
+#[test]
+fn test_deserialize_hive_metastore_catalog_type_alias() {
+    let catalog: CatalogType = serde_json::from_str(
+        r#"{
+            "type": "hive-metastore",
+            "name": "hms",
+            "uris": ["127.0.0.1:9083"]
+        }"#,
+    )
+    .expect("catalog type alias should deserialize");
+
+    match catalog {
+        CatalogType::HiveMetastore { name, uris, .. } => {
+            assert_eq!(name, "hms");
+            assert_eq!(uris, vec!["127.0.0.1:9083"]);
+        }
+        other => panic!("unexpected catalog type: {other:?}"),
+    }
 }

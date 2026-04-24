@@ -35,14 +35,14 @@ pub struct HmsCatalogConfig {
     pub thrift_transport: Option<String>,
     pub auth: Option<String>,
     pub kerberos_service_principal: Option<String>,
-    pub sasl_qop_min: Option<String>,
+    pub min_sasl_qop: Option<String>,
     pub connect_timeout_secs: Option<u64>,
 }
 
 pub struct HmsCatalogProvider {
     name: String,
     config: HmsCatalogConfig,
-    sasl_qop_min: SaslQop,
+    min_sasl_qop: SaslQop,
     endpoints: Vec<HmsEndpoint>,
     state: Mutex<HmsClientState>,
 }
@@ -200,8 +200,8 @@ fn catalog_auth_mode(
     }
 }
 
-fn parse_sasl_qop_min(config: &HmsCatalogConfig) -> CatalogResult<SaslQop> {
-    SaslQop::from_config(config.sasl_qop_min.as_deref().unwrap_or("auth"))
+fn parse_min_sasl_qop(config: &HmsCatalogConfig) -> CatalogResult<SaslQop> {
+    SaslQop::from_config(config.min_sasl_qop.as_deref().unwrap_or("auth"))
 }
 
 fn connect_timeout(config: &HmsCatalogConfig) -> Duration {
@@ -225,7 +225,7 @@ impl HmsCatalogProvider {
         config: HmsCatalogConfig,
         _runtime: RuntimeHandle,
     ) -> CatalogResult<Self> {
-        let sasl_qop_min = parse_sasl_qop_min(&config)?;
+        let min_sasl_qop = parse_min_sasl_qop(&config)?;
         let normalized = split_hms_uri_list(&config.uris)?;
         let endpoints = normalized
             .into_iter()
@@ -235,7 +235,7 @@ impl HmsCatalogProvider {
         Ok(Self {
             name,
             config,
-            sasl_qop_min,
+            min_sasl_qop,
             endpoints,
             state: Mutex::new(HmsClientState {
                 active_index: 0,
@@ -318,14 +318,14 @@ impl HmsCatalogProvider {
             (CatalogAuthMode::Kerberos { hostbased_service }, "buffered") => builder
                 .make_transport(KerberosMakeTransport::new(
                     hostbased_service,
-                    self.sasl_qop_min,
+                    self.min_sasl_qop,
                 ))
                 .make_codec(volo_thrift::codec::default::DefaultMakeCodec::buffered())
                 .build(),
             (CatalogAuthMode::Kerberos { hostbased_service }, "framed") => builder
                 .make_transport(KerberosMakeTransport::new(
                     hostbased_service,
-                    self.sasl_qop_min,
+                    self.min_sasl_qop,
                 ))
                 .make_codec(volo_thrift::codec::default::DefaultMakeCodec::framed())
                 .build(),
@@ -981,9 +981,7 @@ impl CatalogProvider for HmsCatalogProvider {
                     .await
                 {
                     Ok(MaybeException::Ok(table)) => table,
-                    Ok(MaybeException::Exception(
-                        ThriftHiveMetastoreGetTableException::O2(_),
-                    )) => {
+                    Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => {
                         return Err(CatalogError::NotFound(
                             CatalogObject::Table,
                             format!("{db_name}.{table_name}"),
@@ -1026,23 +1024,19 @@ impl CatalogProvider for HmsCatalogProvider {
                 }
 
                 match client
-                    .alter_table(
-                        db_name.clone().into(),
-                        table_name.clone().into(),
-                        hms_table,
-                    )
+                    .alter_table(db_name.clone().into(), table_name.clone().into(), hms_table)
                     .await
                 {
                     Ok(MaybeException::Ok(())) => Ok(()),
-                    Ok(MaybeException::Exception(
-                        ThriftHiveMetastoreAlterTableException::O1(err),
-                    )) => Err(CatalogError::External(format!(
+                    Ok(MaybeException::Exception(ThriftHiveMetastoreAlterTableException::O1(
+                        err,
+                    ))) => Err(CatalogError::External(format!(
                         "Failed to alter HMS table '{db_name}.{table_name}': \
                          invalid operation: {err:?}"
                     ))),
-                    Ok(MaybeException::Exception(
-                        ThriftHiveMetastoreAlterTableException::O2(err),
-                    )) => Err(CatalogError::External(format!(
+                    Ok(MaybeException::Exception(ThriftHiveMetastoreAlterTableException::O2(
+                        err,
+                    ))) => Err(CatalogError::External(format!(
                         "Failed to alter HMS table '{db_name}.{table_name}': \
                          metastore error: {err:?}"
                     ))),
@@ -1176,7 +1170,7 @@ mod tests {
                 thrift_transport: None,
                 auth: None,
                 kerberos_service_principal: None,
-                sasl_qop_min: None,
+                min_sasl_qop: None,
                 connect_timeout_secs: None,
             },
             runtime,
@@ -1247,7 +1241,7 @@ mod tests {
                 thrift_transport: None,
                 auth: None,
                 kerberos_service_principal: None,
-                sasl_qop_min: None,
+                min_sasl_qop: None,
                 connect_timeout_secs: None,
             },
             "127.0.0.1:9083",
@@ -1286,7 +1280,7 @@ mod tests {
                 thrift_transport: None,
                 auth: Some("kerberos".to_string()),
                 kerberos_service_principal: None,
-                sasl_qop_min: None,
+                min_sasl_qop: None,
                 connect_timeout_secs: None,
             },
             "127.0.0.1:9083",
@@ -1306,7 +1300,7 @@ mod tests {
                 thrift_transport: None,
                 auth: Some("ldap".to_string()),
                 kerberos_service_principal: None,
-                sasl_qop_min: None,
+                min_sasl_qop: None,
                 connect_timeout_secs: None,
             },
             "127.0.0.1:9083",
@@ -1318,14 +1312,14 @@ mod tests {
     }
 
     #[test]
-    fn test_default_sasl_qop_min_is_auth() {
-        let qop_min = super::parse_sasl_qop_min(&HmsCatalogConfig {
+    fn test_default_min_sasl_qop_is_auth() {
+        let qop_min = super::parse_min_sasl_qop(&HmsCatalogConfig {
             uris: vec!["127.0.0.1:9083".to_string()],
             warehouse: None,
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,
-            sasl_qop_min: None,
+            min_sasl_qop: None,
             connect_timeout_secs: None,
         })
         .unwrap();
@@ -1334,20 +1328,20 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_sasl_qop_min_is_rejected() {
-        let error = super::parse_sasl_qop_min(&HmsCatalogConfig {
+    fn test_invalid_min_sasl_qop_is_rejected() {
+        let error = super::parse_min_sasl_qop(&HmsCatalogConfig {
             uris: vec!["127.0.0.1:9083".to_string()],
             warehouse: None,
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,
-            sasl_qop_min: Some("invalid".to_string()),
+            min_sasl_qop: Some("invalid".to_string()),
             connect_timeout_secs: None,
         })
         .unwrap_err();
 
         assert!(matches!(error, CatalogError::InvalidArgument(_)));
-        assert!(error.to_string().contains("sasl_qop_min"));
+        assert!(error.to_string().contains("min_sasl_qop"));
     }
 
     #[test]
@@ -1390,7 +1384,7 @@ mod tests {
             thrift_transport: None,
             auth: Some("kerberos".to_string()),
             kerberos_service_principal: Some("hive-metastore/_HOST@EXAMPLE.COM".to_string()),
-            sasl_qop_min: None,
+            min_sasl_qop: None,
             connect_timeout_secs: None,
         };
 
@@ -1434,7 +1428,7 @@ mod tests {
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,
-            sasl_qop_min: None,
+            min_sasl_qop: None,
             connect_timeout_secs: None,
         });
 
@@ -1449,7 +1443,7 @@ mod tests {
             thrift_transport: None,
             auth: None,
             kerberos_service_principal: None,
-            sasl_qop_min: None,
+            min_sasl_qop: None,
             connect_timeout_secs: Some(12),
         });
 
