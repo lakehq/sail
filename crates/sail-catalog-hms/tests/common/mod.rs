@@ -162,7 +162,8 @@ pub async fn setup_hms_catalog(test_name: &str) -> HmsTestContext {
             connect_timeout_secs: None,
         },
         runtime_handle(),
-    );
+    )
+    .expect("create HMS provider");
 
     wait_until_ready(&provider, 60, "Hive Metastore").await;
 
@@ -348,7 +349,8 @@ async fn setup_kerberos_hms_catalog_inner(
             connect_timeout_secs: None,
         },
         runtime_handle(),
-    );
+    )
+    .expect("create HMS provider");
 
     if perform_kinit {
         wait_until_ready(&catalog, 240, "Kerberos Hive Metastore").await;

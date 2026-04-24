@@ -111,11 +111,12 @@ fn split_hms_uri_list(uris: &[String]) -> CatalogResult<Vec<String>> {
 }
 
 fn normalize_hms_uri(uri: &str) -> CatalogResult<String> {
-    let normalized = uri
+    let uri_lower = uri.trim_start().to_ascii_lowercase();
+    let stripped = uri_lower
         .strip_prefix("thrift://")
-        .or_else(|| uri.strip_prefix("THRIFT://"))
-        .unwrap_or(uri)
-        .trim();
+        .map(|suffix| &uri[uri.len() - suffix.len()..])
+        .unwrap_or(uri);
+    let normalized = stripped.trim();
     if normalized.is_empty() {
         return Err(CatalogError::InvalidArgument(
             "Invalid empty HMS URI entry".to_string(),
@@ -211,13 +212,12 @@ fn connect_timeout(config: &HmsCatalogConfig) -> Duration {
 }
 
 impl HmsCatalogProvider {
-    #[expect(
-        clippy::panic,
-        reason = "HmsCatalogProvider::new is the infallible constructor"
-    )]
-    pub fn new(name: String, config: HmsCatalogConfig, runtime: RuntimeHandle) -> Self {
+    pub fn new(
+        name: String,
+        config: HmsCatalogConfig,
+        runtime: RuntimeHandle,
+    ) -> CatalogResult<Self> {
         Self::try_new(name, config, runtime)
-            .unwrap_or_else(|error| panic!("failed to build HMS provider config: {error}"))
     }
 
     pub fn try_new(
@@ -244,6 +244,9 @@ impl HmsCatalogProvider {
         })
     }
 
+    /// Determines whether an error is retryable by failing over to the next endpoint.
+    /// The volo-thrift client wraps all transport and Thrift errors as
+    /// `CatalogError::External(String)`, so string matching is the only option.
     fn should_retry(error: &CatalogError) -> bool {
         let CatalogError::External(message) = error else {
             return false;
@@ -517,9 +520,10 @@ impl HmsCatalogProvider {
 
     async fn list_hms_tables(&self, database: &Namespace) -> CatalogResult<Vec<Table>> {
         let db_name = validate_namespace(database)?;
+        let db_name_owned = db_name.clone();
         let names = self
             .with_failover(|client| {
-                let db_name = db_name.clone();
+                let db_name = db_name_owned.clone();
                 async move {
                     match client.get_all_tables(db_name.clone().into()).await {
                         Ok(MaybeException::Ok(names)) => Ok(names),
@@ -534,11 +538,26 @@ impl HmsCatalogProvider {
             })
             .await?;
 
-        let mut tables = Vec::with_capacity(names.len());
-        for name in names {
-            tables.push(self.fetch_hms_table(database, name.as_ref()).await?);
-        }
-        Ok(tables)
+        let tbl_names: Vec<pilota::FastStr> = names.iter().map(|n| n.clone().into()).collect();
+        self.with_failover(|client| {
+            let db_name = db_name_owned.clone();
+            let tbl_names = tbl_names.clone();
+            async move {
+                match client
+                    .get_table_objects_by_name(db_name.into(), tbl_names)
+                    .await
+                {
+                    Ok(MaybeException::Ok(tables)) => Ok(tables),
+                    Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                        "Failed to batch-fetch HMS tables: {err:?}"
+                    ))),
+                    Err(err) => Err(CatalogError::External(format!(
+                        "Failed to batch-fetch HMS tables: {err}"
+                    ))),
+                }
+            }
+        })
+        .await
     }
 
     async fn drop_hms_table(
@@ -721,34 +740,49 @@ impl CatalogProvider for HmsCatalogProvider {
         &self,
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
-        let prefix = match prefix {
+        let pattern = match prefix {
             Some(prefix) => Some(validate_namespace(prefix)?),
             None => None,
         };
 
-        let databases = self
-            .with_failover(|client| async move {
-                match client.get_all_databases().await {
-                    Ok(MaybeException::Ok(databases)) => Ok(databases),
-                    Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
-                        "Failed to list HMS databases: {err:?}"
-                    ))),
-                    Err(err) => Err(CatalogError::External(format!(
-                        "Failed to list HMS databases: {err}"
-                    ))),
-                }
-            })
-            .await?;
+        let databases = match &pattern {
+            Some(pat) => {
+                let pat = pat.clone();
+                self.with_failover(|client| {
+                    let pat = pat.clone();
+                    async move {
+                        match client.get_databases(pat.into()).await {
+                            Ok(MaybeException::Ok(databases)) => Ok(databases),
+                            Ok(MaybeException::Exception(err)) => Err(CatalogError::External(
+                                format!("Failed to list HMS databases: {err:?}"),
+                            )),
+                            Err(err) => Err(CatalogError::External(format!(
+                                "Failed to list HMS databases: {err}"
+                            ))),
+                        }
+                    }
+                })
+                .await?
+            }
+            None => {
+                self.with_failover(|client| async move {
+                    match client.get_all_databases().await {
+                        Ok(MaybeException::Ok(databases)) => Ok(databases),
+                        Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                            "Failed to list HMS databases: {err:?}"
+                        ))),
+                        Err(err) => Err(CatalogError::External(format!(
+                            "Failed to list HMS databases: {err}"
+                        ))),
+                    }
+                })
+                .await?
+            }
+        };
 
         let mut result = Vec::new();
         for database_name in databases {
             let database_name = database_name.to_string();
-            if prefix
-                .as_deref()
-                .is_some_and(|prefix| prefix != database_name.as_str())
-            {
-                continue;
-            }
             let database = self
                 .get_database(&Namespace::try_from(vec![database_name])?)
                 .await?;
@@ -905,6 +939,9 @@ impl CatalogProvider for HmsCatalogProvider {
         }
     }
 
+    /// No-op: HMS does not currently mirror table property changes, but ALTER TABLE
+    /// is still useful for HMS-tracked Delta tables where the property change is
+    /// persisted by the Delta `TableFormat`. This matches the Glue catalog behavior.
     async fn alter_table(
         &self,
         _database: &Namespace,
@@ -1037,7 +1074,8 @@ mod tests {
                 connect_timeout_secs: None,
             },
             runtime,
-        );
+        )
+        .unwrap();
 
         let error = provider
             .create_table(

@@ -17,7 +17,22 @@ pub fn arrow_to_hive_type(data_type: &DataType) -> CatalogResult<String> {
         DataType::UInt64 => Ok("bigint".to_string()),
         DataType::Float16 | DataType::Float32 => Ok("float".to_string()),
         DataType::Float64 => Ok("double".to_string()),
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
+            let precision = *precision as u8;
+            let scale = *scale as i8;
+            if precision > 38 {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Hive Metastore supports decimal precision up to 38, got {precision}"
+                )));
+            }
+            if scale < 0 || scale as u8 > precision {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Invalid decimal scale {scale} for precision {precision}"
+                )));
+            }
             Ok(format!("decimal({precision},{scale})"))
         }
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok("string".to_string()),
@@ -25,6 +40,8 @@ pub fn arrow_to_hive_type(data_type: &DataType) -> CatalogResult<String> {
         | DataType::FixedSizeBinary(_)
         | DataType::LargeBinary
         | DataType::BinaryView => Ok("binary".to_string()),
+        // HMS DATE is days since epoch. Arrow Date32 is days, Date64 is milliseconds.
+        // Both map to the same HMS type since HMS has no sub-day date precision.
         DataType::Date32 | DataType::Date64 => Ok("date".to_string()),
         DataType::Timestamp(_, _) => Ok("timestamp".to_string()),
         DataType::Time32(_)
@@ -66,12 +83,9 @@ pub fn arrow_to_hive_type(data_type: &DataType) -> CatalogResult<String> {
             ))
         }
         DataType::Dictionary(_, value_type) => arrow_to_hive_type(value_type),
-        DataType::Union(_, _)
-        | DataType::RunEndEncoded(_, _)
-        | DataType::Decimal32(_, _)
-        | DataType::Decimal64(_, _) => Err(CatalogError::NotSupported(format!(
-            "Data type {data_type:?} is not supported by Hive Metastore catalog"
-        ))),
+        DataType::Union(_, _) | DataType::RunEndEncoded(_, _) => Err(CatalogError::NotSupported(
+            format!("Data type {data_type:?} is not supported by Hive Metastore catalog"),
+        )),
     }
 }
 

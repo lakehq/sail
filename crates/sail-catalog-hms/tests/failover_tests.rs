@@ -34,7 +34,8 @@ async fn test_failover_from_dead_primary_endpoint() {
             tokio::runtime::Handle::current(),
             tokio::runtime::Handle::current(),
         ),
-    );
+    )
+    .expect("create HMS provider");
 
     let databases = provider.list_databases(None).await.unwrap();
     assert!(!databases.is_empty());
