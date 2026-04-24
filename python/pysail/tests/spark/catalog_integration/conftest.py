@@ -3,10 +3,10 @@
 Each sub-directory (glue/, iceberg_rest/, unity/) provides fixtures that
 spin up the relevant infrastructure containers and a dedicated Sail server.
 
-These tests are **deselected by default**. To run them, pass
-``--run-catalog-integration`` explicitly::
+These tests are marked with ``@pytest.mark.catalog_integration`` and are
+**deselected by default**. To run them, pass ``-m catalog_integration``::
 
-    hatch run pytest --run-catalog-integration
+    hatch run pytest -m catalog_integration
 """
 
 from __future__ import annotations
@@ -81,34 +81,30 @@ def create_spark_session(remote: str, app_name: str = "catalog_test") -> SparkSe
     return spark
 
 
-def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register the CLI flag that opts in to catalog integration tests."""
-    parser.addoption(
-        "--run-catalog-integration",
-        action="store_true",
-        default=False,
-        help="Run catalog integration tests (deselected by default).",
-    )
-
-
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Auto-mark catalog_integration tests and deselect them unless explicitly opted in.
+    """Auto-mark catalog integration tests and deselect them unless explicitly opted in.
 
-    Catalog integration tests are skipped by default. They are only collected when the
-    user passes ``--run-catalog-integration`` or an explicit marker expression that
-    positively selects the ``catalog_integration`` marker (e.g. ``-m catalog_integration``).
-    Expressions such as ``-m 'not catalog_integration'`` or ``-m 'not slow'`` will
-    deselect catalog integration tests.
+    Tests under this directory are tagged with the ``catalog_integration`` marker.
+    When the user does not pass a ``-m`` marker expression, these tests are
+    deselected so that a bare ``pytest`` invocation does not attempt to spin up
+    external services. When ``-m`` is supplied (for example ``-m catalog_integration``
+    or ``-m 'not catalog_integration'``), pytest's built-in marker filter applies
+    and this hook performs no additional deselection.
+
+    This approach works correctly with ``pytest --pyargs <package>`` because it
+    relies only on the standard ``-m`` option rather than a custom CLI flag that
+    would need to be registered at the root ``conftest.py`` (which is not part
+    of the installed package).
     """
     this_dir = os.path.dirname(os.path.abspath(__file__))
-    opted_in = bool(config.getoption("--run-catalog-integration", default=False))
+    markexpr = config.getoption("markexpr") or ""
 
     remaining: list[pytest.Item] = []
     deselected: list[pytest.Item] = []
     for item in items:
         if str(item.fspath).startswith(this_dir):
             item.add_marker(pytest.mark.catalog_integration)
-            if not opted_in:
+            if not markexpr:
                 deselected.append(item)
                 continue
         remaining.append(item)
