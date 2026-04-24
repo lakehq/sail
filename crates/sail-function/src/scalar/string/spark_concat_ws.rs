@@ -29,7 +29,7 @@ impl Default for SparkConcatWs {
 impl SparkConcatWs {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -61,6 +61,20 @@ impl ScalarUDFImpl for SparkConcatWs {
 
         // Use make_scalar_function to handle scalar/array conversion uniformly
         make_scalar_function(concat_ws_inner, vec![])(&args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_types
+            .iter()
+            .map(|arg_type| match arg_type {
+                DataType::Utf8View => Ok(DataType::Utf8),
+                DataType::ListView(field) | DataType::FixedSizeList(field, _) => {
+                    Ok(DataType::List(field.clone()))
+                }
+                DataType::LargeListView(field) => Ok(DataType::LargeList(field.clone())),
+                other => Ok(other.clone()),
+            })
+            .collect()
     }
 }
 
