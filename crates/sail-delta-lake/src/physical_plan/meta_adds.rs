@@ -18,8 +18,10 @@ const COL_MODIFICATION_TIME: &str = "modification_time";
 const COL_STATS_JSON: &str = "stats_json";
 const COL_PARTITION_SCAN: &str = "partition_scan";
 const COL_DELETION_VECTOR: &str = "deletionVector";
+const COL_BASE_ROW_ID: &str = "baseRowId";
+const COL_DEFAULT_ROW_COMMIT_VERSION: &str = "defaultRowCommitVersion";
 
-const RESERVED_META_COLUMNS: [&str; 9] = [
+const RESERVED_META_COLUMNS: [&str; 11] = [
     PATH_COLUMN,
     COL_SIZE_BYTES,
     COL_MODIFICATION_TIME,
@@ -29,6 +31,8 @@ const RESERVED_META_COLUMNS: [&str; 9] = [
     COMMIT_VERSION_COLUMN,
     COMMIT_TIMESTAMP_COLUMN,
     COL_DELETION_VECTOR,
+    COL_BASE_ROW_ID,
+    COL_DEFAULT_ROW_COMMIT_VERSION,
 ];
 
 /// Infer partition column names from a metadata batch schema by excluding known reserved columns.
@@ -73,6 +77,12 @@ pub fn decode_adds_from_meta_batch(
         .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
     let commit_timestamp_arr: Option<&Int64Array> = batch
         .column_by_name(COMMIT_TIMESTAMP_COLUMN)
+        .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+    let base_row_id_arr: Option<&Int64Array> = batch
+        .column_by_name(COL_BASE_ROW_ID)
+        .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+    let default_rcv_arr: Option<&Int64Array> = batch
+        .column_by_name(COL_DEFAULT_ROW_COMMIT_VERSION)
         .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
 
     // stats_json may arrive as LargeUtf8 depending on upstream casts.
@@ -172,8 +182,20 @@ pub fn decode_adds_from_meta_batch(
             stats,
             tags: None,
             deletion_vector: extract_dv_from_struct(dv_arr, row),
-            base_row_id: None,
-            default_row_commit_version: None,
+            base_row_id: base_row_id_arr.and_then(|a| {
+                if a.is_null(row) {
+                    None
+                } else {
+                    Some(a.value(row))
+                }
+            }),
+            default_row_commit_version: default_rcv_arr.and_then(|a| {
+                if a.is_null(row) {
+                    None
+                } else {
+                    Some(a.value(row))
+                }
+            }),
             clustering_provider: None,
             commit_version,
             commit_timestamp,

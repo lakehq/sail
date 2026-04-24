@@ -151,3 +151,95 @@ Feature: Delta Lake Row Tracking writer (baseRowId, defaultRowCommitVersion, row
         | add.defaultRowCommitVersion                                                          | 0                   |
         | domainMetadata.domain                                                                | "delta.rowTracking" |
       Then delta log commit 00000000000000000000.json in location has rowTracking high-water-mark 2
+
+  @sail-only
+  Rule: SQL can read _metadata.row_id and _metadata.row_commit_version
+
+    Background:
+      Given variable location for temporary directory delta_rt_sql_reads
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_rt_sql_reads_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_rt_sql_reads_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableRowTracking' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_rt_sql_reads_test VALUES (10), (20), (30)
+        """
+      Given statement
+        """
+        INSERT INTO delta_rt_sql_reads_test VALUES (40), (50)
+        """
+
+    Scenario: Row ids are contiguous per file and restart per commit; commit versions match
+      When query
+        """
+        SELECT id, _metadata.row_id AS rid, _metadata.row_commit_version AS ver
+        FROM delta_rt_sql_reads_test
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | rid | ver |
+        | 10 | 0   | 0   |
+        | 20 | 1   | 0   |
+        | 30 | 2   | 0   |
+        | 40 | 3   | 1   |
+        | 50 | 4   | 1   |
+
+    Scenario: Only row_id can be projected (struct pruning)
+      When query
+        """
+        SELECT _metadata.row_id AS rid FROM delta_rt_sql_reads_test ORDER BY rid
+        """
+      Then query result ordered
+        | rid |
+        | 0   |
+        | 1   |
+        | 2   |
+        | 3   |
+        | 4   |
+
+  @sail-only
+  Rule: Suspended row tracking reads back NULL metadata
+
+    Background:
+      Given variable location for temporary directory delta_rt_sql_suspended
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_rt_sql_suspended_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_rt_sql_suspended_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.minReaderVersion' = '3',
+          'delta.minWriterVersion' = '7',
+          'delta.feature.rowTracking' = 'supported',
+          'delta.feature.domainMetadata' = 'supported',
+          'delta.rowTrackingSuspended' = 'true'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_rt_sql_suspended_test VALUES (1), (2)
+        """
+
+    Scenario: Suspended tables expose NULL row_id and row_commit_version
+      When query
+        """
+        SELECT id, _metadata.row_id AS rid, _metadata.row_commit_version AS ver
+        FROM delta_rt_sql_suspended_test
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | rid  | ver  |
+        | 1  | NULL | NULL |
+        | 2  | NULL | NULL |

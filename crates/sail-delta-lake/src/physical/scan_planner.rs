@@ -218,7 +218,15 @@ pub(crate) async fn plan_delta_scan(
     let has_dvs = snapshot
         .protocol()
         .has_reader_feature(&crate::spec::TableFeature::DeletionVectors);
-    let files = if has_dvs { None } else { files };
+    let wants_row_tracking_metadata = logical_schema
+        .fields()
+        .iter()
+        .any(|f| f.name() == crate::datasource::METADATA_COLUMN_NAME);
+    let files = if has_dvs || wants_row_tracking_metadata {
+        None
+    } else {
+        files
+    };
 
     if let Some(files) = files {
         let file_scan_config = build_file_scan_config(
@@ -309,6 +317,7 @@ pub(crate) async fn plan_delta_scan(
         include_stats_json: pruning_expr
             .as_ref()
             .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols)),
+        include_row_tracking: wants_row_tracking_metadata,
         ..Default::default()
     };
 

@@ -21,11 +21,45 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
+    DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema, SchemaRef,
 };
 
 use crate::kernel::snapshot::DeltaSnapshot;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
+use crate::table::features::RowTrackingToken;
+
+/// Name of the synthetic struct column exposing row-tracking metadata to SQL.
+pub const METADATA_COLUMN_NAME: &str = "_metadata";
+pub const METADATA_ROW_ID_FIELD: &str = "row_id";
+pub const METADATA_ROW_COMMIT_VERSION_FIELD: &str = "row_commit_version";
+
+pub fn metadata_struct_fields() -> Fields {
+    Fields::from(vec![
+        Field::new(METADATA_ROW_ID_FIELD, ArrowDataType::Int64, true),
+        Field::new(
+            METADATA_ROW_COMMIT_VERSION_FIELD,
+            ArrowDataType::Int64,
+            true,
+        ),
+    ])
+}
+
+pub fn metadata_struct_field() -> Field {
+    Field::new(
+        METADATA_COLUMN_NAME,
+        ArrowDataType::Struct(metadata_struct_fields()),
+        true,
+    )
+}
+
+pub fn snapshot_exposes_row_tracking_metadata(snapshot: &DeltaSnapshot) -> bool {
+    matches!(
+        snapshot.get_row_tracking_state(),
+        Ok(RowTrackingToken::Enabled(_))
+            | Ok(RowTrackingToken::SupportedOnly(_))
+            | Ok(RowTrackingToken::Suspended)
+    )
+}
 
 /// The logical schema for a Deltatable is different from the protocol level schema since partition
 /// columns must appear at the end of the schema. This is to align with how partition are handled
@@ -80,6 +114,10 @@ pub fn df_logical_schema(
             ArrowDataType::Int64,
             true,
         )));
+    }
+
+    if snapshot_exposes_row_tracking_metadata(snapshot) {
+        fields.push(Arc::new(metadata_struct_field()));
     }
 
     Ok(Arc::new(ArrowSchema::new(fields)))
