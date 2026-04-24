@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use hive_metastore::{
-    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreClient,
-    ThriftHiveMetastoreClientBuilder, ThriftHiveMetastoreCreateDatabaseException,
-    ThriftHiveMetastoreCreateTableException, ThriftHiveMetastoreDropDatabaseException,
-    ThriftHiveMetastoreDropTableException,
+    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
+    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
+    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
+    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
     ThriftHiveMetastoreDropTableWithEnvironmentContextException,
     ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
     ThriftHiveMetastoreGetTableReqException,
@@ -960,16 +960,100 @@ impl CatalogProvider for HmsCatalogProvider {
         }
     }
 
-    /// No-op: HMS does not currently mirror table property changes, but ALTER TABLE
-    /// is still useful for HMS-tracked Delta tables where the property change is
-    /// persisted by the Delta `TableFormat`. This matches the Glue catalog behavior.
     async fn alter_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: AlterTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        Ok(())
+        let db_name = validate_namespace(database)?;
+        let table_name = table.to_string();
+
+        self.with_failover(|client| {
+            let db_name = db_name.clone();
+            let table_name = table_name.clone();
+            let options = options.clone();
+            async move {
+                // Fetch the current table, mutate its properties, then call alter_table.
+                // This matches Spark's HMS catalog approach.
+                let mut hms_table = match client
+                    .get_table(db_name.clone().into(), table_name.clone().into())
+                    .await
+                {
+                    Ok(MaybeException::Ok(table)) => table,
+                    Ok(MaybeException::Exception(
+                        ThriftHiveMetastoreGetTableException::O2(_),
+                    )) => {
+                        return Err(CatalogError::NotFound(
+                            CatalogObject::Table,
+                            format!("{db_name}.{table_name}"),
+                        ))
+                    }
+                    Ok(MaybeException::Exception(err)) => {
+                        return Err(CatalogError::External(format!(
+                            "Failed to fetch HMS table '{db_name}.{table_name}' for alter: {err:?}"
+                        )))
+                    }
+                    Err(err) => {
+                        return Err(Self::hms_client_error(
+                            &format!(
+                                "Failed to fetch HMS table '{db_name}.{table_name}' for alter"
+                            ),
+                            err,
+                        ))
+                    }
+                };
+
+                let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
+                match options {
+                    AlterTableOptions::SetTableProperties { properties } => {
+                        for (key, value) in properties {
+                            parameters.insert(key.into(), value.into());
+                        }
+                    }
+                    AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+                        for key in keys {
+                            if if_exists || parameters.contains_key(key.as_str()) {
+                                parameters.remove(key.as_str());
+                            } else {
+                                return Err(CatalogError::InvalidArgument(format!(
+                                    "Table property '{key}' does not exist on \
+                                     '{db_name}.{table_name}'"
+                                )));
+                            }
+                        }
+                    }
+                }
+
+                match client
+                    .alter_table(
+                        db_name.clone().into(),
+                        table_name.clone().into(),
+                        hms_table,
+                    )
+                    .await
+                {
+                    Ok(MaybeException::Ok(())) => Ok(()),
+                    Ok(MaybeException::Exception(
+                        ThriftHiveMetastoreAlterTableException::O1(err),
+                    )) => Err(CatalogError::External(format!(
+                        "Failed to alter HMS table '{db_name}.{table_name}': \
+                         invalid operation: {err:?}"
+                    ))),
+                    Ok(MaybeException::Exception(
+                        ThriftHiveMetastoreAlterTableException::O2(err),
+                    )) => Err(CatalogError::External(format!(
+                        "Failed to alter HMS table '{db_name}.{table_name}': \
+                         metastore error: {err:?}"
+                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        &format!("Failed to alter HMS table '{db_name}.{table_name}'"),
+                        err,
+                    )),
+                }
+            }
+        })
+        .await
     }
 
     async fn create_view(
