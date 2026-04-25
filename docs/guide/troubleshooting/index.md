@@ -20,6 +20,26 @@ To work around this issue, you can run the following command on the host:
 sudo timedatectl set-timezone UTC
 ```
 
+## JVM-Only `sparkContext` Patterns Under Spark Connect
+
+Spark Connect does not support `SparkContext` or RDD operations, since there is no JVM in the client process. Code that accesses `spark.sparkContext` will raise an error under Spark Connect (and therefore under Sail).
+
+A common example is creating an empty DataFrame using the legacy pattern:
+
+```python
+# ❌ Fails under Spark Connect
+spark.createDataFrame(spark.sparkContext.emptyRDD(), schema)
+```
+
+Replace it with the equivalent Spark Connect-compatible call:
+
+```python
+# ✅ Works under Spark Connect
+spark.createDataFrame([], schema)
+```
+
+The same applies to other `sparkContext` methods that construct RDDs (e.g. `parallelize`, `textFile`). Migrate these by using the corresponding `SparkSession` or DataFrame API equivalents instead.
+
 ## Protobuf Version Mismatch
 
 When you run PySpark 4.0 in Spark Connect mode, you may see a lot of warnings like this:
