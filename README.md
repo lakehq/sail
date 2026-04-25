@@ -44,20 +44,6 @@ If you need to deploy Sail in production environments, the [Deployment Guide](ht
 
 ## Getting Started
 
-### Spark Compatibility
-
-Sail is designed to be compatible with Spark 3.5.x, Spark 4.x, and later versions. Existing PySpark code works out of the box once you connect your Spark client session to Sail over the Spark Connect protocol.
-
-As a starting point, Sail ships with a **experimental** [PySpark function compatibility check script](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/#check-your-code-for-compatibility) that scans your codebase for PySpark functions and reports their Sail support status.
-
-```bash
-python -m pysail.examples.spark.compatibility_check <directory>
-```
-
-> **Experimental** — use as a rough first pass only. The script checks whether referenced PySpark functions are _implemented_ in Sail. It does **not** verify behavioral parity, does **not** cover Spark SQL, and does **not** account for runtime semantics. Passing the check is not a guarantee that your workload will run correctly on Sail.
-
-See the [Migration Guide](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/) for recommended migration practices.
-
 ### Starting the Sail Server
 
 **Option 1: Command Line Interface.** You can start the local Sail server using the `sail` command.
@@ -96,6 +82,20 @@ spark.sql("SELECT 1 + 1").show()
 ```
 
 Please refer to the [Getting Started](https://docs.lakesail.com/sail/latest/introduction/getting-started/) guide for further details.
+
+## Spark Compatibility
+
+Sail is designed to be compatible with Spark 3.5.x, Spark 4.x, and later versions. Existing PySpark code works out of the box once you connect your Spark client session to Sail over the Spark Connect protocol.
+
+As a starting point, Sail ships with a **experimental** [PySpark function compatibility check script](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/#check-your-code-for-compatibility) that scans your codebase for PySpark functions and reports their Sail support status.
+
+```bash
+python -m pysail.examples.spark.compatibility_check <directory>
+```
+
+> **Experimental** — use as a rough first pass only. The script checks whether referenced PySpark functions are _implemented_ in Sail. It does **not** verify behavioral parity, does **not** cover Spark SQL, and does **not** account for runtime semantics. Passing the check is not a guarantee that your workload will run correctly on Sail.
+
+See the [Migration Guide](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/) for recommended migration practices.
 
 ## Feature Highlights
 
