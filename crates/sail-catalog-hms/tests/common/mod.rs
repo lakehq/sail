@@ -654,6 +654,8 @@ fn host_krb5_conf(kdc_host: &str, kdc_tcp_port: u16, kdc_udp_port: u16) -> Strin
  dns_lookup_kdc = false
  dns_lookup_realm = false
  rdns = false
+ dns_canonicalize_hostname = false
+ ignore_acceptor_hostname = true
  ticket_lifetime = 24h
  forwardable = true
 

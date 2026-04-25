@@ -327,6 +327,7 @@ impl GssClientContext {
             | bindings::GSS_C_SEQUENCE_FLAG
             | bindings::GSS_C_CONF_FLAG
             | bindings::GSS_C_INTEG_FLAG
+            | bindings::GSS_C_ANON_FLAG
             | bindings::GSS_C_PROT_READY_FLAG
             | bindings::GSS_C_TRANS_FLAG
             | bindings::GSS_C_DELEG_POLICY_FLAG;
