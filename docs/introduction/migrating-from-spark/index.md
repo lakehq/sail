@@ -31,6 +31,10 @@ To use it, simply run the following command in your terminal after installing Sa
 
 The command also allows you to specify the desired output format using `--output=text` (human-readable), `--output=json`, or `--output=csv`.
 
+::: info
+Use the script as a rough first pass only. The script checks whether referenced PySpark functions are _implemented_ in Sail. It does **not** verify behavioral parity. It looks for functions used in DataFrame operations but does **not** cover Spark SQL strings.
+:::
+
 ## Considerations
 
 Here we recommend some practices to help you adopt Sail in your production environment.

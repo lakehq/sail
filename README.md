@@ -87,13 +87,13 @@ Please refer to the [Getting Started](https://docs.lakesail.com/sail/latest/intr
 
 Sail is designed to be compatible with Spark 3.5.x, Spark 4.x, and later versions. Existing PySpark code works out of the box once you connect your Spark client session to Sail over the Spark Connect protocol.
 
-As a starting point, Sail ships with a **experimental** [PySpark function compatibility check script](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/#check-your-code-for-compatibility) that scans your codebase for PySpark functions and reports their Sail support status.
+As a starting point, Sail ships with an **experimental** [PySpark function compatibility check script](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/#check-your-code-for-compatibility) that scans your codebase for PySpark functions and reports their Sail support status.
 
 ```bash
 python -m pysail.examples.spark.compatibility_check <directory>
 ```
 
-> **Experimental** — use as a rough first pass only. The script checks whether referenced PySpark functions are _implemented_ in Sail. It does **not** verify behavioral parity, does **not** cover Spark SQL, and does **not** account for runtime semantics. Passing the check is not a guarantee that your workload will run correctly on Sail.
+> **Experimental** Use the script as a rough first pass only. The script checks whether referenced PySpark functions are _implemented_ in Sail. It does **not** verify behavioral parity. It looks for functions used in DataFrame operations but does **not** cover Spark SQL strings.
 
 See the [Migration Guide](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/) for recommended migration practices.
 
