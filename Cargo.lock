@@ -7191,6 +7191,7 @@ version = "0.6.0"
 dependencies = [
  "datafusion",
  "datafusion-common",
+ "datafusion-common-runtime",
  "datafusion-expr",
  "futures",
  "lazy_static",

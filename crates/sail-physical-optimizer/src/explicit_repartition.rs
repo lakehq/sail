@@ -10,7 +10,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_physical_expr::Partitioning;
 use sail_physical_plan::repartition::{
-    ExplicitRepartitionExec, ExplicitRepartitionKind, NarrowCoalesceExec,
+    ExplicitRepartitionExec, ExplicitRepartitionKind, NarrowCoalesceExec, RoundRobinRepartitionExec,
 };
 
 pub struct RewriteExplicitRepartition {}
@@ -38,12 +38,15 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
             if let Some(node) = plan.as_any().downcast_ref::<ExplicitRepartitionExec>() {
                 let partitioning = node.properties().output_partitioning().clone();
                 match node.kind() {
-                    ExplicitRepartitionKind::RoundRobin | ExplicitRepartitionKind::Hash => {
-                        Ok(Transformed::yes(Arc::new(RepartitionExec::try_new(
+                    ExplicitRepartitionKind::RoundRobin => Ok(Transformed::yes(Arc::new(
+                        RoundRobinRepartitionExec::try_new(
                             node.input().clone(),
-                            partitioning,
-                        )?)))
-                    }
+                            partitioning.partition_count(),
+                        )?,
+                    ))),
+                    ExplicitRepartitionKind::Hash => Ok(Transformed::yes(Arc::new(
+                        RepartitionExec::try_new(node.input().clone(), partitioning)?,
+                    ))),
                     ExplicitRepartitionKind::Coalesce => {
                         let target_partitions = partitioning.partition_count();
                         let input_partitions = node.input().output_partitioning().partition_count();

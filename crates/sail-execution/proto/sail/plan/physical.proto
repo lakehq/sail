@@ -58,6 +58,7 @@ message ExtendedPhysicalPlanNode {
     SparkPartitionIdExecNode spark_partition_id = 43;
     DeletionVectorWriterExecNode deletion_vector_writer = 44;
     NarrowCoalesceExecNode narrow_coalesce = 45;
+    RoundRobinRepartitionExecNode round_robin_repartition = 46;
   }
 }
 
@@ -598,6 +599,11 @@ message SparkPartitionIdExecNode {
 }
 
 message NarrowCoalesceExecNode {
+  bytes input = 1;
+  uint64 target_partitions = 2;
+}
+
+message RoundRobinRepartitionExecNode {
   bytes input = 1;
   uint64 target_partitions = 2;
 }

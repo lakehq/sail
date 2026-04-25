@@ -49,3 +49,16 @@ def test_repartition_without_expressions_uses_round_robin(spark):
     assert "RoundRobin" in plan
     assert "Hash(" not in plan
     assert "hashpartitioning" not in plan
+
+
+def test_repartition_without_expressions_distributes_rows_round_robin(spark):
+    ids = [
+        row["pid"]
+        for row in spark.range(0, 64, 1, 9)
+        .repartition(10)
+        .select(F.spark_partition_id().alias("pid"))
+        .distinct()
+        .orderBy("pid")
+        .collect()
+    ]
+    assert ids == list(range(10))

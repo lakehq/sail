@@ -13,6 +13,7 @@ sail-logical-plan = { path = "../sail-logical-plan" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-common-runtime = { workspace = true }
 datafusion-expr = { workspace = true }
 futures = { workspace = true }
 tokio-stream = { workspace = true }
