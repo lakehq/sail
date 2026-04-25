@@ -419,14 +419,12 @@ impl From<TaskOutputDistribution> for gen::TaskOutputDistribution {
             TaskOutputDistribution::RoundRobin {
                 channels,
                 row_level,
-            } => {
-                gen::task_output_distribution::Kind::RoundRobin(
-                    gen::TaskOutputRoundRobinDistribution {
-                        channels: channels as u64,
-                        row_level,
-                    },
-                )
-            }
+            } => gen::task_output_distribution::Kind::RoundRobin(
+                gen::TaskOutputRoundRobinDistribution {
+                    channels: channels as u64,
+                    row_level,
+                },
+            ),
         };
         gen::TaskOutputDistribution { kind: Some(kind) }
     }

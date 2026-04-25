@@ -254,19 +254,21 @@ impl ShufflePartitioner {
                 input_partition,
                 input_partitions,
             )?)),
-            Partitioning::RoundRobinBatch(target_partitions) if row_level_round_robin => Ok(
-                Self::RowRoundRobin(RowRoundRobinBatchPartitioner::try_new(
+            Partitioning::RoundRobinBatch(target_partitions) if row_level_round_robin => {
+                Ok(Self::RowRoundRobin(RowRoundRobinBatchPartitioner::try_new(
                     target_partitions,
                     input_partition,
                     input_partitions,
-                )?),
-            ),
-            Partitioning::RoundRobinBatch(_) => Ok(Self::BatchRoundRobin(BatchPartitioner::try_new(
-                partitioning,
-                Default::default(),
-                input_partition,
-                input_partitions,
-            )?)),
+                )?))
+            }
+            Partitioning::RoundRobinBatch(_) => {
+                Ok(Self::BatchRoundRobin(BatchPartitioner::try_new(
+                    partitioning,
+                    Default::default(),
+                    input_partition,
+                    input_partitions,
+                )?))
+            }
             other => internal_err!("unsupported shuffle partitioning: {other}"),
         }
     }
