@@ -11,6 +11,8 @@ cat > /etc/krb5.conf <<EOF
  dns_lookup_kdc = false
  dns_lookup_realm = false
  rdns = false
+ dns_canonicalize_hostname = false
+ ignore_acceptor_hostname = true
  ticket_lifetime = 24h
  forwardable = true
 
