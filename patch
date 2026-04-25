@@ -1,0 +1,705 @@
+diff --git a/crates/sail-data-source/src/formats/python/arrow_utils.rs b/crates/sail-data-source/src/formats/python/arrow_utils.rs
+index 828319c57f7e59657dd7a8e2e3e1400924b9fbbd..aad8803cb476fe64d672c81cd3c272ec0750207f 100644
+--- a/crates/sail-data-source/src/formats/python/arrow_utils.rs
++++ b/crates/sail-data-source/src/formats/python/arrow_utils.rs
+@@ -339,51 +339,55 @@ fn extract_timestamp_us_tz_value(
+         .map_err(py_err)?;
+     Ok(py_dt.unbind())
+ }
+ 
+ /// Convert an Arrow Decimal128 value to a Python `decimal.Decimal`.
+ ///
+ /// Converts via string representation to avoid precision loss.
+ fn extract_decimal128_value(
+     py: Python<'_>,
+     array: &ArrayRef,
+     row_idx: usize,
+     _precision: u8,
+     scale: i8,
+ ) -> Result<Py<PyAny>> {
+     let arr = array
+         .as_any()
+         .downcast_ref::<Decimal128Array>()
+         .ok_or_else(|| {
+             DataFusionError::Execution("Failed to downcast to Decimal128Array".to_string())
+         })?;
+     let raw_value = arr.value(row_idx);
+ 
+     // Convert to string with proper scale to avoid floating-point precision loss
+     let decimal_str = if scale <= 0 {
+         // No decimal point needed (or need to append zeros)
+-        let factor = 10i128.pow((-scale) as u32);
++        let factor_scale = scale
++            .checked_neg()
++            .ok_or_else(|| DataFusionError::Execution("Decimal scale overflow".to_string()))?
++            as u32;
++        let factor = 10i128.pow(factor_scale);
+         format!("{}", raw_value * factor)
+     } else {
+         let scale_u = scale as u32;
+         let divisor = 10i128.pow(scale_u);
+         let integer_part = raw_value / divisor;
+         let fractional_part = (raw_value % divisor).unsigned_abs();
+         let sign = if raw_value < 0 && integer_part == 0 {
+             "-"
+         } else {
+             ""
+         };
+         format!(
+             "{}{}.{:0>width$}",
+             sign,
+             integer_part,
+             fractional_part,
+             width = scale_u as usize
+         )
+     };
+ 
+     let decimal_mod = py.import("decimal").map_err(py_err)?;
+     let decimal_cls = decimal_mod.getattr("Decimal").map_err(py_err)?;
+     let py_decimal = decimal_cls.call1((decimal_str,)).map_err(py_err)?;
+     Ok(py_decimal.unbind())
+ }
+diff --git a/crates/sail-data-source/src/formats/python/stream.rs b/crates/sail-data-source/src/formats/python/stream.rs
+index 83a3b34a3c455be2e053cf8671fe5d7a4307283b..a5207ab6817b22e74ff71d627ee9d989f3ea3152 100644
+--- a/crates/sail-data-source/src/formats/python/stream.rs
++++ b/crates/sail-data-source/src/formats/python/stream.rs
+@@ -1,38 +1,40 @@
+ use std::pin::Pin;
+ use std::sync::atomic::{AtomicU64, Ordering};
+ use std::task::{Context, Poll};
+ use std::time::Instant;
+ 
+ use arrow::array::RecordBatch;
+ use arrow_schema::SchemaRef;
+ use datafusion::common::runtime::SpawnedTask;
+ use datafusion::physical_plan::RecordBatchStream;
+ use datafusion_common::Result;
+ use futures::Stream;
+ use tokio::sync::mpsc;
+ 
++const MAX_NANOS_U64: u128 = u64::MAX as u128;
++
+ /// RecordBatch stream from Python data source.
+ ///
+ /// This stream reads from a Python datasource in a dedicated thread,
+ /// with proper RAII cleanup via the Drop impl.
+ ///
+ /// # Timeout Limitations
+ ///
+ /// In-process Python execution cannot be interrupted mid-operation due to GIL
+ /// constraints. The stop_signal is only checked between Python `__next__` calls.
+ /// If a single Python operation hangs (e.g., slow network I/O in `read()`),
+ /// there is no way to cancel it without subprocess isolation (Phase 2/3).
+ ///
+ /// Configure `python.data_source_slow_read_warn_ms` (default: 30000) to log warnings
+ /// when individual Python operations exceed the threshold.
+ use super::executor::InputPartition;
+ 
+ /// Metrics for Python execution performance tracking.
+ ///
+ /// Tracks GIL contention and throughput to help identify bottlenecks
+ /// in Python datasource execution.
+ #[derive(Debug, Default)]
+ pub struct PythonExecutionMetrics {
+     /// Total time spent waiting to acquire GIL (nanoseconds)
+     pub gil_wait_ns: AtomicU64,
+     /// Total time holding GIL (nanoseconds)
+@@ -138,51 +140,51 @@ impl PythonDataSourceStream {
+ 
+     /// Run the Python reader in a dedicated thread.
+     fn run_python_reader(
+         pickled_reader: Vec<u8>,
+         partition: InputPartition,
+         schema: SchemaRef,
+         batch_size: usize,
+         slow_read_warn_ms: u64,
+         tx: mpsc::Sender<Result<RecordBatch>>,
+     ) {
+         use pyo3::prelude::*;
+         use pyo3::types::PyBytes;
+ 
+         use super::error::PythonDataSourceContext;
+ 
+         let partition_id = partition.partition_id;
+         let metrics = PythonExecutionMetrics::new();
+ 
+         // Track time waiting for GIL
+         let gil_wait_start = Instant::now();
+ 
+         let result = Python::attach(|py| -> Result<()> {
+             // Record GIL wait time (time from start to acquiring GIL)
+             let gil_acquired = Instant::now();
+             metrics.gil_wait_ns.fetch_add(
+-                gil_wait_start.elapsed().as_nanos().min(u64::MAX as u128) as u64,
++                gil_wait_start.elapsed().as_nanos().min(MAX_NANOS_U64) as u64,
+                 Ordering::Relaxed,
+             );
+             metrics.gil_acquisitions.fetch_add(1, Ordering::Relaxed);
+ 
+             // Deserialize reader (already has filters applied)
+             let cloudpickle = import_cloudpickle(py)?;
+             let reader_bytes = PyBytes::new(py, &pickled_reader);
+             let reader = cloudpickle
+                 .call_method1("loads", (reader_bytes,))
+                 .map_err(py_err)?;
+ 
+             let ctx = PythonDataSourceContext::new("<reader>", "read");
+ 
+             // Deserialize partition
+             let partition_bytes = PyBytes::new(py, &partition.data);
+             let py_partition = cloudpickle
+                 .call_method1("loads", (partition_bytes,))
+                 .map_err(py_err)?;
+ 
+             // Call read() directly - no need to create reader or push filters
+             let iterator = reader
+                 .call_method1("read", (py_partition,))
+                 .map_err(|e| ctx.wrap_py_error(e))?;
+ 
+             // Get pyarrow.RecordBatch type for isinstance check
+diff --git a/crates/sail-data-source/src/formats/python/table_format.rs b/crates/sail-data-source/src/formats/python/table_format.rs
+index 6e4265b858c9e21b0e2b6bff74f507414941875e..1cb236d691782bed0f75fe7a5bffb2e71c6014c0 100644
+--- a/crates/sail-data-source/src/formats/python/table_format.rs
++++ b/crates/sail-data-source/src/formats/python/table_format.rs
+@@ -229,53 +229,55 @@ impl TableFormat for PythonTableFormat {
+         // ErrorIfExists and IgnoreIfExists are pre-write semantics that PySpark
+         // handles at the catalog level for managed tables. For Python datasources
+         // that manage their own storage, the mode is passed as an option so the
+         // datasource can implement its own existence checks if desired.
+         let overwrite = matches!(
+             mode,
+             PhysicalSinkMode::Overwrite
+                 | PhysicalSinkMode::OverwriteIf { .. }
+                 | PhysicalSinkMode::OverwritePartitions
+         );
+ 
+         // Pass the save mode as an option for datasources that need it
+         let mode_str = match &mode {
+             PhysicalSinkMode::ErrorIfExists => "error",
+             PhysicalSinkMode::IgnoreIfExists => "ignore",
+             PhysicalSinkMode::Append => "append",
+             PhysicalSinkMode::Overwrite => "overwrite",
+             PhysicalSinkMode::OverwriteIf { .. } => "overwrite",
+             PhysicalSinkMode::OverwritePartitions => "overwrite",
+         };
+         let mode_option: HashMap<String, String> = [("mode".to_string(), mode_str.to_string())]
+             .into_iter()
+             .collect();
+         options.push(mode_option);
+ 
+-        // Create datasource and get writer
++        // Create datasource and get writer using the same executor configuration
++        // path as write execution for consistent Python datasource behavior.
+         let datasource = self.create_datasource(&options)?;
+-        let executor: Arc<dyn super::executor::PythonExecutor> = Arc::new(InProcessExecutor::new());
++        let executor: Arc<dyn super::executor::PythonExecutor> =
++            Arc::new(InProcessExecutor::from_app_config());
+         let schema = input.schema();
+ 
+         let writer_plan = executor
+             .get_writer(datasource.command(), &schema, overwrite)
+             .await?;
+ 
+         Ok(Arc::new(super::write_exec::PythonDataSourceWriteExec::new(
+             input,
+             writer_plan.pickled_writer,
+             schema,
+             writer_plan.is_arrow,
+         )))
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
+     #[test]
+     fn test_python_table_format_name() {
+         let format = PythonTableFormat::new("test_datasource".to_string());
+         assert_eq!(format.name(), "test_datasource");
+     }
+ }
+diff --git a/crates/sail-execution/proto/sail/plan/physical.proto b/crates/sail-execution/proto/sail/plan/physical.proto
+index 21d09a81286f734cc6a32fa8c3ca9c5543e8ae45..e0b6644a6a8c8354b25e17a419ce2c4d50bf4038 100644
+--- a/crates/sail-execution/proto/sail/plan/physical.proto
++++ b/crates/sail-execution/proto/sail/plan/physical.proto
+@@ -573,34 +573,36 @@ message IcebergCommitExecNode {
+   string table_url = 2;
+ }
+ 
+ message DeltaLogReplayExecNode {
+   bytes input = 1;
+   string table_url = 2;
+   int64 version = 3;
+   repeated string partition_columns = 4;
+   repeated string checkpoint_files = 5;
+   repeated string commit_files = 6;
+ }
+ 
+ message PythonDataSourceInputPartition {
+   uint64 partition_id = 1;
+   bytes data = 2;
+ }
+ 
+ message PythonDataSourceExecNode {
+   // Pickled Python DataSourceReader instance (with filters already applied)
+   bytes pickled_reader = 1;
+   bytes schema = 2;
+   repeated PythonDataSourceInputPartition partitions = 3;
+ }
+ 
+ message PythonDataSourceWriteExecNode {
+-  // Pickled Python DataSourceWriter instance
++  // Pickled Python DataSourceWriter instance obtained from
++  // DataSource.writer(schema, overwrite), ready for write(), commit(),
++  // and abort() calls (stateless boundary matches write_exec.rs).
+   bytes pickled_writer = 1;
+   // Schema of the data being written
+   bytes schema = 2;
+   // Whether writer is DataSourceArrowWriter (true) or DataSourceWriter (false)
+   bool is_arrow = 3;
+   // Input plan (data to write)
+   bytes input = 4;
+ }
+diff --git a/python/pysail/tests/spark/test_python_datasource.py b/python/pysail/tests/spark/test_python_datasource.py
+index 03f1f6d97ddb93ed0c3ea5e555e90ba24b63b177..777571081587a771e765d173b1bcc060297bf031 100644
+--- a/python/pysail/tests/spark/test_python_datasource.py
++++ b/python/pysail/tests/spark/test_python_datasource.py
+@@ -816,188 +816,183 @@ class TestFilterPushdown:
+                 # Accept all filters (return empty to indicate all handled)
+                 return []
+ 
+         spark.dataSource.register(FilterTrackingDataSource)
+ 
+         # Query with complex AND filter
+         df = spark.read.format("filter_tracking_and_test").load()
+         filtered_df = df.filter("value > 15 AND id < 3")
+ 
+         rows = filtered_df.collect()
+         assert len(rows) > 0
+ 
+         # The 'name' column contains the string representation of pushed filters
+         pushed_filters_str = rows[0].name
+ 
+         # Should see both GreaterThan and LessThan filters in the list
+         assert "GreaterThan" in pushed_filters_str or "LessThan" in pushed_filters_str
+         assert "value" in pushed_filters_str or "id" in pushed_filters_str
+ 
+ 
+ # ============================================================================
+ # Write Support Tests
+ # ============================================================================
+ 
+ 
+-class InMemoryWriter(DataSourceWriter):
+-    """Row-based writer for testing."""
+-
+-    def __init__(self, schema, overwrite):
+-        self.schema = schema
+-        self.overwrite = overwrite
+-        self.data = []
+-        self.committed = False
+-        self.aborted = False
+-        self.commit_messages = []
+-
+-    def write(self, iterator):
+-        """Write rows and return commit message."""
+-        for row in iterator:
+-            # Convert Row to dict for storage
+-            self.data.append(dict(row.asDict()))
+-        return {"partition_data": self.data, "count": len(self.data)}
+-
+-    def commit(self, messages):
+-        """Commit the write."""
+-        self.committed = True
+-        self.commit_messages = messages
+-        # Store messages in a global for test verification
+-        InMemoryWriter._last_commit_messages = messages
+-
+-    def abort(self, messages):
+-        """Abort the write."""
+-        self.aborted = True
+-        self.commit_messages = messages
+-
+-
+-# Global storage for commit messages
+-InMemoryWriter._last_commit_messages = []  # noqa: SLF001
+-
+-
+-class InMemoryArrowWriter(DataSourceArrowWriter):
+-    """Arrow-based writer for testing."""
+-
+-    def __init__(self, schema, overwrite):
+-        self.schema = schema
+-        self.overwrite = overwrite
+-        self.batches = []
+-        self.committed = False
+-        self.aborted = False
+-        self.commit_messages = []
+-
+-    def write(self, iterator):
+-        """Write Arrow RecordBatches and return commit message."""
+-        batch_count = 0
+-        total_rows = 0
+-        for batch in iterator:
+-            self.batches.append(batch)
+-            batch_count += 1
+-            total_rows += batch.num_rows
+-        return {"batch_count": batch_count, "total_rows": total_rows}
+-
+-    def commit(self, messages):
+-        """Commit the write."""
+-        self.committed = True
+-        self.commit_messages = messages
+-        InMemoryArrowWriter._last_commit_messages = messages
+-
+-    def abort(self, messages):
+-        """Abort the write."""
+-        self.aborted = True
+-        self.commit_messages = messages
+-
+-
+-InMemoryArrowWriter._last_commit_messages = []  # noqa: SLF001
+-
+-
+-class WritableDataSource(DataSource):
+-    """DataSource that supports both reading and writing."""
+-
+-    def __init__(self, options):
+-        self.options = options
+-        self.writer_type = options.get("writer_type", "row")
++def _create_writable_test_datasource(commit_state: dict[str, list[Any] | None]):
++    """Create a writable datasource class with per-test local commit state."""
+ 
+-    @classmethod
+-    def name(cls):
+-        return "writable_test"
++    class InMemoryWriter(DataSourceWriter):
++        """Row-based writer for testing."""
+ 
+-    def schema(self):
+-        return "id INT, value STRING"
++        def __init__(self, schema, overwrite):
++            self.schema = schema
++            self.overwrite = overwrite
++            self.data = []
++            self.committed = False
++            self.aborted = False
++            self.commit_messages = []
+ 
+-    def reader(self, schema):  # noqa: ARG002
+-        # Simple reader for testing
+-        class SimpleReader(DataSourceReader):
+-            def partitions(self):
+-                return [InputPartition(0)]
++        def write(self, iterator):
++            """Write rows and return commit message."""
++            for row in iterator:
++                # Convert Row to dict for storage
++                self.data.append(dict(row.asDict()))
++            return {"partition_data": self.data, "count": len(self.data)}
+ 
+-            def read(self, partition):  # noqa: ARG002
+-                data = {"id": [1, 2, 3], "value": ["a", "b", "c"]}
+-                reader_schema = pa.schema([("id", pa.int32()), ("value", pa.string())])
+-                batch = pa.RecordBatch.from_pydict(data, schema=reader_schema)
+-                yield batch
++        def commit(self, messages):
++            """Commit the write."""
++            self.committed = True
++            self.commit_messages = messages
++            commit_state["row"] = messages
++
++        def abort(self, messages):
++            """Abort the write."""
++            self.aborted = True
++            self.commit_messages = messages
++
++    class InMemoryArrowWriter(DataSourceArrowWriter):
++        """Arrow-based writer for testing."""
++
++        def __init__(self, schema, overwrite):
++            self.schema = schema
++            self.overwrite = overwrite
++            self.batches = []
++            self.committed = False
++            self.aborted = False
++            self.commit_messages = []
++
++        def write(self, iterator):
++            """Write Arrow RecordBatches and return commit message."""
++            batch_count = 0
++            total_rows = 0
++            for batch in iterator:
++                self.batches.append(batch)
++                batch_count += 1
++                total_rows += batch.num_rows
++            return {"batch_count": batch_count, "total_rows": total_rows}
++
++        def commit(self, messages):
++            """Commit the write."""
++            self.committed = True
++            self.commit_messages = messages
++            commit_state["arrow"] = messages
+ 
+-        return SimpleReader()
++        def abort(self, messages):
++            """Abort the write."""
++            self.aborted = True
++            self.commit_messages = messages
++
++    class WritableDataSource(DataSource):
++        """DataSource that supports both reading and writing."""
++
++        def __init__(self, options):
++            self.options = options
++            self.writer_type = options.get("writer_type", "row")
++
++        @classmethod
++        def name(cls):
++            return "writable_test"
++
++        def schema(self):
++            return "id INT, value STRING"
++
++        def reader(self, schema):  # noqa: ARG002
++            # Simple reader for testing
++            class SimpleReader(DataSourceReader):
++                def partitions(self):
++                    return [InputPartition(0)]
++
++                def read(self, partition):  # noqa: ARG002
++                    data = {"id": [1, 2, 3], "value": ["a", "b", "c"]}
++                    reader_schema = pa.schema([("id", pa.int32()), ("value", pa.string())])
++                    batch = pa.RecordBatch.from_pydict(data, schema=reader_schema)
++                    yield batch
++
++            return SimpleReader()
++
++        def writer(self, schema, overwrite):
++            """Return writer based on configuration."""
++            if self.writer_type == "arrow":
++                return InMemoryArrowWriter(schema, overwrite)
++            return InMemoryWriter(schema, overwrite)
+ 
+-    def writer(self, schema, overwrite):
+-        """Return writer based on configuration."""
+-        if self.writer_type == "arrow":
+-            return InMemoryArrowWriter(schema, overwrite)
+-        return InMemoryWriter(schema, overwrite)
++    return WritableDataSource
+ 
+ 
+ def test_basic_write(spark):
+     """Test basic Row-based write."""
+-    # Reset global state to avoid cross-test contamination
+-    InMemoryWriter._last_commit_messages = None  # noqa: SLF001
+-    spark.dataSource.register(WritableDataSource)
++    commit_state = {"row": None}
++    spark.dataSource.register(_create_writable_test_datasource(commit_state))
+ 
+     # Create test DataFrame
+     df = spark.createDataFrame([(1, "a"), (2, "b"), (3, "c")], ["id", "value"])
+ 
+     # Write data
+     df.write.format("writable_test").option("writer_type", "row").mode("append").save()
+ 
+     # Verify commit was called
+-    assert InMemoryWriter._last_commit_messages is not None  # noqa: SLF001
+-    assert len(InMemoryWriter._last_commit_messages) > 0  # noqa: SLF001
++    row_messages = commit_state["row"]
++    assert row_messages is not None
++    assert len(row_messages) > 0
+ 
+ 
+ def test_arrow_write(spark):
+     """Test Arrow-based write."""
+-    # Reset global state to avoid cross-test contamination
+-    InMemoryArrowWriter._last_commit_messages = None  # noqa: SLF001
+-    spark.dataSource.register(WritableDataSource)
++    commit_state = {"arrow": None}
++    spark.dataSource.register(_create_writable_test_datasource(commit_state))
+ 
+     # Create test DataFrame
+     df = spark.createDataFrame([(1, "x"), (2, "y")], ["id", "value"])
+ 
+     # Write data using Arrow writer
+     df.write.format("writable_test").option("writer_type", "arrow").mode("append").save()
+ 
+     # Verify commit was called
+-    assert InMemoryArrowWriter._last_commit_messages is not None  # noqa: SLF001
+-    assert len(InMemoryArrowWriter._last_commit_messages) > 0  # noqa: SLF001
++    arrow_messages = commit_state["arrow"]
++    assert arrow_messages is not None
++    assert len(arrow_messages) > 0
+ 
+ 
+ def test_write_overwrite_mode(spark):
+     """Test that overwrite mode is passed correctly."""
+ 
+     class OverwriteCheckWriter(DataSourceWriter):
+         def __init__(self, schema, overwrite):  # noqa: ARG002
+             self.overwrite = overwrite
+             self.data = []
+ 
+         def write(self, iterator):
+             for row in iterator:
+                 self.data.append(dict(row.asDict()))
+             return {}
+ 
+         def commit(self, messages):  # noqa: ARG002
+             # Store overwrite flag for verification
+             OverwriteCheckWriter._last_overwrite = self.overwrite
+ 
+     OverwriteCheckWriter._last_overwrite = None  # noqa: SLF001
+ 
+     class OverwriteCheckDataSource(DataSource):
+         def __init__(self, options):
+             super().__init__(options)
+ 
+@@ -1079,62 +1074,62 @@ def test_write_commit(spark):
+         def __init__(self, options):
+             super().__init__(options)
+ 
+         @classmethod
+         def name(cls):
+             return "commit_tracking"
+ 
+         def schema(self):
+             return "id INT"
+ 
+         def writer(self, schema, overwrite):
+             return CommitTrackingWriter(schema, overwrite)
+ 
+     spark.dataSource.register(CommitTrackingDataSource)
+ 
+     df = spark.createDataFrame([(1,), (2,), (3,)], ["id"])
+     df.write.format("commit_tracking").save()
+ 
+     # Verify commit was called with messages
+     assert CommitTrackingWriter._commit_messages is not None  # noqa: SLF001
+     assert len(CommitTrackingWriter._commit_messages) > 0  # noqa: SLF001
+ 
+ 
+ def test_write_empty_dataframe(spark):
+     """Test writing an empty DataFrame."""
+-    # Reset global state to avoid cross-test contamination
+-    InMemoryWriter._last_commit_messages = None  # noqa: SLF001
+-    spark.dataSource.register(WritableDataSource)
++    commit_state = {"row": None}
++    spark.dataSource.register(_create_writable_test_datasource(commit_state))
+ 
+     # Create empty DataFrame
+     df = spark.createDataFrame([], "id INT, value STRING")
+ 
+     # Write should succeed even with empty data
+     df.write.format("writable_test").option("writer_type", "row").save()
+ 
+     # Verify commit was called
+-    assert InMemoryWriter._last_commit_messages is not None  # noqa: SLF001
++    row_messages = commit_state["row"]
++    assert row_messages is not None
+ 
+ 
+ def test_write_no_writer_implemented(spark):
+     """Test error when writer() is not implemented."""
+ 
+     class ReadOnlyDataSource(DataSource):
+         def __init__(self, options):
+             pass
+ 
+         @classmethod
+         def name(cls):
+             return "readonly"
+ 
+         def schema(self):
+             return "id INT"
+ 
+         def reader(self, schema):  # noqa: ARG002
+             class SimpleReader(DataSourceReader):
+                 def partitions(self):
+                     return [InputPartition(0)]
+ 
+                 def read(self, partition):  # noqa: ARG002
+                     data = {"id": [1, 2, 3]}
+                     reader_schema = pa.schema([("id", pa.int32())])
+                     batch = pa.RecordBatch.from_pydict(data, schema=reader_schema)
+@@ -1329,70 +1324,70 @@ def test_write_commit_failure_triggers_abort(spark):
+         def name(cls):
+             return "commit_fail"
+ 
+         def schema(self):
+             return "id INT"
+ 
+         def writer(self, schema, overwrite):
+             return CommitFailWriter(schema, overwrite)
+ 
+     spark.dataSource.register(CommitFailDataSource)
+ 
+     df = spark.createDataFrame([(1,), (2,)], ["id"])
+ 
+     # Write should fail because commit fails
+     with pytest.raises(Exception, match=r"(?i)commit failure|error"):
+         df.write.format("commit_fail").save()
+ 
+     # Verify abort was called after commit failure
+     assert CommitFailWriter._abort_called, (  # noqa: SLF001
+         "abort() should have been called after commit failure"
+     )
+ 
+ 
+ def test_write_null_values(spark):
+     """Test writing data that contains null values."""
+-    # Reset global state to avoid cross-test contamination
+-    InMemoryWriter._last_commit_messages = None  # noqa: SLF001
+-    InMemoryArrowWriter._last_commit_messages = None  # noqa: SLF001
+-    spark.dataSource.register(WritableDataSource)
++    commit_state = {"row": None, "arrow": None}
++    spark.dataSource.register(_create_writable_test_datasource(commit_state))
+ 
+     # Create DataFrame with null values
+     df = spark.createDataFrame(
+         [(1, "a"), (2, None), (None, "c")],
+         "id INT, value STRING",
+     )
+ 
+     # Test row-based write with nulls
+     df.write.format("writable_test").option("writer_type", "row").mode("append").save()
+-    assert InMemoryWriter._last_commit_messages is not None  # noqa: SLF001
+-    assert len(InMemoryWriter._last_commit_messages) > 0  # noqa: SLF001
++    row_messages = commit_state["row"]
++    assert row_messages is not None
++    assert len(row_messages) > 0
+ 
+     # Test Arrow-based write with nulls
+     df.write.format("writable_test").option("writer_type", "arrow").mode("append").save()
+-    assert InMemoryArrowWriter._last_commit_messages is not None  # noqa: SLF001
+-    assert len(InMemoryArrowWriter._last_commit_messages) > 0  # noqa: SLF001
++    arrow_messages = commit_state["arrow"]
++    assert arrow_messages is not None
++    assert len(arrow_messages) > 0
+ 
+ 
+ def test_write_none_commit_message(spark):
+     """Test that writer returning None as commit message is handled correctly."""
+ 
+     class NoneMessageWriter(DataSourceWriter):
+         _commit_messages = None
+ 
+         def __init__(self, schema, overwrite):
+             pass
+ 
+         def write(self, iterator):
+             for _ in iterator:
+                 pass
+             # Explicitly return None (no commit message)
+ 
+         def commit(self, messages):
+             NoneMessageWriter._commit_messages = messages
+ 
+     NoneMessageWriter._commit_messages = None  # noqa: SLF001
+ 
+     class NoneMessageDataSource(DataSource):
+         def __init__(self, options):
+             super().__init__(options)
+ 

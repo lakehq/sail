@@ -134,7 +134,7 @@ pub fn simple_table_options_with_format(
 
 pub async fn setup_hms_catalog(test_name: &str) -> HmsTestContext {
     let lock = test_lock().lock_owned().await;
-    let container = GenericImage::new("apache/hive", "4.1.0")
+    let container = GenericImage::new("apache/hive", "3.1.3")
         .with_wait_for(WaitFor::seconds(1))
         .with_exposed_port(ContainerPort::Tcp(HIVE_METASTORE_PORT))
         .with_env_var("SERVICE_NAME", "metastore")
@@ -296,7 +296,7 @@ async fn setup_kerberos_hms_catalog_inner(
     fs::write(&core_site_path, core_site_xml())
         .unwrap_or_else(|error| panic!("write core-site.xml: {error}"));
 
-    let hms_container = GenericImage::new("apache/hive", "4.1.0")
+    let hms_container = GenericImage::new("apache/hive", "3.1.3")
         .with_exposed_port(ContainerPort::Tcp(HIVE_METASTORE_PORT))
         .with_network(&network_name)
         .with_container_name(format!("sail-krb-hms-{suffix}"))
