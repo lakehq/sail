@@ -357,7 +357,7 @@ impl GssClientContext {
                 ptr::null_mut(),
                 &mut self.ctx as *mut bindings::gss_ctx_id_t,
                 self.target.name,
-                *libgssapi()?.gss_mech_krb5() as bindings::gss_OID,
+                ptr::null_mut(), // GSS_C_NO_MECHANISM
                 self.flags,
                 bindings::_GSS_C_INDEFINITE,
                 ptr::null_mut(),
@@ -447,35 +447,41 @@ impl Drop for GssClientContext {
     }
 }
 
-fn check_gss_ok(mut major: u32, mut minor: u32) -> CatalogResult<()> {
+fn check_gss_ok(mut major: u32, minor: u32) -> CatalogResult<()> {
     major &= (bindings::_GSS_C_CALLING_ERROR_MASK << bindings::GSS_C_CALLING_ERROR_OFFSET)
         | (bindings::_GSS_C_ROUTINE_ERROR_MASK << bindings::GSS_C_ROUTINE_ERROR_OFFSET);
     if major == bindings::GSS_S_COMPLETE {
         return Ok(());
     }
 
-    let mut context = 0;
-    let mut message = GssBuf::empty();
-    let ret = unsafe {
-        libgssapi()?.gss_display_status(
-            &mut minor,
-            major,
-            bindings::GSS_C_GSS_CODE as i32,
-            ptr::null_mut(),
-            &mut context,
-            message.as_ptr(),
-        )
-    };
-    let error_message = if ret == bindings::GSS_S_COMPLETE {
-        let s = String::from_utf8_lossy(message.as_ref()).to_string();
-        message.release();
-        s
-    } else {
-        String::new()
-    };
+    fn display_status(code: u32, type_: i32) -> CatalogResult<String> {
+        let mut context = 0;
+        let mut message = GssBuf::empty();
+        let mut minor = 0;
+        let ret = unsafe {
+            libgssapi()?.gss_display_status(
+                &mut minor,
+                code,
+                type_,
+                ptr::null_mut(),
+                &mut context,
+                message.as_ptr(),
+            )
+        };
+        if ret == bindings::GSS_S_COMPLETE {
+            let s = String::from_utf8_lossy(message.as_ref()).to_string();
+            message.release();
+            Ok(s)
+        } else {
+            Ok(format!("(failed to display status {code})"))
+        }
+    }
+
+    let major_message = display_status(major, bindings::GSS_C_GSS_CODE as i32)?;
+    let minor_message = display_status(minor, bindings::GSS_C_MECH_CODE as i32)?;
 
     Err(CatalogError::External(format!(
-        "gssapi error: {:?} (minor {minor}): {error_message}",
+        "gssapi error: {:?} (minor {minor}): {major_message}. {minor_message}",
         GssMajorCodes::from_bits_retain(major)
     )))
 }
