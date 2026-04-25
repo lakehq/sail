@@ -194,11 +194,7 @@ async fn shared_hms_container() -> &'static SharedHmsContainer {
         .await
         .expect("Failed to start Hive Metastore");
 
-    let host = container
-        .get_host()
-        .await
-        .expect("get host")
-        .to_string();
+    let host = container.get_host().await.expect("get host").to_string();
     let port = container
         .get_host_port_ipv4(HIVE_METASTORE_PORT)
         .await
@@ -432,16 +428,16 @@ async fn shared_kerberos_infrastructure() -> &'static SharedKerberosInfrastructu
     std::env::set_var("SAIL_HMS_KRB_TRACE", "1");
 
     let _ = SHARED_KRB.set(SharedKerberosInfrastructure {
-            canonical_host,
-            hms_port,
-            service_principal,
-            client_principal,
-            client_keytab_path,
-            host_krb5_conf_path,
-            temp_dir,
-            _kdc_container: kdc_container,
-            _hms_container: hms_container,
-        });
+        canonical_host,
+        hms_port,
+        service_principal,
+        client_principal,
+        client_keytab_path,
+        host_krb5_conf_path,
+        temp_dir,
+        _kdc_container: kdc_container,
+        _hms_container: hms_container,
+    });
     SHARED_KRB.get().unwrap()
 }
 
