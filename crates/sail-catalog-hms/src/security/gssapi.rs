@@ -191,6 +191,11 @@ fn libgssapi() -> CatalogResult<&'static bindings::GSSAPI> {
     })
 }
 
+/// Returns `true` if the GSSAPI/Kerberos runtime library was successfully loaded.
+pub(crate) fn is_available() -> bool {
+    LIBGSSAPI.is_some()
+}
+
 #[repr(transparent)]
 struct GssBuf<'a>(bindings::gss_buffer_desc_struct, PhantomData<&'a [u8]>);
 

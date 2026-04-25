@@ -19,7 +19,7 @@ use testcontainers::runners::{AsyncBuilder, AsyncRunner};
 use testcontainers::{ContainerAsync, GenericBuildableImage, GenericImage, Image, ImageExt};
 use tokio::net::TcpStream;
 use tokio::process::Command;
-use tokio::sync::OwnedMutexGuard;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 const KERBEROS_REALM: &str = "SAIL.TEST";
 const KDC_HOSTNAME: &str = "sail-kerberos-kdc";
@@ -33,22 +33,17 @@ const KDC_PORT: u16 = 88;
 
 pub struct HmsTestContext {
     pub catalog: HmsCatalogProvider,
-    pub container: ContainerAsync<GenericImage>,
-    _lock: OwnedMutexGuard<()>,
+    pub host: String,
+    pub port: u16,
 }
 
 pub struct HmsDatabaseContext {
     pub catalog: HmsCatalogProvider,
-    pub container: ContainerAsync<GenericImage>,
     pub namespace: Namespace,
-    _lock: OwnedMutexGuard<()>,
 }
 
 pub struct KerberosHmsTestContext {
     pub catalog: HmsCatalogProvider,
-    _kdc_container: ContainerAsync<GenericImage>,
-    _hms_container: ContainerAsync<GenericImage>,
-    _temp_dir: TempDir,
     _env_guard: ProcessEnvGuard,
     _lock: OwnedMutexGuard<()>,
 }
@@ -133,7 +128,62 @@ pub fn simple_table_options_with_format(
 }
 
 pub async fn setup_hms_catalog(test_name: &str) -> HmsTestContext {
-    let lock = test_lock().lock_owned().await;
+    let shared = shared_hms_container().await;
+    let provider = HmsCatalogProvider::new(
+        test_name.to_string(),
+        HmsCatalogConfig {
+            uris: vec![format!("{}:{}", shared.host, shared.port)],
+            thrift_transport: None,
+            auth: None,
+            kerberos_service_principal: None,
+            min_sasl_qop: None,
+            connect_timeout_secs: None,
+        },
+        runtime_handle(),
+    )
+    .expect("create HMS provider");
+
+    HmsTestContext {
+        catalog: provider,
+        host: shared.host.clone(),
+        port: shared.port,
+    }
+}
+
+pub async fn setup_with_database(test_name: &str) -> HmsDatabaseContext {
+    let HmsTestContext { catalog, .. } = setup_hms_catalog(test_name).await;
+    let namespace = Namespace::try_from(vec![format!("{test_name}_db")]).unwrap();
+    catalog
+        .create_database(&namespace, simple_database_options())
+        .await
+        .unwrap();
+    HmsDatabaseContext { catalog, namespace }
+}
+
+#[derive(Debug)]
+struct SharedHmsContainer {
+    host: String,
+    port: u16,
+    _container: ContainerAsync<GenericImage>,
+}
+
+static SHARED_HMS: OnceLock<SharedHmsContainer> = OnceLock::new();
+
+static HMS_INIT: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+
+async fn shared_hms_container() -> &'static SharedHmsContainer {
+    if let Some(shared) = SHARED_HMS.get() {
+        return shared;
+    }
+
+    // Serialize async initialization so only one caller creates the container.
+    let mutex = HMS_INIT.get_or_init(|| Mutex::new(()));
+    let _guard = mutex.lock().await;
+    // Double-check after acquiring the lock.
+    if let Some(shared) = SHARED_HMS.get() {
+        return shared;
+    }
+
     let container = GenericImage::new("apache/hive", "3.1.3")
         .with_wait_for(WaitFor::seconds(1))
         .with_exposed_port(ContainerPort::Tcp(HIVE_METASTORE_PORT))
@@ -144,14 +194,18 @@ pub async fn setup_hms_catalog(test_name: &str) -> HmsTestContext {
         .await
         .expect("Failed to start Hive Metastore");
 
-    let host = container.get_host().await.expect("get host");
+    let host = container
+        .get_host()
+        .await
+        .expect("get host")
+        .to_string();
     let port = container
         .get_host_port_ipv4(HIVE_METASTORE_PORT)
         .await
         .expect("get thrift port");
 
     let provider = HmsCatalogProvider::new(
-        test_name.to_string(),
+        "shared_hms readiness check".to_string(),
         HmsCatalogConfig {
             uris: vec![format!("{host}:{port}")],
             thrift_transport: None,
@@ -166,30 +220,14 @@ pub async fn setup_hms_catalog(test_name: &str) -> HmsTestContext {
 
     wait_until_ready(&provider, 60, "Hive Metastore").await;
 
-    HmsTestContext {
-        catalog: provider,
-        container,
-        _lock: lock,
-    }
-}
-
-pub async fn setup_with_database(test_name: &str) -> HmsDatabaseContext {
-    let HmsTestContext {
-        catalog,
-        container,
-        _lock,
-    } = setup_hms_catalog(test_name).await;
-    let namespace = Namespace::try_from(vec![format!("{test_name}_db")]).unwrap();
-    catalog
-        .create_database(&namespace, simple_database_options())
-        .await
-        .unwrap();
-    HmsDatabaseContext {
-        catalog,
-        container,
-        namespace,
-        _lock,
-    }
+    SHARED_HMS
+        .set(SharedHmsContainer {
+            host,
+            port,
+            _container: container,
+        })
+        .expect("shared HMS container was already initialized");
+    SHARED_HMS.get().unwrap()
 }
 
 pub async fn setup_kerberos_hms_catalog(test_name: &str) -> KerberosHmsTestContext {
@@ -204,7 +242,68 @@ async fn setup_kerberos_hms_catalog_inner(
     test_name: &str,
     perform_kinit: bool,
 ) -> KerberosHmsTestContext {
-    let lock = test_lock().lock_owned().await;
+    let lock = kerberos_test_lock().lock_owned().await;
+    let shared = shared_kerberos_infrastructure().await;
+
+    let mut env_guard = ProcessEnvGuard::new();
+    let ticket_cache_path = shared.temp_dir.path().join(format!("krb5cc-{test_name}"));
+    env_guard.set("KRB5CCNAME", ticket_cache_path.as_os_str());
+
+    if perform_kinit {
+        run_kinit(&shared.client_keytab_path, &shared.client_principal).await;
+    }
+
+    let catalog = HmsCatalogProvider::new(
+        test_name.to_string(),
+        HmsCatalogConfig {
+            uris: vec![format!("{}:{}", shared.canonical_host, shared.hms_port)],
+            thrift_transport: None,
+            auth: Some("kerberos".to_string()),
+            kerberos_service_principal: Some(shared.service_principal.clone()),
+            min_sasl_qop: None,
+            connect_timeout_secs: None,
+        },
+        runtime_handle(),
+    )
+    .expect("create HMS provider");
+
+    if perform_kinit {
+        wait_until_ready(&catalog, 240, "Kerberos Hive Metastore").await;
+    }
+
+    KerberosHmsTestContext {
+        catalog,
+        _env_guard: env_guard,
+        _lock: lock,
+    }
+}
+
+struct SharedKerberosInfrastructure {
+    canonical_host: String,
+    hms_port: u16,
+    service_principal: String,
+    client_principal: String,
+    client_keytab_path: PathBuf,
+    host_krb5_conf_path: PathBuf,
+    temp_dir: TempDir,
+    _kdc_container: ContainerAsync<GenericImage>,
+    _hms_container: ContainerAsync<GenericImage>,
+}
+
+static SHARED_KRB: OnceLock<SharedKerberosInfrastructure> = OnceLock::new();
+static KRB_INIT: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+
+async fn shared_kerberos_infrastructure() -> &'static SharedKerberosInfrastructure {
+    if let Some(shared) = SHARED_KRB.get() {
+        return shared;
+    }
+
+    let mutex = KRB_INIT.get_or_init(|| Mutex::new(()));
+    let _guard = mutex.lock().await;
+    if let Some(shared) = SHARED_KRB.get() {
+        return shared;
+    }
+
     let suffix = unique_suffix();
     let temp_dir = tempfile::Builder::new()
         .prefix("sail-kerberos-hms-")
@@ -326,42 +425,24 @@ async fn setup_kerberos_hms_catalog_inner(
         .unwrap_or_else(|error| panic!("get HMS host port: {error}"));
     wait_for_tcp_port(&canonical_host, hms_port, 240, "Kerberos Hive Metastore").await;
 
-    let mut env_guard = ProcessEnvGuard::new();
-    env_guard.set("KRB5_CONFIG", host_krb5_conf_path.as_os_str());
-    let ticket_cache_path = temp_dir.path().join("krb5cc");
-    env_guard.set("KRB5CCNAME", ticket_cache_path.as_os_str());
-    env_guard.set("SAIL_HMS_KRB_TRACE", "1");
+    // Set Kerberos env vars permanently for the process (not per-test).
+    // KRB5_CONFIG must be set before any GSSAPI call so the library can
+    // locate the KDC. SAIL_HMS_KRB_TRACE enables readiness diagnostics.
+    std::env::set_var("KRB5_CONFIG", &host_krb5_conf_path);
+    std::env::set_var("SAIL_HMS_KRB_TRACE", "1");
 
-    if perform_kinit {
-        run_kinit(&client_keytab_path, &client_principal).await;
-    }
-
-    let catalog = HmsCatalogProvider::new(
-        test_name.to_string(),
-        HmsCatalogConfig {
-            uris: vec![format!("{canonical_host}:{hms_port}")],
-            thrift_transport: None,
-            auth: Some("kerberos".to_string()),
-            kerberos_service_principal: Some(service_principal),
-            min_sasl_qop: None,
-            connect_timeout_secs: None,
-        },
-        runtime_handle(),
-    )
-    .expect("create HMS provider");
-
-    if perform_kinit {
-        wait_until_ready(&catalog, 240, "Kerberos Hive Metastore").await;
-    }
-
-    KerberosHmsTestContext {
-        catalog,
-        _kdc_container: kdc_container,
-        _hms_container: hms_container,
-        _temp_dir: temp_dir,
-        _env_guard: env_guard,
-        _lock: lock,
-    }
+    let _ = SHARED_KRB.set(SharedKerberosInfrastructure {
+            canonical_host,
+            hms_port,
+            service_principal,
+            client_principal,
+            client_keytab_path,
+            host_krb5_conf_path,
+            temp_dir,
+            _kdc_container: kdc_container,
+            _hms_container: hms_container,
+        });
+    SHARED_KRB.get().unwrap()
 }
 
 fn runtime_handle() -> RuntimeHandle {
@@ -371,7 +452,7 @@ fn runtime_handle() -> RuntimeHandle {
     )
 }
 
-fn test_lock() -> Arc<tokio::sync::Mutex<()>> {
+fn kerberos_test_lock() -> Arc<tokio::sync::Mutex<()>> {
     static LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
     LOCK.get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()

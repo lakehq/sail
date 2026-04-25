@@ -13,3 +13,8 @@ mod thrift_sasl;
 
 pub(crate) use gssapi::SaslQop;
 pub(crate) use thrift_sasl::KerberosMakeTransport;
+
+/// Returns `true` if the GSSAPI/Kerberos runtime library is available on this host.
+pub fn gssapi_available() -> bool {
+    gssapi::is_available()
+}

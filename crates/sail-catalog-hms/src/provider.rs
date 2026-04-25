@@ -181,6 +181,14 @@ fn catalog_auth_mode(
     {
         "none" => Ok(CatalogAuthMode::None),
         "kerberos" => {
+            if !crate::security::gssapi_available() {
+                return Err(CatalogError::InvalidArgument(
+                    "Kerberos auth was requested but the GSSAPI runtime library is not available. \
+                     Install the Kerberos runtime (e.g. libgssapi-krb5-2 on Debian, krb5-libs on RHEL) \
+                     and run kinit before starting Sail."
+                        .to_string(),
+                ));
+            }
             let service_principal = config
                 .kerberos_service_principal
                 .as_deref()
