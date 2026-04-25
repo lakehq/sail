@@ -101,7 +101,11 @@ impl ScalarUDFImpl for SparkAbs {
             return Err(invalid_arg_count_exec_err("abs", (1, 1), args.len()));
         };
         match arg {
-            // Signed integer abs: ANSI=true errors on overflow, ANSI=false wraps.
+            // Signed integer abs: ANSI=true errors on overflow (mathematically
+            // correct: |MIN| does not fit in the same width). ANSI=false uses
+            // two's-complement wrap (returns MIN itself for MIN inputs) —
+            // Spark-JVM compatible behavior inherited from Java's Math.abs(int),
+            // but mathematically incorrect since abs is defined as non-negative.
             ColumnarValue::Scalar(ScalarValue::Int8(v)) => match v {
                 Some(x) => {
                     let r = if self.ansi_mode {
@@ -330,6 +334,16 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        // Idempotence: abs(abs(x)) = abs(x). Safe under both ANSI modes —
+        // the inner abs already errored or wrapped, so |abs(x)| = abs(x).
+        if args.len() == 1 {
+            if let Expr::ScalarFunction(inner) = &args[0] {
+                if inner.func.name() == self.name() {
+                    return Ok(ExprSimplifyResult::Simplified(args[0].clone()));
+                }
+            }
+        }
+
         let dt = info.get_data_type(&args[0])?;
         match dt {
             // Keep in invoke_with_args: interval/duration, and signed integers
