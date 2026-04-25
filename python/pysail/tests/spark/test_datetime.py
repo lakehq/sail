@@ -1,9 +1,9 @@
 import platform
 from datetime import date, datetime, timezone
 
-import pytest
 import pyspark.sql.functions as F  # noqa: N812
-import pyspark.sql.types as T
+import pyspark.sql.types as T  # noqa: N812
+import pytest
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.utils.sql import strict
