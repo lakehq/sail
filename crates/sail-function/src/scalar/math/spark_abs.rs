@@ -113,11 +113,8 @@ impl ScalarUDFImpl for SparkAbs {
             }
         }
         match arg {
-            // Signed integer abs: ANSI=true errors on overflow (mathematically
-            // correct: |MIN| does not fit in the same width). ANSI=false uses
-            // two's-complement wrap (returns MIN itself for MIN inputs) —
-            // Spark-JVM compatible behavior inherited from Java's Math.abs(int),
-            // but mathematically incorrect since abs is defined as non-negative.
+            // Signed integer abs: ANSI=true errors on MIN; ANSI=false wraps
+            // (matches Java's Math.abs(int) — abs(MIN) returns MIN).
             ColumnarValue::Scalar(ScalarValue::Int8(v)) => match v {
                 Some(x) => {
                     let r = if self.ansi_mode {
@@ -190,7 +187,7 @@ impl ScalarUDFImpl for SparkAbs {
                 let r = match interval {
                     Some(x) => Some(x.checked_abs().ok_or_else(|| {
                         exec_datafusion_err!(
-                            "[INTERVAL_ARITHMETIC_OVERFLOW] interval overflow on abs(interval day-time)"
+                            "[ARITHMETIC_OVERFLOW] long overflow on abs(interval day-time)"
                         )
                     })?),
                     None => None,
@@ -201,7 +198,7 @@ impl ScalarUDFImpl for SparkAbs {
                 let r = match interval {
                     Some(x) => Some(x.checked_abs().ok_or_else(|| {
                         exec_datafusion_err!(
-                            "[INTERVAL_ARITHMETIC_OVERFLOW] interval overflow on abs(interval month-day-nano)"
+                            "[ARITHMETIC_OVERFLOW] long overflow on abs(interval month-day-nano)"
                         )
                     })?),
                     None => None,
@@ -344,7 +341,7 @@ impl ScalarUDFImpl for SparkAbs {
                             .try_unary(|x| {
                                 x.checked_abs().ok_or_else(|| {
                                     exec_datafusion_err!(
-                                        "[INTERVAL_ARITHMETIC_OVERFLOW] interval overflow on abs(interval day-time)"
+                                        "[ARITHMETIC_OVERFLOW] long overflow on abs(interval day-time)"
                                     )
                                 })
                             })?
@@ -357,7 +354,7 @@ impl ScalarUDFImpl for SparkAbs {
                             .try_unary(|x| {
                                 x.checked_abs().ok_or_else(|| {
                                     exec_datafusion_err!(
-                                        "[INTERVAL_ARITHMETIC_OVERFLOW] interval overflow on abs(interval month-day-nano)"
+                                        "[ARITHMETIC_OVERFLOW] long overflow on abs(interval month-day-nano)"
                                     )
                                 })
                             })?
@@ -433,8 +430,7 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        // Idempotence: abs(abs(x)) = abs(x). Safe under both ANSI modes —
-        // the inner abs already errored or wrapped, so |abs(x)| = abs(x).
+        // Idempotence: abs(abs(x)) = abs(x).
         if args.len() == 1 {
             if let Expr::ScalarFunction(inner) = &args[0] {
                 if inner.func.name() == self.name() {

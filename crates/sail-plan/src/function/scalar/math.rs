@@ -565,11 +565,6 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }))
 }
 
-/// Dispatch for `abs(x)`.
-///
-/// Reads `PlanConfig::ansi_mode` at planning time and bakes it into the UDF
-/// so signed-integer overflow wraps under ANSI=false (matching Spark) and
-/// errors under ANSI=true.
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = input.function_context.plan_config.ansi_mode;
     let udf = ScalarUDF::from(SparkAbs::new(ansi_mode));

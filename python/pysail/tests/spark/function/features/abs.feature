@@ -268,10 +268,8 @@ Feature: abs comprehensive tests
         | 10000000000000000000000000000000000000  |
 
     @sail-bug
-    # Same root cause and same caveat as the scenario above: JVM's CAST rounds
-    # 38 nines up to 10^38 and errors on overflow; Sail keeps 38 nines (which
-    # fits in DECIMAL(38,0) max = 10^38 - 1) and succeeds. Sail is mathematically
-    # correct here; the "bug" label is purely Spark-compat framing.
+    # Same root cause as the scenario above (CAST rounding) — JVM rounds
+    # 38 nines up to 10^38 and errors on overflow; Sail keeps 38 nines.
     Scenario: abs DECIMAL 38,0 exceeds range errors
       When query
         """
@@ -353,7 +351,7 @@ Feature: abs comprehensive tests
         """
         SELECT abs(CAST(-128 AS TINYINT)) AS result
         """
-      Then query error .*
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
     Scenario: abs INT MIN errors under ANSI true
       Given config spark.sql.ansi.enabled = true
@@ -361,7 +359,7 @@ Feature: abs comprehensive tests
         """
         SELECT abs(CAST(-2147483648 AS INT)) AS result
         """
-      Then query error .*
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
     Scenario: abs BIGINT MIN errors under ANSI true
       Given config spark.sql.ansi.enabled = true
@@ -369,7 +367,7 @@ Feature: abs comprehensive tests
         """
         SELECT abs(CAST(-9223372036854775808 AS BIGINT)) AS result
         """
-      Then query error .*
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
   Rule: String coercion under ANSI=false
     # Sail now coerces STRING → DOUBLE (via `coerce_types` in spark_abs), but
@@ -528,7 +526,7 @@ Feature: abs comprehensive tests
         """
         SELECT abs(INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH) AS result
         """
-      Then query error .*
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
     Scenario: abs INTERVAL YEAR TO MONTH MIN errors under ANSI=true
       Given config spark.sql.ansi.enabled = true
@@ -536,7 +534,7 @@ Feature: abs comprehensive tests
         """
         SELECT abs(INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH) AS result
         """
-      Then query error .*
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
     Scenario: abs INTERVAL DAY TO SECOND MIN errors under ANSI=false
       Given config spark.sql.ansi.enabled = false
@@ -544,7 +542,7 @@ Feature: abs comprehensive tests
         """
         SELECT abs(INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND) AS result
         """
-      Then query error .*
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
     Scenario: abs INTERVAL DAY TO SECOND MIN errors under ANSI=true
       Given config spark.sql.ansi.enabled = true
@@ -552,7 +550,7 @@ Feature: abs comprehensive tests
         """
         SELECT abs(INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND) AS result
         """
-      Then query error .*
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
 
   Rule: Multi-row vectorized path
 
@@ -644,11 +642,9 @@ Feature: abs comprehensive tests
         | NULL               |
 
   Rule: All-null short-circuit
-    # Locks the all-null short-circuit invariant: when every input row is NULL,
-    # invoke_with_args returns an all-null result without running the kernel.
-    # Sanity coverage on the paths that route through SparkAbs::invoke_with_args
-    # (integers + interval/duration). Float/decimal paths are delegated to
-    # DataFusion's abs and don't reach this short-circuit.
+    # When every input row is NULL, invoke returns an all-null result
+    # without running the kernel. Coverage on integer + interval paths
+    # (floats/decimals are delegated to DataFusion's abs).
 
     Scenario: all-null INT column returns all NULL under ANSI=false
       Given config spark.sql.ansi.enabled = false
@@ -782,8 +778,7 @@ Feature: abs comprehensive tests
   @sail-only
   Rule: cross-nesting with other UDFs
     # Verifies abs simplify/output_ordering composes correctly with other
-    # planner hooks already on main (e.g. ceil/floor). Pattern #7 from
-    # feedback_hook_interactions.md.
+    # planner hooks already on main (e.g. ceil/floor).
 
     Scenario: EXPLAIN abs of ceil keeps spark_abs delegation chain consistent
       When query
@@ -873,4 +868,4 @@ Feature: abs comprehensive tests
         """
         SELECT abs(abs(CAST(-2147483648 AS INT))) AS result
         """
-      Then query error .*
+      Then query error .*\[ARITHMETIC_OVERFLOW\].*
