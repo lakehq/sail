@@ -18,7 +18,9 @@ use sail_data_source::options::gen::DeltaWritePartialOptions;
 use sail_data_source::options::PartialOptions;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
-use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
+use crate::datasource::{
+    df_logical_schema, is_metadata_struct_field, simplify_expr, DeltaScanConfig,
+};
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
@@ -221,7 +223,7 @@ pub(crate) async fn plan_delta_scan(
     let wants_row_tracking_metadata = logical_schema
         .fields()
         .iter()
-        .any(|f| f.name() == crate::datasource::METADATA_COLUMN_NAME);
+        .any(|f| is_metadata_struct_field(f));
     let files = if has_dvs || wants_row_tracking_metadata {
         None
     } else {

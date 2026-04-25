@@ -39,7 +39,10 @@ use crate::kernel::checkpoints::{
 use crate::kernel::log_segment::ReplayedTableHeader;
 pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
 use crate::kernel::{DeltaSnapshotConfig, SchemaRef};
-use crate::schema::{arrow_field_physical_name, arrow_schema_reorder_partitions};
+use crate::schema::{
+    arrow_field_physical_name, arrow_schema_reorder_partitions,
+    validate_row_tracking_materialized_column_names,
+};
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_PATH,
     FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
@@ -767,6 +770,11 @@ impl DeltaSnapshot {
                     )));
                 }
             }
+            validate_row_tracking_materialized_column_names(
+                &self.metadata().parse_schema()?,
+                config,
+                self.effective_column_mapping_mode(),
+            )?;
             if self
                 .adds
                 .iter()

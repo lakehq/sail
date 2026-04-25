@@ -15,7 +15,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{ArrayRef, BooleanArray, Int64Array, Int64Builder, StructArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, Int64Array, Int64Builder, StructArray,
+};
 use datafusion::arrow::buffer::BooleanBuffer;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -38,8 +40,8 @@ use url::Url;
 
 use crate::datasource::scan::{FileScanParams, TableStatsMode};
 use crate::datasource::{
-    build_file_scan_config, df_logical_schema, metadata_struct_fields, DeltaScanConfig,
-    METADATA_COLUMN_NAME,
+    build_file_scan_config, df_logical_schema, is_metadata_struct_field, metadata_struct_fields,
+    DeltaScanConfig, METADATA_COLUMN_NAME,
 };
 use crate::deletion_vector::DeletionVectorBitmap;
 use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
@@ -52,6 +54,12 @@ use crate::table::DeltaSnapshot;
 // TODO(dynamic-file-scheduling): Replace fixed file-count chunking with byte-aware chunking
 // and optional work-stealing so executors pull remaining file work dynamically under skew.
 const ADD_SCAN_CHUNK_FILES: usize = 1024;
+
+#[derive(Debug, Clone)]
+struct RowTrackingMaterializedColumns {
+    row_id: String,
+    row_commit_version: String,
+}
 
 struct ScanByAddsStreamState {
     input: SendableRecordBatchStream,
@@ -72,6 +80,7 @@ struct ScanByAddsStreamState {
     file_schema: Option<SchemaRef>,
     partition_columns: Option<Vec<String>>,
     logical_names: Option<Vec<String>>,
+    metadata_column_name: Option<String>,
 
     // control
     partition_scan: Option<bool>,
@@ -111,6 +120,7 @@ impl ScanByAddsStreamState {
             file_schema: None,
             partition_columns: None,
             logical_names: None,
+            metadata_column_name: None,
             partition_scan: None,
             emitted_partition_empty: false,
             pending_adds: Vec::new(),
@@ -172,6 +182,11 @@ impl ScanByAddsStreamState {
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
+        let metadata_column_name = logical_schema
+            .fields()
+            .iter()
+            .find(|field| is_metadata_struct_field(field))
+            .map(|field| field.name().clone());
 
         let table_partition_cols = snapshot_state.metadata().partition_columns();
         let kmode = snapshot_state.effective_column_mapping_mode();
@@ -204,6 +219,7 @@ impl ScanByAddsStreamState {
         self.file_schema = Some(file_schema);
         self.partition_columns = Some(partition_columns);
         self.logical_names = Some(logical_names);
+        self.metadata_column_name = metadata_column_name;
         self.scan_config = scan_config;
         self.table_opened = true;
         Ok(())
@@ -248,6 +264,11 @@ impl ScanByAddsStreamState {
             .as_ref()
             .ok_or_else(|| DataFusionError::Internal("missing file_schema".into()))?
             .clone();
+        let partition_columns = self
+            .partition_columns
+            .as_ref()
+            .ok_or_else(|| DataFusionError::Internal("missing partition_columns".into()))?
+            .clone();
         let logical_names = self
             .logical_names
             .as_ref()
@@ -255,6 +276,24 @@ impl ScanByAddsStreamState {
             .clone();
 
         let wants_metadata = self.output_schema_has_row_tracking_metadata();
+        let metadata_column_name = if wants_metadata {
+            Some(self.row_tracking_metadata_column_name()?.to_string())
+        } else {
+            None
+        };
+        let materialized_columns = if wants_metadata {
+            row_tracking_materialized_columns(snapshot)?
+        } else {
+            None
+        };
+        let metadata_file_schema = if wants_metadata {
+            file_schema_with_materialized_columns(
+                Arc::clone(&file_schema),
+                materialized_columns.as_ref(),
+            )
+        } else {
+            Arc::clone(&file_schema)
+        };
 
         // Split adds: files with DVs and files requiring row-tracking metadata
         // go through per-file scans; the rest use bulk parallel scan.
@@ -273,6 +312,9 @@ impl ScanByAddsStreamState {
                 &plain_adds,
                 file_schema.clone(),
                 &logical_names,
+                &partition_columns,
+                None,
+                false,
             )?;
             all_streams.extend(streams);
         }
@@ -314,21 +356,28 @@ impl ScanByAddsStreamState {
                     log_store,
                     session_state,
                     std::slice::from_ref(add),
-                    file_schema.clone(),
+                    metadata_file_schema.clone(),
                     &logical_names,
+                    &partition_columns,
+                    materialized_columns.as_ref(),
+                    bitmap.is_some(),
                 )?;
 
                 let bitmap = bitmap.map(Arc::new);
                 for mut inner in file_streams {
-                    if let Some(bitmap) = bitmap.as_ref() {
-                        inner = dv_filter_stream(inner, Arc::clone(bitmap));
-                    }
                     if wants_metadata {
                         inner = row_tracking_metadata_stream(
                             inner,
                             add.base_row_id,
                             add.default_row_commit_version,
+                            materialized_columns.clone(),
+                            metadata_column_name
+                                .as_deref()
+                                .unwrap_or(METADATA_COLUMN_NAME),
                         );
+                    }
+                    if let Some(bitmap) = bitmap.as_ref() {
+                        inner = dv_filter_stream(inner, Arc::clone(bitmap));
                     }
                     all_streams.push(inner);
                 }
@@ -356,35 +405,60 @@ impl ScanByAddsStreamState {
 
     /// Build a bulk Parquet scan for a set of Add actions (no DV filtering).
     fn output_schema_has_row_tracking_metadata(&self) -> bool {
-        self.output_schema
-            .fields()
-            .iter()
-            .any(|f| f.name() == METADATA_COLUMN_NAME)
+        self.output_schema.fields().iter().any(|field| {
+            is_metadata_struct_field(field)
+                || self
+                    .metadata_column_name
+                    .as_ref()
+                    .is_some_and(|name| field.name() == name)
+        })
     }
 
-    /// Projection with the `_metadata` index removed. `projection` values are indices into
-    /// `logical_names`, so we locate `_metadata` in `logical_names` (not `output_schema`).
-    fn inner_projection_for(&self, logical_names: &[String]) -> Option<Vec<usize>> {
-        let projection = self.projection.as_ref()?;
-        let meta_idx = logical_names
+    fn row_tracking_metadata_column_name(&self) -> Result<&str> {
+        if let Some(field) = self
+            .output_schema
+            .fields()
             .iter()
-            .position(|n| n.as_str() == METADATA_COLUMN_NAME)?;
-        Some(
-            projection
-                .iter()
-                .filter(|idx| **idx != meta_idx)
-                .copied()
-                .collect(),
-        )
+            .find(|field| is_metadata_struct_field(field))
+        {
+            return Ok(field.name());
+        }
+        self.metadata_column_name
+            .as_deref()
+            .ok_or_else(|| DataFusionError::Internal("missing row tracking metadata column".into()))
     }
 
     /// `logical_names` with the `_metadata` entry removed.
     fn inner_logical_names(&self, logical_names: &[String]) -> Vec<String> {
+        let metadata_column_name = self.metadata_column_name.as_deref();
         logical_names
             .iter()
-            .filter(|name| name.as_str() != METADATA_COLUMN_NAME)
+            .filter(|name| Some(name.as_str()) != metadata_column_name)
             .cloned()
             .collect()
+    }
+
+    fn inner_logical_names_for_metadata_scan(
+        &self,
+        logical_names: &[String],
+        partition_columns: &[String],
+        materialized_columns: Option<&RowTrackingMaterializedColumns>,
+    ) -> Vec<String> {
+        let mut names = self.inner_logical_names(logical_names);
+        if let Some(columns) = materialized_columns {
+            let insert_at = names
+                .iter()
+                .position(|name| {
+                    partition_columns.iter().any(|p| p == name)
+                        || self.scan_config.file_column_name.as_ref() == Some(name)
+                        || self.scan_config.commit_version_column_name.as_ref() == Some(name)
+                        || self.scan_config.commit_timestamp_column_name.as_ref() == Some(name)
+                })
+                .unwrap_or(names.len());
+            names.insert(insert_at, columns.row_id.clone());
+            names.insert(insert_at + 1, columns.row_commit_version.clone());
+        }
+        names
     }
 
     fn build_bulk_scan(
@@ -395,19 +469,31 @@ impl ScanByAddsStreamState {
         adds: &[crate::spec::Add],
         file_schema: SchemaRef,
         logical_names: &[String],
+        partition_columns: &[String],
+        materialized_columns: Option<&RowTrackingMaterializedColumns>,
+        disable_row_filtering: bool,
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let wants_metadata = self.output_schema_has_row_tracking_metadata();
         let inner_projection = if wants_metadata {
-            self.inner_projection_for(logical_names)
+            None
         } else {
             self.projection.clone()
         };
         let inner_logical_names_vec;
         let inner_logical_names: &[String] = if wants_metadata {
-            inner_logical_names_vec = self.inner_logical_names(logical_names);
+            inner_logical_names_vec = self.inner_logical_names_for_metadata_scan(
+                logical_names,
+                partition_columns,
+                materialized_columns,
+            );
             &inner_logical_names_vec
         } else {
             logical_names
+        };
+        let pushdown_filter = if wants_metadata || disable_row_filtering {
+            None
+        } else {
+            self.pushdown_filter.clone()
         };
 
         let file_scan_config = build_file_scan_config(
@@ -419,7 +505,7 @@ impl ScanByAddsStreamState {
                 pruning_mask: None,
                 projection: inner_projection.as_ref(),
                 limit: self.limit,
-                pushdown_filter: self.pushdown_filter.clone(),
+                pushdown_filter,
                 sort_order: None,
                 table_stats_mode: TableStatsMode::AddsOnly,
             },
@@ -511,18 +597,132 @@ fn dv_filter_stream(
     Box::pin(RecordBatchStreamAdapter::new(schema, filtered))
 }
 
-/// Append a `_metadata` struct column with `row_id` (= base_row_id + running row offset) and
-/// `row_commit_version` (= default_row_commit_version). Both are NULL when the underlying
-/// Add lacks the respective field.
+fn row_tracking_materialized_columns(
+    snapshot: &DeltaSnapshot,
+) -> Result<Option<RowTrackingMaterializedColumns>> {
+    if !matches!(
+        snapshot
+            .get_row_tracking_state()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        crate::table::features::RowTrackingToken::Enabled(_)
+    ) {
+        return Ok(None);
+    }
+    let config = snapshot.metadata().configuration();
+    let row_id = config
+        .get(crate::schema::ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "{} is required when delta.enableRowTracking = true",
+                crate::schema::ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY
+            ))
+        })?;
+    let row_commit_version = config
+        .get(crate::schema::ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "{} is required when delta.enableRowTracking = true",
+                crate::schema::ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY
+            ))
+        })?;
+    Ok(Some(RowTrackingMaterializedColumns {
+        row_id,
+        row_commit_version,
+    }))
+}
+
+fn file_schema_with_materialized_columns(
+    file_schema: SchemaRef,
+    materialized_columns: Option<&RowTrackingMaterializedColumns>,
+) -> SchemaRef {
+    let Some(columns) = materialized_columns else {
+        return file_schema;
+    };
+    let mut fields = file_schema
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect::<Vec<_>>();
+    for name in [&columns.row_id, &columns.row_commit_version] {
+        if !fields.iter().any(|field| field.name() == name) {
+            fields.push(Field::new(name.clone(), ArrowDataType::Int64, true));
+        }
+    }
+    Arc::new(Schema::new(fields))
+}
+
+fn generated_row_id_array(
+    base_row_id: Option<i64>,
+    row_offset: i64,
+    num_rows: usize,
+) -> Int64Array {
+    match base_row_id {
+        Some(base) => {
+            let mut builder = Int64Builder::with_capacity(num_rows);
+            for i in 0..num_rows {
+                builder.append_value(base.saturating_add(row_offset).saturating_add(i as i64));
+            }
+            builder.finish()
+        }
+        None => Int64Array::new_null(num_rows),
+    }
+}
+
+fn constant_i64_array(value: Option<i64>, num_rows: usize) -> Int64Array {
+    match value {
+        Some(value) => Int64Array::from(vec![value; num_rows]),
+        None => Int64Array::new_null(num_rows),
+    }
+}
+
+fn coalesce_materialized_i64(
+    batch: &RecordBatch,
+    materialized_name: Option<&str>,
+    fallback: &Int64Array,
+) -> Result<ArrayRef> {
+    let Some(materialized_name) = materialized_name else {
+        return Ok(Arc::new(fallback.clone()));
+    };
+    let Some(array) = batch.column_by_name(materialized_name) else {
+        return Ok(Arc::new(fallback.clone()));
+    };
+    let materialized = array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "Row Tracking materialized column '{materialized_name}' must be Int64"
+        ))
+    })?;
+    let mut builder = Int64Builder::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        if materialized.is_valid(row) {
+            builder.append_value(materialized.value(row));
+        } else if fallback.is_valid(row) {
+            builder.append_value(fallback.value(row));
+        } else {
+            builder.append_null();
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+/// Append a `_metadata` struct column with Delta Row Tracking metadata.
+///
+/// `row_id` and `row_commit_version` prefer materialized hidden Parquet columns when present,
+/// and otherwise fall back to the Add-action defaults plus the physical file row index.
 fn row_tracking_metadata_stream(
     inner: SendableRecordBatchStream,
     base_row_id: Option<i64>,
     default_row_commit_version: Option<i64>,
+    materialized_columns: Option<RowTrackingMaterializedColumns>,
+    metadata_column_name: &str,
 ) -> SendableRecordBatchStream {
     let inner_schema = inner.schema();
     let struct_fields = metadata_struct_fields();
     let metadata_field = Field::new(
-        METADATA_COLUMN_NAME,
+        metadata_column_name,
         ArrowDataType::Struct(struct_fields.clone()),
         true,
     );
@@ -538,29 +738,39 @@ fn row_tracking_metadata_stream(
     let stream = stream::try_unfold((inner, 0i64), move |(mut inner, mut row_offset)| {
         let struct_fields = struct_fields.clone();
         let out_schema = Arc::clone(&out_schema_stream);
+        let materialized_columns = materialized_columns.clone();
         async move {
             match inner.try_next().await? {
                 None => Ok(None),
                 Some(batch) => {
                     let num_rows = batch.num_rows();
 
-                    let row_id_array: ArrayRef = match base_row_id {
-                        Some(base) => {
-                            let mut builder = Int64Builder::with_capacity(num_rows);
-                            for i in 0..num_rows {
-                                builder.append_value(base + row_offset + i as i64);
-                            }
-                            Arc::new(builder.finish())
-                        }
-                        None => Arc::new(Int64Array::new_null(num_rows)),
-                    };
-                    let commit_version_array: ArrayRef = match default_row_commit_version {
-                        Some(v) => Arc::new(Int64Array::from(vec![v; num_rows])),
-                        None => Arc::new(Int64Array::new_null(num_rows)),
-                    };
+                    let default_row_id = generated_row_id_array(base_row_id, row_offset, num_rows);
+                    let base_row_id_array = constant_i64_array(base_row_id, num_rows);
+                    let default_commit_version_array =
+                        constant_i64_array(default_row_commit_version, num_rows);
+                    let row_id_array = coalesce_materialized_i64(
+                        &batch,
+                        materialized_columns
+                            .as_ref()
+                            .map(|columns| columns.row_id.as_str()),
+                        &default_row_id,
+                    )?;
+                    let commit_version_array = coalesce_materialized_i64(
+                        &batch,
+                        materialized_columns
+                            .as_ref()
+                            .map(|columns| columns.row_commit_version.as_str()),
+                        &default_commit_version_array,
+                    )?;
                     let struct_array = StructArray::new(
                         struct_fields,
-                        vec![row_id_array, commit_version_array],
+                        vec![
+                            row_id_array,
+                            Arc::new(base_row_id_array) as ArrayRef,
+                            Arc::new(default_commit_version_array) as ArrayRef,
+                            commit_version_array,
+                        ],
                         None,
                     );
 

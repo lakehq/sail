@@ -53,6 +53,17 @@ pub async fn build_merge_plan(
         .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
+    if matches!(
+        snapshot_state
+            .get_row_tracking_state()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        crate::table::features::RowTrackingToken::Enabled(_)
+    ) {
+        return Err(DataFusionError::NotImplemented(
+            "MERGE on Delta tables with row tracking enabled requires preserving stable row IDs via materialized row-tracking columns"
+                .to_string(),
+        ));
+    }
 
     let mut options = DeltaWriterExecOptions::from(ctx.options().clone());
     if merge_info.with_schema_evolution {

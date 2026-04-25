@@ -205,8 +205,64 @@ Feature: Delta Lake Row Tracking writer (baseRowId, defaultRowCommitVersion, row
         | 3   |
         | 4   |
 
+    Scenario: SELECT star excludes row tracking metadata
+      When query
+        """
+        SELECT * FROM delta_rt_sql_reads_test ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 10 |
+        | 20 |
+        | 30 |
+        | 40 |
+        | 50 |
+
   @sail-only
-  Rule: Suspended row tracking reads back NULL metadata
+  Rule: User data columns named _metadata do not hide explicit row-tracking metadata
+
+    Background:
+      Given variable location for temporary directory delta_rt_user_metadata
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_rt_user_metadata_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_rt_user_metadata_test (`_metadata` BIGINT, id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableRowTracking' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_rt_user_metadata_test VALUES (100, 1), (200, 2)
+        """
+
+    Scenario: Plain _metadata resolves to the user column
+      When query
+        """
+        SELECT `_metadata`, id FROM delta_rt_user_metadata_test ORDER BY id
+        """
+      Then query result ordered
+        | _metadata | id |
+        | 100       | 1  |
+        | 200       | 2  |
+
+    Scenario: Nested row-tracking metadata can still be read
+      When query
+        """
+        SELECT id, _metadata.row_id AS rid
+        FROM delta_rt_user_metadata_test
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | rid |
+        | 1  | 0   |
+        | 2  | 1   |
+
+  @sail-only
+  Rule: Suspended row tracking does not expose row-tracking metadata
 
     Background:
       Given variable location for temporary directory delta_rt_sql_suspended
@@ -232,14 +288,104 @@ Feature: Delta Lake Row Tracking writer (baseRowId, defaultRowCommitVersion, row
         INSERT INTO delta_rt_sql_suspended_test VALUES (1), (2)
         """
 
-    Scenario: Suspended tables expose NULL row_id and row_commit_version
+    Scenario: Suspended tables do not expose row_id and row_commit_version
       When query
         """
         SELECT id, _metadata.row_id AS rid, _metadata.row_commit_version AS ver
         FROM delta_rt_sql_suspended_test
         ORDER BY id
         """
+      Then query error _metadata
+
+  @sail-only
+  Rule: Row tracking row ids use physical file row indices
+
+    Background:
+      Given variable location for temporary directory delta_rt_dv_row_index
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_rt_dv_row_index_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_rt_dv_row_index_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.enableRowTracking' = 'true',
+          'delta.enableDeletionVectors' = 'true'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_rt_dv_row_index_test VALUES (1), (2), (3), (4), (5)
+        """
+      Given statement
+        """
+        DELETE FROM delta_rt_dv_row_index_test WHERE id = 2
+        """
+
+    Scenario: Deletion vectors do not renumber row ids
+      When query
+        """
+        SELECT id, _metadata.row_id AS rid
+        FROM delta_rt_dv_row_index_test
+        ORDER BY id
+        """
       Then query result ordered
-        | id | rid  | ver  |
-        | 1  | NULL | NULL |
-        | 2  | NULL | NULL |
+        | id | rid |
+        | 1  | 0   |
+        | 3  | 2   |
+        | 4  | 3   |
+        | 5  | 4   |
+
+  @sail-only
+  Rule: Row tracking protocol validation rejects conflicting materialized columns
+
+    Scenario: Materialized row id column cannot conflict with a data column
+      Given variable location for temporary directory delta_rt_materialized_conflict
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_rt_materialized_conflict_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_rt_materialized_conflict_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.enableRowTracking' = 'true',
+          'delta.rowTracking.materializedRowIdColumnName' = 'id',
+          'delta.rowTracking.materializedRowCommitVersionColumnName' = '_row-commit-version-col-test'
+        )
+        """
+      When query
+        """
+        INSERT INTO delta_rt_materialized_conflict_test VALUES (1)
+        """
+      Then query error materialized column name
+
+  @sail-only
+  Rule: Row tracking enabled rewrites fail safely until stable IDs are preserved
+
+    Scenario: Copy-on-Write DELETE refuses to rewrite row-tracking enabled rows
+      Given variable location for temporary directory delta_rt_cow_delete_guard
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_rt_cow_delete_guard_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_rt_cow_delete_guard_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableRowTracking' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_rt_cow_delete_guard_test VALUES (1), (2), (3)
+        """
+      Given statement with error Copy-on-Write DELETE
+        """
+        DELETE FROM delta_rt_cow_delete_guard_test WHERE id = 2
+        """

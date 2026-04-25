@@ -563,7 +563,7 @@ def _checkpoint_row_to_dict(table, row_index: int) -> dict:
 def _load_checkpoint_parquet(location: Path, filename: str) -> list[dict]:
     """Load a checkpoint parquet file and return a list of nested dict rows."""
     try:
-        import pyarrow.parquet as pq
+        import pyarrow.parquet as pq  # noqa: PLC0415
     except ModuleNotFoundError as e:  # pragma: no cover
         msg = "pyarrow is required for checkpoint parquet assertions"
         raise RuntimeError(msg) from e
@@ -574,7 +574,7 @@ def _load_checkpoint_parquet(location: Path, filename: str) -> list[dict]:
     table = pq.read_table(cp_path)
     rows: list[dict] = []
     for i in range(table.num_rows):
-        rows.append(_checkpoint_row_to_dict(table, i))
+        rows.append(_checkpoint_row_to_dict(table, i))  # noqa: PERF401
     return rows
 
 
@@ -625,11 +625,7 @@ def checkpoint_parquet_contains_add_fields(
         assert matched, f"field {path!r}: expected {expected!r}, got {last_actual!r} across {len(add_rows)} add rows"
 
 
-@then(
-    parsers.parse(
-        "checkpoint parquet file {filename} in {location_var} does not contain add sub-field {field}"
-    )
-)
+@then(parsers.parse("checkpoint parquet file {filename} in {location_var} does not contain add sub-field {field}"))
 def checkpoint_parquet_add_missing_field(
     filename: str,
     location_var: str,
@@ -648,7 +644,7 @@ def checkpoint_parquet_add_missing_field(
     assert location is not None, f"Variable {location_var!r} not found"
 
     try:
-        import pyarrow.parquet as pq
+        import pyarrow.parquet as pq  # noqa: PLC0415
     except ModuleNotFoundError as e:  # pragma: no cover
         msg = "pyarrow is required for checkpoint parquet assertions"
         raise RuntimeError(msg) from e
@@ -732,11 +728,7 @@ def delta_log_commit_action_contains(
         )
 
 
-@then(
-    parsers.parse(
-        "delta log commit {filename} in {location_var} has no action with sub-field {field} set"
-    )
-)
+@then(parsers.parse("delta log commit {filename} in {location_var} has no action with sub-field {field} set"))
 def delta_log_commit_no_action_with_subfield_set(
     filename: str,
     location_var: str,
@@ -765,16 +757,11 @@ def delta_log_commit_no_action_with_subfield_set(
                 found = False
                 break
         if found and cursor is not None:
-            raise AssertionError(
-                f"expected no action to carry {field!r} set; found value {cursor!r} in action {action!r}"
-            )
+            msg = f"expected no action to carry {field!r} set; found value {cursor!r} in action {action!r}"
+            raise AssertionError(msg)
 
 
-@then(
-    parsers.parse(
-        "delta log commit {filename} in {location_var} has rowTracking high-water-mark {hwm:d}"
-    )
-)
+@then(parsers.parse("delta log commit {filename} in {location_var} has rowTracking high-water-mark {hwm:d}"))
 def delta_log_commit_row_tracking_hwm(
     filename: str,
     location_var: str,
@@ -802,14 +789,12 @@ def delta_log_commit_row_tracking_hwm(
             try:
                 cfg_obj = json.loads(cfg)
             except json.JSONDecodeError as e:
-                raise AssertionError(f"domainMetadata.configuration is not valid JSON: {cfg!r}") from e
+                msg = f"domainMetadata.configuration is not valid JSON: {cfg!r}"
+                raise AssertionError(msg) from e
         else:
             cfg_obj = cfg
         actual = cfg_obj.get("rowIdHighWaterMark") if isinstance(cfg_obj, dict) else None
-        assert actual == hwm, (
-            f"rowIdHighWaterMark: expected {hwm!r}, got {actual!r} (configuration={cfg!r})"
-        )
+        assert actual == hwm, f"rowIdHighWaterMark: expected {hwm!r}, got {actual!r} (configuration={cfg!r})"
         return
-    raise AssertionError(
-        f"no domainMetadata action with domain 'delta.rowTracking' found in {filename}"
-    )
+    msg = f"no domainMetadata action with domain 'delta.rowTracking' found in {filename}"
+    raise AssertionError(msg)

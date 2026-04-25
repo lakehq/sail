@@ -18,6 +18,14 @@ use crate::spec::{
     Protocol, StructType, TableFeature,
 };
 
+pub const ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY: &str =
+    "delta.rowTracking.materializedRowIdColumnName";
+pub const ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY: &str =
+    "delta.rowTracking.materializedRowCommitVersionColumnName";
+pub const ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_PREFIX: &str = "_row-id-col-";
+pub const ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_PREFIX: &str =
+    "_row-commit-version-col-";
+
 /// Check if a Delta StructType schema contains any columns with generation expressions.
 pub fn schema_has_generated_columns(schema: &StructType) -> bool {
     schema.fields().any(|f| {
@@ -211,12 +219,12 @@ pub fn ensure_row_tracking_materialized_column_names(
     }
     for (key, prefix) in [
         (
-            "delta.rowTracking.materializedRowIdColumnName",
-            "_row-id-col-",
+            ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
+            ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_PREFIX,
         ),
         (
-            "delta.rowTracking.materializedRowCommitVersionColumnName",
-            "_row-commit-version-col-",
+            ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+            ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_PREFIX,
         ),
     ] {
         if configuration.get(key).map(|v| v.is_empty()).unwrap_or(true) {
@@ -230,12 +238,66 @@ pub fn ensure_row_tracking_materialized_column_names(
     }
 }
 
+pub fn validate_row_tracking_materialized_column_names(
+    schema: &StructType,
+    configuration: &HashMap<String, String>,
+    mode: ColumnMappingMode,
+) -> DeltaResult<()> {
+    let Some(row_id_name) = configuration
+        .get(ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(row_commit_version_name) = configuration
+        .get(ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+
+    if row_id_name.eq_ignore_ascii_case(row_commit_version_name) {
+        return Err(DeltaTableError::generic(format!(
+            "Row Tracking materialized column names must be unique: {row_id_name}"
+        )));
+    }
+
+    for materialized_name in [row_id_name, row_commit_version_name] {
+        for field in schema.fields() {
+            if field.name().eq_ignore_ascii_case(materialized_name) {
+                return Err(DeltaTableError::generic(format!(
+                    "Row Tracking materialized column name '{materialized_name}' conflicts with table column '{}'",
+                    field.name()
+                )));
+            }
+            if !matches!(mode, ColumnMappingMode::None)
+                && field
+                    .physical_name(mode)
+                    .eq_ignore_ascii_case(materialized_name)
+            {
+                return Err(DeltaTableError::generic(format!(
+                    "Row Tracking materialized column name '{materialized_name}' conflicts with physical column name '{}'",
+                    field.physical_name(mode)
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use super::{ensure_row_tracking_materialized_column_names, protocol_for_create};
-    use crate::spec::{DeltaResult, TableFeature};
+    use super::{
+        ensure_row_tracking_materialized_column_names, protocol_for_create,
+        validate_row_tracking_materialized_column_names,
+    };
+    use crate::spec::{
+        ColumnMappingMode, DataType, DeltaResult, MetadataValue, StructField, StructType,
+        TableFeature,
+    };
 
     #[test]
     fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {
@@ -444,5 +506,51 @@ mod tests {
                 .map(String::as_str),
             Some("_row-commit-version-col-kept")
         );
+    }
+
+    #[test]
+    fn validate_materialized_column_names_rejects_logical_name_conflict() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::not_null("id", DataType::LONG)])?;
+        let mut cfg = HashMap::new();
+        cfg.insert(
+            "delta.rowTracking.materializedRowIdColumnName".to_string(),
+            "id".to_string(),
+        );
+        cfg.insert(
+            "delta.rowTracking.materializedRowCommitVersionColumnName".to_string(),
+            "_row-commit-version-col-test".to_string(),
+        );
+
+        let err =
+            validate_row_tracking_materialized_column_names(&schema, &cfg, ColumnMappingMode::None)
+                .unwrap_err();
+        assert!(err.to_string().contains("conflicts with table column"));
+        Ok(())
+    }
+
+    #[test]
+    fn validate_materialized_column_names_rejects_physical_name_conflict() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::not_null("id", DataType::LONG)
+            .with_metadata([(
+                "delta.columnMapping.physicalName",
+                MetadataValue::String("phys_id".to_string()),
+            )])])?;
+        let mut cfg = HashMap::new();
+        cfg.insert(
+            "delta.rowTracking.materializedRowIdColumnName".to_string(),
+            "phys_id".to_string(),
+        );
+        cfg.insert(
+            "delta.rowTracking.materializedRowCommitVersionColumnName".to_string(),
+            "_row-commit-version-col-test".to_string(),
+        );
+
+        let err =
+            validate_row_tracking_materialized_column_names(&schema, &cfg, ColumnMappingMode::Name)
+                .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("conflicts with physical column name"));
+        Ok(())
     }
 }

@@ -56,8 +56,28 @@ pub async fn build_delete_plan(
     // Partition-only predicates can delete entire files without scanning data. In that case,
     // build a visible metadata pipeline over a log-derived meta table.
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
+    let row_tracking_state = snapshot_state
+        .get_row_tracking_state()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let include_row_tracking = matches!(
+        row_tracking_state,
+        crate::table::features::RowTrackingToken::Enabled(_)
+            | crate::table::features::RowTrackingToken::SupportedOnly(_)
+    );
+    if !partition_only
+        && matches!(
+            row_tracking_state,
+            crate::table::features::RowTrackingToken::Enabled(_)
+        )
+    {
+        return Err(DataFusionError::NotImplemented(
+            "Copy-on-Write DELETE on Delta tables with row tracking enabled requires preserving stable row IDs via materialized row-tracking columns"
+                .to_string(),
+        ));
+    }
     let log_replay_options = LogReplayOptions {
         include_stats_json: !partition_only,
+        include_row_tracking,
         ..Default::default()
     };
 
@@ -177,6 +197,13 @@ pub async fn build_delete_plan_mor(
 
     let log_replay_options = LogReplayOptions {
         include_stats_json: true,
+        include_row_tracking: matches!(
+            snapshot_state
+                .get_row_tracking_state()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            crate::table::features::RowTrackingToken::Enabled(_)
+                | crate::table::features::RowTrackingToken::SupportedOnly(_)
+        ),
         ..Default::default()
     };
 

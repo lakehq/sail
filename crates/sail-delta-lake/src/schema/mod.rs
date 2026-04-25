@@ -23,6 +23,9 @@ pub use converter::{
 pub use manager::{
     ensure_row_tracking_materialized_column_names, evolve_schema,
     metadata_for_create_with_struct_type, protocol_for_create, schema_has_generated_columns,
+    validate_row_tracking_materialized_column_names,
+    ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+    ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
 };
 pub use mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,

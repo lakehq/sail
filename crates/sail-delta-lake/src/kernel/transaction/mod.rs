@@ -38,9 +38,14 @@ use crate::kernel::checkpoints::{
 };
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::{DeltaOperation, DeltaSnapshotConfig};
+use crate::schema::{
+    validate_row_tracking_materialized_column_names,
+    ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+    ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
+};
 use crate::spec::{
-    checksum_path, temp_commit_path, Action, CommitAction, DeltaError, DeltaResult, Metadata,
-    TableFeature, Transaction, VersionChecksum,
+    checksum_path, temp_commit_path, Action, ColumnMappingMode, CommitAction, DeltaError,
+    DeltaResult, Metadata, TableFeature, Transaction, VersionChecksum,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
@@ -609,6 +614,33 @@ fn validate_effective_commit_target(
         && !protocol_has_writer_feature(&protocol, &TableFeature::DomainMetadata)
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DomainMetadata).into());
+    }
+    if table_property_enabled(&metadata, "delta.enableRowTracking") {
+        for key in [
+            ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
+            ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+        ] {
+            if metadata
+                .configuration()
+                .get(key)
+                .map(|value| value.is_empty())
+                .unwrap_or(true)
+            {
+                return Err(DeltaError::generic(format!(
+                    "{key} is required when delta.enableRowTracking = true"
+                )));
+            }
+        }
+        let column_mapping_mode = metadata
+            .configuration()
+            .get("delta.columnMapping.mode")
+            .and_then(|value| ColumnMappingMode::try_from(value.as_str()).ok())
+            .unwrap_or_default();
+        validate_row_tracking_materialized_column_names(
+            &metadata.parse_schema()?,
+            metadata.configuration(),
+            column_mapping_mode,
+        )?;
     }
     let row_tracking_supported = protocol_has_writer_feature(&protocol, &TableFeature::RowTracking);
     let row_tracking_suspended = table_property_enabled(&metadata, "delta.rowTrackingSuspended");
