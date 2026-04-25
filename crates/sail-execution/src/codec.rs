@@ -103,6 +103,7 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
+use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
@@ -2352,6 +2353,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
                 "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
+                "schema_of_variant_agg" => Ok(Arc::new(AggregateUDF::from(
+                    SchemaOfVariantAggFunction::new(),
+                ))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
@@ -2436,7 +2440,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udaf = PySparkBatchCollectorUDF::new(input_types, input_names);
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
-            None => plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
+            None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
         }
     }
 
@@ -2450,6 +2454,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ModeFunction>()
             || node.inner().as_any().is::<PercentileFunction>()
             || node.inner().as_any().is::<PercentileDisc>()
+            || node.inner().as_any().is::<SchemaOfVariantAggFunction>()
             || node.inner().as_any().is::<SkewnessFunc>()
             || node.inner().as_any().is::<TryAvgFunction>()
             || node.inner().as_any().is::<SparkTrySum>()
