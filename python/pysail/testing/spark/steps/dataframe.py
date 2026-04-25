@@ -3,9 +3,9 @@ from __future__ import annotations
 import math
 
 import pytest
-from pytest_bdd import parsers, then, when
 from pyspark.sql import Row
 from pyspark.sql import functions as sf
+from pytest_bdd import parsers, then, when
 
 
 def _sample_by_input(spark):
@@ -57,7 +57,9 @@ def dataframe_columns(datatable, dataframe):
 def dataframe_result(datatable, ordered, dataframe):
     header, *rows = datatable
     assert list(dataframe.columns) == header
-    actual = [[str(row[column]) if row[column] is not None else "NULL" for column in header] for row in dataframe.collect()]
+    actual = [
+        [str(row[column]) if row[column] is not None else "NULL" for column in header] for row in dataframe.collect()
+    ]
     if ordered:
         assert actual == rows
     else:

@@ -1,6 +1,4 @@
 use std::any::Any;
-use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use datafusion::arrow::array::Float64Array;
@@ -12,16 +10,9 @@ use rand::{rng, RngExt};
 use super::xorshift::SparkXorShiftRandom;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Random {
     signature: Signature,
-    // Spark evaluates seeded random expressions with seed + partitionIndex.
-    // DataFusion does not currently expose the partition index to scalar UDFs,
-    // so this counter assigns partition-like indices to per-batch invocations.
-    // This matches Sail's single-node Spark compatibility test execution. The
-    // counter is execution state rather than function identity, so it is
-    // intentionally excluded from equality and hashing below.
-    next_partition: AtomicUsize,
 }
 
 impl Default for Random {
@@ -34,22 +25,7 @@ impl Random {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Volatile),
-            next_partition: AtomicUsize::new(0),
         }
-    }
-}
-
-impl PartialEq for Random {
-    fn eq(&self, other: &Self) -> bool {
-        self.signature == other.signature
-    }
-}
-
-impl Eq for Random {}
-
-impl Hash for Random {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.signature.hash(state);
     }
 }
 
@@ -95,8 +71,7 @@ impl ScalarUDFImpl for Random {
                     }
                     _ => return exec_err!("`random` expects an integer seed, got {scalar}"),
                 };
-                let partition = self.next_partition.fetch_add(1, Ordering::Relaxed) as i64;
-                let mut rng = SparkXorShiftRandom::new(seed.wrapping_add(partition));
+                let mut rng = SparkXorShiftRandom::new(seed);
                 let values = std::iter::repeat_with(|| rng.next_double()).take(number_rows);
                 let array = Float64Array::from_iter_values(values);
                 Ok(ColumnarValue::Array(Arc::new(array)))

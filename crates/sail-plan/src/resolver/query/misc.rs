@@ -36,11 +36,8 @@ impl PlanResolver<'_> {
             num_partitions,
         } = range;
         let start = start.unwrap_or(0);
-        // TODO: use parallelism in Spark configuration as the default.
-        // Spark Connect uses the server's default parallelism when the client does
-        // not specify the number of range partitions. The local Spark test
-        // environment uses four worker threads, so use the same default here.
-        let num_partitions = num_partitions.unwrap_or(4);
+        // TODO: use parallelism in Spark configuration as the default
+        let num_partitions = num_partitions.unwrap_or(1);
         if num_partitions < 1 {
             return Err(PlanError::invalid(format!(
                 "invalid number of partitions: {num_partitions}"
