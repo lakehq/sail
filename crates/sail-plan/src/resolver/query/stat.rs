@@ -16,7 +16,6 @@ use datafusion_expr::{
     and, col, expr, lit, or, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
 use sail_common::spec;
-use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::math::random::Random;
 
 use crate::error::{PlanError, PlanResult};
@@ -499,7 +498,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         if fractions
             .iter()
-            .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
+            .any(|f| f.fraction.is_nan() || f.fraction < 0.0 || f.fraction > 1.0)
         {
             return Err(PlanError::invalid(
                 "All fraction values must be >= 0.0 and <= 1.0",
@@ -509,30 +508,8 @@ impl PlanResolver<'_> {
         let input: LogicalPlan = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let schema = input.schema();
-        let column_expr: Column = match &column {
-            spec::Expr::UnresolvedAttribute {
-                name,
-                plan_id,
-                is_metadata_column: false,
-            } => {
-                let name: Vec<String> = name.clone().into();
-                let Ok(name) = name.one() else {
-                    return Err(PlanError::invalid("Expected simple column name"));
-                };
-                match self.resolve_optional_column(schema, &name, *plan_id, state)? {
-                    Some(col) => col,
-                    None => {
-                        return Err(PlanError::invalid(format!(
-                            "Could not resolve column: {name}"
-                        )));
-                    }
-                }
-            }
-            _ => {
-                return Err(PlanError::invalid("Expected UnresolvedAttribute"));
-            }
-        };
+        let schema = input.schema().clone();
+        let column_expr = self.resolve_expression(column, &schema, state).await?;
 
         let init_exprs: Vec<Expr> = input
             .schema()
@@ -557,8 +534,8 @@ impl PlanResolver<'_> {
         for frac in &fractions {
             let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
             let f = and(
-                Expr::Column(column_expr.clone()).eq(lit(key_val)),
-                col(&rand_column_name).lt_eq(lit(frac.fraction)),
+                column_expr.clone().eq(lit(key_val)),
+                col(&rand_column_name).lt(lit(frac.fraction)),
             );
             acc_exprs.push(f);
         }
