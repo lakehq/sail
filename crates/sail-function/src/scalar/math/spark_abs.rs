@@ -2,9 +2,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    ArrayRef, AsArray, DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
-    DurationSecondArray, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    new_null_array, ArrayRef, AsArray, DurationMicrosecondArray, DurationMillisecondArray,
+    DurationNanosecondArray, DurationSecondArray, Int16Array, Int32Array, Int64Array, Int8Array,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
 };
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
@@ -96,10 +96,22 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let return_dtype = args.return_field.data_type().clone();
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
             return Err(invalid_arg_count_exec_err("abs", (1, 1), args.len()));
         };
+        // Skip the kernel pass when every input row is NULL. Placed AFTER the
+        // arity guard so a malformed call still errors; abs has no further
+        // runtime validation, so this is safe here.
+        if let ColumnarValue::Array(array) = arg {
+            if array.null_count() == array.len() {
+                return Ok(ColumnarValue::Array(new_null_array(
+                    &return_dtype,
+                    array.len(),
+                )));
+            }
+        }
         match arg {
             // Signed integer abs: ANSI=true errors on overflow (mathematically
             // correct: |MIN| does not fit in the same width). ANSI=false uses

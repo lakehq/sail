@@ -556,7 +556,13 @@ Feature: abs comprehensive tests
         | 99.75  |
 
     @sail-bug
-    # Includes a row with INT MIN under ANSI=false — tests both vectorized path and wrap
+    # Vectorized abs path (.unary on Int32Array) is correct — failure traces to
+    # the same parser bug documented in `Scenario: abs INT literal MIN preserves
+    # INT type and wraps under ANSI false` above: Sail parses -2147483648 as
+    # UnaryMinus(IntLit(2147483648)), the positive overflows INT32 and widens
+    # to BIGINT, so the column type becomes BIGINT instead of INT. Fix path:
+    # `sail-sql-analyzer` literal narrowing for `-INT_MIN` / `-LONG_MIN`.
+    # Affects every multi-row test that mixes a MIN literal with other values.
     Scenario: abs INT column with NULL mix
       Given config spark.sql.ansi.enabled = false
       When query
@@ -573,6 +579,11 @@ Feature: abs comprehensive tests
         | -2147483648 |
 
     @sail-bug
+    # Vectorized abs path is correct — same root cause as the scalar interval
+    # scenarios above (see `Rule: Interval values` comment at L457): Sail
+    # widens Spark interval subranges to DAY TO SECOND at the type layer.
+    # The vectorized kernel succeeds; the rendered/expected interval format
+    # diverges. Fix path: preserve subrange in Spark→Arrow Field metadata.
     Scenario: abs INTERVAL DAY column with NULL mix
       When query
         """
@@ -590,6 +601,49 @@ Feature: abs comprehensive tests
         | INTERVAL '0' DAY   |
         | INTERVAL '10' DAY  |
         | NULL               |
+
+  Rule: All-null short-circuit
+    # Locks the all-null short-circuit invariant: when every input row is NULL,
+    # invoke_with_args returns an all-null result without running the kernel.
+    # Sanity coverage on the paths that route through SparkAbs::invoke_with_args
+    # (integers + interval/duration). Float/decimal paths are delegated to
+    # DataFusion's abs and don't reach this short-circuit.
+
+    Scenario: all-null INT column returns all NULL under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs(v) AS result
+        FROM VALUES (CAST(NULL AS INT)), (CAST(NULL AS INT)), (CAST(NULL AS INT)) AS t(v)
+        """
+      Then query result ordered
+        | result |
+        | NULL   |
+        | NULL   |
+        | NULL   |
+
+    Scenario: all-null INT column returns all NULL under ANSI=true (no overflow check fires)
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(v) AS result
+        FROM VALUES (CAST(NULL AS INT)), (CAST(NULL AS INT)) AS t(v)
+        """
+      Then query result ordered
+        | result |
+        | NULL   |
+        | NULL   |
+
+    Scenario: all-null INTERVAL column returns all NULL
+      When query
+        """
+        SELECT abs(v) AS result
+        FROM VALUES (CAST(NULL AS INTERVAL DAY)), (CAST(NULL AS INTERVAL DAY)) AS t(v)
+        """
+      Then query result ordered
+        | result |
+        | NULL   |
+        | NULL   |
 
   Rule: Type rejection
 
