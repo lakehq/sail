@@ -20,6 +20,25 @@ To work around this issue, you can run the following command on the host:
 sudo timedatectl set-timezone UTC
 ```
 
+## Local Time Zone Configuration
+
+Spark Connect uses the system local time zone when interpreting certain timestamp values on the client side.
+Python `datetime.datetime` objects created without an explicit time zone are converted to Arrow data using the local time zone, before being sent to the server.
+
+On Linux and macOS, you can change the local time zone using the `TZ` environment variable. Changes to the `TZ` environment variable at runtime can be made effective by calling [`time.tzset()`](https://docs.python.org/3/library/time.html#time.tzset) in Python.
+
+```python
+import os
+import time
+
+os.environ["TZ"] = "America/New_York"
+time.tzset()
+```
+
+On Windows, `time.tzset()` is not available, so the local time zone cannot be changed at runtime from Python.
+However, you can still configure the local time zone by setting the `TZ` environment variable _before_ starting Python.
+Note that the `TZ` environment variable may also affect other libraries using the system time zone, so be mindful of any unintended side effects.
+
 ## JVM-Only `sparkContext` Patterns Under Spark Connect
 
 Spark Connect does not support `SparkContext` or RDD operations, since there is no JVM in the client process. Code that accesses `spark.sparkContext` will raise an error under Spark Connect (and therefore under Sail).
