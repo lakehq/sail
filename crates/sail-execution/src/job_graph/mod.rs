@@ -180,6 +180,7 @@ pub enum OutputDistribution {
     },
     RoundRobin {
         channels: usize,
+        row_level: bool,
     },
 }
 
@@ -187,7 +188,7 @@ impl OutputDistribution {
     pub fn channels(&self) -> usize {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
-            OutputDistribution::RoundRobin { channels } => *channels,
+            OutputDistribution::RoundRobin { channels, .. } => *channels,
         }
     }
 }
@@ -199,8 +200,15 @@ impl fmt::Display for OutputDistribution {
                 let keys = keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
                 write!(f, "Hash(keys=[{}], channels={})", keys.join(", "), channels)
             }
-            OutputDistribution::RoundRobin { channels } => {
-                write!(f, "RoundRobin(channels={})", channels)
+            OutputDistribution::RoundRobin {
+                channels,
+                row_level,
+            } => {
+                write!(
+                    f,
+                    "RoundRobin(channels={}, row_level={})",
+                    channels, row_level
+                )
             }
         }
     }

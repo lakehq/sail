@@ -64,6 +64,7 @@ pub enum TaskOutputDistribution {
     },
     RoundRobin {
         channels: usize,
+        row_level: bool,
     },
 }
 
@@ -415,10 +416,14 @@ impl From<TaskOutputDistribution> for gen::TaskOutputDistribution {
                     channels: channels as u64,
                 })
             }
-            TaskOutputDistribution::RoundRobin { channels } => {
+            TaskOutputDistribution::RoundRobin {
+                channels,
+                row_level,
+            } => {
                 gen::task_output_distribution::Kind::RoundRobin(
                     gen::TaskOutputRoundRobinDistribution {
                         channels: channels as u64,
+                        row_level,
                     },
                 )
             }
@@ -440,9 +445,13 @@ impl TryFrom<gen::TaskOutputDistribution> for TaskOutputDistribution {
                 channels: channels as usize,
             }),
             Some(gen::task_output_distribution::Kind::RoundRobin(
-                gen::TaskOutputRoundRobinDistribution { channels },
+                gen::TaskOutputRoundRobinDistribution {
+                    channels,
+                    row_level,
+                },
             )) => Ok(TaskOutputDistribution::RoundRobin {
                 channels: channels as usize,
+                row_level,
             }),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output distribution".to_string(),
@@ -606,7 +615,7 @@ impl TaskOutput {
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(Partitioning::Hash(keys, *channels))
             }
-            TaskOutputDistribution::RoundRobin { channels } => {
+            TaskOutputDistribution::RoundRobin { channels, .. } => {
                 Ok(Partitioning::RoundRobinBatch(*channels))
             }
         }

@@ -33,6 +33,7 @@ pub struct ShuffleWriteExec {
     locations: Vec<Vec<TaskWriteLocation>>,
     properties: Arc<PlanProperties>,
     writer: Arc<dyn TaskStreamWriter>,
+    row_level_round_robin: bool,
 }
 
 impl ShuffleWriteExec {
@@ -41,6 +42,7 @@ impl ShuffleWriteExec {
         locations: Vec<Vec<TaskWriteLocation>>,
         writer: Arc<dyn TaskStreamWriter>,
         partitioning: Partitioning,
+        row_level_round_robin: bool,
     ) -> Self {
         let partitioning = match partitioning {
             Partitioning::Hash(expr, n) if expr.is_empty() => Partitioning::UnknownPartitioning(n),
@@ -74,6 +76,7 @@ impl ShuffleWriteExec {
             locations,
             properties,
             writer,
+            row_level_round_robin,
         }
     }
 }
@@ -82,8 +85,9 @@ impl DisplayAs for ShuffleWriteExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "ShuffleWriteExec: partitioning={}, locations={}",
+            "ShuffleWriteExec: partitioning={}, row_level_round_robin={}, locations={}",
             self.shuffle_partitioning,
+            self.row_level_round_robin,
             ListListDisplay(&self.locations),
         )
     }
@@ -152,8 +156,12 @@ impl ExecutionPlan for ShuffleWriteExec {
             .properties()
             .output_partitioning()
             .partition_count();
-        let partitioner =
-            ShufflePartitioner::try_new(shuffle_partitioning, partition, num_input_partitions)?;
+        let partitioner = ShufflePartitioner::try_new(
+            shuffle_partitioning,
+            partition,
+            num_input_partitions,
+            self.row_level_round_robin,
+        )?;
         let empty = RecordBatch::new_empty(self.schema());
         let output = futures::stream::once(async move {
             shuffle_write(writer, stream, &locations, partitioner).await?;
@@ -228,7 +236,8 @@ async fn shuffle_write(
 
 enum ShufflePartitioner {
     Hash(BatchPartitioner),
-    RoundRobin(RowRoundRobinBatchPartitioner),
+    BatchRoundRobin(BatchPartitioner),
+    RowRoundRobin(RowRoundRobinBatchPartitioner),
 }
 
 impl ShufflePartitioner {
@@ -236,6 +245,7 @@ impl ShufflePartitioner {
         partitioning: Partitioning,
         input_partition: usize,
         input_partitions: usize,
+        row_level_round_robin: bool,
     ) -> Result<Self> {
         match partitioning {
             Partitioning::Hash(_, _) => Ok(Self::Hash(BatchPartitioner::try_new(
@@ -244,13 +254,19 @@ impl ShufflePartitioner {
                 input_partition,
                 input_partitions,
             )?)),
-            Partitioning::RoundRobinBatch(target_partitions) => {
-                Ok(Self::RoundRobin(RowRoundRobinBatchPartitioner::try_new(
+            Partitioning::RoundRobinBatch(target_partitions) if row_level_round_robin => Ok(
+                Self::RowRoundRobin(RowRoundRobinBatchPartitioner::try_new(
                     target_partitions,
                     input_partition,
                     input_partitions,
-                )?))
-            }
+                )?),
+            ),
+            Partitioning::RoundRobinBatch(_) => Ok(Self::BatchRoundRobin(BatchPartitioner::try_new(
+                partitioning,
+                Default::default(),
+                input_partition,
+                input_partitions,
+            )?)),
             other => internal_err!("unsupported shuffle partitioning: {other}"),
         }
     }
@@ -260,8 +276,10 @@ impl ShufflePartitioner {
         F: FnMut(usize, RecordBatch) -> Result<()>,
     {
         match self {
-            Self::Hash(partitioner) => partitioner.partition(batch, f),
-            Self::RoundRobin(partitioner) => {
+            Self::Hash(partitioner) | Self::BatchRoundRobin(partitioner) => {
+                partitioner.partition(batch, f)
+            }
+            Self::RowRoundRobin(partitioner) => {
                 for (partition, batch) in partitioner.partition(batch)? {
                     f(partition, batch)?;
                 }

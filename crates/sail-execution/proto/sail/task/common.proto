@@ -86,6 +86,7 @@ message TaskOutputHashDistribution {
 
 message TaskOutputRoundRobinDistribution {
   uint64 channels = 1;
+  bool row_level = 2;
 }
 
 message TaskOutputLocator {
@@ -102,4 +103,3 @@ message TaskOutputLocalLocator {
 message TaskOutputRemoteLocator {
   string uri = 1;
 }
-

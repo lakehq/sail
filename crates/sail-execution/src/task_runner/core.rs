@@ -26,7 +26,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
-use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
+use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput, TaskOutputDistribution};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunner, TaskRunnerMessage};
 
@@ -180,7 +180,20 @@ impl TaskRunner {
             }
         };
         let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
-        let shuffle = ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning);
+        let row_level_round_robin = matches!(
+            &output.distribution,
+            TaskOutputDistribution::RoundRobin {
+                row_level: true,
+                ..
+            }
+        );
+        let shuffle = ShuffleWriteExec::new(
+            plan,
+            locations,
+            Arc::new(accessor),
+            partitioning,
+            row_level_round_robin,
+        );
         Ok(Arc::new(shuffle))
     }
 }

@@ -727,8 +727,12 @@ impl JobScheduler {
                     channels: *channels,
                 }
             }
-            OutputDistribution::RoundRobin { channels } => TaskOutputDistribution::RoundRobin {
+            OutputDistribution::RoundRobin {
+                channels,
+                row_level,
+            } => TaskOutputDistribution::RoundRobin {
                 channels: *channels,
+                row_level: *row_level,
             },
         };
         let locator = match stage.mode {

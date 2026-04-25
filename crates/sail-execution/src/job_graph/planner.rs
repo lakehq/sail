@@ -40,7 +40,10 @@ impl JobGraph {
             plan: last,
             group: String::new(),
             mode: OutputMode::Pipelined,
-            distribution: OutputDistribution::RoundRobin { channels: 1 },
+            distribution: OutputDistribution::RoundRobin {
+                channels: 1,
+                row_level: false,
+            },
             placement: TaskPlacement::Worker,
         });
         Ok(graph)
@@ -246,21 +249,21 @@ fn build_job_graph(
                         .clone()
                         .with_partitioning(Partitioning::RoundRobinBatch(n)),
                 );
-                create_shuffle(child, graph, properties, consumption)?
+                create_shuffle(child, graph, properties, consumption, false)?
             }
             Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
-                create_shuffle(child, graph, properties, consumption)?
+                create_shuffle(child, graph, properties, consumption, false)?
             }
         }
     } else if let Some(repartition) = plan.as_any().downcast_ref::<RoundRobinRepartitionExec>() {
         let properties = repartition.properties().clone();
         let child = plan.children().one()?;
-        create_shuffle(child, graph, properties, consumption)?
+        create_shuffle(child, graph, properties, consumption, true)?
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
         let properties = coalesce.properties().clone();
         let child = plan.children().one()?;
         let fetch = coalesce.fetch();
-        let shuffled = create_shuffle(child, graph, properties, consumption)?;
+        let shuffled = create_shuffle(child, graph, properties, consumption, false)?;
         if let Some(f) = fetch {
             Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
         } else {
@@ -290,7 +293,10 @@ fn create_merge_input(
         plan,
         group: String::new(),
         mode: OutputMode::Pipelined,
-        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        distribution: OutputDistribution::RoundRobin {
+            channels: 1,
+            row_level: false,
+        },
         placement: TaskPlacement::Worker,
     };
     let s = graph.stages.len();
@@ -311,10 +317,14 @@ fn create_shuffle(
     // which are different from the properties of the input plan.
     properties: Arc<PlanProperties>,
     consumption: ShuffleConsumption,
+    row_level_round_robin: bool,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = match properties.partitioning.clone() {
         Partitioning::RoundRobinBatch(channels) | Partitioning::UnknownPartitioning(channels) => {
-            OutputDistribution::RoundRobin { channels }
+            OutputDistribution::RoundRobin {
+                channels,
+                row_level: row_level_round_robin,
+            }
         }
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
     };
@@ -366,7 +376,10 @@ fn create_driver_stage(
         plan: plan.clone(),
         group: String::new(),
         mode: OutputMode::Pipelined,
-        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        distribution: OutputDistribution::RoundRobin {
+            channels: 1,
+            row_level: false,
+        },
         placement: TaskPlacement::Driver,
     };
     let s = graph.stages.len();
