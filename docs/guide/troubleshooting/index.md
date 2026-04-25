@@ -38,7 +38,7 @@ Replace it with the equivalent Spark Connect-compatible call:
 spark.createDataFrame([], schema)
 ```
 
-The same applies to other `sparkContext` methods that construct RDDs (e.g. `parallelize`, `textFile`). Migrate these by using the corresponding `SparkSession` or DataFrame API equivalents instead.
+The same applies to other `sparkContext` methods that construct RDDs. Migrate these by using the corresponding `SparkSession` or DataFrame API equivalents instead.
 
 ## Protobuf Version Mismatch
 
