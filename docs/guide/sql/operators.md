@@ -133,11 +133,13 @@ The operators are listed in order of decreasing precedence, where 1 is the highe
 ::: info
 
 In the original Spark documentation, the logical not operator (`NOT` or `!`) has a
-higher precedence than predicates such as `LIKE`,
-but this does not seem to be consistent with the actual implementation.
+higher precedence than predicates such as `LIKE`.
+This is inconsistent with the actual implementation in Spark.
 
 In both the Sail documentation here and the Sail implementation, the logical not operator has a lower precedence than other predicates.
 This provides a more intuitive behavior, where `NOT a LIKE b` is interpreted as `NOT (a LIKE b)` instead of `(NOT a) LIKE b`.
+
+You can refer to the bug reports ([#729](https://github.com/lakehq/sail/issues/729) and [#773](https://github.com/lakehq/sail/issues/773)) and the bug fix ([#776](https://github.com/lakehq/sail/pull/776)) for more details.
 
 :::
 

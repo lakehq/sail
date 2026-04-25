@@ -229,7 +229,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"S\")])"
+        "failure": "analysis error: attribute ObjectName([Identifier(\"S\")]) is missing from the schema: cannot resolve attribute"
       }
     },
     {
@@ -263,7 +263,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"S\")])"
+        "failure": "analysis error: attribute ObjectName([Identifier(\"S\")]) is missing from the schema: cannot resolve attribute"
       }
     },
     {

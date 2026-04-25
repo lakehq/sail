@@ -39,7 +39,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"session_window\"), Identifier(\"start\")])"
+        "failure": "analysis error: attribute ObjectName([Identifier(\"session_window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
       }
     },
     {
@@ -82,7 +82,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"session_window\"), Identifier(\"start\")])"
+        "failure": "analysis error: attribute ObjectName([Identifier(\"session_window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
       }
     },
     {
@@ -174,7 +174,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"window\"), Identifier(\"start\")])"
+        "failure": "analysis error: attribute ObjectName([Identifier(\"window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
       }
     },
     {
@@ -216,7 +216,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"window\"), Identifier(\"start\")])"
+        "failure": "analysis error: attribute ObjectName([Identifier(\"window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
       }
     },
     {
@@ -458,7 +458,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"current_time\")])"
+        "failure": "analysis error: attribute ObjectName([Identifier(\"current_time\")]) is missing from the schema: cannot resolve attribute"
       }
     },
     {
