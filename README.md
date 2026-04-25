@@ -44,6 +44,18 @@ If you need to deploy Sail in production environments, the [Deployment Guide](ht
 
 ## Getting Started
 
+### Spark Compatibility
+
+Sail is designed to be compatible with Spark 3.5.x, Spark 4.x, and later versions. Existing PySpark code works out of the box once you connect your Spark client session to Sail over the Spark Connect protocol.
+
+To assess whether Sail already covers all PySpark functionality used in your project, Sail ships with a [compatibility check script](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/#check-your-code-for-compatibility) (experimental) that scans your codebase for used PySpark functions and reports their Sail support status.
+
+```bash
+python -m pysail.examples.spark.compatibility_check <directory>
+```
+
+See the [Migration Guide](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/) for more details.
+
 ### Starting the Sail Server
 
 **Option 1: Command Line Interface.** You can start the local Sail server using the `sail` command.
