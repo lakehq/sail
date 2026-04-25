@@ -21,11 +21,6 @@ cat > /etc/krb5.conf <<EOF
   kdc = ${KDC_HOSTNAME}:88
  }
 
-[domain_realm]
- ${KDC_HOSTNAME} = ${REALM}
- .${KDC_HOSTNAME} = ${REALM}
- localhost = ${REALM}
- .local = ${REALM}
 EOF
 
 cat > /etc/krb5kdc/kdc.conf <<EOF
