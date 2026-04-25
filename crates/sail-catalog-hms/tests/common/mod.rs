@@ -341,7 +341,7 @@ async fn shared_kerberos_infrastructure() -> &'static SharedKerberosInfrastructu
         .unwrap_or_else(|error| panic!("get KDC UDP host port: {error}"));
     wait_for_tcp_port(&canonical_host, kdc_port, 60, "Kerberos KDC").await;
 
-    let service_principal = format!("hive-metastore/{HMS_HOSTNAME}@{KERBEROS_REALM}");
+    let service_principal = format!("hive-metastore/localhost@{KERBEROS_REALM}");
     let client_principal = format!("sail-test-client@{KERBEROS_REALM}");
 
     exec_checked(
