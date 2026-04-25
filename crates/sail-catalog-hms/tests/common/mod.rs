@@ -243,7 +243,8 @@ async fn setup_kerberos_hms_catalog_inner(
 
     let mut env_guard = ProcessEnvGuard::new();
     let ticket_cache_path = shared.temp_dir.path().join(format!("krb5cc-{test_name}"));
-    env_guard.set("KRB5CCNAME", ticket_cache_path.as_os_str());
+    let ticket_cache_str = format!("FILE:{}", ticket_cache_path.display());
+    env_guard.set("KRB5CCNAME", ticket_cache_str);
 
     if perform_kinit {
         run_kinit(&shared.client_keytab_path, &shared.client_principal).await;
@@ -664,6 +665,13 @@ fn host_krb5_conf(kdc_host: &str, kdc_tcp_port: u16, kdc_udp_port: u16) -> Strin
   kdc = {kdc_host}:{kdc_udp_port}
   kdc = {kdc_host}:{kdc_tcp_port}
  }}
+
+[domain_realm]
+ localhost = {realm}
+ .localhost = {realm}
+ .local = {realm}
+ .internal.cloudapp.net = {realm}
+ .cloudapp.net = {realm}
 "#,
         realm = KERBEROS_REALM,
     )
