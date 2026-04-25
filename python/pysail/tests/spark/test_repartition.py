@@ -2,6 +2,7 @@ import io
 from contextlib import redirect_stdout
 
 import pandas as pd
+import pyarrow as pa
 import pyspark.sql.functions as F  # noqa: N812
 
 
@@ -62,3 +63,60 @@ def test_repartition_without_expressions_distributes_rows_round_robin(spark):
         .collect()
     ]
     assert ids == list(range(10))
+
+
+def test_repartition_before_global_sort_preserves_rows(spark):
+    rows = spark.range(0, 50_000).repartition(10).orderBy("id").collect()
+
+    assert len(rows) == 50_000  # noqa: PLR2004
+    assert rows[0]["id"] == 0
+    assert rows[-1]["id"] == 49_999  # noqa: PLR2004
+
+
+def test_repartition_before_python_map_udfs_preserves_rows(spark):
+    def pandas_mapper(iterator):
+        for _ in iterator:
+            yield pd.DataFrame({"value": list(range(100))})
+
+    pandas_values = {
+        row["value"] for row in spark.range(10).repartition(1).mapInPandas(pandas_mapper, "value long").collect()
+    }
+    assert pandas_values == set(range(100))
+
+    def arrow_mapper(iterator):
+        for _ in iterator:
+            yield pa.RecordBatch.from_pandas(pd.DataFrame({"value": list(range(100))}))
+
+    arrow_values = {
+        row["value"] for row in spark.range(10).repartition(1).mapInArrow(arrow_mapper, "value long").collect()
+    }
+    assert arrow_values == set(range(100))
+
+
+def test_repartition_before_grouped_pandas_udf_and_sort_preserves_groups(spark):
+    df = (
+        spark.range(2)
+        .join(spark.range(4).withColumnRenamed("id", "day"))
+        .join(spark.range(10_000).withColumnRenamed("id", "value"))
+        .repartition(10)
+    )
+
+    def count_group(pdf):
+        return pd.DataFrame(
+            {
+                "id": [pdf["id"][0]],
+                "day": [pdf["day"][0]],
+                "count": [len(pdf.index)],
+            }
+        )
+
+    rows = (
+        df.groupBy("id", "day")
+        .applyInPandas(count_group, "id long, day long, count long")
+        .orderBy("id", "day")
+        .collect()
+    )
+
+    assert [(row["id"], row["day"], row["count"]) for row in rows] == [
+        (group_id, day, 10_000) for group_id in range(2) for day in range(4)
+    ]

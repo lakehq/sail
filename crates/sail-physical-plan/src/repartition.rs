@@ -19,8 +19,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{exec_err, internal_err, plan_err, DataFusionError, Result, Statistics};
 use datafusion_common_runtime::SpawnedTask;
-use futures::channel::mpsc::{self, Receiver, Sender};
-use futures::{SinkExt, Stream, StreamExt};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::{Stream, StreamExt};
 pub use sail_logical_plan::repartition::ExplicitRepartitionKind;
 
 /// A physical plan node for explicit repartitioning in the query.
@@ -145,8 +145,8 @@ impl ExecutionPlan for ExplicitRepartitionExec {
     //   wants to evaluate these expressions after repartitioning.
 }
 
-type RoundRobinSender = Sender<Result<RecordBatch>>;
-type RoundRobinReceiver = Receiver<Result<RecordBatch>>;
+type RoundRobinSender = UnboundedSender<Result<RecordBatch>>;
+type RoundRobinReceiver = UnboundedReceiver<Result<RecordBatch>>;
 
 /// Partitions record batches using Spark-compatible row-level round-robin.
 pub struct RowRoundRobinBatchPartitioner {
@@ -255,16 +255,15 @@ impl RoundRobinRepartitionExec {
             return Ok(());
         }
 
-        let queue_size = self.target_partitions.max(1);
-        let (senders, receivers): (Vec<_>, Vec<_>) = (0..self.target_partitions)
-            .map(|_| mpsc::channel(queue_size))
-            .unzip();
+        // Consumers such as global sort may not poll all output partitions concurrently.
+        let (senders, receivers): (Vec<_>, Vec<_>) =
+            (0..self.target_partitions).map(|_| unbounded()).unzip();
         let input_partitions = self.input.output_partitioning().partition_count();
         let mut tasks = Vec::with_capacity(input_partitions);
         for input_partition in 0..input_partitions {
             let input = self.input.clone();
             let context = context.clone();
-            let mut task_senders = senders.clone();
+            let task_senders = senders.clone();
             let target_partitions = self.target_partitions;
             tasks.push(SpawnedTask::spawn(async move {
                 if let Err(error) = pull_round_robin_input(
@@ -273,17 +272,17 @@ impl RoundRobinRepartitionExec {
                     input_partitions,
                     target_partitions,
                     context,
-                    &mut task_senders,
+                    &task_senders,
                 )
                 .await
                 {
-                    send_round_robin_error(&mut task_senders, error).await;
+                    send_round_robin_error(&task_senders, error);
                 }
             }));
         }
 
         state.receivers = Some(receivers.into_iter().map(Some).collect());
-        state.tasks = tasks;
+        state.tasks = Some(Arc::new(tasks));
         Ok(())
     }
 }
@@ -367,9 +366,13 @@ impl ExecutionPlan for RoundRobinRepartitionExec {
                     partition
                 ))
             })?;
+        let tasks = state.tasks.as_ref().cloned().ok_or_else(|| {
+            DataFusionError::Execution(format!("{}: input tasks were not initialized", self.name()))
+        })?;
         Ok(Box::pin(RoundRobinPartitionStream::new(
             self.schema(),
             receiver,
+            tasks,
         )))
     }
 
@@ -389,17 +392,27 @@ impl ExecutionPlan for RoundRobinRepartitionExec {
 #[derive(Default)]
 struct RoundRobinRepartitionState {
     receivers: Option<Vec<Option<RoundRobinReceiver>>>,
-    tasks: Vec<SpawnedTask<()>>,
+    tasks: Option<Arc<Vec<SpawnedTask<()>>>>,
 }
 
 struct RoundRobinPartitionStream {
     schema: SchemaRef,
     receiver: RoundRobinReceiver,
+    // Keep producer tasks alive even if the plan node is dropped after streams are created.
+    _tasks: Arc<Vec<SpawnedTask<()>>>,
 }
 
 impl RoundRobinPartitionStream {
-    fn new(schema: SchemaRef, receiver: RoundRobinReceiver) -> Self {
-        Self { schema, receiver }
+    fn new(
+        schema: SchemaRef,
+        receiver: RoundRobinReceiver,
+        tasks: Arc<Vec<SpawnedTask<()>>>,
+    ) -> Self {
+        Self {
+            schema,
+            receiver,
+            _tasks: tasks,
+        }
     }
 }
 
@@ -423,7 +436,7 @@ async fn pull_round_robin_input(
     input_partitions: usize,
     target_partitions: usize,
     context: Arc<TaskContext>,
-    senders: &mut [RoundRobinSender],
+    senders: &[RoundRobinSender],
 ) -> Result<()> {
     let mut stream = input.execute(input_partition, context)?;
     let mut partitioner = RowRoundRobinBatchPartitioner::try_new(
@@ -437,18 +450,16 @@ async fn pull_round_robin_input(
             continue;
         }
         for (partition, batch) in partitioner.partition(batch)? {
-            let _ = senders[partition].send(Ok(batch)).await;
+            let _ = senders[partition].unbounded_send(Ok(batch));
         }
     }
     Ok(())
 }
 
-async fn send_round_robin_error(senders: &mut [RoundRobinSender], error: DataFusionError) {
+fn send_round_robin_error(senders: &[RoundRobinSender], error: DataFusionError) {
     let message = error.to_string();
     for sender in senders {
-        let _ = sender
-            .send(Err(DataFusionError::Execution(message.clone())))
-            .await;
+        let _ = sender.unbounded_send(Err(DataFusionError::Execution(message.clone())));
     }
 }
 
