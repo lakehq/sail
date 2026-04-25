@@ -57,6 +57,7 @@ message ExtendedPhysicalPlanNode {
     RelaxedTzCastExecNode relaxed_tz_cast = 42;
     SparkPartitionIdExecNode spark_partition_id = 43;
     DeletionVectorWriterExecNode deletion_vector_writer = 44;
+    NarrowCoalesceExecNode narrow_coalesce = 45;
   }
 }
 
@@ -594,6 +595,11 @@ message SparkPartitionIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message NarrowCoalesceExecNode {
+  bytes input = 1;
+  uint64 target_partitions = 2;
 }
 
 message RelaxedTzCastExecNode {

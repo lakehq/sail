@@ -106,6 +106,12 @@ impl ExecutionPlan for SparkPartitionIdExec {
         )?))
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        // `spark_partition_id()` is user-visible and must observe the input partition
+        // numbering, so the optimizer must not add automatic repartitioning below it.
+        vec![false]
+    }
+
     fn execute(
         &self,
         partition: usize,

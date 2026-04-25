@@ -28,7 +28,7 @@ use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
-use sail_logical_plan::repartition::ExplicitRepartitionNode;
+use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
@@ -257,9 +257,14 @@ Ensure expand_row_level_op is enabled; MERGE is currently only supported for lak
                 input.as_ref(),
                 node.num_partitions(),
                 node.partitioning_expressions(),
+                node.kind(),
                 session_state,
             )?;
-            Arc::new(ExplicitRepartitionExec::new(input.clone(), partitioning))
+            Arc::new(ExplicitRepartitionExec::new(
+                input.clone(),
+                partitioning,
+                node.kind(),
+            ))
         } else if node.as_any().is::<StreamSourceAdapterNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("StreamSourceExec requires exactly one physical input");
@@ -338,12 +343,37 @@ fn plan_explicit_partitioning(
     input: &dyn ExecutionPlan,
     num_partitions: Option<usize>,
     expressions: &[Expr],
+    kind: ExplicitRepartitionKind,
     session_state: &SessionState,
 ) -> datafusion_common::Result<Partitioning> {
-    match (num_partitions, expressions) {
-        (Some(0), _) => internal_err!("number of explicit partitions cannot be zero"),
-        (Some(1), _) => Ok(Partitioning::UnknownPartitioning(1)),
-        (Some(_) | None, expressions) => {
+    match kind {
+        ExplicitRepartitionKind::Coalesce => {
+            let Some(num_partitions) = num_partitions else {
+                return internal_err!("coalesce requires an explicit partition count");
+            };
+            if num_partitions == 0 {
+                return internal_err!("number of explicit partitions cannot be zero");
+            }
+            let input_partitions = input.properties().output_partitioning().partition_count();
+            Ok(Partitioning::UnknownPartitioning(
+                num_partitions.min(input_partitions),
+            ))
+        }
+        ExplicitRepartitionKind::RoundRobin => {
+            let Some(num_partitions) = num_partitions else {
+                return internal_err!(
+                    "round-robin repartition requires an explicit partition count"
+                );
+            };
+            if num_partitions == 0 {
+                return internal_err!("number of explicit partitions cannot be zero");
+            }
+            Ok(Partitioning::RoundRobinBatch(num_partitions))
+        }
+        ExplicitRepartitionKind::Hash => {
+            if matches!(num_partitions, Some(0)) {
+                return internal_err!("number of explicit partitions cannot be zero");
+            }
             if expressions.is_empty() {
                 return internal_err!(
                     "explicit repartitioning requires at least one partitioning expression"

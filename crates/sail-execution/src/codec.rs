@@ -206,6 +206,7 @@ use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::repartition::NarrowCoalesceExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
@@ -1001,6 +1002,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::NarrowCoalesce(gen::NarrowCoalesceExecNode {
+                input,
+                target_partitions,
+            }) => Ok(Arc::new(NarrowCoalesceExec::try_new(
+                self.try_decode_plan(&input, ctx)?,
+                usize::try_from(target_partitions).map_err(|_| {
+                    plan_datafusion_err!("invalid number of partitions for narrow coalesce")
+                })?,
+            )?)),
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
@@ -1689,6 +1699,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 column_name: spark_partition_id.column_name().to_string(),
                 schema,
+            })
+        } else if let Some(narrow_coalesce) = node.as_any().downcast_ref::<NarrowCoalesceExec>() {
+            let input = self.try_encode_plan(narrow_coalesce.input().clone())?;
+            let target_partitions =
+                u64::try_from(narrow_coalesce.target_partitions()).map_err(|_| {
+                    plan_datafusion_err!("invalid number of partitions for narrow coalesce")
+                })?;
+            NodeKind::NarrowCoalesce(gen::NarrowCoalesceExecNode {
+                input,
+                target_partitions,
             })
         } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {
             let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;

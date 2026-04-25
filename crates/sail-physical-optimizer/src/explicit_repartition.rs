@@ -1,16 +1,17 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_physical_expr::Partitioning;
-use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::repartition::{
+    ExplicitRepartitionExec, ExplicitRepartitionKind, NarrowCoalesceExec,
+};
 
 pub struct RewriteExplicitRepartition {}
 
@@ -36,18 +37,28 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
         let result = plan.transform_up(|plan| {
             if let Some(node) = plan.as_any().downcast_ref::<ExplicitRepartitionExec>() {
                 let partitioning = node.properties().output_partitioning().clone();
-                match partitioning {
-                    Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
+                match node.kind() {
+                    ExplicitRepartitionKind::RoundRobin | ExplicitRepartitionKind::Hash => {
                         Ok(Transformed::yes(Arc::new(RepartitionExec::try_new(
                             node.input().clone(),
                             partitioning,
                         )?)))
                     }
-                    Partitioning::UnknownPartitioning(1) => Ok(Transformed::yes(Arc::new(
-                        CoalescePartitionsExec::new(node.input().clone()),
-                    ))),
-                    Partitioning::UnknownPartitioning(n) => {
-                        internal_err!("unknown explicit repartitioning with {n} partitions")
+                    ExplicitRepartitionKind::Coalesce => {
+                        let target_partitions = partitioning.partition_count();
+                        let input_partitions = node.input().output_partitioning().partition_count();
+                        if target_partitions >= input_partitions {
+                            Ok(Transformed::yes(node.input().clone()))
+                        } else if matches!(partitioning, Partitioning::UnknownPartitioning(1)) {
+                            Ok(Transformed::yes(Arc::new(CoalescePartitionsExec::new(
+                                node.input().clone(),
+                            ))))
+                        } else {
+                            Ok(Transformed::yes(Arc::new(NarrowCoalesceExec::try_new(
+                                node.input().clone(),
+                                target_partitions,
+                            )?)))
+                        }
                     }
                 }
             } else {
