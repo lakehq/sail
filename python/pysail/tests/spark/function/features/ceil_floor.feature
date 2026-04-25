@@ -919,75 +919,21 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         """
       Then query plan matches snapshot
 
-  Rule: Plan snapshot — output_ordering (order preservation)
-
-    @sail-only
-    Scenario: EXPLAIN ORDER BY on subquery already sorted by col avoids re-sorting ceil(col)
-      When query
-        """
-        EXPLAIN SELECT ceil(v) AS c FROM (
-          SELECT * FROM VALUES (CAST(3.0 AS DOUBLE)), (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)) AS t(v) ORDER BY v
-        ) ORDER BY ceil(v)
-        """
-      Then query plan matches snapshot
-
-    @sail-only
-    Scenario: EXPLAIN ORDER BY on subquery already sorted by col avoids re-sorting floor(col)
-      When query
-        """
-        EXPLAIN SELECT floor(v) AS f FROM (
-          SELECT * FROM VALUES (CAST(3.0 AS DOUBLE)), (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)) AS t(v) ORDER BY v
-        ) ORDER BY floor(v)
-        """
-      Then query plan matches snapshot
-
-  Rule: Plan snapshot — filter pushdown on Parquet (preimage + propagate_constraints)
-    # Two complementary hooks cover filter pushdown for ceil/floor, with very
-    # different visibility in DF v53:
+  Rule: Plan snapshot — filter pushdown on Parquet (preimage)
+    # Filter pushdown on FLOOR via `preimage()`: the logical simplifier rule
+    # `rewrite_with_preimage` rewrites `floor(col) OP lit` into a pure column
+    # predicate `col OP' lower/upper`. With `floor(x) = N` ⇔ `x ∈ [N, N+1)`
+    # the half-open `PreimageResult::Range` fits exactly. `DataSourceExec`
+    # gets a literal column predicate, and Parquet `pruning_predicate` +
+    # `required_guarantees` are populated → row groups pruned by min/max stats.
     #
-    # 1) `preimage()` — WIRED ON FLOOR ONLY.
-    #    The logical simplifier rule `rewrite_with_preimage` calls
-    #    `ScalarUDFImpl::preimage` and rewrites `<udf>(col) OP lit` into a pure
-    #    column predicate `col OP' lower/upper` (see
-    #    `datafusion_optimizer::simplify_expressions::udf_preimage`). We
-    #    implement it on `SparkFloor` because `floor(x) = N` ⇔ `x ∈ [N, N+1)`
-    #    fits the half-open `PreimageResult::Range` exactly.
-    #
-    #    We do NOT implement it on `SparkCeil` because `ceil(x) = N` ⇔
-    #    `x ∈ (N - 1, N]` is right-closed / left-open and cannot be expressed
-    #    as `[lower, upper)` — any attempt would produce an unsound rewrite
-    #    (either include `N - 1` spuriously or drop `N`). Upstream DF v53
-    #    makes the same choice on `CeilFunc`.
-    #
-    #    Observable effect for floor: `WHERE floor(v) <= 1` at the logical
-    #    layer turns into `v < 2` (after `<=` → `< upper` via the rewrite),
-    #    so `DataSourceExec` gets a literal column predicate — same shape as
-    #    the literal-baseline scenario — and `pruning_predicate` +
-    #    `required_guarantees` are populated. Row groups can now be pruned by
-    #    Parquet min/max stats.
-    #
-    #    Floor snapshots are the proof: compare `EXPLAIN ... WHERE floor(v)
-    #    <= 1` against `EXPLAIN ... WHERE v < 2` (baseline) — the two
-    #    predicate trees match.
-    #
-    # 2) `propagate_constraints()` — CORRECT BUT INVISIBLE.
-    #    Implemented on both SparkCeil and SparkFloor (see `propagate_ceil_floor`).
-    #    The only DF v53 consumer is `FilterExec::statistics_by_expr()` via
-    #    `physical_expr::analysis::analyze` → `ExprIntervalGraph`. For
-    #    ScalarUDF children the graph stops at the UDF node, so the refined
-    #    interval never reaches `FilterExec.statistics` and
-    #    `row_groups_pruned_statistics` stays 0. The hook is kept for
-    #    forward-compat: when upstream threads UDFs into the interval graph
-    #    (or adds a preimage rewrite before `PruningPredicate` for operators
-    #    not covered by `udf_preimage`), `ceil` filter pushdown will turn on
-    #    automatically. Ceil also benefits indirectly via the
-    #    integer-identity simplify (`ceil(int_col) → int_col`).
-    #
-    # The `ceil` snapshots below retain the old shape (per-row
-    # `spark_ceil(v@0) > 2` predicate, no pruning predicate), and serve as
-    # regression fixtures for that asymmetry. When/if preimage gets a
-    # right-closed variant, updating the ceil snapshots will be the test
-    # that forces us to revisit this narrative.
+    # CEIL does NOT implement preimage: `ceil(x) = N` ⇔ `x ∈ (N - 1, N]` is
+    # right-closed / left-open and cannot be expressed as `[lower, upper)`.
+    # Any rewrite would be unsound. Upstream DF v53 makes the same choice on
+    # `CeilFunc`. The `ceil` snapshots below retain the per-row
+    # `spark_ceil(v@0) > 2` predicate (no pruning) and serve as regression
+    # fixtures for that asymmetry — when/if preimage gets a right-closed
+    # variant, updating them will be the test that forces revisit.
 
     # ── STEP 1: LITERAL BASELINE ──────────────────────────────────────
     # Reference point. A pure literal predicate that PruningPredicate +
@@ -1195,10 +1141,8 @@ Feature: ceil() and floor() round numbers toward +/- infinity
       Then query plan matches snapshot
 
     # ── STEP 6: DIFFERENT OPTIMIZATION ANGLE — GROUP BY ───────────────
-    # Grouping by a monotonic UDF. DF chooses hash aggregation (not
-    # sorted) so `output_ordering` doesn't help here — different from
-    # the ORDER BY case (Rule output_ordering). Documented so the
-    # reader sees when output_ordering DOES and DOESN'T kick in.
+    # Grouping by a monotonic UDF. DF chooses hash aggregation, so the
+    # GROUP BY plan looks the same regardless of monotonicity hooks.
 
     @sail-only
     Scenario: EXPLAIN GROUP BY ceil(v) on Parquet — aggregation plan
@@ -1343,13 +1287,20 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | NULL   |
 
+    @sail-bug
+    # Spark JVM raises [NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION] when the
+    # Float→Decimal cast under ANSI=true overflows. Sail's cast kernel emits a
+    # raw arrow error without a bracketed Spark error class. The query DOES
+    # error in both engines (loose `.*` would silently pass), but the class
+    # diverges. Fix path: align Sail's Float→Decimal cast error to use Spark's
+    # error class, likely in arrow-rs cast kernel or a Sail-side wrapper.
     Scenario: ceil ANSI=true overflow errors
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT ceil(CAST(1e300 AS DOUBLE), 2) AS result
         """
-      Then query error .*
+      Then query error .*\[NUMERIC_VALUE_OUT_OF_RANGE.*\].*
 
     Scenario: floor ANSI=false overflow returns NULL
       Given config spark.sql.ansi.enabled = false
@@ -1361,13 +1312,16 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         | result |
         | NULL   |
 
+    @sail-bug
+    # Same root cause as `ceil ANSI=true overflow` — Sail's cast kernel emits
+    # a raw arrow error instead of [NUMERIC_VALUE_OUT_OF_RANGE].
     Scenario: floor ANSI=true overflow errors
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT floor(CAST(1e300 AS DOUBLE), 2) AS result
         """
-      Then query error .*
+      Then query error .*\[NUMERIC_VALUE_OUT_OF_RANGE.*\].*
 
   Rule: Adversarial — deep nesting stress (simplify chain survival)
     # 5-level mixed nesting. Spark JVM collapses to the outermost function's
@@ -1464,92 +1418,3 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         """
       Then query plan matches snapshot
 
-  Rule: Adversarial — nested filter (propagate_constraints + evaluate_bounds paired)
-    # Nested `ceil(floor(v)) > K` exercises the forward (`evaluate_bounds` on
-    # inner `floor`) and backward (`propagate_constraints` on outer `ceil`)
-    # interval graph hooks as a pair. Without evaluate_bounds on floor,
-    # propagate_constraints on ceil would receive Unbounded — cardinality
-    # estimation degrades silently.
-
-    Scenario: nested filter ceil(floor(v)) > K returns correct rows
-      When query
-        """
-        SELECT v FROM VALUES (1.5), (2.5), (3.5), (4.5), (5.5) AS t(v)
-        WHERE ceil(floor(v)) > 3
-        ORDER BY v
-        """
-      Then query result ordered
-        | v   |
-        | 4.5 |
-        | 5.5 |
-
-    @sail-only
-    Scenario: EXPLAIN nested filter exercises both evaluate_bounds and propagate_constraints
-      When query
-        """
-        EXPLAIN SELECT v FROM VALUES (CAST(1.5 AS DOUBLE)), (CAST(4.5 AS DOUBLE)) AS t(v)
-        WHERE ceil(floor(v)) > 3
-        """
-      Then query plan matches snapshot
-
-  Rule: Adversarial — ORDER BY DESC (output_ordering preserves direction)
-    # output_ordering forwards child sort_properties without flipping. For a
-    # monotonic non-decreasing function, DESC input → DESC output, so no
-    # redundant SortExec should appear after projection.
-    #
-    # FINDING (captured as fixture): the DESC variant currently shows a
-    # redundant SortExec in the plan — the ASC variant at `Rule: Plan snapshot
-    # — output_ordering` does NOT. Investigation:
-    #
-    #   1) Our hooks expose the property correctly:
-    #      - `output_ordering` forwards `SortProperties` including `descending`.
-    #      - `preserves_lex_ordering = true` (explicitly overridden). Verified
-    #        empirically: setting it to true didn't change the DESC plan →
-    #        the gap is NOT in the equivalence inference path that consumes
-    #        this flag (see equivalence/properties/mod.rs:469).
-    #
-    #   2) Upstream DataFusion `CeilFunc`/`FloorFunc` have the same trivial
-    #      `output_ordering` impl and default `preserves_lex_ordering = false`
-    #      → reproducing this with vanilla DF would show the same DESC gap.
-    #
-    #   3) The gap lives in `datafusion-physical-optimizer/enforce_sorting/
-    #      sort_pushdown.rs` (`pushdown_sorts_helper`). Traced against DF v53.1:
-    #      - `options_compatible` (strict equality for nullable in
-    #        physical-expr-common/sort_expr.rs:210) does NOT discriminate ASC/DESC.
-    #      - `get_expr_properties` (physical-expr/equivalence/properties/mod.rs:1446)
-    #        recurses correctly through our `ScalarFunctionExpr::get_properties`,
-    #        forwarding `SortProperties` via `output_ordering`.
-    #      The asymmetry is in PLAN SHAPE, not in property inference:
-    #           ASC:  keeps inner `SortExec[v ASC]`, projection computes ceil
-    #                 after sort → outer ORDER BY satisfied via monotonicity.
-    #           DESC: eliminates inner `SortExec[v DESC]`, computes ceil+v in
-    #                 the projection, then adds outer `SortExec[ceil(v) DESC]`.
-    #      i.e. DF v53 chooses a different plan shape for DESC ORDER BY over a
-    #      monotonic UDF, bypassing the optimization that works for ASC. Not a
-    #      Sail bug.
-    #
-    # The snapshot below is a regression fixture: when upstream (or we) teach
-    # the planner to reuse DESC input order through monotonic UDFs, the
-    # SortExec will disappear and the snapshot diff will flag the improvement.
-
-    Scenario: ORDER BY ceil(v) DESC on reversed input preserves order
-      When query
-        """
-        SELECT v, ceil(v) AS c FROM VALUES (3.5), (1.5), (2.5) AS t(v)
-        ORDER BY ceil(v) DESC
-        """
-      Then query result ordered
-        | v   | c |
-        | 3.5 | 4 |
-        | 2.5 | 3 |
-        | 1.5 | 2 |
-
-    @sail-only
-    Scenario: EXPLAIN ORDER BY ceil DESC on already-sorted-DESC input avoids extra sort
-      When query
-        """
-        EXPLAIN SELECT ceil(v) AS c FROM (
-            SELECT v FROM VALUES (3.5), (2.5), (1.5) AS t(v) ORDER BY v DESC
-        ) ORDER BY ceil(v) DESC
-        """
-      Then query plan matches snapshot

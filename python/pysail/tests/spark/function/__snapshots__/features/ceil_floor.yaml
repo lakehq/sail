@@ -108,45 +108,6 @@ data:
             AggregateExec: mode=Partial, gby=[spark_ceil(#0@0) as spark_ceil(explain_groupby_ceil_parquet.#0)], aggr=[count(Int64(1))]
               DataSourceExec: file_groups={1 group: [[<tmp>/explain_groupby_ceil/<id>_0.zst.parquet]]}, projection=[v@0 as #0], file_type=parquet
 ---
-name: "test_explain_nested_filter_exercises_both_evaluate_bounds_and_propagate_constraints"
-data:
-  |-
-    == Physical Plan ==
-    ProjectionExec: expr=[#2@0 as v]
-      ProjectionExec: expr=[column1@0 as #2]
-        FilterExec: column1@0 >= 4
-          DataSourceExec: partitions=1, partition_sizes=[1]
----
-name: "test_explain_order_by_ceil_desc_on_alreadysorteddesc_input_avoids_extra_sort"
-data:
-  |-
-    == Physical Plan ==
-    ProjectionExec: expr=[#3@0 as c]
-      ProjectionExec: expr=[#3@0 as #3]
-        SortExec: expr=[spark_ceil(#2@1) DESC NULLS LAST], preserve_partitioning=[false]
-          ProjectionExec: expr=[spark_ceil(column1@0) as #3, column1@0 as #2]
-            DataSourceExec: partitions=1, partition_sizes=[1]
----
-name: "test_explain_order_by_on_subquery_already_sorted_by_col_avoids_resorting_ceilcol"
-data:
-  |-
-    == Physical Plan ==
-    ProjectionExec: expr=[#3@0 as c]
-      ProjectionExec: expr=[spark_ceil(#2@0) as #3]
-        SortExec: expr=[#2@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[column1@0 as #2]
-            DataSourceExec: partitions=1, partition_sizes=[1]
----
-name: "test_explain_order_by_on_subquery_already_sorted_by_col_avoids_resorting_floorcol"
-data:
-  |-
-    == Physical Plan ==
-    ProjectionExec: expr=[#3@0 as f]
-      ProjectionExec: expr=[spark_floor(#2@0) as #3]
-        SortExec: expr=[#2@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[column1@0 as #2]
-            DataSourceExec: partitions=1, partition_sizes=[1]
----
 name: "test_explain_select_from_parquet_with_ceil_filter_shows_pushdown"
 data:
   |-
