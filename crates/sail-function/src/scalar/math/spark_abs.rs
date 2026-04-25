@@ -172,40 +172,85 @@ impl ScalarUDFImpl for SparkAbs {
                 }
                 None => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
             },
+            // Interval/Duration abs is ALWAYS-checked in Spark — both ANSI=true
+            // and ANSI=false raise ARITHMETIC_OVERFLOW on the MIN value, unlike
+            // signed integer abs which respects spark.sql.ansi.enabled.
             ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(interval)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(
-                    interval.map(|x| x.wrapping_abs()),
-                )))
+                let r = match interval {
+                    Some(x) => Some(x.checked_abs().ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "[ARITHMETIC_OVERFLOW] integer overflow on abs(interval year-month)"
+                        )
+                    })?),
+                    None => None,
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(r)))
             }
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(interval)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::IntervalDayTime(
-                    interval.map(|x| x.wrapping_abs()),
-                )))
+                let r = match interval {
+                    Some(x) => Some(x.checked_abs().ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "[INTERVAL_ARITHMETIC_OVERFLOW] interval overflow on abs(interval day-time)"
+                        )
+                    })?),
+                    None => None,
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::IntervalDayTime(r)))
             }
             ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(interval)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
-                    interval.map(|x| x.wrapping_abs()),
-                )))
+                let r = match interval {
+                    Some(x) => Some(x.checked_abs().ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "[INTERVAL_ARITHMETIC_OVERFLOW] interval overflow on abs(interval month-day-nano)"
+                        )
+                    })?),
+                    None => None,
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(r)))
             }
             ColumnarValue::Scalar(ScalarValue::DurationSecond(duration)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::DurationSecond(
-                    duration.map(|x| x.wrapping_abs()),
-                )))
+                let r = match duration {
+                    Some(x) => Some(x.checked_abs().ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "[ARITHMETIC_OVERFLOW] long overflow on abs(duration second)"
+                        )
+                    })?),
+                    None => None,
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationSecond(r)))
             }
             ColumnarValue::Scalar(ScalarValue::DurationMillisecond(duration)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::DurationMillisecond(
-                    duration.map(|x| x.wrapping_abs()),
-                )))
+                let r = match duration {
+                    Some(x) => Some(x.checked_abs().ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "[ARITHMETIC_OVERFLOW] long overflow on abs(duration millisecond)"
+                        )
+                    })?),
+                    None => None,
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationMillisecond(r)))
             }
             ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(duration)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(
-                    duration.map(|x| x.wrapping_abs()),
-                )))
+                let r = match duration {
+                    Some(x) => Some(x.checked_abs().ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "[ARITHMETIC_OVERFLOW] long overflow on abs(duration microsecond)"
+                        )
+                    })?),
+                    None => None,
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(r)))
             }
             ColumnarValue::Scalar(ScalarValue::DurationNanosecond(duration)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::DurationNanosecond(
-                    duration.map(|x| x.wrapping_abs()),
-                )))
+                let r = match duration {
+                    Some(x) => Some(x.checked_abs().ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "[ARITHMETIC_OVERFLOW] long overflow on abs(duration nanosecond)"
+                        )
+                    })?),
+                    None => None,
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationNanosecond(r)))
             }
             ColumnarValue::Array(array) => {
                 let result = match array.data_type() {
@@ -283,49 +328,91 @@ impl ScalarUDFImpl for SparkAbs {
                     DataType::Interval(IntervalUnit::YearMonth) => {
                         let result: IntervalYearMonthArray = array
                             .as_primitive::<IntervalYearMonthType>()
-                            .unary(|x| x.wrapping_abs())
+                            .try_unary(|x| {
+                                x.checked_abs().ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "[ARITHMETIC_OVERFLOW] integer overflow on abs(interval year-month)"
+                                    )
+                                })
+                            })?
                             .with_data_type(DataType::Interval(IntervalUnit::YearMonth));
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Interval(IntervalUnit::DayTime) => {
                         let result: IntervalDayTimeArray = array
                             .as_primitive::<IntervalDayTimeType>()
-                            .unary(|x| x.wrapping_abs())
+                            .try_unary(|x| {
+                                x.checked_abs().ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "[INTERVAL_ARITHMETIC_OVERFLOW] interval overflow on abs(interval day-time)"
+                                    )
+                                })
+                            })?
                             .with_data_type(DataType::Interval(IntervalUnit::DayTime));
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Interval(IntervalUnit::MonthDayNano) => {
                         let result: IntervalMonthDayNanoArray = array
                             .as_primitive::<IntervalMonthDayNanoType>()
-                            .unary(|x| x.wrapping_abs())
+                            .try_unary(|x| {
+                                x.checked_abs().ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "[INTERVAL_ARITHMETIC_OVERFLOW] interval overflow on abs(interval month-day-nano)"
+                                    )
+                                })
+                            })?
                             .with_data_type(DataType::Interval(IntervalUnit::MonthDayNano));
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Duration(TimeUnit::Second) => {
                         let result: DurationSecondArray = array
                             .as_primitive::<DurationSecondType>()
-                            .unary(|x| x.wrapping_abs())
+                            .try_unary(|x| {
+                                x.checked_abs().ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "[ARITHMETIC_OVERFLOW] long overflow on abs(duration second)"
+                                    )
+                                })
+                            })?
                             .with_data_type(DataType::Duration(TimeUnit::Second));
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Duration(TimeUnit::Millisecond) => {
                         let result: DurationMillisecondArray = array
                             .as_primitive::<DurationMillisecondType>()
-                            .unary(|x| x.wrapping_abs())
+                            .try_unary(|x| {
+                                x.checked_abs().ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "[ARITHMETIC_OVERFLOW] long overflow on abs(duration millisecond)"
+                                    )
+                                })
+                            })?
                             .with_data_type(DataType::Duration(TimeUnit::Millisecond));
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Duration(TimeUnit::Microsecond) => {
                         let result: DurationMicrosecondArray = array
                             .as_primitive::<DurationMicrosecondType>()
-                            .unary(|x| x.wrapping_abs())
+                            .try_unary(|x| {
+                                x.checked_abs().ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "[ARITHMETIC_OVERFLOW] long overflow on abs(duration microsecond)"
+                                    )
+                                })
+                            })?
                             .with_data_type(DataType::Duration(TimeUnit::Microsecond));
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Duration(TimeUnit::Nanosecond) => {
                         let result: DurationNanosecondArray = array
                             .as_primitive::<DurationNanosecondType>()
-                            .unary(|x| x.wrapping_abs())
+                            .try_unary(|x| {
+                                x.checked_abs().ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "[ARITHMETIC_OVERFLOW] long overflow on abs(duration nanosecond)"
+                                    )
+                                })
+                            })?
                             .with_data_type(DataType::Duration(TimeUnit::Nanosecond));
                         Ok(Arc::new(result) as ArrayRef)
                     }

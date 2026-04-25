@@ -513,6 +513,47 @@ Feature: abs comprehensive tests
         | result                         |
         | INTERVAL '01:30' HOUR TO MINUTE |
 
+  Rule: Interval overflow always errors (regardless of ANSI mode)
+    # Spark errors with ARITHMETIC_OVERFLOW on abs(interval_MIN) UNCONDITIONALLY
+    # — interval abs is always-checked, unlike integer abs which respects
+    # spark.sql.ansi.enabled. Verified against Spark JVM 4.x on 2026-04-25:
+    # both ANSI=true and ANSI=false raise ARITHMETIC_OVERFLOW for the MIN of
+    # both INTERVAL YEAR TO MONTH (i32::MIN months) and INTERVAL DAY TO SECOND
+    # (i64::MIN microseconds). The MIN values must be constructed via
+    # subtraction since literal parsers reject them.
+
+    Scenario: abs INTERVAL YEAR TO MONTH MIN errors under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs(INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH) AS result
+        """
+      Then query error .*
+
+    Scenario: abs INTERVAL YEAR TO MONTH MIN errors under ANSI=true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(INTERVAL '0' MONTH - INTERVAL '2147483647' MONTH - INTERVAL '1' MONTH) AS result
+        """
+      Then query error .*
+
+    Scenario: abs INTERVAL DAY TO SECOND MIN errors under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs(INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND) AS result
+        """
+      Then query error .*
+
+    Scenario: abs INTERVAL DAY TO SECOND MIN errors under ANSI=true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT abs(INTERVAL '0' MICROSECOND - INTERVAL '9223372036854775807' MICROSECOND - INTERVAL '1' MICROSECOND) AS result
+        """
+      Then query error .*
+
   Rule: Multi-row vectorized path
 
     Scenario: abs BIGINT column with mixed signs and NULL
