@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
 };
 use futures::future::try_join_all;
 use futures::StreamExt;
+use sail_physical_plan::repartition::RowRoundRobinBatchPartitioner;
 
 use crate::plan::ListListDisplay;
 use crate::stream::writer::{TaskStreamSinkState, TaskStreamWriter, TaskWriteLocation};
@@ -151,12 +152,8 @@ impl ExecutionPlan for ShuffleWriteExec {
             .properties()
             .output_partitioning()
             .partition_count();
-        let partitioner = BatchPartitioner::try_new(
-            shuffle_partitioning,
-            Default::default(),
-            partition,
-            num_input_partitions,
-        )?;
+        let partitioner =
+            ShufflePartitioner::try_new(shuffle_partitioning, partition, num_input_partitions)?;
         let empty = RecordBatch::new_empty(self.schema());
         let output = futures::stream::once(async move {
             shuffle_write(writer, stream, &locations, partitioner).await?;
@@ -173,7 +170,7 @@ async fn shuffle_write(
     writer: Arc<dyn TaskStreamWriter>,
     mut stream: SendableRecordBatchStream,
     locations: &[TaskWriteLocation],
-    mut partitioner: BatchPartitioner,
+    mut partitioner: ShufflePartitioner,
 ) -> Result<()> {
     let schema = stream.schema();
     let mut partition_sinks = {
@@ -227,4 +224,49 @@ async fn shuffle_write(
         .filter_map(|s| s.map(|x| x.close()));
     try_join_all(futures).await?;
     Ok(())
+}
+
+enum ShufflePartitioner {
+    Hash(BatchPartitioner),
+    RoundRobin(RowRoundRobinBatchPartitioner),
+}
+
+impl ShufflePartitioner {
+    fn try_new(
+        partitioning: Partitioning,
+        input_partition: usize,
+        input_partitions: usize,
+    ) -> Result<Self> {
+        match partitioning {
+            Partitioning::Hash(_, _) => Ok(Self::Hash(BatchPartitioner::try_new(
+                partitioning,
+                Default::default(),
+                input_partition,
+                input_partitions,
+            )?)),
+            Partitioning::RoundRobinBatch(target_partitions) => {
+                Ok(Self::RoundRobin(RowRoundRobinBatchPartitioner::try_new(
+                    target_partitions,
+                    input_partition,
+                    input_partitions,
+                )?))
+            }
+            other => internal_err!("unsupported shuffle partitioning: {other}"),
+        }
+    }
+
+    fn partition<F>(&mut self, batch: RecordBatch, mut f: F) -> Result<()>
+    where
+        F: FnMut(usize, RecordBatch) -> Result<()>,
+    {
+        match self {
+            Self::Hash(partitioner) => partitioner.partition(batch, f),
+            Self::RoundRobin(partitioner) => {
+                for (partition, batch) in partitioner.partition(batch)? {
+                    f(partition, batch)?;
+                }
+                Ok(())
+            }
+        }
+    }
 }

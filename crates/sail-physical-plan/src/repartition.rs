@@ -148,6 +148,56 @@ impl ExecutionPlan for ExplicitRepartitionExec {
 type RoundRobinSender = Sender<Result<RecordBatch>>;
 type RoundRobinReceiver = Receiver<Result<RecordBatch>>;
 
+/// Partitions record batches using Spark-compatible row-level round-robin.
+pub struct RowRoundRobinBatchPartitioner {
+    target_partitions: usize,
+    next_partition: usize,
+}
+
+impl RowRoundRobinBatchPartitioner {
+    pub fn try_new(
+        target_partitions: usize,
+        input_partition: usize,
+        input_partitions: usize,
+    ) -> Result<Self> {
+        if target_partitions == 0 {
+            return plan_err!("number of round-robin partitions cannot be zero");
+        }
+        if input_partitions == 0 {
+            return plan_err!("number of input partitions cannot be zero");
+        }
+        Ok(Self {
+            target_partitions,
+            next_partition: input_partition * target_partitions / input_partitions,
+        })
+    }
+
+    pub fn partition(&mut self, batch: RecordBatch) -> Result<Vec<(usize, RecordBatch)>> {
+        let mut indices = vec![Vec::new(); self.target_partitions];
+        for row in 0..batch.num_rows() {
+            let row = u32::try_from(row)
+                .map_err(|_| DataFusionError::Execution("record batch has too many rows".into()))?;
+            indices[self.next_partition].push(row);
+            self.next_partition = (self.next_partition + 1) % self.target_partitions;
+        }
+
+        let mut output = Vec::new();
+        for (partition, indices) in indices.into_iter().enumerate() {
+            if indices.is_empty() {
+                continue;
+            }
+            let indices: PrimitiveArray<UInt32Type> = indices.into();
+            let columns = take_arrays(batch.columns(), &indices, None)?;
+            let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
+            output.push((
+                partition,
+                RecordBatch::try_new_with_options(batch.schema(), columns, &options)?,
+            ));
+        }
+        Ok(output)
+    }
+}
+
 /// A Spark-compatible row-level round-robin repartition.
 ///
 /// DataFusion's `RoundRobinBatch` repartitioning rotates whole `RecordBatch` values.
@@ -376,48 +426,21 @@ async fn pull_round_robin_input(
     senders: &mut [RoundRobinSender],
 ) -> Result<()> {
     let mut stream = input.execute(input_partition, context)?;
-    let mut next_partition = input_partition * target_partitions / input_partitions;
+    let mut partitioner = RowRoundRobinBatchPartitioner::try_new(
+        target_partitions,
+        input_partition,
+        input_partitions,
+    )?;
     while let Some(batch) = stream.next().await {
         let batch = batch?;
         if batch.num_rows() == 0 {
             continue;
         }
-        for (partition, batch) in
-            split_round_robin_batch(batch, &mut next_partition, target_partitions)?
-        {
+        for (partition, batch) in partitioner.partition(batch)? {
             let _ = senders[partition].send(Ok(batch)).await;
         }
     }
     Ok(())
-}
-
-fn split_round_robin_batch(
-    batch: RecordBatch,
-    next_partition: &mut usize,
-    target_partitions: usize,
-) -> Result<Vec<(usize, RecordBatch)>> {
-    let mut indices = vec![Vec::new(); target_partitions];
-    for row in 0..batch.num_rows() {
-        let row = u32::try_from(row)
-            .map_err(|_| DataFusionError::Execution("record batch has too many rows".into()))?;
-        indices[*next_partition].push(row);
-        *next_partition = (*next_partition + 1) % target_partitions;
-    }
-
-    let mut output = Vec::new();
-    for (partition, indices) in indices.into_iter().enumerate() {
-        if indices.is_empty() {
-            continue;
-        }
-        let indices: PrimitiveArray<UInt32Type> = indices.into();
-        let columns = take_arrays(batch.columns(), &indices, None)?;
-        let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
-        output.push((
-            partition,
-            RecordBatch::try_new_with_options(batch.schema(), columns, &options)?,
-        ));
-    }
-    Ok(output)
 }
 
 async fn send_round_robin_error(senders: &mut [RoundRobinSender], error: DataFusionError) {

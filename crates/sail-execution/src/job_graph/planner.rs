@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::repartition::RoundRobinRepartitionExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -205,6 +206,7 @@ fn build_job_graph(
             build_job_graph(right.clone(), usage, graph)?,
         ]
     } else if plan.as_any().is::<RepartitionExec>()
+        || plan.as_any().is::<RoundRobinRepartitionExec>()
         || plan.as_any().is::<CoalescePartitionsExec>()
         || plan.as_any().is::<SortPreservingMergeExec>()
     {
@@ -250,6 +252,10 @@ fn build_job_graph(
                 create_shuffle(child, graph, properties, consumption)?
             }
         }
+    } else if let Some(repartition) = plan.as_any().downcast_ref::<RoundRobinRepartitionExec>() {
+        let properties = repartition.properties().clone();
+        let child = plan.children().one()?;
+        create_shuffle(child, graph, properties, consumption)?
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
         let properties = coalesce.properties().clone();
         let child = plan.children().one()?;
