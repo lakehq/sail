@@ -358,7 +358,7 @@ impl GssClientContext {
                 ptr::null_mut(),
                 &mut self.ctx as *mut bindings::gss_ctx_id_t,
                 self.target.name,
-                ptr::null_mut(), // GSS_C_NO_MECHANISM
+                *libgssapi()?.gss_mech_krb5() as bindings::gss_OID,
                 self.flags,
                 bindings::_GSS_C_INDEFINITE,
                 ptr::null_mut(),
