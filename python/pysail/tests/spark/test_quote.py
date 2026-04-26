@@ -1,6 +1,9 @@
 """Tests for the quote function."""
 
 import pandas as pd
+import pytest
+
+from pysail.testing.spark.utils.common import pyspark_version
 
 
 def test_quote(spark):
@@ -27,6 +30,10 @@ def test_quote(spark):
     assert pd.isna(actual["result"].iloc[5])
 
 
+@pytest.mark.skipif(
+    pyspark_version() < (4, 1),
+    reason="pyspark.sql.functions.quote was added in PySpark 4.1",
+)
 def test_quote_function_api(spark):
     """Tests sf.quote() function from pyspark.sql.functions matches the SQL form."""
     from pyspark.sql import functions as sf
