@@ -6,10 +6,11 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, StringBuilder};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::unicode::reverse::ReverseFunc;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions_nested::reverse::array_reverse_inner;
 
+use crate::error::unsupported_data_type_exec_err;
 use crate::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -39,78 +40,82 @@ fn is_array_type(dt: &DataType) -> bool {
 }
 
 fn is_string_type(dt: &DataType) -> bool {
-    matches!(dt, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+    matches!(
+        dt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
 }
 
 fn is_binary_type(dt: &DataType) -> bool {
-    matches!(dt, DataType::Binary | DataType::LargeBinary | DataType::BinaryView)
+    matches!(
+        dt,
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    )
+}
+
+fn append_reversed_bytes<'a, I>(iter: I, builder: &mut StringBuilder, buf: &mut Vec<u8>)
+where
+    I: Iterator<Item = Option<&'a [u8]>>,
+{
+    for bytes_opt in iter {
+        match bytes_opt {
+            None => builder.append_null(),
+            Some(bytes) => {
+                buf.clear();
+                buf.extend(bytes.iter().copied().rev());
+                builder.append_value(String::from_utf8_lossy(buf).as_ref());
+            }
+        }
+    }
 }
 
 fn reverse_binary(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arg = &args[0];
     match arg {
-        ColumnarValue::Scalar(ScalarValue::Binary(None))
-        | ColumnarValue::Scalar(ScalarValue::LargeBinary(None)) => {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
-        }
-        ColumnarValue::Scalar(ScalarValue::Binary(Some(bytes))) => {
+        ColumnarValue::Scalar(sv) => {
+            use datafusion_common::ScalarValue;
+            let bytes = match sv {
+                ScalarValue::Binary(None) | ScalarValue::LargeBinary(None) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                }
+                ScalarValue::Binary(Some(b)) | ScalarValue::LargeBinary(Some(b)) => b,
+                other => {
+                    return Err(unsupported_data_type_exec_err(
+                        "reverse",
+                        "binary scalar",
+                        &other.data_type(),
+                    ));
+                }
+            };
             let reversed: Vec<u8> = bytes.iter().copied().rev().collect();
-            let s = String::from_utf8_lossy(&reversed).into_owned();
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))))
-        }
-        ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(bytes))) => {
-            let reversed: Vec<u8> = bytes.iter().copied().rev().collect();
-            let s = String::from_utf8_lossy(&reversed).into_owned();
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))))
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::from_utf8_lossy(&reversed).into_owned(),
+            ))))
         }
         ColumnarValue::Array(array) => {
-            let mut builder = StringBuilder::new();
+            let mut buf = Vec::new();
+            let mut builder =
+                StringBuilder::with_capacity(array.len(), array.get_buffer_memory_size());
             match array.data_type() {
                 DataType::Binary => {
-                    let arr = array.as_binary::<i32>();
-                    for i in 0..arr.len() {
-                        if arr.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            let reversed: Vec<u8> =
-                                arr.value(i).iter().copied().rev().collect();
-                            builder.append_value(String::from_utf8_lossy(&reversed).as_ref());
-                        }
-                    }
+                    append_reversed_bytes(array.as_binary::<i32>().iter(), &mut builder, &mut buf);
                 }
                 DataType::LargeBinary => {
-                    let arr = array.as_binary::<i64>();
-                    for i in 0..arr.len() {
-                        if arr.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            let reversed: Vec<u8> =
-                                arr.value(i).iter().copied().rev().collect();
-                            builder.append_value(String::from_utf8_lossy(&reversed).as_ref());
-                        }
-                    }
+                    append_reversed_bytes(array.as_binary::<i64>().iter(), &mut builder, &mut buf);
                 }
                 DataType::BinaryView => {
-                    let arr = array.as_binary_view();
-                    for i in 0..arr.len() {
-                        if arr.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            let reversed: Vec<u8> =
-                                arr.value(i).iter().copied().rev().collect();
-                            builder.append_value(String::from_utf8_lossy(&reversed).as_ref());
-                        }
-                    }
+                    append_reversed_bytes(array.as_binary_view().iter(), &mut builder, &mut buf);
                 }
                 other => {
-                    return exec_err!(
-                        "reverse: unexpected binary type in invoke: {other}"
-                    )
+                    return Err(unsupported_data_type_exec_err(
+                        "reverse",
+                        "binary array",
+                        other,
+                    ));
                 }
             }
             Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
         }
-        other => exec_err!("reverse: unexpected binary scalar value: {other:?}"),
     }
 }
 
@@ -143,10 +148,8 @@ impl ScalarUDFImpl for SparkReverse {
         }
         let dt = &arg_types[0];
         if is_array_type(dt) || is_string_type(dt) || is_binary_type(dt) {
-            // Keep as-is: arrays are reversed as arrays, strings/binary handled directly.
             Ok(vec![dt.clone()])
         } else if matches!(dt, DataType::Null) {
-            // Untyped NULL: treat as string so DataFusion casts it to Utf8 NULL.
             Ok(vec![DataType::Utf8])
         } else if matches!(dt, DataType::Map(_, _) | DataType::Struct(_)) {
             plan_err!(
@@ -155,15 +158,11 @@ impl ScalarUDFImpl for SparkReverse {
                  not `{dt}`."
             )
         } else {
-            // Numeric, temporal, boolean, etc. — Spark casts to STRING first.
             Ok(vec![DataType::Utf8])
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 {
-            return exec_err!("reverse requires exactly 1 argument");
-        }
         let dt = args.args[0].data_type();
         if is_string_type(&dt) {
             ReverseFunc::new().invoke_with_args(args)
@@ -172,7 +171,11 @@ impl ScalarUDFImpl for SparkReverse {
         } else if is_array_type(&dt) {
             make_scalar_function(array_reverse_inner)(&args.args)
         } else {
-            exec_err!("reverse: unsupported type {dt}")
+            Err(unsupported_data_type_exec_err(
+                "reverse",
+                "string, binary, or array",
+                &dt,
+            ))
         }
     }
 }
