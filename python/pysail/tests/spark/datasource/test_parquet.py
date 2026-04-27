@@ -4,7 +4,7 @@ import pandas as pd
 from pandas.testing import assert_frame_equal
 
 from pysail.testing.spark.utils.files import get_data_directory_size
-from pysail.testing.spark.utils.sql import escape_sql_identifier
+from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
 
 def safe_sort_key(row):
@@ -155,3 +155,49 @@ def test_parquet_format_path(spark, sample_df, tmp_path):
     df = spark.sql(f"SELECT * FROM parquet.`{escape_sql_identifier(path)}`")  # noqa: S608
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+def test_parquet_read_with_custom_extension(spark, sample_pandas_df, tmp_path):
+    """Parquet files written under a non-standard suffix (e.g. `.hive`, as
+    emitted by Hive-managed tables) can be read via the `extension` /
+    `fileExtension` option."""
+    directory = tmp_path / "parquet_custom_extension"
+    directory.mkdir()
+    file_path = directory / "data.hive"
+    sample_pandas_df.to_parquet(str(file_path))
+
+    expected_count = len(sample_pandas_df)
+    expected_rows = sorted(sample_pandas_df.to_dict(orient="records"), key=safe_sort_key)
+
+    def actual_rows(df):
+        return sorted(df.toPandas().to_dict(orient="records"), key=safe_sort_key)
+
+    # Option key `extension`, directory path.
+    read_df = spark.read.option("extension", ".hive").parquet(str(directory))
+    assert read_df.count() == expected_count
+    assert actual_rows(read_df) == expected_rows
+
+    # Camel-case alias `fileExtension`, single-file path.
+    read_df = spark.read.option("fileExtension", ".hive").parquet(str(file_path))
+    assert read_df.count() == expected_count
+    assert actual_rows(read_df) == expected_rows
+
+    # SQL CREATE TABLE with OPTIONS (fileExtension '.hive').
+    table_name = "parquet_custom_extension_table"
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"CREATE TABLE {table_name} USING parquet "
+            f"OPTIONS (fileExtension '.hive') "
+            f"LOCATION '{escape_sql_string_literal(str(directory))}'"
+        )
+        read_df = spark.sql(f"SELECT * FROM {table_name}")  # noqa: S608
+        assert read_df.count() == expected_count
+        assert actual_rows(read_df) == expected_rows
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    # Empty string disables extension filtering entirely.
+    read_df = spark.read.option("extension", "").parquet(str(directory))
+    assert read_df.count() == expected_count
+    assert actual_rows(read_df) == expected_rows
