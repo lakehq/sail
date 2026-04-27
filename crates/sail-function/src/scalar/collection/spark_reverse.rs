@@ -1,5 +1,3 @@
-/// Spark-compatible `reverse` function.
-/// <https://spark.apache.org/docs/latest/api/sql/index.html#reverse>
 use std::any::Any;
 use std::sync::Arc;
 
@@ -10,9 +8,11 @@ use datafusion_common::{plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions_nested::reverse::array_reverse_inner;
 
-use crate::error::unsupported_data_type_exec_err;
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::functions_nested_utils::make_scalar_function;
 
+/// Spark-compatible `reverse` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#reverse>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkReverse {
     signature: Signature,
@@ -62,15 +62,15 @@ where
             None => builder.append_null(),
             Some(bytes) => {
                 buf.clear();
-                buf.extend(bytes.iter().copied().rev());
+                buf.extend_from_slice(bytes);
+                buf.reverse();
                 builder.append_value(String::from_utf8_lossy(buf).as_ref());
             }
         }
     }
 }
 
-fn reverse_binary(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arg = &args[0];
+fn reverse_binary(arg: &ColumnarValue) -> Result<ColumnarValue> {
     match arg {
         ColumnarValue::Scalar(sv) => {
             use datafusion_common::ScalarValue;
@@ -139,12 +139,30 @@ impl ScalarUDFImpl for SparkReverse {
         }
     }
 
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let dt = args.args[0].data_type();
+        if is_string_type(&dt) {
+            ReverseFunc::new().invoke_with_args(args)
+        } else if is_binary_type(&dt) {
+            reverse_binary(&args.args[0])
+        } else if is_array_type(&dt) {
+            make_scalar_function(array_reverse_inner)(&args.args)
+        } else {
+            Err(unsupported_data_type_exec_err(
+                "reverse",
+                "string, binary, or array",
+                &dt,
+            ))
+        }
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 1 {
-            return plan_err!(
-                "reverse requires exactly 1 argument, got {}",
-                arg_types.len()
-            );
+            return Err(invalid_arg_count_exec_err(
+                "reverse",
+                (1, 1),
+                arg_types.len(),
+            ));
         }
         let dt = &arg_types[0];
         if is_array_type(dt) || is_string_type(dt) || is_binary_type(dt) {
@@ -159,23 +177,6 @@ impl ScalarUDFImpl for SparkReverse {
             )
         } else {
             Ok(vec![DataType::Utf8])
-        }
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let dt = args.args[0].data_type();
-        if is_string_type(&dt) {
-            ReverseFunc::new().invoke_with_args(args)
-        } else if is_binary_type(&dt) {
-            reverse_binary(&args.args)
-        } else if is_array_type(&dt) {
-            make_scalar_function(array_reverse_inner)(&args.args)
-        } else {
-            Err(unsupported_data_type_exec_err(
-                "reverse",
-                "string, binary, or array",
-                &dt,
-            ))
         }
     }
 }
