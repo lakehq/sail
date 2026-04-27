@@ -521,15 +521,15 @@ impl PlanResolver<'_> {
                             items: options.to_vec(),
                         }],
                     };
-                    let provider = table_format
-                        .create_provider(&self.ctx.state(), info)
+                    let source = table_format
+                        .create_source(&self.ctx.state(), info)
                         .await
                         .map_err(|e| {
                             PlanError::invalid(format!(
                                 "failed to infer schema for table `{table:?}` from format `{format}`: {e}",
                             ))
                         })?;
-                    columns = provider
+                    columns = source
                         .schema()
                         .fields()
                         .iter()

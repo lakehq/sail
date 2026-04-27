@@ -3,7 +3,8 @@ mod writer;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
+use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use sail_common_datafusion::datasource::{
@@ -23,11 +24,11 @@ impl TableFormat for ConsoleTableFormat {
         "console"
     }
 
-    async fn create_provider(
+    async fn create_source(
         &self,
         _ctx: &dyn Session,
         _info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         not_impl_err!("console table format does not support reading")
     }
 

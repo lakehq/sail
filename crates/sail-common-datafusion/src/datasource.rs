@@ -4,9 +4,8 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, Schema};
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
-use datafusion::datasource::provider_as_source;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
@@ -283,23 +282,11 @@ pub trait TableFormat: Send + Sync {
     fn name(&self) -> &str;
 
     /// Creates a logical [`TableSource`] for read.
-    ///
-    /// Default implementation wraps [`Self::create_provider`] using DataFusion's
-    /// `DefaultTableSource` adapter to preserve backwards compatibility.
     async fn create_source(
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<Arc<dyn TableSource>> {
-        Ok(provider_as_source(self.create_provider(ctx, info).await?))
-    }
-
-    /// Creates a `TableProvider` for read.
-    async fn create_provider(
-        &self,
-        ctx: &dyn Session,
-        info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>>;
+    ) -> Result<Arc<dyn TableSource>>;
 
     /// Creates a `ExecutionPlan` for write.
     async fn create_writer(

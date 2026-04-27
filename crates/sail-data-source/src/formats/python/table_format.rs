@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
+use datafusion::datasource::provider_as_source;
+use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{
@@ -168,11 +170,11 @@ impl TableFormat for PythonTableFormat {
         &self.name
     }
 
-    async fn create_provider(
+    async fn create_source(
         &self,
         _ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         // Create PythonDataSource from options
         let opaque_options: Vec<HashMap<String, String>> = info
             .options
@@ -195,7 +197,7 @@ impl TableFormat for PythonTableFormat {
         // Create TableProvider with executor and command bytes
         let provider = PythonTableProvider::new(executor, datasource.command().to_vec(), schema);
 
-        Ok(Arc::new(provider))
+        Ok(provider_as_source(Arc::new(provider)))
     }
 
     async fn create_writer(
