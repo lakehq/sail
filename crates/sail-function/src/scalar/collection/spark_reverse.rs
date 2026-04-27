@@ -134,7 +134,7 @@ impl ScalarUDFImpl for SparkReverse {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            dt if is_array_type(dt) => Ok(dt.clone()),
+            dt if is_array_type(dt) || is_string_type(dt) => Ok(dt.clone()),
             _ => Ok(DataType::Utf8),
         }
     }
