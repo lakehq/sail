@@ -75,7 +75,6 @@ Feature: reverse function
         | result |
         | 1      |
 
-    @sail-bug
     Scenario: Multi-digit integer reversed as string
       When query
         """
@@ -85,7 +84,6 @@ Feature: reverse function
         | result |
         | 54321  |
 
-    @sail-bug
     Scenario: Negative integer reversed as string includes minus sign
       When query
         """
@@ -95,7 +93,6 @@ Feature: reverse function
         | result  |
         | 54321-  |
 
-    @sail-bug
     Scenario: BIGINT is implicitly cast to string before reversing
       When query
         """
@@ -105,7 +102,6 @@ Feature: reverse function
         | result |
         | 54321  |
 
-    @sail-bug
     Scenario: TINYINT is implicitly cast to string before reversing
       When query
         """
@@ -115,7 +111,6 @@ Feature: reverse function
         | result |
         | 24     |
 
-    @sail-bug
     Scenario: DECIMAL is implicitly cast to string before reversing
       When query
         """
@@ -125,7 +120,6 @@ Feature: reverse function
         | result |
         | 32.1   |
 
-    @sail-bug
     Scenario: DOUBLE is implicitly cast to string before reversing
       When query
         """
@@ -144,7 +138,6 @@ Feature: reverse function
         | result |
         | 0.1    |
 
-    @sail-bug
     Scenario: FLOAT NaN is implicitly cast to string before reversing
       When query
         """
@@ -154,7 +147,6 @@ Feature: reverse function
         | result |
         | NaN    |
 
-    @sail-bug
     Scenario: FLOAT Infinity is implicitly cast to string before reversing
       When query
         """
@@ -164,7 +156,6 @@ Feature: reverse function
         | result    |
         | ytinifnI  |
 
-    @sail-bug
     Scenario: FLOAT negative Infinity is implicitly cast to string before reversing
       When query
         """
@@ -201,7 +192,6 @@ Feature: reverse function
         | result     |
         | 51-01-4202 |
 
-    @sail-bug
     Scenario: TIMESTAMP is implicitly cast to string before reversing
       When query
         """
@@ -211,7 +201,6 @@ Feature: reverse function
         | result              |
         | 54:03:21 51-10-4202 |
 
-    @sail-bug
     Scenario: TIMESTAMP_NTZ is implicitly cast to string before reversing
       When query
         """
@@ -348,7 +337,6 @@ Feature: reverse function
         | [5, 4]    |
 
   Rule: Binary input
-    @sail-bug
     Scenario: BINARY value is reversed as bytes and returned as string
       When query
         """
@@ -358,7 +346,6 @@ Feature: reverse function
         | result |
         | olleH  |
 
-    @sail-bug
     Scenario: Empty BINARY reversed returns empty string
       When query
         """
@@ -368,7 +355,6 @@ Feature: reverse function
         | result |
         |        |
 
-    @sail-bug
     Scenario: NULL BINARY returns NULL
       When query
         """
