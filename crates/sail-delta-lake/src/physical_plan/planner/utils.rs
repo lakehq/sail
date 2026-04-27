@@ -141,6 +141,7 @@ pub fn build_standard_write_layers(
         ctx.table_exists(),
         original_schema,
         sink_mode.clone(),
+        ctx.options().user_metadata.clone(),
     )))
 }
 

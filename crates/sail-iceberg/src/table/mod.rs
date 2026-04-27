@@ -94,13 +94,14 @@ impl Table {
     /// Build an Iceberg table provider that reflects the requested snapshot options.
     pub fn to_provider(&self, options: &IcebergReadOptions) -> Result<IcebergTableProvider> {
         let (schema, snapshot, partition_specs) = self.scan_state(options)?;
-        IcebergTableProvider::new(
+        let provider = IcebergTableProvider::new(
             self.table_url.to_string(),
             schema,
             snapshot,
             partition_specs,
             self.metadata.default_spec_id,
-        )
+        )?;
+        Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read))
     }
 
     /// Create a Transaction anchored at the current snapshot, if one exists.
