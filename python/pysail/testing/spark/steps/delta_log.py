@@ -548,3 +548,94 @@ def _latest_effective_protocol_and_metadata_from_variables(variables: dict) -> d
                 if "metaData" in obj:
                     result["metaData"] = obj["metaData"]
     return result
+
+
+def _checkpoint_row_to_dict(table, row_index: int) -> dict:
+    """Convert one pyarrow checkpoint table row to nested Python objects."""
+    return {col_name: table.column(col_name)[row_index].as_py() for col_name in table.column_names}
+
+
+def _load_checkpoint_parquet(location: Path, filename: str) -> list[dict]:
+    """Load a checkpoint parquet file and return nested row dictionaries."""
+    try:
+        import pyarrow.parquet as pq  # noqa: PLC0415
+    except ModuleNotFoundError as e:  # pragma: no cover
+        msg = "pyarrow is required for checkpoint parquet assertions"
+        raise RuntimeError(msg) from e
+
+    checkpoint_path = location / "_delta_log" / filename
+    assert checkpoint_path.exists(), f"checkpoint parquet not found: {checkpoint_path}"
+    table = pq.read_table(checkpoint_path)
+    return [_checkpoint_row_to_dict(table, i) for i in range(table.num_rows)]
+
+
+@then(parsers.parse("checkpoint parquet file {filename} in {location_var} contains add fields"))
+def checkpoint_parquet_contains_add_fields(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    datatable,
+) -> None:
+    """Assert fields inside the checkpoint ``add`` struct match expected values."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    rows = _load_checkpoint_parquet(Path(location.path), filename)
+    add_rows = [row.get("add") for row in rows if row.get("add") is not None]
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *dtable_rows = datatable
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+        "expected datatable with columns: | path | value |"
+    )
+    for drow in dtable_rows:
+        if not drow or len(drow) < 2:  # noqa: PLR2004
+            continue
+        path, raw_value = drow[0], drow[1]
+        expected = _parse_expected_value(raw_value)
+        last_actual: object = None
+        matched = False
+        for add in add_rows:
+            try:
+                actual = _get_by_path(add, path)
+            except KeyError:
+                actual = None
+            last_actual = actual
+            if actual == expected:
+                matched = True
+                break
+        assert matched, f"field {path!r}: expected {expected!r}, got {last_actual!r} across {len(add_rows)} add rows"
+
+
+@then(parsers.parse("checkpoint parquet file {filename} in {location_var} does not contain add sub-field {field}"))
+def checkpoint_parquet_add_missing_field(
+    filename: str,
+    location_var: str,
+    field: str,
+    variables: dict,
+) -> None:
+    """Assert the checkpoint ``add`` struct does not have a direct sub-field."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    try:
+        import pyarrow.parquet as pq  # noqa: PLC0415
+    except ModuleNotFoundError as e:  # pragma: no cover
+        msg = "pyarrow is required for checkpoint parquet assertions"
+        raise RuntimeError(msg) from e
+
+    checkpoint_path = Path(location.path) / "_delta_log" / filename
+    assert checkpoint_path.exists(), f"checkpoint parquet not found: {checkpoint_path}"
+    schema = pq.read_schema(checkpoint_path)
+    add_field = schema.field("add") if "add" in schema.names else None
+    assert add_field is not None, "checkpoint schema must have an 'add' column"
+    sub_names = {f.name for f in add_field.type}
+    assert field not in sub_names, (
+        f"expected 'add' struct to not have sub-field {field!r}; found fields: {sorted(sub_names)}"
+    )
