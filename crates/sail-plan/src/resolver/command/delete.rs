@@ -34,11 +34,11 @@ impl PlanResolver<'_> {
             .get_table_or_view(table.parts())
             .await
             .map_err(PlanError::from)?;
-        let (location, format, table_schema) = self.get_schema_for_delete(&table_status).await?;
+        let info = self.get_table_info_for_delete(&table_status).await?;
 
-        let field_ids = state.register_fields(table_schema.fields());
+        let field_ids = state.register_fields(info.schema.fields());
 
-        let original_arrow_schema = Arc::new(table_schema.as_arrow().clone());
+        let original_arrow_schema = Arc::new(info.schema.as_arrow().clone());
         let schema_for_resolution = rename_schema(&original_arrow_schema, &field_ids)?;
         let df_schema_for_resolution = schema_for_resolution.to_dfschema_ref()?;
 
@@ -60,15 +60,14 @@ impl PlanResolver<'_> {
             None
         };
 
-        let TableKind::Table { properties, .. } = table_status.kind else {
-            unreachable!("get_schema_for_delete only succeeds for table targets");
-        };
         let file_delete_options = FileDeleteOptions {
             table_name: table.into(),
-            path: location,
-            format,
+            path: info.location,
+            format: info.format,
             condition,
-            options: vec![OptionLayer::TablePropertyList { items: properties }],
+            options: vec![OptionLayer::TablePropertyList {
+                items: info.properties,
+            }],
         };
 
         Ok(LogicalPlan::Extension(Extension {
@@ -76,17 +75,20 @@ impl PlanResolver<'_> {
         }))
     }
 
-    async fn get_schema_for_delete(
-        &self,
-        table_status: &TableStatus,
-    ) -> PlanResult<(String, String, DFSchemaRef)> {
-        let (location, format, columns) = match &table_status.kind {
+    async fn get_table_info_for_delete(&self, table_status: &TableStatus) -> PlanResult<TableInfo> {
+        let (location, format, columns, properties) = match &table_status.kind {
             TableKind::Table {
                 location,
                 format,
                 columns,
+                properties,
                 ..
-            } => (location.clone(), format.clone(), columns.clone()),
+            } => (
+                location.clone(),
+                format.clone(),
+                columns.clone(),
+                properties.clone(),
+            ),
             _ => {
                 return Err(PlanError::unsupported(
                     "DELETE is only supported on tables, not views",
@@ -121,6 +123,18 @@ impl PlanResolver<'_> {
             schema.to_dfschema_ref()?
         };
 
-        Ok((location, format, schema))
+        Ok(TableInfo {
+            location,
+            format,
+            schema,
+            properties,
+        })
     }
+}
+
+struct TableInfo {
+    location: String,
+    format: String,
+    schema: DFSchemaRef,
+    properties: Vec<(String, String)>,
 }
