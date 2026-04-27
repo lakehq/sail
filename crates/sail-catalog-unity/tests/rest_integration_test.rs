@@ -1066,7 +1066,7 @@ async fn test_get_table() {
     };
 
     let properties: HashMap<String, String> = properties.into_iter().collect();
-    assert_eq!(properties.len(), 7);
+    assert_eq!(properties.len(), 8);
     assert!(properties.contains_key("updated_at"));
     assert!(properties.contains_key("created_at"));
     assert!(properties.contains_key("table_id"));
