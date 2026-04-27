@@ -15,12 +15,10 @@ use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
-use sail_delta_lake::logical::RewriteDeltaTableSource;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
@@ -66,18 +64,12 @@ impl QueryPlanner for ExtensionQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        // TODO: show rewriters and the final logical plan in `EXPLAIN`
-        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![Box::new(RewriteDeltaTableSource)];
-        let mut logical_plan = logical_plan.clone();
-        for rewriter in rewriters {
-            logical_plan = rewriter.rewrite(logical_plan)?.data
-        }
         let mut extension_planners = new_lakehouse_extension_planners();
         extension_planners.push(Arc::new(SystemTablePhysicalPlanner));
         extension_planners.push(Arc::new(ExtensionPhysicalPlanner));
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         planner
-            .create_physical_plan(&logical_plan, session_state)
+            .create_physical_plan(logical_plan, session_state)
             .await
     }
 }
