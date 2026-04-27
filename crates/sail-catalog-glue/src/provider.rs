@@ -7,6 +7,7 @@ use aws_sdk_glue::types::{
 };
 use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
+use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
     CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
@@ -19,7 +20,6 @@ use sail_common_datafusion::catalog::{
 use tokio::sync::OnceCell;
 
 use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
-use crate::format::GlueStorageFormat;
 use crate::{hive, iceberg};
 
 /// Configuration for AWS Glue Data Catalog.
@@ -111,12 +111,25 @@ impl GlueCatalogProvider {
         let location = storage.and_then(|sd| sd.location()).map(|s| s.to_string());
 
         // Detect format from serde info and table parameters
-        let format = storage
-            .and_then(|sd| sd.serde_info())
-            .and_then(|si| si.serialization_library())
-            .map(|lib| GlueStorageFormat::detect_format_from_serde(Some(lib)))
-            .or_else(|| GlueStorageFormat::detect_iceberg_format(table.parameters()))
-            .unwrap_or_else(|| "unknown".to_string());
+        let format = HiveDetectedFormat::detect(
+            storage
+                .and_then(|sd| sd.serde_info())
+                .and_then(|si| si.serialization_library()),
+            storage.and_then(|sd| sd.input_format()),
+            storage.and_then(|sd| sd.output_format()),
+        )
+        .as_str()
+        .to_string();
+        let format = if format == "unknown" {
+            table
+                .parameters()
+                .and_then(|props| props.get("table_type"))
+                .filter(|v| v == &"iceberg")
+                .map(|_| "iceberg".to_string())
+                .unwrap_or(format)
+        } else {
+            format
+        };
 
         // Extract columns from storage descriptor
         let mut columns: Vec<TableColumnStatus> = storage

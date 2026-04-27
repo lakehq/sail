@@ -137,6 +137,7 @@ async fn build_full_overwrite_plan(
         ctx.table_exists(),
         input_schema,
         PhysicalSinkMode::Overwrite,
+        ctx.options().user_metadata.clone(),
     )))
 }
 
@@ -249,6 +250,7 @@ async fn build_overwrite_if_plan(
             condition: None,
             source: predicate_source,
         },
+        ctx.options().user_metadata.clone(),
     )))
 }
 

@@ -369,6 +369,10 @@ SKIPPED_SPARK_TESTS = [
         keywords=["connect", "client", "test_client.py"],
         reason="Subsequent tests would have setup errors after these tests",
     ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.listCatalogs"],
+        reason="Sail exposes an additional 'system' catalog that Spark does not have; ported to PySail test suite",
+    ),
 ]
 
 

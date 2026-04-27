@@ -288,8 +288,11 @@ impl PlanResolver<'_> {
             CommandNode::DescribeCatalog { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeCatalog"))
             }
-            CommandNode::DescribeDatabase { .. } => {
-                Err(PlanError::todo("CommandNode::DescribeDatabase"))
+            CommandNode::DescribeDatabase { database, extended } => {
+                self.resolve_catalog_command(CatalogCommand::DescribeDatabase {
+                    database: database.into(),
+                    extended,
+                })
             }
             CommandNode::DescribeTable {
                 table,
