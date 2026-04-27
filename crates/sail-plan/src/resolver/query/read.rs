@@ -95,7 +95,6 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                options: table_options,
                 properties: table_properties,
             } => {
                 self.resolve_table_kind_table(
@@ -106,7 +105,6 @@ impl PlanResolver<'_> {
                     partition_by,
                     sort_by,
                     bucket_by,
-                    table_options,
                     table_properties,
                     temporal,
                     options,
@@ -185,7 +183,6 @@ impl PlanResolver<'_> {
         partition_by: Vec<sail_common_datafusion::catalog::CatalogPartitionField>,
         sort_by: Vec<sail_common_datafusion::catalog::CatalogTableSort>,
         bucket_by: Option<sail_common_datafusion::catalog::CatalogTableBucketBy>,
-        table_options: Vec<(String, String)>,
         table_properties: Vec<(String, String)>,
         temporal: Option<spec::TableTemporal>,
         options: Vec<(String, String)>,
@@ -207,7 +204,7 @@ impl PlanResolver<'_> {
             // TODO: detect duplicated keys in each set of options
             options: vec![
                 OptionLayer::TablePropertyList {
-                    items: table_options.into_iter().chain(table_properties).collect(),
+                    items: table_properties,
                 },
                 OptionLayer::OptionList { items: options },
                 OptionLayer::OptionList {

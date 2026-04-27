@@ -5,7 +5,7 @@ use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TableKind, TableStatus};
-use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
@@ -60,12 +60,20 @@ impl PlanResolver<'_> {
             None
         };
 
+        let properties = match table_status.kind {
+            TableKind::Table { properties, .. } => properties,
+            TableKind::View { .. }
+            | TableKind::TemporaryView { .. }
+            | TableKind::GlobalTemporaryView { .. } => {
+                return Err(PlanError::invalid("cannot delete from views"));
+            }
+        };
         let file_delete_options = FileDeleteOptions {
             table_name: table.into(),
             path: location,
             format,
             condition,
-            options: vec![],
+            options: vec![OptionLayer::TablePropertyList { items: properties }],
         };
 
         Ok(LogicalPlan::Extension(Extension {

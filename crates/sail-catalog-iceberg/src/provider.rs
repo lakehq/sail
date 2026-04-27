@@ -336,20 +336,6 @@ impl IcebergRestCatalogProvider {
 
         let comment = get_property(&properties, "comment");
 
-        let options: Vec<_> = properties
-            .extract_if(|k, _| k.trim().to_lowercase().starts_with("options."))
-            .map(|(k, v)| {
-                let trimmed = k.trim().to_string();
-                let stripped =
-                    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("options.") {
-                        trimmed[8..].to_string()
-                    } else {
-                        trimmed
-                    };
-                (stripped, v)
-            })
-            .collect();
-
         if let Some(metadata_location) = result.metadata_location {
             properties.insert("metadata-location".to_string(), metadata_location);
         }
@@ -414,7 +400,6 @@ impl IcebergRestCatalogProvider {
                 partition_by,
                 sort_by,
                 bucket_by: None,
-                options,
                 properties,
             },
         })
@@ -766,7 +751,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
-            options,
             properties,
         } = options;
 
@@ -825,10 +809,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
         let mut props = HashMap::new();
-        // TODO: Is this correct for options?
-        for (k, v) in options {
-            props.insert(format!("options.{k}"), v);
-        }
         if let Some(c) = comment {
             props.insert("comment".to_string(), c);
         }
@@ -935,7 +915,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     partition_by: Vec::new(),
                     sort_by: Vec::new(),
                     bucket_by: None,
-                    options: Vec::new(),
                     properties: Vec::new(),
                 },
             })

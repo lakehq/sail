@@ -101,7 +101,6 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         bucket_by,
         if_not_exists,
         replace,
-        options: table_options,
         properties,
     } = options;
 
@@ -118,11 +117,6 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
     if !sort_by.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support SORT BY".to_string(),
-        ));
-    }
-    if !table_options.is_empty() {
-        return Err(CatalogError::NotSupported(
-            "AWS Glue catalog does not support OPTIONS".to_string(),
         ));
     }
     if bucket_by.is_some() {

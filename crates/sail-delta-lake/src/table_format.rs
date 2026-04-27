@@ -9,8 +9,8 @@ use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
-    MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo,
-    SourceInfo, TableFormat, TableFormatRegistry,
+    find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
+    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::error::DataSourceResult;
@@ -75,14 +75,15 @@ impl TableFormat for DeltaTableFormat {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let path = info.path();
+        let Some(path) = find_path_in_options(&info.options) else {
+            return plan_err!("missing path in Delta table options");
+        };
         let SinkInfo {
             input,
             mode,
             partition_by,
             bucket_by,
             sort_order,
-            table_properties,
             options,
             logical_schema,
         } = info;
@@ -102,8 +103,7 @@ impl TableFormat for DeltaTableFormat {
             .collect::<Vec<_>>();
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        let (options, routed_table_properties) =
-            split_delta_write_options_and_table_properties(options);
+        let (options, table_properties) = split_delta_write_options_and_table_properties(options);
         let delta_options = resolve_delta_write_options(options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -131,24 +131,8 @@ impl TableFormat for DeltaTableFormat {
             Err(err) => return Err(DataFusionError::External(Box::new(err))),
         };
         let table_exists = table.is_some();
-        let mut metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
+        let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        if table_exists {
-            if !routed_table_properties.is_empty() {
-                let mut keys: Vec<_> = routed_table_properties.keys().cloned().collect();
-                keys.sort();
-                log::warn!(
-                    "ignoring write-time Delta table properties for existing table at {table_url}: {}",
-                    keys.join(", ")
-                );
-            }
-        } else {
-            let routed_metadata_configuration =
-                resolve_delta_metadata_configuration(&routed_table_properties)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            metadata_configuration.extend(routed_metadata_configuration);
-        }
 
         match mode {
             PhysicalSinkMode::ErrorIfExists if table_exists => {

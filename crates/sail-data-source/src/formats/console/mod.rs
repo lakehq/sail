@@ -37,22 +37,17 @@ impl TableFormat for ConsoleTableFormat {
         _ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let path = info.path();
         let SinkInfo {
             input,
             mode,
             partition_by,
             bucket_by,
             sort_order,
-            table_properties: _,
             options,
             logical_schema: _,
         } = info;
         if !is_flow_event_schema(&input.schema()) {
             return plan_err!("the console table format only supports streaming data");
-        }
-        if !path.is_empty() {
-            return plan_err!("the console table format does not support path");
         }
         if !matches!(mode, PhysicalSinkMode::Append) {
             return not_impl_err!("the console table format only supports append mode");
