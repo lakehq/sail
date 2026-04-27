@@ -702,7 +702,7 @@ mod tests {
                 items: vec![
                     ("delta.appendOnly".to_string(), "true".to_string()),
                     ("option.target_file_size".to_string(), "50000".to_string()),
-                    ("my.tag".to_string(), "remove-me".to_string()),
+                    ("my.tag".to_string(), "custom-value".to_string()),
                     ("keep.me".to_string(), "yes".to_string()),
                 ],
             },
@@ -722,7 +722,7 @@ mod tests {
         );
         assert_eq!(
             table_properties.get("my.tag"),
-            Some(&"remove-me".to_string())
+            Some(&"custom-value".to_string())
         );
         assert_eq!(table_properties.get("keep.me"), Some(&"yes".to_string()));
         // option.target_file_size should NOT be in table_properties
