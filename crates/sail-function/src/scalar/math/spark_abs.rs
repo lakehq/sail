@@ -96,14 +96,29 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Float/Decimal/UInt/Null have no ANSI overflow concerns; delegate to
+        // DataFusion's built-in abs so the kernel stays correct even on
+        // bypass paths where `simplify` has not rewritten the call.
+        if matches!(
+            args.args[0].data_type(),
+            DataType::Float32
+                | DataType::Float64
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Null
+        ) {
+            return datafusion::functions::math::abs::AbsFunc::new().invoke_with_args(args);
+        }
         let return_dtype = args.return_field.data_type().clone();
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
             return Err(invalid_arg_count_exec_err("abs", (1, 1), args.len()));
         };
-        // Skip the kernel pass when every input row is NULL. Placed AFTER the
-        // arity guard so a malformed call still errors; abs has no further
-        // runtime validation, so this is safe here.
+        // Skip the kernel pass when every input row is NULL.
         if let ColumnarValue::Array(array) = arg {
             if array.null_count() == array.len() {
                 return Ok(ColumnarValue::Array(new_null_array(
