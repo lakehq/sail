@@ -58,10 +58,9 @@ impl PlanResolver<'_> {
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
-        let properties = options
+        let properties = properties
             .into_iter()
-            .map(|(k, v)| (format!("option.{k}"), v))
-            .chain(properties)
+            .chain(options.into_iter().map(|(k, v)| (format!("option.{k}"), v)))
             .collect();
 
         let command = CatalogCommand::CreateTable {

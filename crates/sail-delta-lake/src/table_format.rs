@@ -625,8 +625,14 @@ fn split_delta_write_options_and_table_properties(
                 for (key, value) in items {
                     if let Some(property_key) = route_table_property_key(&key) {
                         table_properties.insert(property_key, value);
-                    } else {
+                    } else if key.starts_with("option.") {
+                        // Write option from the OPTIONS clause; keep in clean items
+                        // so that resolve_delta_write_options can process it.
                         clean_items.push((key, value));
+                    } else {
+                        // Custom user table property (e.g. from TBLPROPERTIES); include
+                        // it in the Delta metadata configuration as-is.
+                        table_properties.insert(key, value);
                     }
                 }
                 OptionLayer::TablePropertyList { items: clean_items }
@@ -682,5 +688,62 @@ mod tests {
             table_properties.get("delta.appendOnly"),
             Some(&"true".to_string())
         );
+    }
+
+    #[test]
+    fn test_split_delta_write_options_and_table_properties_from_table_property_list() {
+        // Simulate a TablePropertyList as produced for an existing catalog table.
+        // It may contain:
+        //   - known delta properties (e.g. delta.appendOnly) -> routed to table_properties
+        //   - option.* write options stored from the OPTIONS clause -> kept in clean items
+        //   - custom user TBLPROPERTIES (e.g. my.tag) -> forwarded to table_properties as-is
+        let options = vec![
+            OptionLayer::TablePropertyList {
+                items: vec![
+                    ("delta.appendOnly".to_string(), "true".to_string()),
+                    ("option.target_file_size".to_string(), "50000".to_string()),
+                    ("my.tag".to_string(), "remove-me".to_string()),
+                    ("keep.me".to_string(), "yes".to_string()),
+                ],
+            },
+            OptionLayer::OptionList {
+                items: vec![("path".to_string(), "/tmp/table".to_string())],
+            },
+        ];
+
+        let (clean_options, table_properties) =
+            split_delta_write_options_and_table_properties(options);
+
+        // delta.appendOnly routes to table_properties; option.* stays in clean items;
+        // custom properties (my.tag, keep.me) also go to table_properties.
+        assert_eq!(
+            table_properties.get("delta.appendOnly"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            table_properties.get("my.tag"),
+            Some(&"remove-me".to_string())
+        );
+        assert_eq!(table_properties.get("keep.me"), Some(&"yes".to_string()));
+        // option.target_file_size should NOT be in table_properties
+        assert_eq!(table_properties.get("option.target_file_size"), None);
+
+        // option.target_file_size and path remain as clean items
+        assert_eq!(clean_options.len(), 2);
+        match &clean_options[0] {
+            OptionLayer::TablePropertyList { items } => {
+                assert_eq!(
+                    items,
+                    &[("option.target_file_size".to_string(), "50000".to_string())]
+                );
+            }
+            _ => unreachable!("expected TablePropertyList"),
+        }
+        match &clean_options[1] {
+            OptionLayer::OptionList { items } => {
+                assert_eq!(items, &[("path".to_string(), "/tmp/table".to_string())]);
+            }
+            _ => unreachable!("expected OptionList"),
+        }
     }
 }

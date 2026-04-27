@@ -569,6 +569,11 @@
         - write_batch_size
         - writeBatchSize
       parser: crate::options::parsers::parse_non_zero_usize
+    - type: table_property
+      keys:
+        - option.write_batch_size
+        - option.writeBatchSize
+      parser: crate::options::parsers::parse_non_zero_usize
 
 ### Read and Write Options ###
 

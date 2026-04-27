@@ -60,13 +60,8 @@ impl PlanResolver<'_> {
             None
         };
 
-        let properties = match table_status.kind {
-            TableKind::Table { properties, .. } => properties,
-            TableKind::View { .. }
-            | TableKind::TemporaryView { .. }
-            | TableKind::GlobalTemporaryView { .. } => {
-                return Err(PlanError::invalid("cannot delete from views"));
-            }
+        let TableKind::Table { properties, .. } = table_status.kind else {
+            unreachable!("get_schema_for_delete only succeeds for table targets");
         };
         let file_delete_options = FileDeleteOptions {
             table_name: table.into(),

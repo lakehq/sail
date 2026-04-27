@@ -168,7 +168,7 @@ pub struct SinkInfo {
     pub logical_schema: Option<datafusion_common::DFSchemaRef>,
 }
 
-/// Returns the path from options, or an empty string if not set.
+/// Returns the path from options, or `None` if not set.
 /// Checks the `"path"` key first, then `"location"`.
 /// Key comparison is case-insensitive.
 pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
