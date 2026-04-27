@@ -4,13 +4,13 @@ use std::collections::{HashMap, HashSet};
 use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
 use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
+use sail_catalog::hive_format::HiveStorageFormat;
 use sail_catalog::provider::{
     CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace, PartitionTransform,
 };
 use sail_common_datafusion::catalog::TableStatus;
 
 use crate::data_type::arrow_to_glue_type;
-use crate::format::GlueStorageFormat;
 use crate::GlueCatalogProvider;
 
 /// Validated options for Hive table creation.
@@ -44,7 +44,7 @@ pub(crate) async fn create_hive_table(
         properties,
     } = validate_hive_options(options)?;
 
-    let format_info = GlueStorageFormat::from_format(&format)?;
+    let format_info = HiveStorageFormat::from_format(&format)?;
 
     let (regular_columns, partition_columns) = build_glue_columns(columns, &partition_by)?;
 
@@ -191,7 +191,7 @@ fn build_glue_columns(
 /// Builds a Glue StorageDescriptor from column definitions and format info.
 fn build_storage_descriptor(
     columns: Vec<aws_sdk_glue::types::Column>,
-    format_info: &GlueStorageFormat,
+    format_info: &HiveStorageFormat,
     location: Option<&str>,
 ) -> StorageDescriptor {
     let serde_info = SerDeInfo::builder()

@@ -83,6 +83,20 @@ spark.sql("SELECT 1 + 1").show()
 
 Please refer to the [Getting Started](https://docs.lakesail.com/sail/latest/introduction/getting-started/) guide for further details.
 
+## Spark Compatibility
+
+Sail is designed to be compatible with Spark 3.5.x, Spark 4.x, and later versions. Existing PySpark code works out of the box once you connect your Spark client session to Sail over the Spark Connect protocol.
+
+As a starting point, Sail ships with an **experimental** [PySpark function compatibility check script](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/#check-your-code-for-compatibility) that scans your codebase for PySpark functions and reports their Sail support status.
+
+```bash
+python -m pysail.examples.spark.compatibility_check <directory>
+```
+
+> **Experimental** Use the script as a rough first pass only. The script checks whether referenced PySpark functions are _implemented_ in Sail. It does **not** verify behavioral parity. It looks for functions used in DataFrame operations but does **not** cover Spark SQL strings.
+
+See the [Migration Guide](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/) for recommended migration practices.
+
 ## Feature Highlights
 
 ### Storage
