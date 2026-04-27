@@ -134,8 +134,8 @@
     #   We should eventually support read options via SQL hints.
     - type: table_property
       keys:
-        - metadata_as_data_read
-        - metadataAsDataRead
+        - option.metadata_as_data_read
+        - option.metadataAsDataRead
       parser: crate::options::parsers::parse_bool
 
 - key: max_files_per_trigger
@@ -546,6 +546,11 @@
       keys:
         - target_file_size
         - targetFileSize
+      parser: crate::options::parsers::parse_u64
+    - type: table_property
+      keys:
+        - option.target_file_size
+        - option.targetFileSize
       parser: crate::options::parsers::parse_u64
 
 - key: write_batch_size
