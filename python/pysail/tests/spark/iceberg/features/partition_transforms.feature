@@ -241,6 +241,40 @@ Feature: Iceberg Partition Transforms
         | 1  | start      |
         | 2  | progress   |
 
+    Scenario: Day transform on timestamp preserves range filter results
+      Given statement template
+        """
+        CREATE TABLE timestamp_transform_test (
+          id INT,
+          payload_timestamp TIMESTAMP,
+          payload STRING
+        )
+        USING iceberg
+        PARTITIONED BY (days(payload_timestamp))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO timestamp_transform_test VALUES
+          (1, TIMESTAMP '2024-01-01 10:00:00', 'day1-a'),
+          (2, TIMESTAMP '2024-01-01 11:00:00', 'day1-b'),
+          (3, TIMESTAMP '2024-01-02 10:00:00', 'day2-a'),
+          (4, TIMESTAMP '2024-01-02 11:00:00', 'day2-b'),
+          (5, TIMESTAMP '2024-01-03 10:00:00', 'day3-a'),
+          (6, TIMESTAMP '2024-01-03 11:00:00', 'day3-b')
+        """
+      When query
+        """
+        SELECT id, payload FROM timestamp_transform_test
+        WHERE payload_timestamp >= TIMESTAMP '2024-01-02 00:00:00'
+          AND payload_timestamp < TIMESTAMP '2024-01-03 00:00:00'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | payload |
+        | 3  | day2-a  |
+        | 4  | day2-b  |
+
   Rule: Multi-column transform creates nested partitions
     Background:
       Given variable location for temporary directory iceberg_multi_transform
