@@ -103,6 +103,7 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
+use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
@@ -177,6 +178,7 @@ use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
+use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractAll;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
@@ -1971,6 +1973,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
+            "quote" => Ok(Arc::new(ScalarUDF::from(SparkQuote::new()))),
             "st_asbinary" => Ok(Arc::new(ScalarUDF::from(StAsBinary::new()))),
             "st_geomfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeomFromWKB::new()))),
             "st_geogfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeogFromWKB::new()))),
@@ -2132,6 +2135,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
             || node_inner.is::<Soundex>()
+            || node_inner.is::<SparkQuote>()
             || node_inner.is::<StAsBinary>()
             || node_inner.is::<StGeomFromWKB>()
             || node_inner.is::<StGeogFromWKB>()
@@ -2352,6 +2356,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
                 "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
+                "schema_of_variant_agg" => Ok(Arc::new(AggregateUDF::from(
+                    SchemaOfVariantAggFunction::new(),
+                ))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
@@ -2436,7 +2443,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udaf = PySparkBatchCollectorUDF::new(input_types, input_names);
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
-            None => plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
+            None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
         }
     }
 
@@ -2450,6 +2457,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ModeFunction>()
             || node.inner().as_any().is::<PercentileFunction>()
             || node.inner().as_any().is::<PercentileDisc>()
+            || node.inner().as_any().is::<SchemaOfVariantAggFunction>()
             || node.inner().as_any().is::<SkewnessFunc>()
             || node.inner().as_any().is::<TryAvgFunction>()
             || node.inner().as_any().is::<SparkTrySum>()

@@ -1,0 +1,30 @@
+[package]
+name = "sail-catalog-hms"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-catalog = { path = "../sail-catalog" }
+sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+
+arrow = { workspace = true }
+async-trait = { workspace = true }
+bitflags = { workspace = true }
+chrono = { workspace = true }
+datafusion = { workspace = true }
+futures = { workspace = true }
+hive_metastore = { workspace = true }
+libloading = { workspace = true }
+pilota = { workspace = true }
+tokio = { workspace = true }
+volo = { workspace = true }
+volo-thrift = { workspace = true }
+
+[dev-dependencies]
+arrow = { workspace = true }
+tempfile = { workspace = true }
+testcontainers = { workspace = true }
