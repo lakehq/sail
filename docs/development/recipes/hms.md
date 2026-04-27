@@ -14,7 +14,7 @@ What maintainers can rely on today:
 
 - Plain HMS catalog connectivity over Thrift.
 - Kerberos-secured HMS connectivity over Thrift SASL.
-- Kerberos SASL frame wrapping (`auth-int` / `auth-conf`) with configurable minimum QOP (`sasl_qop_min`).
+- Kerberos SASL frame wrapping (`auth-int` / `auth-conf`) with configurable minimum QOP (`min_sasl_qop`).
 - HMS endpoint lists with automatic failover on retryable transport/Thrift errors.
 - Basic metadata CRUD for databases and tables through `HmsCatalogProvider`.
 - A self-contained Kerberos integration harness built with `testcontainers`.
@@ -124,14 +124,14 @@ Supported contract:
 - endpoint-ordered failover with a per-endpoint connect timeout that defaults to `5s` and can be overridden with `connect_timeout_secs`
 - DNS is re-resolved when Sail builds a new connection for an endpoint instead of pinning the startup-resolved address forever
 - Kerberos principal configured with `auth = "kerberos"` and `kerberos_service_principal`
-- minimum Kerberos SASL QOP via `sasl_qop_min` (`auth`, `auth_int`, `auth_conf`)
+- minimum Kerberos SASL QOP via `min_sasl_qop` (`auth`, `auth_int`, `auth_conf`)
 - `_HOST` expansion for the principal based on the currently selected endpoint
 - metadata CRUD for databases, tables, and views
 - retried create/drop mutations normalize `AlreadyExists` and `NotFound` responses when the earlier attempt likely succeeded and only the response was lost
 
 Security guarantees in this contract:
 
-- Downgrade fail-fast: if the configured `sasl_qop_min` cannot be met by the server SASL layer advertisement, transport creation fails before the HMS client is usable.
+- Downgrade fail-fast: if the configured `min_sasl_qop` cannot be met by the server SASL layer advertisement, transport creation fails before the HMS client is usable.
 - Session-wide enforcement: when `auth_int` or `auth_conf` is negotiated, every subsequent Thrift frame on that connection is wrapped on write and unwrapped on read.
 
 Out of scope for the current implementation:
