@@ -4,11 +4,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Schema};
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
+use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::dml::InsertOp;
+use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
@@ -105,11 +107,11 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         self.inner.name()
     }
 
-    async fn create_provider(
+    async fn create_source(
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
             schema,
@@ -179,9 +181,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
         let config = crate::listing::rewrite_listing_partitions(config)?;
-        Ok(Arc::new(
+        Ok(provider_as_source(Arc::new(
             ListingTable::try_new(config)?.with_constraints(constraints),
-        ))
+        )))
     }
 
     async fn create_writer(

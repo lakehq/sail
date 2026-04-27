@@ -103,6 +103,7 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
+use sail_function::aggregate::product::ProductFunction;
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
@@ -178,6 +179,7 @@ use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
+use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractAll;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
@@ -197,7 +199,10 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
-use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
+use sail_iceberg::physical_plan::{
+    IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec, IcebergManifestScanExec,
+    IcebergScanByDataFilesExec, IcebergWriterExec,
+};
 use sail_iceberg::IcebergWriterExecOptions;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
@@ -647,6 +652,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists,
                 sink_schema,
                 sink_mode,
+                user_metadata,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -666,6 +672,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_exists,
                     Arc::new(sink_schema),
                     sink_mode,
+                    user_metadata,
                 )))
             }
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
@@ -1087,6 +1094,73 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
                 Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
             }
+            NodeKind::IcebergManifestScan(gen::IcebergManifestScanExecNode {
+                table_url,
+                snapshot_json,
+            }) => {
+                let snapshot: sail_iceberg::spec::Snapshot = serde_json::from_str(&snapshot_json)
+                    .map_err(|e| {
+                    plan_datafusion_err!("failed to decode Iceberg snapshot: {e}")
+                })?;
+                Ok(Arc::new(IcebergManifestScanExec::new(table_url, snapshot)))
+            }
+            NodeKind::IcebergDiscovery(gen::IcebergDiscoveryExecNode {
+                input,
+                table_url,
+                snapshot_id,
+                input_partition_scan,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(IcebergDiscoveryExec::new(
+                    input,
+                    table_url,
+                    snapshot_id,
+                    input_partition_scan,
+                )?))
+            }
+            NodeKind::IcebergScanByDataFiles(gen::IcebergScanByDataFilesExecNode {
+                input,
+                table_url,
+                output_schema,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let output_schema = Arc::new(self.try_decode_schema(&output_schema)?);
+                Ok(Arc::new(IcebergScanByDataFilesExec::new(
+                    input,
+                    table_url,
+                    output_schema,
+                )))
+            }
+            NodeKind::IcebergDeleteApply(gen::IcebergDeleteApplyExecNode {
+                input,
+                data_file_path,
+                positional_deletes_json,
+                equality_deletes_json,
+                table_url,
+                iceberg_schema_json,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let positional_deletes: Vec<sail_iceberg::spec::delete_index::DeleteFileRef> =
+                    serde_json::from_str(&positional_deletes_json).map_err(|e| {
+                        plan_datafusion_err!("failed to decode positional delete refs: {e}")
+                    })?;
+                let equality_deletes: Vec<sail_iceberg::spec::delete_index::DeleteFileRef> =
+                    serde_json::from_str(&equality_deletes_json).map_err(|e| {
+                        plan_datafusion_err!("failed to decode equality delete refs: {e}")
+                    })?;
+                let iceberg_schema: sail_iceberg::spec::Schema =
+                    serde_json::from_str(&iceberg_schema_json).map_err(|e| {
+                        plan_datafusion_err!("failed to decode Iceberg schema: {e}")
+                    })?;
+                Ok(Arc::new(IcebergDeleteApplyExec::new(
+                    input,
+                    data_file_path,
+                    positional_deletes,
+                    equality_deletes,
+                    table_url,
+                    iceberg_schema,
+                )))
+            }
             NodeKind::PythonDataSource(gen::PythonDataSourceExecNode {
                 pickled_reader,
                 schema,
@@ -1443,6 +1517,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists: delta_commit_exec.table_exists(),
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
                 sink_mode: Some(sink_mode),
+                user_metadata: delta_commit_exec.user_metadata().map(str::to_owned),
             })
         } else if let Some(delta_scan_by_adds_exec) =
             node.as_any().downcast_ref::<DeltaScanByAddsExec>()
@@ -1740,6 +1815,50 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
             })
+        } else if let Some(manifest_scan) = node.as_any().downcast_ref::<IcebergManifestScanExec>()
+        {
+            let snapshot_json = serde_json::to_string(manifest_scan.snapshot())
+                .map_err(|e| plan_datafusion_err!("failed to encode Iceberg snapshot: {e}"))?;
+            NodeKind::IcebergManifestScan(gen::IcebergManifestScanExecNode {
+                table_url: manifest_scan.table_url().to_string(),
+                snapshot_json,
+            })
+        } else if let Some(discovery) = node.as_any().downcast_ref::<IcebergDiscoveryExec>() {
+            let input = self.try_encode_plan(discovery.input().clone())?;
+            NodeKind::IcebergDiscovery(gen::IcebergDiscoveryExecNode {
+                input,
+                table_url: discovery.table_url().to_string(),
+                snapshot_id: discovery.snapshot_id(),
+                input_partition_scan: discovery.input_partition_scan(),
+            })
+        } else if let Some(scan_by_files) =
+            node.as_any().downcast_ref::<IcebergScanByDataFilesExec>()
+        {
+            let input = self.try_encode_plan(scan_by_files.input().clone())?;
+            let output_schema = self.try_encode_schema(scan_by_files.output_schema().as_ref())?;
+            NodeKind::IcebergScanByDataFiles(gen::IcebergScanByDataFilesExecNode {
+                input,
+                table_url: scan_by_files.table_url().to_string(),
+                output_schema,
+            })
+        } else if let Some(delete_apply) = node.as_any().downcast_ref::<IcebergDeleteApplyExec>() {
+            let input = self.try_encode_plan(delete_apply.input().clone())?;
+            let positional_deletes_json = serde_json::to_string(delete_apply.positional_deletes())
+                .map_err(|e| {
+                    plan_datafusion_err!("failed to encode positional delete refs: {e}")
+                })?;
+            let equality_deletes_json = serde_json::to_string(delete_apply.equality_deletes())
+                .map_err(|e| plan_datafusion_err!("failed to encode equality delete refs: {e}"))?;
+            let iceberg_schema_json = serde_json::to_string(delete_apply.iceberg_schema())
+                .map_err(|e| plan_datafusion_err!("failed to encode Iceberg schema: {e}"))?;
+            NodeKind::IcebergDeleteApply(gen::IcebergDeleteApplyExecNode {
+                input,
+                data_file_path: delete_apply.data_file_path().to_string(),
+                positional_deletes_json,
+                equality_deletes_json,
+                table_url: delete_apply.table_url().to_string(),
+                iceberg_schema_json,
+            })
         } else if let Some(python_exec) = node.as_any().downcast_ref::<PythonDataSourceExec>() {
             let schema = self.try_encode_schema(python_exec.schema().as_ref())?;
             let partitions = python_exec
@@ -1975,6 +2094,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "randstr" => Ok(Arc::new(ScalarUDF::from(Randstr::new()))),
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
+            "quote" => Ok(Arc::new(ScalarUDF::from(SparkQuote::new()))),
             "st_asbinary" => Ok(Arc::new(ScalarUDF::from(StAsBinary::new()))),
             "st_geomfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeomFromWKB::new()))),
             "st_geogfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeogFromWKB::new()))),
@@ -2135,6 +2255,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<Randstr>()
             || node_inner.is::<Soundex>()
+            || node_inner.is::<SparkQuote>()
             || node_inner.is::<StAsBinary>()
             || node_inner.is::<StGeomFromWKB>()
             || node_inner.is::<StGeogFromWKB>()
@@ -2357,6 +2478,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
                 "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
+                "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
                 "schema_of_variant_agg" => Ok(Arc::new(AggregateUDF::from(
                     SchemaOfVariantAggFunction::new(),
                 ))),
@@ -2458,6 +2580,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ModeFunction>()
             || node.inner().as_any().is::<PercentileFunction>()
             || node.inner().as_any().is::<PercentileDisc>()
+            || node.inner().as_any().is::<ProductFunction>()
             || node.inner().as_any().is::<SchemaOfVariantAggFunction>()
             || node.inner().as_any().is::<SkewnessFunc>()
             || node.inner().as_any().is::<TryAvgFunction>()
