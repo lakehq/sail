@@ -34,7 +34,7 @@ Hive Metastore can be configured using the following options:
 - `thrift_transport` (optional): The Thrift transport mode. Valid values are `buffered` and `framed`. The default is `buffered`.
 - `auth` (optional): The HMS authentication mode. Valid values are `none` and `kerberos`. The default is `none`.
 - `kerberos_service_principal` (optional): Required when `auth = "kerberos"`. Use the HMS service principal in the form `service/_HOST@REALM`, for example `hive-metastore/_HOST@EXAMPLE.COM`.
-- `sasl_qop_min` (optional): Minimum Kerberos SASL QOP when `auth = "kerberos"`. Valid values are `auth`, `auth_int`, and `auth_conf`. The default is `auth`.
+- `min_sasl_qop` (optional): Minimum Kerberos SASL QOP when `auth = "kerberos"`. Valid values are `auth`, `auth_int`, and `auth_conf`. The default is `auth`.
 - `connect_timeout_secs` (optional): Per-endpoint connect timeout in seconds. The default is `5`.
 
 Failover behavior:
@@ -96,7 +96,7 @@ export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms1.internal:9083"
 
 ### Security Guarantees
 
-- Downgrade fail-fast: if `sasl_qop_min` cannot be satisfied by the server-advertised SASL layers, connection setup fails immediately.
+- Downgrade fail-fast: if `min_sasl_qop` cannot be satisfied by the server-advertised SASL layers, connection setup fails immediately.
 - Session-wide protection: once a wrapped QOP (`auth_int` or `auth_conf`) is negotiated, every Thrift frame for that connection is wrapped/unwrapped through the Kerberos SASL security layer.
 
 ### Current Limitations
@@ -112,5 +112,5 @@ export SAIL_CATALOG__LIST='[{type="hive_metastore", name="sail", uris=["127.0.0.
 
 export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms1.internal:9083","hms2.internal:9083"], thrift_transport="framed", connect_timeout_secs=10}]'
 
-export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms.internal:9083"], auth="kerberos", kerberos_service_principal="hive-metastore/_HOST@EXAMPLE.COM", sasl_qop_min="auth_int", thrift_transport="framed"}]'
+export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms.internal:9083"], auth="kerberos", kerberos_service_principal="hive-metastore/_HOST@EXAMPLE.COM", min_sasl_qop="auth_int", thrift_transport="framed"}]'
 ```

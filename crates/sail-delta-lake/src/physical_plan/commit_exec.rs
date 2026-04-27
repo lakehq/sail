@@ -62,6 +62,8 @@ pub struct DeltaCommitExec {
     table_exists: bool,
     sink_schema: SchemaRef,
     sink_mode: PhysicalSinkMode,
+    /// Per-commit user-defined metadata to record in `commitInfo.userMetadata`.
+    user_metadata: Option<String>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -74,6 +76,7 @@ impl DeltaCommitExec {
         table_exists: bool,
         sink_schema: SchemaRef,
         sink_mode: PhysicalSinkMode,
+        user_metadata: Option<String>,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
@@ -88,6 +91,7 @@ impl DeltaCommitExec {
             table_exists,
             sink_schema,
             sink_mode,
+            user_metadata,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
@@ -124,6 +128,10 @@ impl DeltaCommitExec {
 
     pub fn sink_mode(&self) -> &PhysicalSinkMode {
         &self.sink_mode
+    }
+
+    pub fn user_metadata(&self) -> Option<&str> {
+        self.user_metadata.as_deref()
     }
 }
 
@@ -172,6 +180,7 @@ impl ExecutionPlan for DeltaCommitExec {
             self.table_exists,
             self.sink_schema.clone(),
             self.sink_mode.clone(),
+            self.user_metadata.clone(),
         )))
     }
 
@@ -202,6 +211,7 @@ impl ExecutionPlan for DeltaCommitExec {
         let partition_columns = self.partition_columns.clone();
         let table_exists = self.table_exists;
         let sink_schema = self.sink_schema.clone();
+        let user_metadata = self.user_metadata.clone();
         let schema = self.schema();
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
@@ -417,7 +427,9 @@ impl ExecutionPlan for DeltaCommitExec {
             let reference = snapshot.cloned();
 
             let finalized_commit = CommitBuilder::from(
-                CommitProperties::default().with_operation_metrics(operation_metrics),
+                CommitProperties::default()
+                    .with_operation_metrics(operation_metrics)
+                    .with_user_metadata(user_metadata),
             )
             .with_actions(final_actions)
             .build(reference, table.log_store(), operation)

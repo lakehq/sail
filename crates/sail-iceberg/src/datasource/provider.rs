@@ -21,7 +21,7 @@ use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
-use datafusion::common::{Result, ToDFSchema};
+use datafusion::common::{plan_err, Result, ToDFSchema};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
@@ -31,8 +31,13 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, Operator, TableProviderFilterPushDown,
 };
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::ObjectMeta;
 use url::Url;
@@ -44,7 +49,10 @@ use crate::datasource::type_converter::iceberg_schema_to_arrow;
 use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
 };
-use crate::spec::manifest::DataContentType;
+use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
+use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
+use crate::physical_plan::manifest_scan_exec::IcebergManifestScanExec;
+use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
 use crate::spec::types::values::Literal;
 use crate::spec::{
@@ -52,14 +60,6 @@ use crate::spec::{
 };
 use crate::utils::conversions::primitive_to_scalar_default;
 use crate::utils::get_object_store_from_session;
-
-#[derive(Debug, Clone)]
-struct IcebergDeleteAttachment {
-    eq_delete_count: usize,
-    pos_delete_count: usize,
-}
-
-// removed StoreCtx in favor of shared io::StoreContext
 
 /// Iceberg table provider for DataFusion
 #[derive(Debug)]
@@ -77,6 +77,8 @@ pub struct IcebergTableProvider {
     default_spec_id: i32,
     /// Arrow schema for DataFusion
     arrow_schema: Arc<ArrowSchema>,
+    /// Whether to use the metadata-as-data read path (lazy manifest scanning)
+    metadata_as_data_read: bool,
 }
 
 impl IcebergTableProvider {
@@ -114,7 +116,14 @@ impl IcebergTableProvider {
             partition_specs,
             default_spec_id,
             arrow_schema,
+            metadata_as_data_read: false,
         })
+    }
+
+    /// Set whether to use the metadata-as-data read path.
+    pub fn with_metadata_as_data_read(mut self, enabled: bool) -> Self {
+        self.metadata_as_data_read = enabled;
+        self
     }
 
     fn reorder_arrow_schema_for_identity_partitions(
@@ -195,16 +204,14 @@ impl IcebergTableProvider {
         Ok(ml)
     }
 
-    /// Load data files from manifests
-    async fn load_data_files(
+    /// Load data files from manifests, preserving per-file data sequence numbers.
+    async fn load_data_files_with_seq(
         &self,
         session: &dyn Session,
         filters: &[Expr],
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
-    ) -> Result<Vec<DataFile>> {
-        let mut data_files = Vec::new();
-
+    ) -> Result<Vec<(DataFile, i64)>> {
         let spec_map: HashMap<i32, PartitionSpec> = self
             .partition_specs
             .iter()
@@ -213,8 +220,8 @@ impl IcebergTableProvider {
         let manifest_files =
             prune_manifests_by_partition_summaries(manifest_list, &self.schema, &spec_map, filters);
 
+        let mut out: Vec<(DataFile, i64)> = Vec::new();
         for manifest_file in manifest_files {
-            // TODO: Add support for delete manifests
             if manifest_file.content != ManifestContentType::Data {
                 continue;
             }
@@ -223,59 +230,68 @@ impl IcebergTableProvider {
             log::trace!("Loading manifest: {}", manifest_path_str);
             let manifest = io_load_manifest(store_ctx, manifest_path_str).await?;
 
-            // Get partition_spec_id from manifest file
             let partition_spec_id = manifest_file.partition_spec_id;
+            let parent_seq = manifest_file.sequence_number;
 
-            // Collect data files for this manifest
-            let manifest_data_files: Vec<DataFile> = manifest
-                .entries()
-                .iter()
-                .filter_map(|entry_ref| {
-                    let entry = entry_ref.as_ref();
-                    if matches!(
-                        entry.status,
-                        ManifestStatus::Added | ManifestStatus::Existing
-                    ) {
-                        let mut df = entry.data_file.clone();
-                        df.partition_spec_id = partition_spec_id;
-                        Some(df)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            // Collect (DataFile, seq) pairs preserving inheritance.
+            let mut manifest_pairs: Vec<(DataFile, i64)> = Vec::new();
+            for entry_ref in manifest.entries().iter() {
+                let entry = entry_ref.as_ref();
+                if !matches!(
+                    entry.status,
+                    ManifestStatus::Added | ManifestStatus::Existing
+                ) {
+                    continue;
+                }
+                let mut df = entry.data_file.clone();
+                df.partition_spec_id = partition_spec_id;
+                let seq = entry.sequence_number.unwrap_or(parent_seq);
+                manifest_pairs.push((df, seq));
+            }
 
-            // Early prune at manifest entry level using DataFusion predicate over metrics
-            if !filters.is_empty() {
+            // Early prune at manifest entry level using DataFusion predicate over metrics.
+            if !filters.is_empty() && !manifest_pairs.is_empty() {
+                // Preserve pairing by keying on file_path before/after prune.
+                let (files_only, seq_only): (Vec<DataFile>, Vec<i64>) =
+                    manifest_pairs.iter().cloned().unzip();
+                let seq_by_path: HashMap<String, i64> = files_only
+                    .iter()
+                    .map(|f| f.file_path.clone())
+                    .zip(seq_only)
+                    .collect();
                 let (kept, _mask) = crate::datasource::pruning::prune_files(
                     session,
                     filters,
                     None,
                     self.arrow_schema.clone(),
-                    manifest_data_files,
+                    files_only,
                     &self.schema,
                 )?;
-                data_files.extend(kept);
+                for df in kept {
+                    let seq = *seq_by_path.get(&df.file_path).unwrap_or(&parent_seq);
+                    out.push((df, seq));
+                }
             } else {
-                data_files.extend(manifest_data_files);
+                out.extend(manifest_pairs);
             }
         }
 
-        Ok(data_files)
+        Ok(out)
     }
 
-    fn partition_key_for(&self, partition: &[Option<Literal>]) -> String {
-        serde_json::to_string(partition).unwrap_or_default()
-    }
-
-    async fn load_delete_index(
+    /// Build a [`DeleteFileIndex`] scoped to the current snapshot.
+    async fn build_delete_file_index(
         &self,
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
-    ) -> Result<std::collections::HashMap<String, IcebergDeleteAttachment>> {
-        let mut index: std::collections::HashMap<String, IcebergDeleteAttachment> =
-            std::collections::HashMap::new();
+    ) -> Result<DeleteFileIndex> {
+        let spec_map: HashMap<i32, PartitionSpec> = self
+            .partition_specs
+            .iter()
+            .map(|s| (s.spec_id(), s.clone()))
+            .collect();
 
+        let mut index = DeleteFileIndex::new();
         for manifest_file in manifest_list
             .entries()
             .iter()
@@ -283,6 +299,12 @@ impl IcebergTableProvider {
         {
             let manifest_path_str = manifest_file.manifest_path.as_str();
             let manifest = io_load_manifest(store_ctx, manifest_path_str).await?;
+            let partition_spec_id = manifest_file.partition_spec_id;
+            let is_unpartitioned = spec_map
+                .get(&partition_spec_id)
+                .map(|s| s.is_unpartitioned())
+                .unwrap_or(false);
+            let parent_seq = manifest_file.sequence_number;
 
             for entry_ref in manifest.entries().iter() {
                 let entry = entry_ref.as_ref();
@@ -292,24 +314,31 @@ impl IcebergTableProvider {
                 ) {
                     continue;
                 }
-                let df = &entry.data_file;
-                let key = self.partition_key_for(df.partition());
-                let att = index.entry(key).or_insert(IcebergDeleteAttachment {
-                    eq_delete_count: 0,
-                    pos_delete_count: 0,
-                });
-                match df.content_type() {
-                    DataContentType::EqualityDeletes => {
-                        att.eq_delete_count = att.eq_delete_count.saturating_add(1);
-                    }
-                    DataContentType::PositionDeletes => {
-                        att.pos_delete_count = att.pos_delete_count.saturating_add(1);
-                    }
-                    _ => {}
+                let mut df = entry.data_file.clone();
+                df.partition_spec_id = partition_spec_id;
+                let seq = entry.sequence_number.unwrap_or(parent_seq);
+                let file_ref = DeleteFileRef {
+                    data_file: df,
+                    data_sequence_number: seq,
+                    partition_spec_id,
+                    is_unpartitioned_spec: is_unpartitioned,
+                };
+                // Guard: reject v3 deletion vectors explicitly. Silently skipping would
+                // corrupt read results.
+                if file_ref.is_deletion_vector() {
+                    return plan_err!(
+                        "Iceberg v3 deletion vectors are not yet supported \
+                         (delete file: {})",
+                        file_ref.data_file.file_path
+                    );
                 }
+                index.insert(file_ref).map_err(|e| {
+                    datafusion::common::DataFusionError::Plan(format!(
+                        "failed to index Iceberg delete file: {e}"
+                    ))
+                })?;
             }
         }
-
         Ok(index)
     }
 
@@ -317,7 +346,6 @@ impl IcebergTableProvider {
         &self,
         store_ctx: &StoreContext,
         data_files: Vec<DataFile>,
-        delete_index: &std::collections::HashMap<String, IcebergDeleteAttachment>,
     ) -> Result<Vec<PartitionedFile>> {
         let mut partitioned_files = Vec::new();
 
@@ -353,18 +381,13 @@ impl IcebergTableProvider {
                 })
                 .collect();
 
-            let key = self.partition_key_for(data_file.partition());
-            let extensions: Option<Arc<dyn Any + Send + Sync>> = delete_index
-                .get(&key)
-                .map(|att| Arc::new(att.clone()) as Arc<dyn Any + Send + Sync>);
-
             let partitioned_file = PartitionedFile {
                 object_meta,
                 partition_values,
                 range: None,
                 statistics: Some(Arc::new(self.create_file_statistics(&data_file))),
                 ordering: None,
-                extensions,
+                extensions: None,
                 metadata_size_hint: None,
             };
 
@@ -387,6 +410,63 @@ impl IcebergTableProvider {
         }
 
         file_groups.into_values().map(FileGroup::from).collect()
+    }
+
+    /// Compute the object-store URL for this table, to be passed to
+    /// `FileScanConfigBuilder`.
+    fn object_store_url(&self) -> Result<ObjectStoreUrl> {
+        let table_url = Url::parse(&self.table_uri)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        ObjectStoreUrl::parse(&table_url[..url::Position::BeforePath])
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))
+    }
+
+    fn build_parquet_source(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        parquet_pushdown_filters: &[Expr],
+        enable_pushdown: bool,
+    ) -> Result<Arc<dyn datafusion::datasource::physical_plan::FileSource>> {
+        let file_schema = self.arrow_schema.clone();
+        let parquet_options = TableParquetOptions {
+            global: session.config().options().execution.parquet.clone(),
+            ..Default::default()
+        };
+        let mut parquet_source = ParquetSource::new(Arc::clone(&file_schema))
+            .with_table_parquet_options(parquet_options);
+        if enable_pushdown && !parquet_pushdown_filters.is_empty() {
+            let logical_schema = self.rebuild_logical_schema_for_filters(projection, filters);
+            let df_schema = logical_schema.to_dfschema()?;
+            if let Some(pushdown_expr) = conjunction(parquet_pushdown_filters.iter().cloned()) {
+                let simplified = simplify_expr(session, &df_schema, pushdown_expr)?;
+                parquet_source = parquet_source.with_predicate(simplified);
+            }
+        }
+        Ok(Arc::new(parquet_source))
+    }
+
+    fn expanded_projection(
+        &self,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+    ) -> Option<Vec<usize>> {
+        if let Some(used) = projection {
+            let mut cols: Vec<usize> = used.clone();
+            if let Some(expr) = conjunction(filters.iter().cloned()) {
+                for c in expr.column_refs() {
+                    if let Ok(idx) = self.arrow_schema.index_of(c.name.as_str()) {
+                        if !cols.contains(&idx) {
+                            cols.push(idx);
+                        }
+                    }
+                }
+            }
+            Some(cols)
+        } else {
+            None
+        }
     }
 
     /// Aggregate table-level statistics from a list of Iceberg data files
@@ -561,6 +641,12 @@ impl TableProvider for IcebergTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
+        if self.metadata_as_data_read {
+            return self
+                .scan_metadata_as_data(session, projection, filters, limit)
+                .await;
+        }
+
         let table_url = Url::parse(&self.table_uri)
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
         let base_store = get_object_store_from_session(session, &table_url)?;
@@ -573,124 +659,226 @@ impl TableProvider for IcebergTableProvider {
         );
         let manifest_list = self.load_manifest_list(&store_ctx).await?;
         log::trace!("Loaded {} manifest files", manifest_list.entries().len());
-        log::trace!(
-            "scan: loaded manifest list with file count: {}",
-            manifest_list.entries().len()
-        );
 
         // Classify & split filters for pruning vs parquet pushdown
         let (pruning_filters, parquet_pushdown_filters) = self.separate_filters(filters);
 
         log::trace!("Loading data files from manifests...");
-        let mut data_files = self
-            .load_data_files(session, &pruning_filters, &store_ctx, &manifest_list)
+        let mut data_files_with_seq = self
+            .load_data_files_with_seq(session, &pruning_filters, &store_ctx, &manifest_list)
             .await?;
-        log::trace!("Loaded {} data files", data_files.len());
+        log::trace!("Loaded {} data files", data_files_with_seq.len());
 
-        // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics
+        // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics.
+        // Preserve per-file sequence numbers through the prune.
         let filter_expr = conjunction(pruning_filters.iter().cloned());
-        let mut _pruning_mask: Option<Vec<bool>> = None;
         if filter_expr.is_some() || limit.is_some() {
-            let (kept, mask) = prune_files(
+            let (files_only, seqs_only): (Vec<DataFile>, Vec<i64>) =
+                data_files_with_seq.iter().cloned().unzip();
+            let seq_by_path: HashMap<String, i64> = files_only
+                .iter()
+                .map(|f| f.file_path.clone())
+                .zip(seqs_only)
+                .collect();
+            let (kept, _mask) = prune_files(
                 session,
                 &pruning_filters,
                 limit,
                 self.rebuild_logical_schema_for_filters(projection, filters),
-                data_files,
+                files_only,
                 &self.schema,
             )?;
-            _pruning_mask = mask;
-            data_files = kept;
-            log::trace!("Pruned data files, remaining: {}", data_files.len());
+            data_files_with_seq = kept
+                .into_iter()
+                .map(|df| {
+                    let seq = seq_by_path.get(&df.file_path).copied().unwrap_or(0);
+                    (df, seq)
+                })
+                .collect();
+            log::trace!(
+                "Pruned data files, remaining: {}",
+                data_files_with_seq.len()
+            );
         }
 
-        log::trace!("Loading delete manifests...");
-        let delete_index = self.load_delete_index(&store_ctx, &manifest_list).await?;
+        // Build the delete-file index for this snapshot. Rejects v3 deletion vectors.
+        log::trace!("Building delete file index...");
+        let delete_index = self
+            .build_delete_file_index(&store_ctx, &manifest_list)
+            .await?;
 
-        log::trace!("Creating partitioned files...");
-        let partitioned_files =
-            self.create_partitioned_files(&store_ctx, data_files.clone(), &delete_index)?;
-        log::trace!("Created {} partitioned files", partitioned_files.len());
-
-        // Step 4: Create file groups
-        let file_groups = self.create_file_groups(partitioned_files);
-
-        // Step 5: Create file scan configuration
-        let file_schema = self.arrow_schema.clone();
-        let table_url = Url::parse(&self.table_uri)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-        let base_url = format!("{}://{}", table_url.scheme(), table_url.authority());
-        let base_url_parsed = Url::parse(&base_url)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-        let object_store_url = ObjectStoreUrl::parse(base_url_parsed)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-        let parquet_options = TableParquetOptions {
-            global: session.config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
-
-        let mut parquet_source = ParquetSource::new(Arc::clone(&file_schema))
-            .with_table_parquet_options(parquet_options);
-        // Prepare pushdown filter for Parquet
-        let pushdown_filter: Option<Arc<dyn PhysicalExpr>> = if !parquet_pushdown_filters.is_empty()
-        {
-            let logical_schema = self.rebuild_logical_schema_for_filters(projection, filters);
-            let df_schema = logical_schema.to_dfschema()?;
-            let pushdown_expr = conjunction(parquet_pushdown_filters);
-            pushdown_expr
-                .map(|expr| simplify_expr(session, &df_schema, expr))
-                .transpose()?
-        } else {
-            None
-        };
-        if let Some(pred) = pushdown_filter {
-            // TODO: Consider expression adapter for Parquet pushdown
-            parquet_source = parquet_source.with_predicate(pred);
-        }
-        let parquet_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
-            Arc::new(parquet_source);
-
-        // Build table statistics from pruned files
-        let table_stats = self.aggregate_statistics(&data_files);
-
-        let expanded_projection: Option<Vec<usize>> = if let Some(used) = projection {
-            let mut cols: Vec<usize> = used.clone();
-            if let Some(expr) = conjunction(filters.iter().cloned()) {
-                for c in expr.column_refs() {
-                    if let Ok(idx) = self.arrow_schema.index_of(c.name.as_str()) {
-                        if !cols.contains(&idx) {
-                            cols.push(idx);
-                        }
-                    }
-                }
-            }
-            Some(cols)
-        } else {
-            None
-        };
-
-        let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
-            .with_file_groups(if file_groups.is_empty() {
-                vec![FileGroup::from(vec![])]
+        // Partition each data file into "clean" (no matching deletes) vs "dirty"
+        // (one or more matching deletes) buckets. We only pay the cost of
+        // `IcebergDeleteApplyExec` for dirty files.
+        let mut clean_files: Vec<DataFile> = Vec::new();
+        let mut dirty_units: Vec<(DataFile, Vec<DeleteFileRef>, Vec<DeleteFileRef>)> = Vec::new();
+        for (df, seq) in data_files_with_seq.iter().cloned() {
+            let matched = delete_index.for_data_file(&df, seq);
+            if matched.is_empty() {
+                clean_files.push(df);
             } else {
-                file_groups
-            })
-            .with_statistics(table_stats)
-            .with_projection_indices(expanded_projection)?
-            .with_limit(limit)
-            .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
-                as Arc<dyn PhysicalExprAdapterFactory>))
-            .build();
+                dirty_units.push((df, matched.positional, matched.equality));
+            }
+        }
+        log::trace!(
+            "Delete split: {} clean, {} dirty",
+            clean_files.len(),
+            dirty_units.len()
+        );
 
-        Ok(DataSourceExec::from_data_source(file_scan_config))
+        // Aggregate stats over ALL files (before split) for the planner.
+        let all_data_files: Vec<DataFile> = data_files_with_seq
+            .iter()
+            .map(|(df, _)| df.clone())
+            .collect();
+        let table_stats = self.aggregate_statistics(&all_data_files);
+
+        // Object-store URL shared by all branches.
+        let object_store_url = self.object_store_url()?;
+
+        if dirty_units.is_empty() {
+            // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
+            // is identical to the pre-delete-integration behavior.
+            let partitioned_files = self.create_partitioned_files(&store_ctx, all_data_files)?;
+            let file_groups = self.create_file_groups(partitioned_files);
+            let parquet_source = self.build_parquet_source(
+                session,
+                projection,
+                filters,
+                &parquet_pushdown_filters,
+                true,
+            )?;
+            let expanded_projection = self.expanded_projection(projection, filters);
+            let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
+                .with_file_groups(if file_groups.is_empty() {
+                    vec![FileGroup::from(vec![])]
+                } else {
+                    file_groups
+                })
+                .with_statistics(table_stats)
+                .with_projection_indices(expanded_projection)?
+                .with_limit(limit)
+                .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                    as Arc<dyn PhysicalExprAdapterFactory>))
+                .build();
+            return Ok(DataSourceExec::from_data_source(file_scan_config));
+        }
+
+        // Delete-aware path: build clean + per-dirty-file branches. We apply
+        // predicates, projection, and limit ABOVE the Union so that positional
+        // row offsets inside `IcebergDeleteApplyExec` remain aligned with the
+        // unfiltered Parquet read of each dirty file.
+
+        let mut branches: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
+
+        // Branch A: clean files scanned as one DataSourceExec. Neither projection nor
+        // predicate is pushed down at this level because the upper layers will apply
+        // them uniformly across branches.
+        if !clean_files.is_empty() {
+            let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
+            let file_groups = self.create_file_groups(partitioned_files);
+            let parquet_source = self.build_parquet_source(
+                session,
+                projection,
+                filters,
+                &[], // no parquet-level predicate
+                false,
+            )?;
+            let file_scan_config =
+                FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
+                    .with_file_groups(file_groups)
+                    .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .build();
+            branches.push(DataSourceExec::from_data_source(file_scan_config));
+        }
+
+        // Branch B: one branch per dirty file.
+        for (df, pos_deletes, eq_deletes) in dirty_units {
+            let partitioned = self.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            // Single-file, single-partition scan — preserves row order for positional deletes.
+            let parquet_source = self.build_parquet_source(session, None, &[], &[], false)?;
+            let file_scan_config =
+                FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
+                    .with_file_groups(vec![FileGroup::from(partitioned)])
+                    .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .build();
+            let data_scan: Arc<dyn ExecutionPlan> =
+                DataSourceExec::from_data_source(file_scan_config);
+            let data_file_raw_path = df.file_path().to_string();
+            // Wrap with DeleteApply.
+            let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
+                data_scan,
+                data_file_raw_path,
+                pos_deletes,
+                eq_deletes,
+                self.table_uri.clone(),
+                self.schema.clone(),
+            ));
+            branches.push(apply);
+        }
+
+        // Union the branches.
+        let unioned: Arc<dyn ExecutionPlan> = if branches.len() == 1 {
+            // SAFETY: length was just checked above.
+            branches.into_iter().next().ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(
+                    "unreachable: branches.len() == 1 but next() returned None".to_string(),
+                )
+            })?
+        } else {
+            UnionExec::try_new(branches)?
+        };
+
+        // Apply predicate above (covers both clean & dirty branches).
+        let after_filter: Arc<dyn ExecutionPlan> = if !parquet_pushdown_filters.is_empty() {
+            let df_schema = self.arrow_schema.clone().to_dfschema()?;
+            let pushdown_expr = conjunction(parquet_pushdown_filters.clone()).ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(
+                    "conjunction over non-empty filters returned None".to_string(),
+                )
+            })?;
+            let simplified = simplify_expr(session, &df_schema, pushdown_expr)?;
+            Arc::new(FilterExec::try_new(simplified, unioned)?)
+        } else {
+            unioned
+        };
+
+        // Apply projection above.
+        let after_projection: Arc<dyn ExecutionPlan> = if let Some(proj) = projection {
+            let projected_schema = self.arrow_schema.clone();
+            let proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = proj
+                .iter()
+                .map(|&idx| {
+                    let field = projected_schema.field(idx);
+                    let col: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), idx));
+                    (col, field.name().to_string())
+                })
+                .collect();
+            Arc::new(ProjectionExec::try_new(proj_exprs, after_filter)?)
+        } else {
+            after_filter
+        };
+
+        // Apply limit above (may over-scan; correctness is preserved because
+        // GlobalLimitExec stops streaming once the row count is reached).
+        let final_plan: Arc<dyn ExecutionPlan> = if let Some(lim) = limit {
+            Arc::new(GlobalLimitExec::new(after_projection, 0, Some(lim)))
+        } else {
+            after_projection
+        };
+
+        Ok(final_plan)
     }
 
     fn supports_filters_pushdown(
         &self,
         filter: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
+        if self.metadata_as_data_read {
+            return Ok(vec![TableProviderFilterPushDown::Unsupported; filter.len()]);
+        }
         Ok(filter
             .iter()
             .map(|e| self.classify_pushdown_for_expr(e))
@@ -832,5 +1020,85 @@ impl IcebergTableProvider {
         } else {
             self.arrow_schema.clone()
         }
+    }
+
+    /// Metadata-as-data scan path: defers manifest scanning to the physical plan.
+    /// Instead of eagerly loading file metadata on the driver, an `IcebergManifestScanExec`
+    /// node produces file metadata that feeds through `IcebergDiscoveryExec` (tagging) and
+    /// into `IcebergScanByDataFilesExec` which dynamically opens Parquet files via a
+    /// streaming `try_unfold` loop.
+    ///
+    /// Physical plan pipeline:
+    /// ```text
+    /// IcebergManifestScanExec (lazy manifest reading → file metadata stream)
+    ///   ↓
+    /// IcebergDiscoveryExec (annotate stream with partition_scan flag)
+    ///   ↓
+    /// IcebergScanByDataFilesExec (consume file paths → dynamic Parquet scan)
+    ///   ↓
+    /// Data output (actual table rows)
+    /// ```
+    async fn scan_metadata_as_data(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        log::trace!(
+            "Using metadata-as-data scan path for table: {}",
+            self.table_uri
+        );
+
+        let table_url = Url::parse(&self.table_uri)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        let base_store = get_object_store_from_session(session, &table_url)?;
+        let store_ctx = StoreContext::new(base_store, &table_url)?;
+        let manifest_list = self.load_manifest_list(&store_ctx).await?;
+        if manifest_list
+            .entries()
+            .iter()
+            .any(|mf| mf.content == ManifestContentType::Deletes)
+        {
+            return plan_err!(
+                "metadata-as-data read path does not yet support tables with delete files; \
+                 disable the `metadataAsDataRead` option to use the driver-based read path"
+            );
+        }
+
+        if projection.is_some() || !filters.is_empty() || limit.is_some() {
+            log::debug!(
+                "metadata-as-data scan does not push down projection/filters/limit \
+                 (projection_provided={}, num_filters={}, limit={:?}); relying on \
+                 the planner to apply them above the scan. Note: \
+                 `supports_filters_pushdown` returns Unsupported in this mode so \
+                 the planner does NOT drop filters from the outer plan.",
+                projection.is_some(),
+                filters.len(),
+                limit,
+            );
+        }
+
+        let manifest_scan: Arc<dyn ExecutionPlan> = Arc::new(IcebergManifestScanExec::new(
+            self.table_uri.clone(),
+            self.snapshot.clone(),
+        ));
+
+        let discovery: Arc<dyn ExecutionPlan> = Arc::new(IcebergDiscoveryExec::new(
+            manifest_scan,
+            self.table_uri.clone(),
+            self.snapshot.snapshot_id(),
+            false, // full data file scan, not partition-only
+        )?);
+
+        let scan_exec = Arc::new(
+            crate::physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec::new(
+                discovery,
+                self.table_uri.clone(),
+                self.arrow_schema.clone(),
+            ),
+        );
+
+        Ok(scan_exec)
     }
 }

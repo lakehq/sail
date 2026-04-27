@@ -56,6 +56,30 @@
         - timestampAsOf
       parser: crate::options::parsers::parse_optional_string
 
+- key: metadata_as_data_read
+  description: |
+    Enable the metadata-as-data read path: avoid eagerly loading file metadata on the driver;
+    use manifest scanning in the physical plan instead. When false (default), use the
+    driver path with pre-loaded file list.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - metadata_as_data_read
+        - metadataAsDataRead
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - metadata_as_data_read
+        - metadataAsDataRead
+      parser: crate::options::parsers::parse_bool
+
 ### Write-Only Options ###
 
 - key: overwrite_schema
