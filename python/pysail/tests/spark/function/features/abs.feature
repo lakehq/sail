@@ -373,7 +373,9 @@ Feature: abs comprehensive tests
     # Sail now coerces STRING → DOUBLE (via `coerce_types` in spark_abs), but
     # the inserted CAST does not honour `spark.sql.ansi.enabled`. Under
     # ANSI=false, Spark returns NULL for unparseable strings (`'hello'`, `''`,
-    # whitespace-padded); Sail errors in both modes.
+    # whitespace-only `'   '`); Sail errors in both modes. Whitespace-padded
+    # numeric strings (`'  -5  '`) ARE parseable by Java's Double.parseDouble
+    # and Spark accepts them — they are not in the "unparseable" set.
     # Fix path: make Sail's CAST ANSI-aware (propagate `plan_config.ansi_mode`
     # into `CastOptions { safe: !ansi }` when wrapping the coerced expr).
     # Affects every UDF that coerces STRING → numeric, not just abs.
@@ -594,20 +596,12 @@ Feature: abs comprehensive tests
         | NULL   |
         | 99.75  |
 
-    @sail-bug
-    # Vectorized abs path (.unary on Int32Array) is correct — failure traces to
-    # the same parser bug documented in `Scenario: abs INT literal MIN preserves
-    # INT type and wraps under ANSI false` above: Sail parses -2147483648 as
-    # UnaryMinus(IntLit(2147483648)), the positive overflows INT32 and widens
-    # to BIGINT, so the column type becomes BIGINT instead of INT. Fix path:
-    # `sail-sql-analyzer` literal narrowing for `-INT_MIN` / `-LONG_MIN`.
-    # Affects every multi-row test that mixes a MIN literal with other values.
     Scenario: abs INT column with NULL mix
       Given config spark.sql.ansi.enabled = false
       When query
         """
         SELECT abs(v) AS result
-        FROM VALUES (-5), (0), (5), (CAST(NULL AS INT)), (-2147483648) AS t(v)
+        FROM VALUES (-5), (0), (5), (CAST(NULL AS INT)), (CAST(-2147483648 AS INT)) AS t(v)
         """
       Then query result
         | result      |

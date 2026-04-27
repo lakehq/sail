@@ -31,7 +31,7 @@ pub struct SparkAbs {
 
 impl Default for SparkAbs {
     fn default() -> Self {
-        Self::new(true)
+        Self::new(false)
     }
 }
 
