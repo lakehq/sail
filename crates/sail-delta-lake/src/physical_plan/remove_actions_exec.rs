@@ -216,8 +216,11 @@ fn accumulate_touched_rows(accum: &mut Option<u64>, stats_json: Option<&str>) {
     };
     match Stats::from_json_str(json) {
         Ok(stats) => {
-            let n = u64::try_from(stats.num_records).unwrap_or_default();
-            *accum = Some(current.saturating_add(n));
+            if let Ok(n) = u64::try_from(stats.num_records) {
+                *accum = Some(current.saturating_add(n));
+            } else {
+                *accum = None;
+            }
         }
         Err(_) => {
             *accum = None;

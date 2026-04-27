@@ -27,7 +27,7 @@ use chrono::Utc;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -69,7 +69,7 @@ pub struct Metrics {
 }
 
 /// Metrics serialized as `commitInfo.operationMetrics`. `None` fields are omitted.
-#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, PartialEq, Clone)]
 pub struct OperationMetrics {
     pub num_files: Option<u64>,
     pub num_output_rows: Option<u64>,
@@ -100,6 +100,24 @@ pub struct OperationMetrics {
     pub num_deletion_vectors_updated: Option<u64>,
     pub num_deletion_vectors_removed: Option<u64>,
     pub extra: HashMap<String, Value>,
+}
+
+impl Serialize for OperationMetrics {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.clone().into_map().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OperationMetrics {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        HashMap::<String, Value>::deserialize(deserializer).map(Self::from)
+    }
 }
 
 impl OperationMetrics {

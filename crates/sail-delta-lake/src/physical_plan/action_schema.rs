@@ -333,6 +333,43 @@ mod tests {
     }
 
     #[test]
+    fn exec_commit_meta_transport_uses_compact_operation_metrics_json() -> Result<()> {
+        let meta = ExecCommitMeta {
+            row_count: 10,
+            operation: None,
+            operation_metrics: OperationMetrics {
+                num_removed_files: Some(2),
+                num_touched_rows: Some(5),
+                ..Default::default()
+            },
+        };
+
+        let transport = ExecCommitMetaTransport::from_exec_meta(meta)?;
+        let metrics_json = transport
+            .operation_metrics_json
+            .as_deref()
+            .ok_or_else(|| DataFusionError::Internal("expected operation metrics json".into()))?;
+        let metrics_value = serde_json::from_str::<serde_json::Value>(metrics_json)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        assert_eq!(
+            metrics_value.get("numRemovedFiles"),
+            Some(&serde_json::Value::from(2))
+        );
+        assert_eq!(
+            metrics_value.get("numTouchedRows"),
+            Some(&serde_json::Value::from(5))
+        );
+        assert!(metrics_value.get("num_removed_files").is_none());
+        assert!(!metrics_json.contains("null"));
+
+        let decoded = transport.into_exec_meta()?;
+        assert_eq!(decoded.operation_metrics.num_removed_files, Some(2));
+        assert_eq!(decoded.operation_metrics.num_touched_rows, Some(5));
+        Ok(())
+    }
+
+    #[test]
     fn protocol_and_metadata_roundtrip_as_typed_actions() -> Result<()> {
         let protocol = Protocol::new(3, 7, None, None);
         let metadata = Metadata::try_new(
