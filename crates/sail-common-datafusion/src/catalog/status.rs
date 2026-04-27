@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
+use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
@@ -30,7 +32,26 @@ pub struct TableStatus {
     pub catalog: Option<String>,
     pub database: Vec<String>,
     pub name: String,
+    pub statistics: Option<TableStatistics>,
     pub kind: TableKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableStatistics {
+    pub size_in_bytes: Option<u64>,
+    pub row_count: Option<u64>,
+    pub col_stats: HashMap<String, ColumnStatistics>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColumnStatistics {
+    pub version: Option<i32>,
+    pub distinct_count: Option<u64>,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub null_count: Option<u64>,
+    pub avg_len: Option<u64>,
+    pub max_len: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,4 +270,32 @@ pub fn identity_partition_fields(columns: &[String]) -> Vec<CatalogPartitionFiel
             transform: None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used)]
+    use super::{TableKind, TableStatistics, TableStatus};
+
+    #[test]
+    fn table_status_carries_optional_statistics() {
+        let status = TableStatus {
+            catalog: None,
+            database: vec!["db".to_string()],
+            name: "tbl".to_string(),
+            statistics: Some(TableStatistics {
+                size_in_bytes: Some(42),
+                row_count: Some(7),
+                col_stats: Default::default(),
+            }),
+            kind: TableKind::View {
+                definition: "select 1".to_string(),
+                columns: vec![],
+                comment: None,
+                properties: vec![],
+            },
+        };
+
+        assert_eq!(status.statistics.unwrap().row_count, Some(7));
+    }
 }

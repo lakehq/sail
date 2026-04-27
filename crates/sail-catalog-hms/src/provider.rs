@@ -16,10 +16,10 @@ use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    PartitionTransform,
+    PartitionSpec, PartitionStatus, PartitionTransform,
 };
 use sail_common::runtime::RuntimeHandle;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_datafusion::catalog::{DatabaseStatus, TableStatistics, TableStatus};
 use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
@@ -899,7 +899,9 @@ impl CatalogProvider for HmsCatalogProvider {
             .iter()
             .map(|field| field.column.clone())
             .collect();
-        let hms_table = build_generic_table(
+        let columns_for_metadata = options.columns.clone();
+        let format_for_metadata = format.logical_format.to_string();
+        let mut hms_table = build_generic_table(
             &db_name,
             table,
             options.columns,
@@ -911,6 +913,15 @@ impl CatalogProvider for HmsCatalogProvider {
             },
             options.comment,
             options.properties,
+        )?;
+        let partition_columns_for_metadata =
+            crate::convert::partition_columns_for_table(&hms_table)?;
+
+        crate::convert::inject_spark_metadata(
+            &mut hms_table,
+            &columns_for_metadata,
+            partition_columns_for_metadata.as_slice(),
+            &format_for_metadata,
         )?;
 
         self.create_hms_table(database, table, hms_table, options.if_not_exists)
@@ -1052,6 +1063,458 @@ impl CatalogProvider for HmsCatalogProvider {
             }
         })
         .await
+    }
+
+    async fn alter_table_stats(
+        &self,
+        database: &Namespace,
+        table: &str,
+        stats: Option<TableStatistics>,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        let table_name = table.to_string();
+
+        self.with_failover(|client| {
+            let db_name = db_name.clone();
+            let table_name = table_name.clone();
+            let stats = stats.clone();
+            async move {
+                let mut hms_table = match client
+                    .get_table(db_name.clone().into(), table_name.clone().into())
+                    .await
+                {
+                    Ok(MaybeException::Ok(table)) => table,
+                    Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => {
+                        return Err(CatalogError::NotFound(
+                            CatalogObject::Table,
+                            format!("{db_name}.{table_name}"),
+                        ))
+                    }
+                    Ok(MaybeException::Exception(err)) => {
+                        return Err(CatalogError::External(format!(
+                            "Failed to fetch HMS table '{db_name}.{table_name}' for stats alter: {err:?}"
+                        )))
+                    }
+                    Err(err) => {
+                        return Err(Self::hms_client_error(
+                            &format!(
+                                "Failed to fetch HMS table '{db_name}.{table_name}' for stats alter"
+                            ),
+                            err,
+                        ))
+                    }
+                };
+
+                let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
+
+                // Remove all existing spark.sql.statistics.* properties
+                parameters.retain(|key, _| !key.starts_with("spark.sql.statistics."));
+
+                // Inject new stats if present
+                if let Some(stats) = stats {
+                    let stats_props = crate::convert::table_statistics_to_properties(&stats)?;
+                    for (key, value) in stats_props {
+                        parameters.insert(key.into(), value.into());
+                    }
+                }
+
+                match client
+                    .alter_table(db_name.clone().into(), table_name.clone().into(), hms_table)
+                    .await
+                {
+                    Ok(MaybeException::Ok(())) => Ok(()),
+                    Ok(MaybeException::Exception(ThriftHiveMetastoreAlterTableException::O1(
+                        err,
+                    ))) => Err(CatalogError::External(format!(
+                        "Failed to alter HMS table stats '{db_name}.{table_name}': \
+                         invalid operation: {err:?}"
+                    ))),
+                    Ok(MaybeException::Exception(ThriftHiveMetastoreAlterTableException::O2(
+                        err,
+                    ))) => Err(CatalogError::External(format!(
+                        "Failed to alter HMS table stats '{db_name}.{table_name}': \
+                         metastore error: {err:?}"
+                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        &format!("Failed to alter HMS table stats '{db_name}.{table_name}'"),
+                        err,
+                    )),
+                }
+            }
+        })
+        .await
+    }
+
+    async fn get_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: sail_catalog::provider::GetPartitionsOptions,
+    ) -> CatalogResult<Vec<PartitionStatus>> {
+        let db_name = validate_namespace(database)?;
+        let table_name = table.to_string();
+        let max_parts = options.max_parts.unwrap_or(-1);
+        let filter_str = crate::convert::render_partition_filter(&options.filter)?;
+
+        let partitions = if filter_str.is_empty() {
+            // No filter: use get_partitions for all partitions
+            self.with_failover(|client| {
+                let db_name = db_name.clone();
+                let table_name = table_name.clone();
+                async move {
+                    match client
+                        .get_partitions(db_name.into(), table_name.into(), max_parts)
+                        .await
+                    {
+                        Ok(MaybeException::Ok(parts)) => Ok(parts),
+                        Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                            "Failed to get HMS partitions: {err:?}"
+                        ))),
+                        Err(err) => {
+                            Err(Self::hms_client_error("Failed to get HMS partitions", err))
+                        }
+                    }
+                }
+            })
+            .await?
+        } else {
+            // Filter specified: use get_partitions_by_filter
+            self.with_failover(|client| {
+                let db_name = db_name.clone();
+                let table_name = table_name.clone();
+                let filter_str = filter_str.clone();
+                async move {
+                    match client
+                        .get_partitions_by_filter(
+                            db_name.into(),
+                            table_name.into(),
+                            filter_str.into(),
+                            max_parts,
+                        )
+                        .await
+                    {
+                        Ok(MaybeException::Ok(parts)) => Ok(parts),
+                        Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                            "Failed to get HMS partitions by filter: {err:?}"
+                        ))),
+                        Err(err) => Err(Self::hms_client_error(
+                            "Failed to get HMS partitions by filter",
+                            err,
+                        )),
+                    }
+                }
+            })
+            .await?
+        };
+
+        // HMS Partition.values are positional and carry no column-name information.
+        // We must fetch the table to resolve partition column names for pairing
+        // with the positional values. This is a single additional Thrift round-trip
+        // and is inherent to the HMS API design (there is no batch variant that
+        // includes column names). If this becomes a hot path, consider caching
+        // the table's partition_keys per (database, table) with a short TTL.
+        let hms_table = self.fetch_hms_table(database, table).await?;
+        let partition_columns = crate::convert::partition_columns_for_table(&hms_table)?;
+
+        partitions
+            .iter()
+            .map(|p| crate::convert::partition_to_status(p, Some(&partition_columns)))
+            .collect()
+    }
+
+    async fn create_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        partitions: Vec<PartitionStatus>,
+        options: sail_catalog::provider::CreatePartitionsOptions,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        let table_name = table.to_string();
+        let table_metadata = self.fetch_hms_table(database, table).await?;
+        let partition_columns = crate::convert::partition_columns_for_table(&table_metadata)?;
+
+        let hms_partitions: Vec<_> = partitions
+            .iter()
+            .map(|p| {
+                crate::convert::status_to_partition(
+                    &db_name,
+                    &table_name,
+                    p,
+                    &partition_columns,
+                    None,
+                    table_metadata.sd.as_ref(),
+                )
+            })
+            .collect::<CatalogResult<Vec<_>>>()?;
+
+        self.with_failover(|client| {
+            let db_name = db_name.clone();
+            let table_name = table_name.clone();
+            let hms_partitions = hms_partitions.clone();
+            let if_not_exists = options.ignore_if_exists;
+            async move {
+                let request = hive_metastore::AddPartitionsRequest {
+                    db_name: db_name.into(),
+                    tbl_name: table_name.into(),
+                    parts: hms_partitions,
+                    if_not_exists,
+                    need_result: Some(false),
+                    cat_name: None,
+                };
+                match client.add_partitions_req(request).await {
+                    Ok(MaybeException::Ok(_)) => Ok(()),
+                    Ok(MaybeException::Exception(
+                        hive_metastore::ThriftHiveMetastoreAddPartitionsReqException::O2(_),
+                    )) if if_not_exists => Ok(()),
+                    Ok(MaybeException::Exception(
+                        hive_metastore::ThriftHiveMetastoreAddPartitionsReqException::O2(err),
+                    )) => Err(CatalogError::AlreadyExists(
+                        CatalogObject::Partition,
+                        format!("{err:?}"),
+                    )),
+                    Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                        "Failed to create HMS partitions: {err:?}"
+                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        "Failed to create HMS partitions",
+                        err,
+                    )),
+                }
+            }
+        })
+        .await
+    }
+
+    async fn drop_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        specs: Vec<PartitionSpec>,
+        options: sail_catalog::provider::DropPartitionsOptions,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        let table_name = table.to_string();
+        let table_metadata = self.fetch_hms_table(database, table).await?;
+        let partition_columns = crate::convert::partition_columns_for_table(&table_metadata)?;
+
+        let names: Vec<FastStr> = specs
+            .iter()
+            .map(|spec| {
+                crate::convert::canonicalize_partition_spec(spec, &partition_columns)
+                    .map(|canonical| crate::convert::partition_spec_to_name(&canonical).into())
+            })
+            .collect::<CatalogResult<Vec<_>>>()?;
+
+        self.with_failover(|client| {
+            let db_name = db_name.clone();
+            let table_name = table_name.clone();
+            let names = names.clone();
+            async move {
+                let request = hive_metastore::DropPartitionsRequest {
+                    db_name: db_name.into(),
+                    tbl_name: table_name.into(),
+                    parts: hive_metastore::RequestPartsSpec::Names(names),
+                    delete_data: Some(!options.retain_data),
+                    if_exists: Some(options.ignore_if_not_exists),
+                    ignore_protection: None,
+                    environment_context: if options.purge {
+                        Some(hive_metastore::EnvironmentContext {
+                            properties: Some(AHashMap::from_iter([(
+                                FastStr::from_static_str("ifPurge"),
+                                FastStr::from_static_str("TRUE"),
+                            )])),
+                        })
+                    } else {
+                        None
+                    },
+                    need_result: Some(false),
+                    cat_name: None,
+                };
+                match client.drop_partitions_req(request).await {
+                    Ok(MaybeException::Ok(_)) => Ok(()),
+                    Ok(MaybeException::Exception(
+                        hive_metastore::ThriftHiveMetastoreDropPartitionsReqException::O1(_),
+                    )) if options.ignore_if_not_exists => Ok(()),
+                    Ok(MaybeException::Exception(
+                        hive_metastore::ThriftHiveMetastoreDropPartitionsReqException::O1(err),
+                    )) => Err(CatalogError::NotFound(
+                        CatalogObject::Partition,
+                        format!("{err:?}"),
+                    )),
+                    Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                        "Failed to drop HMS partitions: {err:?}"
+                    ))),
+                    Err(err) => Err(Self::hms_client_error("Failed to drop HMS partitions", err)),
+                }
+            }
+        })
+        .await
+    }
+
+    async fn alter_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        partitions: Vec<PartitionStatus>,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        let table_name = table.to_string();
+        let table_metadata = self.fetch_hms_table(database, table).await?;
+        let table_sd = table_metadata.sd.clone();
+        let partition_columns = crate::convert::partition_columns_for_table(&table_metadata)?;
+        let mut hms_partitions = Vec::with_capacity(partitions.len());
+        for p in &partitions {
+            let canonical_spec =
+                crate::convert::canonicalize_partition_spec(&p.spec, &partition_columns)?;
+            let existing_values: Vec<FastStr> = canonical_spec
+                .iter()
+                .map(|(_, v)| FastStr::from_string(v.clone()))
+                .collect();
+            let existing_part: hive_metastore::Partition = self
+                .with_failover(|client| {
+                    let db = db_name.clone();
+                    let tbl = table_name.clone();
+                    let vals = existing_values.clone();
+                    async move {
+                        match client.get_partition(db.into(), tbl.into(), vals).await {
+                            Ok(MaybeException::Ok(part)) => Ok(part),
+                            Ok(MaybeException::Exception(err)) => Err(CatalogError::External(
+                                format!("Failed to fetch partition for alter: {err:?}"),
+                            )),
+                            Err(err) => Err(Self::hms_client_error(
+                                "Failed to fetch partition for alter",
+                                err,
+                            )),
+                        }
+                    }
+                })
+                .await?;
+            hms_partitions.push(crate::convert::status_to_partition(
+                &db_name,
+                &table_name,
+                p,
+                &partition_columns,
+                Some(&existing_part),
+                table_sd.as_ref(),
+            )?);
+        }
+
+        self.with_failover(|client| {
+            let db_name = db_name.clone();
+            let table_name = table_name.clone();
+            let hms_partitions = hms_partitions.clone();
+            async move {
+                match client
+                    .alter_partitions(db_name.into(), table_name.into(), hms_partitions)
+                    .await
+                {
+                    Ok(MaybeException::Ok(())) => Ok(()),
+                    Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                        "Failed to alter HMS partitions: {err:?}"
+                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        "Failed to alter HMS partitions",
+                        err,
+                    )),
+                }
+            }
+        })
+        .await
+    }
+
+    async fn rename_partitions(
+        &self,
+        database: &Namespace,
+        table: &str,
+        old_specs: Vec<PartitionSpec>,
+        new_specs: Vec<PartitionSpec>,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        let table_name = table.to_string();
+        let table_metadata = self.fetch_hms_table(database, table).await?;
+        let partition_columns = crate::convert::partition_columns_for_table(&table_metadata)?;
+
+        if old_specs.len() != new_specs.len() {
+            return Err(CatalogError::InvalidArgument(format!(
+                "rename_partitions: old_specs count ({}) must match new_specs count ({})",
+                old_specs.len(),
+                new_specs.len(),
+            )));
+        }
+
+        // rename_partition is singular in HMS; loop over pairs, stop on first failure.
+        // We must fetch the existing partition first because HMS rename_partition
+        // replaces the entire partition object. Constructing a partition with only
+        // values would wipe the storage descriptor, parameters, and timestamps.
+        for (old_spec, new_spec) in old_specs.iter().zip(new_specs.iter()) {
+            let canonical_old_spec =
+                crate::convert::canonicalize_partition_spec(old_spec, &partition_columns)?;
+            let canonical_new_spec =
+                crate::convert::canonicalize_partition_spec(new_spec, &partition_columns)?;
+
+            let old_vals: Vec<FastStr> = canonical_old_spec
+                .iter()
+                .map(|(_, v)| FastStr::from_string(v.clone()))
+                .collect();
+            let new_vals: Vec<FastStr> = canonical_new_spec
+                .iter()
+                .map(|(_, v)| FastStr::from_string(v.clone()))
+                .collect();
+
+            // Step 1: Fetch existing partition metadata
+            let existing_part: hive_metastore::Partition = self
+                .with_failover(|client| {
+                    let db = db_name.clone();
+                    let tbl = table_name.clone();
+                    let vals = old_vals.clone();
+                    async move {
+                        match client.get_partition(db.into(), tbl.into(), vals).await {
+                            Ok(MaybeException::Ok(part)) => Ok(part),
+                            Ok(MaybeException::Exception(err)) => Err(CatalogError::External(
+                                format!("Failed to fetch partition for rename: {err:?}"),
+                            )),
+                            Err(err) => Err(Self::hms_client_error(
+                                "Failed to fetch partition for rename",
+                                err,
+                            )),
+                        }
+                    }
+                })
+                .await?;
+
+            // Step 2: Clone existing partition with new values
+            let new_part = hive_metastore::Partition {
+                values: Some(new_vals),
+                ..existing_part
+            };
+
+            // Step 3: Rename
+            self.with_failover(|client| {
+                let db_name = db_name.clone();
+                let table_name = table_name.clone();
+                let old_vals = old_vals.clone();
+                let new_part = new_part.clone();
+                async move {
+                    match client
+                        .rename_partition(db_name.into(), table_name.into(), old_vals, new_part)
+                        .await
+                    {
+                        Ok(MaybeException::Ok(())) => Ok(()),
+                        Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                            "Failed to rename HMS partition: {err:?}"
+                        ))),
+                        Err(err) => Err(Self::hms_client_error(
+                            "Failed to rename HMS partition",
+                            err,
+                        )),
+                    }
+                }
+            })
+            .await?;
+        }
+
+        Ok(())
     }
 
     async fn create_view(

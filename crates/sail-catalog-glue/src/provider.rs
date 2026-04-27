@@ -190,6 +190,7 @@ impl GlueCatalogProvider {
             catalog: Some(self.name.clone()),
             database: database.clone().into(),
             name: table_name,
+            statistics: None,
             kind: TableKind::Table {
                 columns,
                 comment,
@@ -251,6 +252,7 @@ impl GlueCatalogProvider {
             catalog: Some(self.name.clone()),
             database: database.clone().into(),
             name: view_name,
+            statistics: None,
             kind: TableKind::View {
                 definition,
                 columns,

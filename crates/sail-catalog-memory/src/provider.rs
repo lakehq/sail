@@ -222,6 +222,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             catalog: Some(self.name.clone()),
             database: database.clone().into(),
             name: table.to_string(),
+            statistics: None,
             kind: TableKind::Table {
                 columns,
                 comment,
@@ -395,6 +396,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             catalog: Some(self.name.clone()),
             database: database.clone().into(),
             name: view.to_string(),
+            statistics: None,
             kind: TableKind::View {
                 columns,
                 definition,

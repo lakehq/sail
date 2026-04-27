@@ -307,6 +307,7 @@ impl UnityCatalogProvider {
             catalog: Some(self.name.clone()),
             database,
             name,
+            statistics: None,
             kind: TableKind::Table {
                 columns,
                 comment,

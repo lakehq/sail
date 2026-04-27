@@ -262,6 +262,7 @@ impl OneLakeCatalogProvider {
             catalog: Some(self.name.clone()),
             database: vec![schema_name],
             name,
+            statistics: None,
             kind: TableKind::Table {
                 columns,
                 comment: info.comment,
