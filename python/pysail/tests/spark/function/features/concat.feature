@@ -401,7 +401,6 @@ Feature: concat function
         | result |
         | [1, 2] |
 
-    @sail-bug
     Scenario: concat two empty arrays
       When query
         """

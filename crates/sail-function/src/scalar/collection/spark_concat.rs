@@ -84,7 +84,12 @@ impl ScalarUDFImpl for SparkConcat {
                     }
                 }
             }
-            Ok(expr_type)
+            // All arrays had Null element type (e.g. array() + array()) — keep as List(Null)
+            if expr_type == DataType::Null {
+                Ok(arg_types[0].clone())
+            } else {
+                Ok(expr_type)
+            }
         } else if arg_types
             .iter()
             .all(|arg_type| matches!(arg_type, DataType::Binary))
