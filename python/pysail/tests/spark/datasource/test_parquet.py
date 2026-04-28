@@ -155,3 +155,14 @@ def test_parquet_format_path(spark, sample_df, tmp_path):
     df = spark.sql(f"SELECT * FROM parquet.`{escape_sql_identifier(path)}`")  # noqa: S608
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+def test_parquet_uppercase_extension(spark, sample_df, tmp_path):
+    # Files with uppercase extensions (e.g. .PARQUET) should be readable.
+    path = tmp_path / "parquet_uppercase"
+    path.mkdir()
+    parquet_file = path / "data.PARQUET"
+    sample_df.write.parquet(str(parquet_file), mode="overwrite")
+    read_df = spark.read.parquet(str(path))
+    assert sample_df.count() == read_df.count()
+    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)

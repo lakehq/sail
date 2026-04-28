@@ -46,3 +46,15 @@ def test_json_format_path(spark, tmp_path):
     assert df.count() == 2  # noqa: PLR2004
     assert "id" in df.columns
     assert "value" in df.columns
+
+
+def test_json_uppercase_extension(spark, tmp_path):
+    # Files with uppercase extensions (e.g. .JSON) should be readable.
+    path = tmp_path / "json_uppercase"
+    path.mkdir()
+    json_file = path / "data.JSON"
+    json_file.write_text('{"id": 1, "value": "a"}\n{"id": 2, "value": "b"}\n')
+    df = spark.read.json(str(path))
+    assert df.count() == 2  # noqa: PLR2004
+    assert "id" in df.columns
+    assert "value" in df.columns

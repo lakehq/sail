@@ -128,12 +128,14 @@ fn resolve_listing_file_extension(
     // TODO: Future work can support reading all files of the same `FileFormat` regardless of the file extension.
     let mut count_with_compression = 0;
     let mut count_without_compression = 0;
+    let file_extension_lower = file_extension.to_ascii_lowercase();
+    let extension_with_compression_lower = extension_with_compression.to_ascii_lowercase();
     for (_, object_metas) in file_groups {
         for object_meta in object_metas {
-            let path = &object_meta.location;
-            if path.as_ref().ends_with(extension_with_compression) {
+            let path = object_meta.location.as_ref().to_ascii_lowercase();
+            if path.ends_with(&extension_with_compression_lower) {
                 count_with_compression += 1;
-            } else if path.as_ref().ends_with(file_extension) {
+            } else if path.ends_with(&file_extension_lower) {
                 count_without_compression += 1;
             }
         }
@@ -152,10 +154,11 @@ fn infer_listing_file_extension(
     // TODO: Future work can support reading all files of the same `FileFormat` regardless of the file extension.
     let mut counts: HashMap<(String, String), usize> = HashMap::new();
     let mut base_count = 0;
+    let file_extension_lower = file_extension.to_ascii_lowercase();
     for (_, object_metas) in file_groups {
         for object_meta in object_metas {
-            let path = &object_meta.location;
-            if path.as_ref().ends_with(file_extension) {
+            let path = object_meta.location.as_ref().to_ascii_lowercase();
+            if path.ends_with(&file_extension_lower) {
                 base_count += 1;
             }
             for c in [
@@ -165,8 +168,8 @@ fn infer_listing_file_extension(
                 FileCompressionType::from(CompressionTypeVariant::ZSTD),
             ] {
                 let compression_ext = c.get_ext();
-                let candidate = format!("{file_extension}{compression_ext}");
-                if path.as_ref().ends_with(&candidate) {
+                let candidate = format!("{file_extension_lower}{}", compression_ext.to_ascii_lowercase());
+                if path.ends_with(&candidate) {
                     *counts.entry((candidate, compression_ext)).or_default() += 1;
                 }
             }
@@ -216,14 +219,19 @@ pub async fn list_all_files<'a>(
         },
         false => futures::stream::once(store.head(url.prefix())).boxed(),
     };
+    let file_extension_lower = file_extension.to_ascii_lowercase();
+    let extension_with_compression_lower =
+        extension_with_compression.map(|ext| ext.to_ascii_lowercase());
     Ok(list
         .try_filter(move |meta| {
-            let path = &meta.location;
-            let extension_with_compression_match =
-                extension_with_compression.is_some_and(|ext| path.as_ref().ends_with(ext));
+            let path = meta.location.as_ref().to_ascii_lowercase();
+            let extension_with_compression_match = extension_with_compression_lower
+                .as_deref()
+                .is_some_and(|ext| path.ends_with(ext));
             let extension_match =
-                path.as_ref().ends_with(file_extension) || extension_with_compression_match;
-            let extension_match = if !extension_match && extension_with_compression.is_none() {
+                path.ends_with(&file_extension_lower) || extension_with_compression_match;
+            let extension_match = if !extension_match && extension_with_compression_lower.is_none()
+            {
                 [
                     FileCompressionType::from(CompressionTypeVariant::GZIP),
                     FileCompressionType::from(CompressionTypeVariant::BZIP2),
@@ -232,13 +240,14 @@ pub async fn list_all_files<'a>(
                 ]
                 .iter()
                 .any(|c| {
-                    let candidate = format!("{file_extension}{}", c.get_ext());
-                    path.as_ref().ends_with(&candidate)
+                    let candidate =
+                        format!("{}{}", file_extension_lower, c.get_ext().to_ascii_lowercase());
+                    path.ends_with(&candidate)
                 })
             } else {
                 extension_match
             };
-            let glob_match = url.contains(path, ignore_subdirectory);
+            let glob_match = url.contains(&meta.location, ignore_subdirectory);
             futures::future::ready(extension_match && glob_match)
         })
         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))

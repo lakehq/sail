@@ -213,3 +213,27 @@ def test_csv_format_path(spark, tmp_path):
     csv_file.write_text("1,Alice\n2,Bob\n")
     df = spark.sql(f"SELECT * FROM csv.`{escape_sql_identifier(str(csv_file))}`")  # noqa: S608
     assert df.count() == 2  # noqa: PLR2004
+
+
+def test_csv_uppercase_extension(spark, tmp_path):
+    # Files with uppercase extensions (e.g. .CSV) should be readable.
+    path = tmp_path / "csv_uppercase"
+    path.mkdir()
+    csv_file = path / "data.CSV"
+    csv_file.write_text("col1,col2\na,1\nb,2\n")
+    read_df = spark.read.option("header", "true").csv(str(path))
+    assert read_df.count() == 2  # noqa: PLR2004
+    assert read_df.columns == ["col1", "col2"]
+    assert sorted(read_df.collect(), key=safe_sort_key) == [("a", "1"), ("b", "2")]
+
+
+def test_csv_mixed_case_extension(spark, tmp_path):
+    # Files with mixed-case extensions (e.g. .Csv) should be readable.
+    path = tmp_path / "csv_mixed_case"
+    path.mkdir()
+    csv_file = path / "data.Csv"
+    csv_file.write_text("col1,col2\nx,10\ny,20\n")
+    read_df = spark.read.option("header", "true").csv(str(path))
+    assert read_df.count() == 2  # noqa: PLR2004
+    assert read_df.columns == ["col1", "col2"]
+    assert sorted(read_df.collect(), key=safe_sort_key) == [("x", "10"), ("y", "20")]
