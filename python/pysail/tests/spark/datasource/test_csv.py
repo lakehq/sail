@@ -1,4 +1,5 @@
 import glob
+import gzip
 from collections.abc import Mapping
 
 import pytest
@@ -240,12 +241,16 @@ def test_csv_read_uppercase_extension_directory(spark, tmp_path, ext):
     ]
 
 
-def test_csv_read_uppercase_extension_compressed(spark, sample_pandas_df, tmp_path):
+def test_csv_read_uppercase_extension_compressed(spark, tmp_path):
     # Compressed-extension matching should also be case-insensitive: pointing
     # the reader directly at a `*.CSV.GZ` file (without an explicit
     # `compression` option) must still discover it as a gzipped CSV via
     # extension inference.
     file_path = tmp_path / "sample.CSV.GZ"
-    sample_pandas_df.to_csv(str(file_path), index=False, compression="gzip")
+    with gzip.open(file_path, "wb") as f:
+        f.write(b"name,age\nAlice,30\nBob,40\n")
     read_df = spark.read.format("csv").option("header", "true").load(str(file_path))
-    assert len(sample_pandas_df) == read_df.count()
+    assert sorted(read_df.collect(), key=safe_sort_key) == [
+        Row(name="Alice", age=30),
+        Row(name="Bob", age=40),
+    ]
