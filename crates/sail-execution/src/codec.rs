@@ -144,7 +144,7 @@ use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
-use sail_function::scalar::json::{SparkSchemaOfJson, SparkToJson};
+use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -2053,6 +2053,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone }) => {
+                let udf = SparkFromJson::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(safe))));
             }
@@ -2291,6 +2295,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkExpm1>()
             || node_inner.is::<SparkFloor>()
             || node_inner.is::<SparkFromCSV>()
+            || node_inner.is::<SparkFromJson>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
@@ -2442,6 +2447,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromJson>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkNextDay>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
