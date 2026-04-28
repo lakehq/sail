@@ -57,10 +57,7 @@ fn is_binary_type(dt: &DataType) -> bool {
 fn needs_spark_format(dt: &DataType) -> bool {
     matches!(
         dt,
-        DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Timestamp(_, _)
+        DataType::Float16 | DataType::Float32 | DataType::Float64 | DataType::Timestamp(_, _)
     )
 }
 
