@@ -120,6 +120,17 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     )))
 }
 
+/// Case-insensitive equivalent of [`str::ends_with`] for ASCII suffixes.
+///
+/// File extensions like `.csv` are written in lowercase by upstream
+/// `FileFormat` implementations, but users may have files with uppercase
+/// (or mixed-case) extensions such as `.CSV`. Spark treats extensions
+/// case-insensitively, so we match the same behavior here.
+fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
+    s.len() >= suffix.len()
+        && s.as_bytes()[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+}
+
 fn resolve_listing_file_extension(
     file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
     file_extension: &str,
@@ -131,9 +142,9 @@ fn resolve_listing_file_extension(
     for (_, object_metas) in file_groups {
         for object_meta in object_metas {
             let path = &object_meta.location;
-            if path.as_ref().ends_with(extension_with_compression) {
+            if ends_with_ignore_ascii_case(path.as_ref(), extension_with_compression) {
                 count_with_compression += 1;
-            } else if path.as_ref().ends_with(file_extension) {
+            } else if ends_with_ignore_ascii_case(path.as_ref(), file_extension) {
                 count_without_compression += 1;
             }
         }
@@ -155,7 +166,7 @@ fn infer_listing_file_extension(
     for (_, object_metas) in file_groups {
         for object_meta in object_metas {
             let path = &object_meta.location;
-            if path.as_ref().ends_with(file_extension) {
+            if ends_with_ignore_ascii_case(path.as_ref(), file_extension) {
                 base_count += 1;
             }
             for c in [
@@ -166,7 +177,7 @@ fn infer_listing_file_extension(
             ] {
                 let compression_ext = c.get_ext();
                 let candidate = format!("{file_extension}{compression_ext}");
-                if path.as_ref().ends_with(&candidate) {
+                if ends_with_ignore_ascii_case(path.as_ref(), &candidate) {
                     *counts.entry((candidate, compression_ext)).or_default() += 1;
                 }
             }
@@ -219,10 +230,10 @@ pub async fn list_all_files<'a>(
     Ok(list
         .try_filter(move |meta| {
             let path = &meta.location;
-            let extension_with_compression_match =
-                extension_with_compression.is_some_and(|ext| path.as_ref().ends_with(ext));
-            let extension_match =
-                path.as_ref().ends_with(file_extension) || extension_with_compression_match;
+            let extension_with_compression_match = extension_with_compression
+                .is_some_and(|ext| ends_with_ignore_ascii_case(path.as_ref(), ext));
+            let extension_match = ends_with_ignore_ascii_case(path.as_ref(), file_extension)
+                || extension_with_compression_match;
             let extension_match = if !extension_match && extension_with_compression.is_none() {
                 [
                     FileCompressionType::from(CompressionTypeVariant::GZIP),
@@ -233,7 +244,7 @@ pub async fn list_all_files<'a>(
                 .iter()
                 .any(|c| {
                     let candidate = format!("{file_extension}{}", c.get_ext());
-                    path.as_ref().ends_with(&candidate)
+                    ends_with_ignore_ascii_case(path.as_ref(), &candidate)
                 })
             } else {
                 extension_match
