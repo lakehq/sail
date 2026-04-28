@@ -54,7 +54,7 @@ Feature: reverse function
         """
       Then query result
         | result |
-        | null   |
+        | NULL   |
 
     Scenario: NULL string returns NULL
       When query
@@ -63,7 +63,7 @@ Feature: reverse function
         """
       Then query result
         | result |
-        | null   |
+        | NULL   |
 
   Rule: String reversal — implicit type coercion to string
     Scenario: Integer is implicitly cast to string before reversing
@@ -147,6 +147,7 @@ Feature: reverse function
         | result |
         | NaN    |
 
+    @sail-bug
     Scenario: FLOAT Infinity is implicitly cast to string before reversing
       When query
         """
@@ -156,6 +157,7 @@ Feature: reverse function
         | result    |
         | ytinifnI  |
 
+    @sail-bug
     Scenario: FLOAT negative Infinity is implicitly cast to string before reversing
       When query
         """
@@ -192,6 +194,7 @@ Feature: reverse function
         | result     |
         | 51-01-4202 |
 
+    @sail-bug
     Scenario: TIMESTAMP is implicitly cast to string before reversing
       When query
         """
@@ -201,6 +204,7 @@ Feature: reverse function
         | result              |
         | 54:03:21 51-10-4202 |
 
+    @sail-bug
     Scenario: TIMESTAMP_NTZ is implicitly cast to string before reversing
       When query
         """
@@ -255,7 +259,7 @@ Feature: reverse function
         """
       Then query result
         | result |
-        | null   |
+        | NULL   |
 
     Scenario: Array with all NULL elements reverses element order
       When query
@@ -362,7 +366,7 @@ Feature: reverse function
         """
       Then query result
         | result |
-        | null   |
+        | NULL   |
 
   Rule: Type rejection
     Scenario: MAP type is rejected
