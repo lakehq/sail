@@ -35,9 +35,6 @@ impl SparkTryDiv {
 }
 
 impl ScalarUDFImpl for SparkTryDiv {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "try_divide"

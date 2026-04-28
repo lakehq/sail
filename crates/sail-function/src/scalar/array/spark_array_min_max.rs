@@ -37,9 +37,6 @@ impl ArrayMin {
 }
 
 impl ScalarUDFImpl for ArrayMin {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "array_min"
@@ -86,9 +83,6 @@ impl ArrayMax {
 }
 
 impl ScalarUDFImpl for ArrayMax {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "array_max"

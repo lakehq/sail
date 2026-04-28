@@ -30,9 +30,6 @@ impl SparkXxhash64 {
 }
 
 impl ScalarUDFImpl for SparkXxhash64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_xxhash64"

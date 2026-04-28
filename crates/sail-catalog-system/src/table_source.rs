@@ -24,9 +24,6 @@ impl SystemTableSource {
 }
 
 impl TableSource for SystemTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()

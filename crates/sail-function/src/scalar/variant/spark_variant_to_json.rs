@@ -79,9 +79,6 @@ impl Default for SparkVariantToJsonUdf {
 }
 
 impl ScalarUDFImpl for SparkVariantToJsonUdf {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "variant_to_json"

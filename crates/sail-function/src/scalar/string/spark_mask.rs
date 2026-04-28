@@ -45,9 +45,6 @@ impl SparkMask {
 }
 
 impl ScalarUDFImpl for SparkMask {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_mask"

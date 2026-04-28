@@ -43,9 +43,6 @@ impl SparkArray {
 }
 
 impl ScalarUDFImpl for SparkArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_array"

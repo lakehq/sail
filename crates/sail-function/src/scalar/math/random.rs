@@ -30,9 +30,6 @@ impl Random {
 }
 
 impl ScalarUDFImpl for Random {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "random"

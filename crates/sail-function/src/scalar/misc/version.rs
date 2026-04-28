@@ -32,9 +32,6 @@ impl SparkVersion {
 }
 
 impl ScalarUDFImpl for SparkVersion {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "version"

@@ -39,9 +39,6 @@ impl JsonLength {
 }
 
 impl ScalarUDFImpl for JsonLength {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         self.aliases[0].as_str()

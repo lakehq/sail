@@ -31,9 +31,6 @@ impl SparkBase64 {
 }
 
 impl ScalarUDFImpl for SparkBase64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_base64"
@@ -180,9 +177,6 @@ impl SparkUnbase64 {
 }
 
 impl ScalarUDFImpl for SparkUnbase64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_unbase64"

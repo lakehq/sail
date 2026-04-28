@@ -28,9 +28,6 @@ impl SparkUnixTimestamp {
 }
 
 impl ScalarUDFImpl for SparkUnixTimestamp {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_unix_timestamp"

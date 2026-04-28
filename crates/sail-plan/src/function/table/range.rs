@@ -19,9 +19,6 @@ struct RangeTableProvider {
 
 #[tonic::async_trait]
 impl TableProvider for RangeTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn schema(&self) -> SchemaRef {
         self.node.schema().inner().clone()

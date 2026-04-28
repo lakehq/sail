@@ -34,7 +34,7 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let result = plan.transform_up(|plan| {
-            if let Some(node) = plan.as_any().downcast_ref::<ExplicitRepartitionExec>() {
+            if let Some(node) = plan.downcast_ref::<ExplicitRepartitionExec>() {
                 let partitioning = node.properties().output_partitioning().clone();
                 match partitioning {
                     Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {

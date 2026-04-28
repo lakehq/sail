@@ -63,9 +63,6 @@ impl Default for SparkToVariantObjectUdf {
 }
 
 impl ScalarUDFImpl for SparkToVariantObjectUdf {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "to_variant_object"

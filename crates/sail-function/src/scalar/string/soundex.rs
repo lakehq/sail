@@ -29,9 +29,6 @@ impl Soundex {
 }
 
 impl ScalarUDFImpl for Soundex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "soundex"

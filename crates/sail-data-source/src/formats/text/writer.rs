@@ -202,9 +202,6 @@ impl FileSink for TextSink {
 
 #[async_trait::async_trait]
 impl DataSink for TextSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()

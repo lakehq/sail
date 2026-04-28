@@ -51,9 +51,6 @@ impl RewriteLikePatternFunc {
 }
 
 impl ScalarUDFImpl for RewriteLikePatternFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "rewrite_like_pattern"

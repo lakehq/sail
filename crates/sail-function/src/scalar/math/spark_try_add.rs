@@ -37,9 +37,6 @@ impl SparkTryAdd {
 }
 
 impl ScalarUDFImpl for SparkTryAdd {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "try_add"

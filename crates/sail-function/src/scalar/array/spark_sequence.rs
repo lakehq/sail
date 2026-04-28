@@ -39,9 +39,6 @@ impl SparkSequence {
 }
 
 impl ScalarUDFImpl for SparkSequence {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_sequence"

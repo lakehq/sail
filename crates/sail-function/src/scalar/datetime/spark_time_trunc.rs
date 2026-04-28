@@ -41,9 +41,6 @@ fn truncation_divisor(unit: &str) -> Option<i64> {
 }
 
 impl ScalarUDFImpl for SparkTimeTrunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_time_trunc"

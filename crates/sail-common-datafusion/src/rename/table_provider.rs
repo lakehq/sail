@@ -50,10 +50,6 @@ impl RenameTableProvider {
 
 #[async_trait]
 impl TableProvider for RenameTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

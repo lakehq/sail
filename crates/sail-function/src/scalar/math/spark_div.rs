@@ -33,9 +33,6 @@ impl SparkIntervalDiv {
 }
 
 impl ScalarUDFImpl for SparkIntervalDiv {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_interval_div"

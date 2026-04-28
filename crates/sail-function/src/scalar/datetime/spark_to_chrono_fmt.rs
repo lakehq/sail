@@ -37,9 +37,6 @@ impl SparkToChronoFmt {
 }
 
 impl ScalarUDFImpl for SparkToChronoFmt {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_to_chrono_fmt"

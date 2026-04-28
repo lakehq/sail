@@ -29,9 +29,6 @@ impl NegateDuration {
 }
 
 impl ScalarUDFImpl for NegateDuration {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "negate_duration"

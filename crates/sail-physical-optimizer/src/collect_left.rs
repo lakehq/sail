@@ -33,7 +33,7 @@ impl PhysicalOptimizerRule for RewriteCollectLeftHashJoin {
         _config: &datafusion::config::ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let result = plan.transform_up(|node| {
-            let Some(join) = node.as_any().downcast_ref::<HashJoinExec>() else {
+            let Some(join) = node.downcast_ref::<HashJoinExec>() else {
                 return Ok(Transformed::no(node));
             };
 

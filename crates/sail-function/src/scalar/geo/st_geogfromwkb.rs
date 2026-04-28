@@ -35,9 +35,6 @@ impl StGeogFromWKB {
 }
 
 impl ScalarUDFImpl for StGeogFromWKB {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "st_geogfromwkb"

@@ -74,10 +74,10 @@ impl PlanResolver<'_> {
                 let expr = if let Some(value) = value {
                     let value_type = value.get_type(schema)?;
                     if self.can_cast_fill_na_types(&value_type, field.data_type()) {
-                        let value = Expr::TryCast(TryCast {
-                            expr: Box::new(value),
-                            data_type: field.data_type().clone(),
-                        });
+                        let value = Expr::TryCast(TryCast::new(
+                            Box::new(value),
+                            field.data_type().clone(),
+                        ));
                         let is_null_or_nan = column_expr
                             .clone()
                             .is_null()

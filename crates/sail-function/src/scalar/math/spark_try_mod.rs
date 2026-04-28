@@ -44,9 +44,6 @@ impl SparkTryMod {
 }
 
 impl ScalarUDFImpl for SparkTryMod {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "try_mod"

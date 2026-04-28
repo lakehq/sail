@@ -28,9 +28,6 @@ impl MultiExpr {
 }
 
 impl ScalarUDFImpl for MultiExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "multi_expr"

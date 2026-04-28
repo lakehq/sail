@@ -38,9 +38,6 @@ impl SparkConcatWs {
 }
 
 impl ScalarUDFImpl for SparkConcatWs {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_concat_ws"

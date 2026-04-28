@@ -28,9 +28,6 @@ impl Randstr {
 }
 
 impl ScalarUDFImpl for Randstr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "randstr"

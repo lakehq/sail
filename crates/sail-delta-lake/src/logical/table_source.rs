@@ -77,9 +77,6 @@ impl DeltaTableSource {
 }
 
 impl TableSource for DeltaTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()

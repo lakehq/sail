@@ -31,9 +31,6 @@ impl RandPoisson {
 }
 
 impl ScalarUDFImpl for RandPoisson {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "random_poisson"

@@ -110,9 +110,6 @@ impl SparkSchemaOfCsv {
 }
 
 impl ScalarUDFImpl for SparkSchemaOfCsv {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 
     fn name(&self) -> &str {
         Self::SCHEMA_OF_CSV_NAME

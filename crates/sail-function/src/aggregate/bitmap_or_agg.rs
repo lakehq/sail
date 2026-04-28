@@ -44,9 +44,6 @@ impl BitmapOrAggFunction {
 }
 
 impl AggregateUDFImpl for BitmapOrAggFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "bitmap_or_agg"

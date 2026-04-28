@@ -103,9 +103,6 @@ impl SparkDatePart {
 }
 
 impl ScalarUDFImpl for SparkDatePart {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         self.inner.name()

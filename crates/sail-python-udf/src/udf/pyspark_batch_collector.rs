@@ -40,9 +40,6 @@ impl PySparkBatchCollectorUDF {
 }
 
 impl AggregateUDFImpl for PySparkBatchCollectorUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "collect_batch"

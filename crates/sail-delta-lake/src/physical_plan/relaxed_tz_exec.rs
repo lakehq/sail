@@ -90,10 +90,6 @@ impl ExecutionPlan for RelaxedTzCastExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -142,17 +138,24 @@ impl ExecutionPlan for RelaxedTzCastExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let statistics = self.input.partition_statistics(partition)?;
         if self.input.schema() == self.schema {
             Ok(statistics)
         } else {
-            Ok(map_statistics_to_schema(
-                &statistics,
+            Ok(Arc::new(map_statistics_to_schema(
+                statistics.as_ref(),
                 &self.input.schema(),
                 &self.schema,
-            ))
+            )))
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn datafusion::physical_plan::PhysicalExpr) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion>,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
     }
 }
 
@@ -334,10 +337,6 @@ mod tests {
             "TestExec"
         }
 
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.properties
         }
@@ -371,12 +370,19 @@ mod tests {
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
             if partition.is_none() {
-                Ok(self.statistics.clone())
+                Ok(Arc::new(self.statistics.clone()))
             } else {
-                Ok(Statistics::new_unknown(self.schema.as_ref()))
+                Ok(Arc::new(Statistics::new_unknown(self.schema.as_ref())))
             }
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn datafusion::physical_plan::PhysicalExpr) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion>,
+        ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
         }
     }
 }

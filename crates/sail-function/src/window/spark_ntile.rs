@@ -54,9 +54,6 @@ impl Default for SparkNtile {
 }
 
 impl WindowUDFImpl for SparkNtile {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "ntile"
@@ -147,7 +144,7 @@ fn get_scalar_value_from_args(
     index: usize,
 ) -> Result<Option<ScalarValue>> {
     if let Some(expr) = input_exprs.get(index) {
-        if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+        if let Some(literal) = expr.downcast_ref::<Literal>() {
             return Ok(Some(literal.value().clone()));
         }
     }

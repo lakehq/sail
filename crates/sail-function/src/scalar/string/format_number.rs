@@ -31,9 +31,6 @@ impl FormatNumber {
 }
 
 impl ScalarUDFImpl for FormatNumber {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "format_number"

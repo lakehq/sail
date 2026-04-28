@@ -143,9 +143,6 @@ impl PySparkCoGroupMapUDF {
 }
 
 impl ScalarUDFImpl for PySparkCoGroupMapUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         &self.name

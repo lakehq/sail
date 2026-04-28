@@ -31,9 +31,6 @@ impl StAsBinary {
 }
 
 impl ScalarUDFImpl for StAsBinary {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "st_asbinary"

@@ -67,9 +67,6 @@ impl StructFunction {
 }
 
 impl ScalarUDFImpl for StructFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "struct"

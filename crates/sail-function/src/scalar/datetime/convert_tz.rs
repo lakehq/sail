@@ -35,9 +35,6 @@ impl Default for ConvertTz {
 }
 
 impl ScalarUDFImpl for ConvertTz {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "convert_tz"

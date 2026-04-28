@@ -31,9 +31,6 @@ impl SparkMonotonicallyIncreasingId {
 }
 
 impl ScalarUDFImpl for SparkMonotonicallyIncreasingId {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "monotonically_increasing_id"

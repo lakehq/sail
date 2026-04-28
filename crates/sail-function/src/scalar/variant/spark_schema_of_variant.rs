@@ -42,9 +42,6 @@ impl Default for SparkSchemaOfVariantUdf {
 }
 
 impl ScalarUDFImpl for SparkSchemaOfVariantUdf {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "schema_of_variant"

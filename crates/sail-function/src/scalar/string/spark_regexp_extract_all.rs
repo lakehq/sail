@@ -40,9 +40,6 @@ impl SparkRegexpExtractAll {
 }
 
 impl ScalarUDFImpl for SparkRegexpExtractAll {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         Self::NAME

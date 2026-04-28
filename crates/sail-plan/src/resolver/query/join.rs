@@ -21,7 +21,6 @@ fn expr_is_python_udf(expr: &Expr) -> bool {
         Expr::ScalarFunction(sf) => sf
             .func
             .inner()
-            .as_any()
             .downcast_ref::<PySparkUDF>()
             .is_some(),
         _ => false,

@@ -143,9 +143,6 @@ impl std::hash::Hash for SparkArrayFilter {
 impl Eq for SparkArrayFilter {}
 
 impl ScalarUDFImpl for SparkArrayFilter {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_array_filter"

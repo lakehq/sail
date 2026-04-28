@@ -29,9 +29,6 @@ impl SparkQuote {
 }
 
 impl ScalarUDFImpl for SparkQuote {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "quote"

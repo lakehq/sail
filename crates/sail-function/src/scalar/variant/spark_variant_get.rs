@@ -292,9 +292,6 @@ impl SparkVariantGet {
 }
 
 impl ScalarUDFImpl for SparkVariantGet {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         if self.safe {

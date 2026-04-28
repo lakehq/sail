@@ -89,13 +89,13 @@ impl PlanResolver<'_> {
         let resolved = self
             .resolve_time_travel_expression(expr, "timestamp", state)
             .await?;
-        let timestamp = Expr::Cast(datafusion_expr::expr::Cast {
-            expr: Box::new(resolved),
-            data_type: DataType::Timestamp(
+        let timestamp = Expr::Cast(datafusion_expr::expr::Cast::new(
+            Box::new(resolved),
+            DataType::Timestamp(
                 TimeUnit::Microsecond,
                 self.resolve_timezone(&spec::TimestampType::Configured)?,
             ),
-        });
+        ));
         let scalar = self.execute_time_travel_scalar(timestamp).await?;
         Self::normalize_time_travel_timestamp_scalar(scalar)
     }

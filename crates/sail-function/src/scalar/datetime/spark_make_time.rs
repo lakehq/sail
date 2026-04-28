@@ -41,9 +41,6 @@ impl SparkMakeTime {
 }
 
 impl ScalarUDFImpl for SparkMakeTime {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_make_time"

@@ -84,9 +84,6 @@ impl ArrayItemWithPosition {
 }
 
 impl ScalarUDFImpl for ArrayItemWithPosition {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "array_item_with_position"

@@ -69,9 +69,6 @@ impl BitmapConstructAggFunction {
 }
 
 impl AggregateUDFImpl for BitmapConstructAggFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "bitmap_construct_agg"

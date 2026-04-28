@@ -64,9 +64,6 @@ impl PySparkUnresolvedUDF {
 }
 
 impl ScalarUDFImpl for PySparkUnresolvedUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         &self.name

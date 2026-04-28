@@ -40,9 +40,6 @@ impl SparkSentences {
 }
 
 impl ScalarUDFImpl for SparkSentences {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         Self::NAME

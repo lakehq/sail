@@ -162,7 +162,7 @@ fn try_enable_file_column(
     )>,
 > {
     // Try Delta Lake source
-    if let Some(delta_source) = source.as_any().downcast_ref::<DeltaTableSource>() {
+    if let Some(delta_source) = source.downcast_ref::<DeltaTableSource>() {
         if delta_source.file_column_name().is_none() {
             let new_source = delta_source.with_file_column(file_col)?;
             let schema = new_source.schema();

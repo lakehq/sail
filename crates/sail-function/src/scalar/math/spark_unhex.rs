@@ -43,9 +43,6 @@ impl SparkUnHex {
 }
 
 impl ScalarUDFImpl for SparkUnHex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_unhex"

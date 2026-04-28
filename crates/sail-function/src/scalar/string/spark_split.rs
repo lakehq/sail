@@ -38,9 +38,6 @@ impl SparkSplit {
 }
 
 impl ScalarUDFImpl for SparkSplit {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         Self::NAME

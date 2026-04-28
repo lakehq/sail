@@ -193,9 +193,6 @@ impl SparkCeil {
 }
 
 impl ScalarUDFImpl for SparkCeil {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "spark_ceil"
     }
@@ -262,9 +259,6 @@ impl SparkFloor {
 }
 
 impl ScalarUDFImpl for SparkFloor {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "spark_floor"
     }

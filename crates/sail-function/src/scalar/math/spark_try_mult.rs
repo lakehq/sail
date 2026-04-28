@@ -38,9 +38,6 @@ impl SparkTryMult {
 }
 
 impl ScalarUDFImpl for SparkTryMult {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "try_multiply"

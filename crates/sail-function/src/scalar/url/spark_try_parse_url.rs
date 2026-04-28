@@ -30,9 +30,6 @@ impl SparkTryParseUrl {
 }
 
 impl ScalarUDFImpl for SparkTryParseUrl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_try_parse_url"

@@ -34,9 +34,6 @@ impl SparkTryMakeTimestampNtz {
 }
 
 impl ScalarUDFImpl for SparkTryMakeTimestampNtz {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_try_make_timestamp_ntz"

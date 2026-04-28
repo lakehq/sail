@@ -27,9 +27,6 @@ impl SparkMakeYmInterval {
 }
 
 impl ScalarUDFImpl for SparkMakeYmInterval {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_make_ym_interval"

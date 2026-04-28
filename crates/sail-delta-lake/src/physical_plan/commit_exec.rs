@@ -141,10 +141,6 @@ impl ExecutionPlan for DeltaCommitExec {
         "DeltaCommitExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -182,6 +178,13 @@ impl ExecutionPlan for DeltaCommitExec {
             self.sink_mode.clone(),
             self.user_metadata.clone(),
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn datafusion::physical_plan::PhysicalExpr) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion>,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
     }
 
     fn execute(

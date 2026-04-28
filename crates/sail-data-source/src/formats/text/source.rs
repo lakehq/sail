@@ -121,10 +121,6 @@ impl FileSource for TextSource {
         Ok(opener)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
     }
@@ -169,6 +165,14 @@ impl FileSource for TextSource {
             DisplayFormatType::TreeRender => Ok(()),
         }
     }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn datafusion::physical_plan::PhysicalExpr) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion>,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+    }
+
 }
 
 pub struct TextOpener {

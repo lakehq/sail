@@ -26,9 +26,6 @@ impl SparkTryToTimestamp {
 }
 
 impl ScalarUDFImpl for SparkTryToTimestamp {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_try_to_timestamp"

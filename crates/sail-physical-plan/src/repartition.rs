@@ -59,10 +59,6 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -99,11 +95,11 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         )
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_none() {
             self.input.partition_statistics(None)
         } else {
-            Ok(Statistics::new_unknown(&self.schema()))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         }
     }
 
@@ -117,4 +113,11 @@ impl ExecutionPlan for ExplicitRepartitionExec {
     //   push them down since the evaluation can be potentially expensive,
     //   and the presence of explicit repartitioning indicates that the user
     //   wants to evaluate these expressions after repartitioning.
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn datafusion::physical_plan::PhysicalExpr) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion>,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+    }
 }

@@ -40,9 +40,6 @@ impl SparkAbs {
 }
 
 impl ScalarUDFImpl for SparkAbs {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "spark_abs"

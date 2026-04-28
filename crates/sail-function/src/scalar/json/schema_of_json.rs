@@ -90,9 +90,6 @@ impl SparkSchemaOfJson {
 }
 
 impl ScalarUDFImpl for SparkSchemaOfJson {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 
     fn name(&self) -> &str {
         Self::SCHEMA_OF_JSON_NAME

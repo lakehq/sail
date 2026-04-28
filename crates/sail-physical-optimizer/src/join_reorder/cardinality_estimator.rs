@@ -418,7 +418,7 @@ impl CardinalityEstimator {
 
         // Recursively count the number of base conditions in the expression
         fn count_conditions(expr: &Arc<dyn datafusion::physical_expr::PhysicalExpr>) -> usize {
-            if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
                 if binary_expr.op() == &Operator::And {
                     return count_conditions(binary_expr.left())
                         + count_conditions(binary_expr.right());

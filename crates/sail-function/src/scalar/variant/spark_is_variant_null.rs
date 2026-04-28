@@ -35,9 +35,6 @@ impl SparkIsVariantNullUdf {
 }
 
 impl ScalarUDFImpl for SparkIsVariantNullUdf {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 
     fn name(&self) -> &str {
         "is_variant_null"
