@@ -205,3 +205,17 @@ def test_parquet_read_with_custom_extension(spark, sample_pandas_df, tmp_path):
         assert actual_rows(read_df) == expected_rows
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_parquet_read_uppercase_extension(spark, sample_df, tmp_path):
+    # Extensions are matched case-insensitively, so renaming the parquet
+    # file's extension to `.PARQUET` must still allow it to be read.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    for i, f in enumerate(src.glob("*.parquet")):
+        f.rename(dst / f"part-{i}.PARQUET")
+    df = spark.read.parquet(str(dst))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)

@@ -10,6 +10,7 @@ workspace = true
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
 sail-delta-lake = { path = "../sail-delta-lake" }
+sail-iceberg = { path = "../sail-iceberg" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 

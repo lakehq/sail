@@ -7377,6 +7377,7 @@ name = "sail-iceberg"
 version = "0.6.0"
 dependencies = [
  "apache-avro",
+ "async-stream",
  "async-trait",
  "bytes",
  "chrono",
@@ -7538,6 +7539,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "sail-delta-lake",
+ "sail-iceberg",
  "sail-logical-plan",
  "sail-physical-plan",
  "url",

@@ -29,7 +29,7 @@ use datafusion_common::Result;
 use object_store::ObjectStore;
 use url::Url;
 
-use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+use crate::datasource::DeltaScanConfig;
 pub mod features;
 pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
@@ -240,56 +240,6 @@ fn create_logstore_with_object_store(
     );
 
     Ok(log_store)
-}
-
-/// Creates a Delta Lake table provider
-pub async fn create_delta_provider(
-    ctx: &dyn Session,
-    table_url: Url,
-    schema: Option<Schema>,
-    options: DeltaReadOptions,
-) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
-    let url = ListingTableUrl::try_new(table_url.clone(), None)?;
-    let object_store = ctx.runtime_env().object_store(&url)?;
-    let storage_config = StorageConfig;
-    let log_store =
-        create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
-
-    let table_config = if options.metadata_as_data_read {
-        DeltaSnapshotConfig {
-            require_files: false,
-            ..Default::default()
-        }
-    } else {
-        Default::default()
-    };
-    let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
-
-    load_table_by_options(&mut deltalake_table, &options).await?;
-
-    let snapshot = deltalake_table.snapshot()?.clone();
-
-    let scan_config = DeltaScanConfig {
-        file_column_name: None,
-        wrap_partition_values: false,
-        enable_parquet_pushdown: true,
-        schema: match schema {
-            Some(ref s) if s.fields().is_empty() => None,
-            Some(s) => Some(Arc::new(s)),
-            None => None,
-        },
-        commit_version_column_name: None,
-        commit_timestamp_column_name: None,
-        delta_log_replay_strategy: options.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
-    };
-
-    let mut table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
-    if !options.metadata_as_data_read && !snapshot.adds().is_empty() {
-        table_provider = table_provider.with_files(snapshot.adds().to_vec());
-    }
-
-    Ok(Arc::new(table_provider))
 }
 
 /// Creates a Delta Lake table source for logical planning.

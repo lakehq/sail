@@ -111,6 +111,7 @@ pub async fn build_merge_plan(
         true, // table exists
         table_schema,
         merge_operation,
+        ctx.options().user_metadata.clone(),
     )
 }
 
