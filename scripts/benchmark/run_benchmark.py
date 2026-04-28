@@ -4,11 +4,11 @@
 
 Subcommands
 -----------
-* ``run``  - generate (or reuse) the dataset with DuckDB, then run a chosen
-    suite of queries against an in-process (or remote) Sail Spark Connect
-    server and persist the per-query timings as JSON. The generated data uses
-    one folder per table with parquet part files, and row-group sizing follows
-    the sampling approach used by LakeBench's DuckDB TPC-DS generator.
+* ``run``  - generate (or reuse) the dataset, then run a chosen suite of
+    queries against an in-process (or remote) Sail Spark Connect server and
+    persist the per-query timings as JSON. TPC-H data is generated with
+    tpchgen-rs (``tpchgen-cli``), while TPC-DS data uses DuckDB with
+    LakeBench-style row-group sizing from a sample parquet file.
 * ``plot`` - compare two (or more) result labels or files and emit a bar
     chart.  A ``--ylim`` cap keeps a single slow query from squashing the rest
     of the chart; bars that exceed the cap are clipped and annotated with the
@@ -34,8 +34,11 @@ import json
 import re
 import shutil
 import statistics
+import subprocess
 import sys
+import sysconfig
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +60,25 @@ DEFAULT_COMPRESSION = "zstd"
 SAMPLE_ROWS = 1_000_000
 SF_TOLERANCE = 1e-12
 MIN_COMPARISON_DATASETS = 2
+TPCHGEN_COMPRESSION_RATIO = 2.6
+TPCH_SMALL_FILE_TARGET_MB = 128
+TPCH_SINGLE_ROW_GROUP_MB = 1024
+TPCH_TARGET_FILE_SIZE_MAP = (
+    (10, TPCH_SMALL_FILE_TARGET_MB),
+    (1024, 256),
+    (5120, 512),
+    (10240, TPCH_SINGLE_ROW_GROUP_MB),
+)
+TPCH_SF1000_SIZE_GB = {
+    "lineitem": 152,
+    "orders": 38,
+    "partsupp": 26.7,
+    "part": 4,
+    "customer": 7.6,
+    "supplier": 0.48,
+    "region": 0.0,
+    "nation": 0.0,
+}
 QUERY_ROOTS = {
     "tpch": REPO_ROOT / "python" / "pysail" / "data" / "tpch" / "queries",
     "tpcds": REPO_ROOT / "python" / "pysail" / "data" / "tpcds" / "queries",
@@ -110,10 +132,22 @@ def _safe_name(value: str) -> str:
 
 def _normalize_compression(compression: str) -> str:
     normalized = compression.strip().lower()
-    if not re.fullmatch(r"[A-Za-z0-9_]+", normalized):
+    if not re.fullmatch(r"[a-z0-9_]+(?:\([0-9]+\))?", normalized):
         msg = f"unsupported parquet compression name: {compression!r}"
         raise ValueError(msg)
     return normalized
+
+
+def _compression_base(compression: str) -> str:
+    return _normalize_compression(compression).split("(", 1)[0]
+
+
+def _tpchgen_compression_arg(compression: str) -> str:
+    normalized = _normalize_compression(compression)
+    if "(" in normalized:
+        base, level = normalized.split("(", 1)
+        return f"{base.upper()}({level}"
+    return "ZSTD(1)" if normalized == "zstd" else normalized.upper()
 
 
 def _sql_string(value: str | Path) -> str:
@@ -159,7 +193,7 @@ def _expected_dataset_metadata(
         "layout_version": DATASET_LAYOUT_VERSION,
         "suite": suite,
         "sf": sf,
-        "generator": "duckdb",
+        "generator": "tpchgen-rs" if suite == "tpch" else "duckdb",
         "storage": "table-directories",
         "target_row_group_size_mb": target_row_group_size_mb,
         "compression": _normalize_compression(compression),
@@ -200,7 +234,7 @@ def _estimate_target_rows(
         conn.sql(
             f"COPY (SELECT * FROM {_quote_identifier(table)} LIMIT {SAMPLE_ROWS}) "
             f"TO {_sql_string(sample_file)} "
-            f"(FORMAT PARQUET, COMPRESSION {_sql_string(compression)})"
+            f"(FORMAT PARQUET, COMPRESSION {_sql_string(_compression_base(compression))})"
         )
         with pq.ParquetFile(sample_file) as parquet_file:
             total_rows = 0
@@ -224,9 +258,175 @@ def _write_table(conn, table: str, target_dir: Path, target_rows: int, compressi
         shutil.rmtree(target_dir)
     conn.sql(
         f"COPY {_quote_identifier(table)} TO {_sql_string(target_dir)} "
-        f"(FORMAT PARQUET, COMPRESSION {_sql_string(compression)}, "
+        f"(FORMAT PARQUET, COMPRESSION {_sql_string(_compression_base(compression))}, "
         f"ROW_GROUP_SIZE {target_rows}, PER_THREAD_OUTPUT, OVERWRITE)"
     )
+
+
+def _find_tpchgen_cli() -> Path:
+    path = shutil.which("tpchgen-cli")
+    if path:
+        return Path(path)
+
+    scripts_dir = Path(sysconfig.get_path("scripts"))
+    for candidate in (scripts_dir / "tpchgen-cli", scripts_dir / "tpchgen-cli.exe"):
+        if candidate.is_file():
+            return candidate
+
+    msg = "tpchgen-cli is required for TPC-H data generation. Install it with: pip install 'tpchgen-cli>=2,<3'"
+    raise FileNotFoundError(msg)
+
+
+def _tpch_target_file_size_mb(table: str, sf: float) -> int:
+    scale_adjusted_size_gb = TPCH_SF1000_SIZE_GB.get(table, 0.0) * (sf / 1000.0)
+    for threshold_gb, target_mb in TPCH_TARGET_FILE_SIZE_MAP:
+        if scale_adjusted_size_gb < threshold_gb:
+            return target_mb
+    return 1024
+
+
+def _tpch_part_count(table: str, sf: float, target_file_size_mb: int) -> int:
+    scale_adjusted_size_gb = TPCH_SF1000_SIZE_GB.get(table, 0.0) * (sf / 1000.0)
+    return max(round(scale_adjusted_size_gb * 1024 / target_file_size_mb), 1)
+
+
+def _tpchgen_row_group_size_mb(target_file_size_mb: int, target_row_group_size_mb: int, compression: str) -> int:
+    if target_file_size_mb == TPCH_SMALL_FILE_TARGET_MB:
+        return TPCH_SINGLE_ROW_GROUP_MB
+    if _compression_base(compression) == "uncompressed":
+        return target_row_group_size_mb
+    return max(int(target_row_group_size_mb * TPCHGEN_COMPRESSION_RATIO), 1)
+
+
+def _run_tpchgen_table(
+    *,
+    tpchgen_cli: Path,
+    table: str,
+    sf: float,
+    out_dir: Path,
+    target_row_group_size_mb: int,
+    compression: str,
+) -> str:
+    target_file_size_mb = _tpch_target_file_size_mb(table, sf)
+    parts = _tpch_part_count(table, sf, target_file_size_mb)
+    parquet_row_group_mb = _tpchgen_row_group_size_mb(target_file_size_mb, target_row_group_size_mb, compression)
+    table_dir = out_dir / table
+    if table_dir.exists():
+        shutil.rmtree(table_dir)
+
+    print(
+        f"[data]  generating {table}/ with tpchgen-cli "
+        f"(parts={parts}, target_file={target_file_size_mb} MiB, row_group={parquet_row_group_mb} MiB)"
+    )
+    command = [
+        str(tpchgen_cli),
+        "--scale-factor",
+        str(sf),
+        "--output-dir",
+        str(out_dir),
+        "--parts",
+        str(parts),
+        "--format",
+        "parquet",
+        "--parquet-row-group-bytes",
+        str(parquet_row_group_mb * 1024 * 1024),
+        "--parquet-compression",
+        _tpchgen_compression_arg(compression),
+        "--tables",
+        table,
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        details = "\n".join(part for part in (exc.stdout, exc.stderr) if part)
+        msg = f"tpchgen-cli failed for table {table}: {details}"
+        raise RuntimeError(msg) from exc
+    if result.stdout.strip():
+        print(f"[data]  {table} stdout:\n{result.stdout.strip()}")
+    if result.stderr.strip():
+        print(f"[data]  {table} stderr:\n{result.stderr.strip()}")
+    if not table_dir.exists() or not any(table_dir.glob("*.parquet")):
+        msg = f"tpchgen-cli did not create parquet files under {table_dir}"
+        raise RuntimeError(msg)
+    return table
+
+
+def _generate_tpch_dataset(
+    out_dir: Path,
+    sf: float,
+    *,
+    target_row_group_size_mb: int,
+    compression: str,
+    tpchgen_workers: int | None,
+) -> list[str]:
+    tpchgen_cli = _find_tpchgen_cli()
+    tables = list(TABLE_NAMES["tpch"])
+    print(
+        f"[data] generating tpch sf={sf} via tpchgen-rs at {out_dir} "
+        f"(row-group target={target_row_group_size_mb} MiB, compression={_tpchgen_compression_arg(compression)})"
+    )
+
+    completed: list[str] = []
+    with ThreadPoolExecutor(max_workers=tpchgen_workers) as executor:
+        future_to_table = {
+            executor.submit(
+                _run_tpchgen_table,
+                tpchgen_cli=tpchgen_cli,
+                table=table,
+                sf=sf,
+                out_dir=out_dir,
+                target_row_group_size_mb=target_row_group_size_mb,
+                compression=compression,
+            ): table
+            for table in tables
+        }
+        for future in as_completed(future_to_table):
+            table = future_to_table[future]
+            future.result()
+            completed.append(table)
+            part_count = len(list((out_dir / table).glob("*.parquet")))
+            print(f"[data]  wrote {table}/ ({part_count} parquet file(s))")
+
+    return [table for table in tables if table in completed]
+
+
+def _generate_tpcds_dataset(
+    out_dir: Path,
+    sf: float,
+    *,
+    target_row_group_size_mb: int,
+    compression: str,
+    duckdb_threads: int | None,
+) -> list[str]:
+    import duckdb  # local import keeps ``--help`` light
+
+    print(
+        f"[data] generating tpcds sf={sf} via DuckDB into {out_dir} "
+        f"(row-group target={target_row_group_size_mb} MiB, compression={_compression_base(compression)})"
+    )
+    conn = duckdb.connect()
+    try:
+        if duckdb_threads is not None:
+            conn.sql(f"PRAGMA threads={duckdb_threads}")
+        conn.sql(f"CALL dsdgen(sf = {sf})")
+
+        generated = {row[0] for row in conn.sql("SHOW TABLES").fetchall()}
+        tables = [table for table in TABLE_NAMES["tpcds"] if table in generated]
+        missing = set(TABLE_NAMES["tpcds"]) - generated
+        if missing:
+            msg = f"DuckDB did not generate expected tpcds table(s): {sorted(missing)}"
+            raise RuntimeError(msg)
+        for table in tables:
+            target_rows = _estimate_target_rows(conn, table, out_dir, target_row_group_size_mb, compression)
+            target_dir = out_dir / table
+            _write_table(conn, table, target_dir, target_rows, compression)
+            conn.sql(f"DROP TABLE {_quote_identifier(table)}")
+            part_count = len(list(target_dir.glob("*.parquet")))
+            print(f"[data]  wrote {table}/ ({part_count} parquet file(s), row_group_size={target_rows} rows)")
+    finally:
+        conn.close()
+
+    return tables
 
 
 def generate_dataset(
@@ -237,20 +437,21 @@ def generate_dataset(
     target_row_group_size_mb: int = DEFAULT_TARGET_ROW_GROUP_SIZE_MB,
     compression: str = DEFAULT_COMPRESSION,
     duckdb_threads: int | None = None,
+    tpchgen_workers: int | None = None,
 ) -> Path:
-    """Generate the suite's dataset with DuckDB if not already cached.
+    """Generate the suite's dataset if not already cached.
 
-    Each table is exported to a directory containing parquet part files. The
-    ``ROW_GROUP_SIZE`` passed to DuckDB is estimated from a sample parquet file,
-    following LakeBench's DuckDB TPC generator approach.
+    TPC-H uses tpchgen-rs. TPC-DS uses DuckDB and exports one directory per
+    table with LakeBench-style row-group sizing from a sample parquet file.
     """
-    import duckdb  # local import keeps ``--help`` light
-
     if target_row_group_size_mb <= 0:
         msg = "--target-row-group-size-mb must be positive"
         raise ValueError(msg)
     if duckdb_threads is not None and duckdb_threads <= 0:
         msg = "--duckdb-threads must be positive"
+        raise ValueError(msg)
+    if tpchgen_workers is not None and tpchgen_workers <= 0:
+        msg = "--tpchgen-workers must be positive"
         raise ValueError(msg)
 
     compression = _normalize_compression(compression)
@@ -266,39 +467,25 @@ def generate_dataset(
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    print(
-        f"[data] generating {suite} sf={sf} via DuckDB into {out_dir} "
-        f"(row-group target={target_row_group_size_mb} MiB, compression={compression})"
-    )
-    conn = duckdb.connect()
-    try:
-        if duckdb_threads is not None:
-            conn.sql(f"PRAGMA threads={duckdb_threads}")
-        # DuckDB ships these as built-in extensions and auto-loads them
-        # when the call is made.
-        if suite == "tpch":
-            conn.sql(f"CALL dbgen(sf = {sf})")
-        elif suite == "tpcds":
-            conn.sql(f"CALL dsdgen(sf = {sf})")
-        else:
-            msg = f"unknown suite: {suite}"
-            raise ValueError(msg)
-
-        generated = {row[0] for row in conn.sql("SHOW TABLES").fetchall()}
-        tables = [table for table in TABLE_NAMES[suite] if table in generated]
-        missing = set(TABLE_NAMES[suite]) - generated
-        if missing:
-            msg = f"DuckDB did not generate expected {suite} table(s): {sorted(missing)}"
-            raise RuntimeError(msg)
-        for table in tables:
-            target_rows = _estimate_target_rows(conn, table, out_dir, target_row_group_size_mb, compression)
-            target_dir = out_dir / table
-            _write_table(conn, table, target_dir, target_rows, compression)
-            conn.sql(f"DROP TABLE {_quote_identifier(table)}")
-            part_count = len(list(target_dir.glob("*.parquet")))
-            print(f"[data]  wrote {table}/ ({part_count} parquet file(s), row_group_size={target_rows} rows)")
-    finally:
-        conn.close()
+    if suite == "tpch":
+        tables = _generate_tpch_dataset(
+            out_dir,
+            sf,
+            target_row_group_size_mb=target_row_group_size_mb,
+            compression=compression,
+            tpchgen_workers=tpchgen_workers,
+        )
+    elif suite == "tpcds":
+        tables = _generate_tpcds_dataset(
+            out_dir,
+            sf,
+            target_row_group_size_mb=target_row_group_size_mb,
+            compression=compression,
+            duckdb_threads=duckdb_threads,
+        )
+    else:
+        msg = f"unknown suite: {suite}"
+        raise ValueError(msg)
 
     marker = out_dir / ".complete"
     marker.write_text(
@@ -435,6 +622,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         target_row_group_size_mb=args.target_row_group_size_mb,
         compression=args.compression,
         duckdb_threads=args.duckdb_threads,
+        tpchgen_workers=args.tpchgen_workers,
     )
 
     results: dict[str, QueryResult] = {q: QueryResult() for q in queries}
@@ -478,6 +666,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "data_dir": str(data_dir),
         "data_layout_version": DATASET_LAYOUT_VERSION,
+        "data_generator": "tpchgen-rs" if suite == "tpch" else "duckdb",
         "target_row_group_size_mb": args.target_row_group_size_mb,
         "compression": _normalize_compression(args.compression),
         "results": {q: asdict(r) for q, r in results.items()},
@@ -818,13 +1007,19 @@ def main(argv: list[str] | None = None) -> int:
         "--compression",
         type=str,
         default=DEFAULT_COMPRESSION,
-        help=f"DuckDB parquet compression for generated data (default: {DEFAULT_COMPRESSION})",
+        help=f"parquet compression for generated data (default: {DEFAULT_COMPRESSION}; TPC-H maps zstd to ZSTD(1))",
     )
     p_run.add_argument(
         "--duckdb-threads",
         type=int,
         default=None,
-        help="DuckDB thread count used during data generation (default: DuckDB decides)",
+        help="DuckDB thread count used during TPC-DS data generation (default: DuckDB decides)",
+    )
+    p_run.add_argument(
+        "--tpchgen-workers",
+        type=int,
+        default=None,
+        help="parallel tpchgen-cli workers for TPC-H data generation (default: Python executor default)",
     )
     p_run.add_argument(
         "--url",
