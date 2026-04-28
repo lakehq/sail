@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -35,7 +34,6 @@ impl Default for ConvertTz {
 }
 
 impl ScalarUDFImpl for ConvertTz {
-
     fn name(&self) -> &str {
         "convert_tz"
     }

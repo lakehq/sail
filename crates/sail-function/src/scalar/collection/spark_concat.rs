@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::cmp::Ordering;
 
 use datafusion::arrow::array::BooleanArray;
@@ -34,7 +33,6 @@ impl SparkConcat {
 }
 
 impl ScalarUDFImpl for SparkConcat {
-
     fn name(&self) -> &str {
         "spark_concat"
     }

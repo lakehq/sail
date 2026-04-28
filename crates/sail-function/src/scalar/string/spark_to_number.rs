@@ -1,5 +1,4 @@
 use core::any::type_name;
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::Deref;
@@ -51,7 +50,6 @@ impl Default for SparkToNumber {
 }
 
 impl ScalarUDFImpl for SparkToNumber {
-
     fn name(&self) -> &str {
         Self::NAME
     }

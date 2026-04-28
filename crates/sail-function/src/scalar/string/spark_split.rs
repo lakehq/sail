@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -38,7 +37,6 @@ impl SparkSplit {
 }
 
 impl ScalarUDFImpl for SparkSplit {
-
     fn name(&self) -> &str {
         Self::NAME
     }

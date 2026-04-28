@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -31,7 +30,6 @@ impl SparkEncode {
 }
 
 impl ScalarUDFImpl for SparkEncode {
-
     fn name(&self) -> &str {
         "spark_encode"
     }
@@ -263,7 +261,6 @@ impl SparkDecode {
 }
 
 impl ScalarUDFImpl for SparkDecode {
-
     fn name(&self) -> &str {
         "spark_decode"
     }

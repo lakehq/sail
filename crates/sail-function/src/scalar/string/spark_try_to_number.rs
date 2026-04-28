@@ -1,4 +1,4 @@
-use std::any::{type_name, Any};
+use std::any::type_name;
 use std::fmt::Debug;
 
 use datafusion::arrow::array::{ArrayRef, StringArray};
@@ -34,7 +34,6 @@ impl Default for SparkTryToNumber {
 }
 
 impl ScalarUDFImpl for SparkTryToNumber {
-
     fn name(&self) -> &str {
         Self::NAME
     }

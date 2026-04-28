@@ -1,4 +1,3 @@
-use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
@@ -50,7 +49,6 @@ impl Explode {
 }
 
 impl ScalarUDFImpl for Explode {
-
     fn name(&self) -> &str {
         match self.kind {
             ExplodeKind::Explode => "explode",

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, UNNAMED_TABLE};
@@ -453,7 +454,8 @@ impl PlanResolver<'_> {
                             "unknown table function: {function_name}"
                         )));
                     };
-                let table_provider = table_function.create_table_provider(&arguments)?;
+                let table_provider = table_function
+                    .create_table_provider_with_args(TableFunctionArgs::new(&arguments, &self.ctx.state()))?;
                 self.resolve_table_provider_with_rename(
                     table_provider,
                     function_name,

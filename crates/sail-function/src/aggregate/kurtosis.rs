@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 
 use datafusion::arrow::array::{ArrayRef, Float64Array};
@@ -64,7 +63,6 @@ impl KurtosisFunction {
 }
 
 impl AggregateUDFImpl for KurtosisFunction {
-
     fn name(&self) -> &str {
         "kurtosis"
     }

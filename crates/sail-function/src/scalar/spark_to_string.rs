@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -35,7 +34,6 @@ macro_rules! define_to_string_udf {
         }
 
         impl ScalarUDFImpl for $udf {
-
             fn name(&self) -> &str {
                 $name
             }

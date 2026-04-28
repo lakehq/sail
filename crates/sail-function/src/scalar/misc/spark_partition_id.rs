@@ -1,4 +1,3 @@
-use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{exec_err, Result};
@@ -31,7 +30,6 @@ impl SparkPartitionId {
 }
 
 impl ScalarUDFImpl for SparkPartitionId {
-
     fn name(&self) -> &str {
         "spark_partition_id"
     }

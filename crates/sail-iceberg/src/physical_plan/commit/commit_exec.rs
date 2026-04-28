@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -582,7 +581,11 @@ impl ExecutionPlan for IcebergCommitExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&dyn datafusion::physical_plan::PhysicalExpr) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion>,
+        _f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
     ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
         Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
     }

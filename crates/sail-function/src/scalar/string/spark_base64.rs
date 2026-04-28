@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD;
@@ -31,7 +30,6 @@ impl SparkBase64 {
 }
 
 impl ScalarUDFImpl for SparkBase64 {
-
     fn name(&self) -> &str {
         "spark_base64"
     }
@@ -177,7 +175,6 @@ impl SparkUnbase64 {
 }
 
 impl ScalarUDFImpl for SparkUnbase64 {
-
     fn name(&self) -> &str {
         "spark_unbase64"
     }

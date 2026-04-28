@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
@@ -34,7 +33,6 @@ impl TimestampNow {
 }
 
 impl ScalarUDFImpl for TimestampNow {
-
     fn name(&self) -> &str {
         "timestamp_now"
     }

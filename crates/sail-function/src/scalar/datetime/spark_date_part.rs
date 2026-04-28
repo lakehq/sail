@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -103,7 +102,6 @@ impl SparkDatePart {
 }
 
 impl ScalarUDFImpl for SparkDatePart {
-
     fn name(&self) -> &str {
         self.inner.name()
     }

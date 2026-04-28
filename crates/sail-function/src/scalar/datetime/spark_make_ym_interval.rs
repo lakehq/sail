@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, AsArray, IntervalYearMonthArray};
@@ -27,7 +26,6 @@ impl SparkMakeYmInterval {
 }
 
 impl ScalarUDFImpl for SparkMakeYmInterval {
-
     fn name(&self) -> &str {
         "spark_make_ym_interval"
     }

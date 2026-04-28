@@ -401,7 +401,6 @@ impl DeltaCastColumnExpr {
 }
 
 impl PhysicalExpr for DeltaCastColumnExpr {
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.target_field.data_type().clone())
     }

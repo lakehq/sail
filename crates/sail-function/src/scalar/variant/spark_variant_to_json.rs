@@ -79,7 +79,6 @@ impl Default for SparkVariantToJsonUdf {
 }
 
 impl ScalarUDFImpl for SparkVariantToJsonUdf {
-
     fn name(&self) -> &str {
         "variant_to_json"
     }

@@ -35,7 +35,6 @@ impl SparkIsVariantNullUdf {
 }
 
 impl ScalarUDFImpl for SparkIsVariantNullUdf {
-
     fn name(&self) -> &str {
         "is_variant_null"
     }

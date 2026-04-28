@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -42,7 +41,6 @@ impl IcebergTableSource {
 }
 
 impl TableSource for IcebergTableSource {
-
     fn schema(&self) -> SchemaRef {
         self.provider.schema()
     }

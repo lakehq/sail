@@ -1,4 +1,3 @@
-use std::any::Any;
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::DataType;
@@ -43,7 +42,6 @@ fn raise_from_strings<'a>(
 }
 
 impl ScalarUDFImpl for RaiseError {
-
     fn name(&self) -> &str {
         "raise_error"
     }

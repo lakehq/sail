@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
@@ -28,7 +27,6 @@ impl TableInput {
 }
 
 impl ScalarUDFImpl for TableInput {
-
     fn name(&self) -> &str {
         "table_input"
     }

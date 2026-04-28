@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
@@ -29,7 +28,6 @@ impl Soundex {
 }
 
 impl ScalarUDFImpl for Soundex {
-
     fn name(&self) -> &str {
         "soundex"
     }

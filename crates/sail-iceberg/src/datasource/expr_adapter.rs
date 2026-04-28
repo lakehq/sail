@@ -138,9 +138,7 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
             None => return Ok(None),
         };
 
-        let lit = match field_name_expr
-            .downcast_ref::<expressions::Literal>()
-        {
+        let lit = match field_name_expr.downcast_ref::<expressions::Literal>() {
             Some(lit) => lit,
             None => return Ok(None),
         };

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StructArray};
@@ -40,7 +39,6 @@ impl PySparkBatchCollectorUDF {
 }
 
 impl AggregateUDFImpl for PySparkBatchCollectorUDF {
-
     fn name(&self) -> &str {
         "collect_batch"
     }

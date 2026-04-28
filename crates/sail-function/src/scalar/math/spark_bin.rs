@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, StringArray};
@@ -28,7 +27,6 @@ impl SparkBin {
 }
 
 impl ScalarUDFImpl for SparkBin {
-
     fn name(&self) -> &str {
         "spark_bin"
     }

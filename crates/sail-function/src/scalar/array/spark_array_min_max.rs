@@ -1,4 +1,3 @@
-use std::any::Any;
 
 use datafusion::arrow::array::{
     as_large_list_array, as_list_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait,
@@ -37,7 +36,6 @@ impl ArrayMin {
 }
 
 impl ScalarUDFImpl for ArrayMin {
-
     fn name(&self) -> &str {
         "array_min"
     }
@@ -83,7 +81,6 @@ impl ArrayMax {
 }
 
 impl ScalarUDFImpl for ArrayMax {
-
     fn name(&self) -> &str {
         "array_max"
     }

@@ -126,6 +126,9 @@ mod tests {
     }
 
     impl FileMetadata for TestFileMetadata {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
 
         fn memory_size(&self) -> usize {
             self.metadata.len()

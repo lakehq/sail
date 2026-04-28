@@ -1,4 +1,3 @@
-use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Result};
@@ -28,7 +27,6 @@ impl MultiExpr {
 }
 
 impl ScalarUDFImpl for MultiExpr {
-
     fn name(&self) -> &str {
         "multi_expr"
     }

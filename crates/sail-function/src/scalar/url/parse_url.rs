@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -133,7 +132,6 @@ impl ParseUrl {
 }
 
 impl ScalarUDFImpl for ParseUrl {
-
     fn name(&self) -> &str {
         "parse_url"
     }

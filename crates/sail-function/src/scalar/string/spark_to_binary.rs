@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
@@ -37,7 +36,6 @@ impl SparkToBinary {
 }
 
 impl ScalarUDFImpl for SparkToBinary {
-
     fn name(&self) -> &str {
         "spark_to_binary"
     }
@@ -197,7 +195,6 @@ impl SparkTryToBinary {
 }
 
 impl ScalarUDFImpl for SparkTryToBinary {
-
     fn name(&self) -> &str {
         "spark_try_to_binary"
     }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::Write;
@@ -202,7 +201,6 @@ impl FileSink for TextSink {
 
 #[async_trait::async_trait]
 impl DataSink for TextSink {
-
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }

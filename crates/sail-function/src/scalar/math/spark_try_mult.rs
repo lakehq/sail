@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray};
@@ -38,7 +37,6 @@ impl SparkTryMult {
 }
 
 impl ScalarUDFImpl for SparkTryMult {
-
     fn name(&self) -> &str {
         "try_multiply"
     }

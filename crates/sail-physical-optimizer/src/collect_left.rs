@@ -124,17 +124,9 @@ mod tests {
         let config = ConfigOptions::default();
         let result = rule.optimize(join, &config).unwrap();
 
-        let new_join = result.as_any().downcast_ref::<HashJoinExec>().unwrap();
-        assert_eq!(
-            new_join.children()[0]
-                .output_partitioning()
-                .partition_count(),
-            1
-        );
-        assert!(new_join.children()[0]
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-            .is_some());
+        assert_eq!(result.name(), "HashJoinExec");
+        assert_eq!(result.children()[0].output_partitioning().partition_count(), 1);
+        assert_eq!(result.children()[0].name(), "CoalescePartitionsExec");
     }
 
     #[test]
@@ -167,11 +159,8 @@ mod tests {
         let config = ConfigOptions::default();
         let result = rule.optimize(join, &config).unwrap();
 
-        let new_join = result.as_any().downcast_ref::<HashJoinExec>().unwrap();
-        assert!(new_join.children()[0]
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-            .is_none());
+        assert_eq!(result.name(), "HashJoinExec");
+        assert_ne!(result.children()[0].name(), "CoalescePartitionsExec");
     }
 
     #[test]
@@ -202,10 +191,7 @@ mod tests {
         let config = ConfigOptions::default();
         let result = rule.optimize(join, &config).unwrap();
 
-        let new_join = result.as_any().downcast_ref::<HashJoinExec>().unwrap();
-        assert!(new_join.children()[0]
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-            .is_none());
+        assert_eq!(result.name(), "HashJoinExec");
+        assert_ne!(result.children()[0].name(), "CoalescePartitionsExec");
     }
 }

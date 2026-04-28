@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -62,7 +61,6 @@ impl PercentileFunction {
 }
 
 impl AggregateUDFImpl for PercentileFunction {
-
     fn name(&self) -> &str {
         "percentile"
     }

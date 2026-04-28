@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -54,7 +53,6 @@ impl Default for SparkNtile {
 }
 
 impl WindowUDFImpl for SparkNtile {
-
     fn name(&self) -> &str {
         "ntile"
     }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -134,7 +133,11 @@ impl ExecutionPlan for SystemTableExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn datafusion::physical_plan::PhysicalExpr) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion>,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
     ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
         use datafusion::common::tree_node::TreeNodeRecursion;
         let mut tnr = TreeNodeRecursion::Continue;
@@ -143,5 +146,4 @@ impl ExecutionPlan for SystemTableExec {
         }
         Ok(tnr)
     }
-
 }

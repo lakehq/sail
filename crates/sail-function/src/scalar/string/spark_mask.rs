@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, GenericStringBuilder};
@@ -45,7 +44,6 @@ impl SparkMask {
 }
 
 impl ScalarUDFImpl for SparkMask {
-
     fn name(&self) -> &str {
         "spark_mask"
     }

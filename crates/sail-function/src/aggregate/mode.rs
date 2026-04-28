@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -53,7 +52,6 @@ impl ModeFunction {
 }
 
 impl AggregateUDFImpl for ModeFunction {
-
     fn name(&self) -> &str {
         "mode"
     }

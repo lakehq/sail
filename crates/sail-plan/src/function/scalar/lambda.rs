@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, ScalarValue};
-use datafusion_expr::expr::{self, HigherOrderFunction, LambdaVariable, Lambda};
+use datafusion_expr::expr::{self, HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{lit, Expr, ScalarUDF};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -153,17 +153,18 @@ fn replace_synthetic_columns_with_lambda_vars(
     let idx_field = idx_name.map(|name| Arc::new(Field::new(name, DataType::Int64, false)));
 
     let result = expr.transform(|e| match &e {
-        Expr::Column(Column { name, relation: None, .. })
-            if name.as_str() == elem_id =>
-        {
-            Ok(Transformed::yes(Expr::LambdaVariable(LambdaVariable::new(
-                elem_name.to_string(),
-                Some(Arc::clone(&elem_field)),
-            ))))
-        }
-        Expr::Column(Column { name, relation: None, .. })
-            if idx_id.map_or(false, |id| name.as_str() == id) =>
-        {
+        Expr::Column(Column {
+            name,
+            relation: None,
+            ..
+        }) if name.as_str() == elem_id => Ok(Transformed::yes(Expr::LambdaVariable(
+            LambdaVariable::new(elem_name.to_string(), Some(Arc::clone(&elem_field))),
+        ))),
+        Expr::Column(Column {
+            name,
+            relation: None,
+            ..
+        }) if idx_id.is_some_and(|id| name.as_str() == id) => {
             let field = idx_field
                 .as_ref()
                 .and_then(|_f| idx_name.map(|n| Arc::new(Field::new(n, DataType::Int64, false))));

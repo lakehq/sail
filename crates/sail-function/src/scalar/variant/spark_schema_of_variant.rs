@@ -42,7 +42,6 @@ impl Default for SparkSchemaOfVariantUdf {
 }
 
 impl ScalarUDFImpl for SparkSchemaOfVariantUdf {
-
     fn name(&self) -> &str {
         "schema_of_variant"
     }

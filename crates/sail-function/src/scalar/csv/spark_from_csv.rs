@@ -111,7 +111,6 @@ impl SparkFromCSV {
 }
 
 impl ScalarUDFImpl for SparkFromCSV {
-
     fn name(&self) -> &str {
         Self::FROM_CSV_NAME
     }

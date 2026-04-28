@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::Int64Array;
@@ -31,7 +30,6 @@ impl RandPoisson {
 }
 
 impl ScalarUDFImpl for RandPoisson {
-
     fn name(&self) -> &str {
         "random_poisson"
     }

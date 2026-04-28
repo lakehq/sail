@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
@@ -51,7 +50,6 @@ impl RewriteLikePatternFunc {
 }
 
 impl ScalarUDFImpl for RewriteLikePatternFunc {
-
     fn name(&self) -> &str {
         "rewrite_like_pattern"
     }

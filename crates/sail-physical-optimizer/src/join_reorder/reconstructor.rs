@@ -1300,7 +1300,6 @@ mod tests {
         let (plan, _map) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
         let hj = plan
-            
             .downcast_ref::<HashJoinExec>()
             .expect("expected HashJoinExec");
 
@@ -1378,7 +1377,6 @@ mod tests {
         let (plan, _map) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
         let hj = plan
-            
             .downcast_ref::<HashJoinExec>()
             .expect("expected HashJoinExec");
 
@@ -1457,7 +1455,6 @@ mod tests {
         let (plan, _) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
         let hj = plan
-            
             .downcast_ref::<HashJoinExec>()
             .expect("expected HashJoinExec");
 

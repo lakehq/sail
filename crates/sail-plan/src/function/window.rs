@@ -176,9 +176,7 @@ fn kurtosis(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let args = arguments
         .into_iter()
-        .map(|arg| {
-            expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64))
-        })
+        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
@@ -208,9 +206,7 @@ fn skewness(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let args = arguments
         .into_iter()
-        .map(|arg| {
-            expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64))
-        })
+        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(

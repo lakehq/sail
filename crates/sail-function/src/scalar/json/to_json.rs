@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 use base64::prelude::BASE64_STANDARD;
@@ -108,7 +107,6 @@ impl SparkToJson {
 }
 
 impl ScalarUDFImpl for SparkToJson {
-
     fn name(&self) -> &str {
         self.aliases[0].as_str()
     }

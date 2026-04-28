@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
@@ -31,7 +30,6 @@ impl StAsBinary {
 }
 
 impl ScalarUDFImpl for StAsBinary {
-
     fn name(&self) -> &str {
         "st_asbinary"
     }

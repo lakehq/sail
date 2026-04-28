@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -41,7 +40,6 @@ fn truncation_divisor(unit: &str) -> Option<i64> {
 }
 
 impl ScalarUDFImpl for SparkTimeTrunc {
-
     fn name(&self) -> &str {
         "spark_time_trunc"
     }

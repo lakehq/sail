@@ -1,4 +1,3 @@
-use std::any::Any;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
@@ -24,7 +23,6 @@ impl SystemTableSource {
 }
 
 impl TableSource for SystemTableSource {
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

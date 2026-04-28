@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, PrimitiveBuilder};
@@ -41,7 +40,6 @@ impl SparkMakeTime {
 }
 
 impl ScalarUDFImpl for SparkMakeTime {
-
     fn name(&self) -> &str {
         "spark_make_time"
     }

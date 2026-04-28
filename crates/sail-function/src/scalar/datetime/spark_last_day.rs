@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use chrono::{Datelike, Duration, NaiveDate};
@@ -32,7 +31,6 @@ impl SparkLastDay {
 }
 
 impl ScalarUDFImpl for SparkLastDay {
-
     fn name(&self) -> &str {
         "spark_last_day"
     }

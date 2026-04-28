@@ -121,8 +121,13 @@ impl HigherOrderUDF for SparkArrayFilter {
                     DataType::List(f) => Arc::clone(f),
                     _ => unreachable!(),
                 };
-                let (new_values, new_offsets) =
-                    apply_mask_i32(&flat_values, offsets, list.len(), |i| list.is_null(i), &mask)?;
+                let (new_values, new_offsets) = apply_mask_i32(
+                    &flat_values,
+                    offsets,
+                    list.len(),
+                    |i| list.is_null(i),
+                    &mask,
+                )?;
                 Ok(ColumnarValue::Array(Arc::new(ListArray::new(
                     field,
                     new_offsets,
@@ -145,8 +150,13 @@ impl HigherOrderUDF for SparkArrayFilter {
                     DataType::LargeList(f) => Arc::clone(f),
                     _ => unreachable!(),
                 };
-                let (new_values, new_offsets) =
-                    apply_mask_i64(&flat_values, offsets, list.len(), |i| list.is_null(i), &mask)?;
+                let (new_values, new_offsets) = apply_mask_i64(
+                    &flat_values,
+                    offsets,
+                    list.len(),
+                    |i| list.is_null(i),
+                    &mask,
+                )?;
                 Ok(ColumnarValue::Array(Arc::new(LargeListArray::new(
                     field,
                     new_offsets,

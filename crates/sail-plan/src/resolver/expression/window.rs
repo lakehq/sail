@@ -269,7 +269,9 @@ impl PlanResolver<'_> {
         }
         // Apply type coercion so that expressions like `CAST(0 AS INTERVAL SECOND)`
         // have compatible types before physical evaluation.
-        let context = SimplifyContext::default().with_schema(schema.clone());
+        let context = SimplifyContext::builder()
+            .with_schema(schema.clone())
+            .build();
         let simplifier = ExprSimplifier::new(context);
         let coerced = simplifier.coerce(resolved, schema).map_err(|e| {
             PlanError::invalid(format!(

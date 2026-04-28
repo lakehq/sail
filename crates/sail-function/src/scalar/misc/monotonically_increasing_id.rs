@@ -1,4 +1,3 @@
-use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{exec_err, Result};
@@ -31,7 +30,6 @@ impl SparkMonotonicallyIncreasingId {
 }
 
 impl ScalarUDFImpl for SparkMonotonicallyIncreasingId {
-
     fn name(&self) -> &str {
         "monotonically_increasing_id"
     }

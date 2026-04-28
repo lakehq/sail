@@ -149,7 +149,6 @@ struct MaterializedColumnStats {
     min_values: Option<ArrayRef>,
     max_values: Option<ArrayRef>,
     null_counts: Option<ArrayRef>,
-    row_counts: Option<ArrayRef>,
 }
 
 #[derive(Debug)]
@@ -198,7 +197,6 @@ impl AddStatsPruningStatistics {
                             min_values: self.compute_min_values(&column),
                             max_values: self.compute_max_values(&column),
                             null_counts: self.compute_null_counts(&column),
-                            row_counts: self.compute_row_counts(&column),
                         },
                     )
                 })
@@ -452,6 +450,7 @@ impl AddStatsPruningStatistics {
         })
     }
 
+    #[cfg(test)]
     fn compute_row_counts(&self, column: &Column) -> Option<ArrayRef> {
         self.build_count_array(column, |_a, s| s.map(|s| s.num_records.max(0) as u64))
     }
@@ -555,7 +554,7 @@ mod tests {
 
         let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
         let array = stats
-            .row_counts(&Column::from_name("dec_col"))
+            .compute_row_counts(&Column::from_name("dec_col"))
             .ok_or_else(|| {
                 DataFusionError::Internal("row count stats should be available".to_string())
             })?;

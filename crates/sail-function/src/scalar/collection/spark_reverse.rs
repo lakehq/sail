@@ -1,4 +1,3 @@
-use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::unicode::reverse::ReverseFunc;
@@ -28,7 +27,6 @@ impl SparkReverse {
 }
 
 impl ScalarUDFImpl for SparkReverse {
-
     fn name(&self) -> &str {
         "spark_reverse"
     }

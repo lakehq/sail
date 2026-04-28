@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 
 use aes::cipher::block_padding::Pkcs7;
@@ -109,7 +108,6 @@ impl SparkAESEncrypt {
 
 // TODO: Support array batch
 impl ScalarUDFImpl for SparkAESEncrypt {
-
     fn name(&self) -> &str {
         "spark_aes_encrypt"
     }
@@ -557,7 +555,6 @@ impl SparkAESDecrypt {
 
 // TODO: Support array batch
 impl ScalarUDFImpl for SparkAESDecrypt {
-
     fn name(&self) -> &str {
         "spark_aes_decrypt"
     }
@@ -940,7 +937,6 @@ impl SparkTryAESEncrypt {
 }
 
 impl ScalarUDFImpl for SparkTryAESEncrypt {
-
     fn name(&self) -> &str {
         "spark_try_aes_encrypt"
     }
@@ -982,7 +978,6 @@ impl SparkTryAESDecrypt {
 }
 
 impl ScalarUDFImpl for SparkTryAESDecrypt {
-
     fn name(&self) -> &str {
         "spark_try_aes_decrypt"
     }

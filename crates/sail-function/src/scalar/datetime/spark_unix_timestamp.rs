@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
@@ -28,7 +27,6 @@ impl SparkUnixTimestamp {
 }
 
 impl ScalarUDFImpl for SparkUnixTimestamp {
-
     fn name(&self) -> &str {
         "spark_unix_timestamp"
     }

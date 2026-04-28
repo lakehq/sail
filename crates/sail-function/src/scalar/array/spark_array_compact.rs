@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -38,7 +37,6 @@ impl SparkArrayCompact {
 }
 
 impl ScalarUDFImpl for SparkArrayCompact {
-
     fn name(&self) -> &str {
         "spark_array_compact"
     }

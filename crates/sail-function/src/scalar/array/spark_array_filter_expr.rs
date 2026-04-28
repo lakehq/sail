@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, Int32Array, ListArray};
@@ -163,7 +162,6 @@ impl std::hash::Hash for SparkArrayFilterExpr {
 impl Eq for SparkArrayFilterExpr {}
 
 impl ScalarUDFImpl for SparkArrayFilterExpr {
-
     fn name(&self) -> &str {
         "spark_array_filter_expr"
     }

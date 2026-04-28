@@ -63,7 +63,6 @@ impl Default for SparkToVariantObjectUdf {
 }
 
 impl ScalarUDFImpl for SparkToVariantObjectUdf {
-
     fn name(&self) -> &str {
         "to_variant_object"
     }

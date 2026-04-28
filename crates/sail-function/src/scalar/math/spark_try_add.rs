@@ -1,4 +1,3 @@
-use std::any::Any;
 
 use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
@@ -37,7 +36,6 @@ impl SparkTryAdd {
 }
 
 impl ScalarUDFImpl for SparkTryAdd {
-
     fn name(&self) -> &str {
         "try_add"
     }

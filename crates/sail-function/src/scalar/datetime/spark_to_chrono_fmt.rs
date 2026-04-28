@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
@@ -37,7 +36,6 @@ impl SparkToChronoFmt {
 }
 
 impl ScalarUDFImpl for SparkToChronoFmt {
-
     fn name(&self) -> &str {
         "spark_to_chrono_fmt"
     }

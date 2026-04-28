@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
@@ -100,7 +99,6 @@ impl DropStructField {
 }
 
 impl ScalarUDFImpl for DropStructField {
-
     fn name(&self) -> &str {
         "drop_struct_field"
     }

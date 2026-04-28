@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int64Array};
@@ -30,7 +29,6 @@ impl SparkXxhash64 {
 }
 
 impl ScalarUDFImpl for SparkXxhash64 {
-
     fn name(&self) -> &str {
         "spark_xxhash64"
     }

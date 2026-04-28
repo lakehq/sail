@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::types::TimestampMicrosecondType;
@@ -34,7 +33,6 @@ impl SparkTryMakeTimestampNtz {
 }
 
 impl ScalarUDFImpl for SparkTryMakeTimestampNtz {
-
     fn name(&self) -> &str {
         "spark_try_make_timestamp_ntz"
     }

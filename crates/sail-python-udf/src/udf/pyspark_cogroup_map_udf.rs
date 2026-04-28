@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayData, ArrayRef, AsArray};
@@ -143,7 +142,6 @@ impl PySparkCoGroupMapUDF {
 }
 
 impl ScalarUDFImpl for PySparkCoGroupMapUDF {
-
     fn name(&self) -> &str {
         &self.name
     }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -84,7 +83,6 @@ impl ArrayItemWithPosition {
 }
 
 impl ScalarUDFImpl for ArrayItemWithPosition {
-
     fn name(&self) -> &str {
         "array_item_with_position"
     }

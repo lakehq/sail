@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -83,7 +82,6 @@ impl XpathTyped {
 }
 
 impl ScalarUDFImpl for XpathTyped {
-
     fn name(&self) -> &str {
         self.kind.name()
     }

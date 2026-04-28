@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StructArray};
@@ -37,7 +36,6 @@ impl Default for SparkCastToVariant {
 }
 
 impl ScalarUDFImpl for SparkCastToVariant {
-
     fn name(&self) -> &str {
         "spark_cast_to_variant"
     }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StringArray};
@@ -32,7 +31,6 @@ impl SparkVersion {
 }
 
 impl ScalarUDFImpl for SparkVersion {
-
     fn name(&self) -> &str {
         "version"
     }

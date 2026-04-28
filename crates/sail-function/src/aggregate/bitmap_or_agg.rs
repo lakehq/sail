@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 
 use datafusion::arrow::array::{Array, ArrayRef, BinaryArray};
@@ -44,7 +43,6 @@ impl BitmapOrAggFunction {
 }
 
 impl AggregateUDFImpl for BitmapOrAggFunction {
-
     fn name(&self) -> &str {
         "bitmap_or_agg"
     }
