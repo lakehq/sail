@@ -23,7 +23,7 @@ use crate::join_reorder::join_set::JoinSet;
 type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 type EquiPair = (StableColumn, StableColumn);
 type PhysicalExprWithEquiPairs = (PhysicalExprRef, Vec<EquiPair>);
-type GroupedPredicates = HashMap<JoinSet, Vec<PhysicalExprWithEquiPairs>>;
+type GroupedPredicates = HashMap<(JoinSet, JoinSet), Vec<PhysicalExprWithEquiPairs>>;
 
 /// Hard limit on the number of base relations in a single reorderable graph.
 const MAX_RELATIONS: usize = 12;
@@ -226,6 +226,8 @@ impl GraphBuilder {
         // This avoids generating hyperedges for join nodes where each conjunct is actually
         // a binary predicate between two base relations.
         let mut grouped: GroupedPredicates = HashMap::new();
+        let left_relations = self.relations_in_map(&left_map)?;
+        let right_relations = self.relations_in_map(&right_map)?;
 
         for (pred, pairs) in conjuncts {
             let deps = self.relations_for_expr(&pred, &left_map, &right_map)?;
@@ -238,12 +240,36 @@ impl GraphBuilder {
                 deps
             };
 
-            grouped.entry(deps).or_default().push((pred, pairs));
+            let mut left_endpoint = deps & left_relations;
+            let mut right_endpoint = deps & right_relations;
+            if left_endpoint.is_empty() || right_endpoint.is_empty() {
+                let fallback = self.all_relations_in_maps(&left_map, &right_map)?;
+                left_endpoint = fallback & left_relations;
+                right_endpoint = fallback & right_relations;
+            }
+
+            if left_endpoint.is_empty() || right_endpoint.is_empty() {
+                return Err(DataFusionError::Internal(
+                    "JoinReorder: predicate did not reference both sides of join region"
+                        .to_string(),
+                ));
+            }
+
+            grouped
+                .entry((left_endpoint, right_endpoint))
+                .or_default()
+                .push((pred, pairs));
         }
 
-        for (join_set, preds) in grouped {
+        for ((left_endpoint, right_endpoint), preds) in grouped {
             let (filter, equi_pairs) = Self::combine_predicates(preds)?;
-            let mut edge = JoinEdge::new(join_set, filter, *join_plan.join_type(), equi_pairs);
+            let mut edge = JoinEdge::new_with_endpoints(
+                left_endpoint,
+                right_endpoint,
+                filter,
+                *join_plan.join_type(),
+                equi_pairs,
+            );
             edge.null_equality = join_plan.null_equality();
             self.graph.add_edge(edge)?;
         }
@@ -406,8 +432,12 @@ impl GraphBuilder {
         left_map: &ColumnMap,
         right_map: &ColumnMap,
     ) -> Result<JoinSet> {
+        Ok(self.relations_in_map(left_map)? | self.relations_in_map(right_map)?)
+    }
+
+    fn relations_in_map(&self, map: &ColumnMap) -> Result<JoinSet> {
         let mut bits: u64 = 0;
-        for e in left_map.iter().chain(right_map.iter()) {
+        for e in map {
             self.add_relation_bits_from_entry(e, &mut bits)?;
         }
         Ok(JoinSet::from_bits(bits))

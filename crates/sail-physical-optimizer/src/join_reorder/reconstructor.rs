@@ -289,16 +289,9 @@ impl<'a> PlanReconstructor<'a> {
         if dp_plan.join_set.cardinality() as usize == self.query_graph.relation_count() {
             if !self.pending_filters.is_empty() {
                 let (plan, col_map) = &result;
-                match self.apply_remaining_pending_filters(plan.clone(), col_map)? {
-                    Some(new_plan) => {
-                        result = (new_plan, col_map.clone());
-                        // All remaining were applied; clear them
-                        self.pending_filters.clear();
-                    }
-                    None => {
-                        // Could not apply any; warn below
-                    }
-                }
+                let new_plan = self.apply_remaining_pending_filters(plan.clone(), col_map)?;
+                result = (new_plan, col_map.clone());
+                self.pending_filters.clear();
             }
 
             // Final sanity check if there are still pending filters after reconstruction
@@ -656,17 +649,21 @@ impl<'a> PlanReconstructor<'a> {
                     "JoinReorder: Applying previously deferred filter - required relations: {:?}",
                     pending.required_relations.iter().collect::<Vec<_>>()
                 );
-                if let Ok(rewritten_pred) = self.rewrite_pending_filter_for_current_join(
-                    &pending.expr,
-                    left_map,
-                    right_map,
-                    left_plan,
-                    right_plan,
-                ) {
-                    applicable_pending.push(rewritten_pred);
-                } else {
-                    log::warn!("JoinReorder: Failed to rewrite pending filter, skipping");
-                }
+                let rewritten_pred = self
+                    .rewrite_pending_filter_for_current_join(
+                        &pending.expr,
+                        left_map,
+                        right_map,
+                        left_plan,
+                        right_plan,
+                    )
+                    .map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "JoinReorder: failed to rewrite pending filter for required relations {:?}: {e}",
+                            pending.required_relations.iter().collect::<Vec<_>>()
+                        ))
+                    })?;
+                applicable_pending.push(rewritten_pred);
             } else {
                 // Keep in pending list
                 remaining_pending.push(pending);
@@ -802,28 +799,34 @@ impl<'a> PlanReconstructor<'a> {
         )))
     }
 
-    /// Attempt to apply any remaining pending filters as a top-level FilterExec
-    /// on the provided plan. Returns Some(new_plan) if at least one filter has
-    /// been applied, or None if none could be rewritten.
+    /// Apply all remaining pending filters as a top-level FilterExec on the provided plan.
     fn apply_remaining_pending_filters(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         output_map: &ColumnMap,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         if self.pending_filters.is_empty() {
-            return Ok(None);
+            return Ok(plan);
         }
 
-        // Try rewriting each pending filter to reference the final plan's schema
+        // Rewrite each pending filter to reference the final plan's schema.
         let mut rewritten: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
         for pending in &self.pending_filters {
-            if let Ok(expr) = self.rewrite_expr_to_output_schema(&pending.expr, &plan, output_map) {
-                rewritten.push(expr);
-            }
+            let expr = self
+                .rewrite_expr_to_output_schema(&pending.expr, &plan, output_map)
+                .map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "JoinReorder: failed to apply pending filter for required relations {:?}: {e}",
+                        pending.required_relations.iter().collect::<Vec<_>>()
+                    ))
+                })?;
+            rewritten.push(expr);
         }
 
         if rewritten.is_empty() {
-            return Ok(None);
+            return Err(DataFusionError::Internal(
+                "JoinReorder: no pending filters were rewritten".to_string(),
+            ));
         }
 
         // Combine with AND and attach FilterExec
@@ -834,7 +837,7 @@ impl<'a> PlanReconstructor<'a> {
         };
 
         let new_plan = Arc::new(FilterExec::try_new(combined, plan)?);
-        Ok(Some(new_plan))
+        Ok(new_plan)
     }
 
     /// Rewrite an expression that uses stable column names (e.g. "R{rel}.C{col}")
