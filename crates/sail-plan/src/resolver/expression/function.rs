@@ -212,13 +212,26 @@ impl PlanResolver<'_> {
                         .map(|(column, _)| Expr::Column(column.clone()))
                         .collect();
 
+                    // The first var_name is the element variable; second (if any) is the index.
+                    let element_var_name = var_names
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "x".to_string());
+                    let index_var_name = if var_names.len() >= 2 {
+                        var_names.get(1).cloned()
+                    } else {
+                        None
+                    };
+
                     // Create the lambda function input and call the handler
                     let lambda_input = LambdaFunctionInput {
                         array_expr,
                         resolved_lambda,
                         element_type,
                         element_column_name: element_field_id,
+                        element_var_name,
                         index_column_name: index_field_id,
+                        index_var_name,
                         outer_columns,
                         outer_column_exprs,
                     };

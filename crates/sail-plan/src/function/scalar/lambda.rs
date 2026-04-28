@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
-use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, Expr, ScalarUDF};
+use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::expr::{self, HigherOrderFunction, LambdaVariable, Lambda};
+use datafusion_expr::{lit, Expr, ScalarUDF};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::higher_order::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_filter_expr::SparkArrayFilterExpr;
 
 use crate::error::{PlanError, PlanResult};
@@ -68,43 +72,64 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
 }
 
 /// Handler for filter(array, lambda) - filters array elements using a predicate lambda.
+///
+/// Uses DataFusion's native HigherOrderUDF when no outer-column captures are needed.
+/// Falls back to SparkArrayFilterExpr (ScalarUDF) for outer-column capture until DF
+/// resolves https://github.com/apache/datafusion/issues/21172.
 fn filter_lambda(input: LambdaFunctionInput) -> PlanResult<Expr> {
     let LambdaFunctionInput {
         array_expr,
         resolved_lambda,
         element_type,
         element_column_name,
+        element_var_name,
         index_column_name,
+        index_var_name,
         outer_columns,
         outer_column_exprs,
     } = input;
 
-    // Build UDF arguments: array + outer column expressions
+    // Native HigherOrderUDF path — no outer column capture needed and element type is known
+    if outer_columns.is_empty() && element_type != DataType::Null {
+        let body = replace_synthetic_columns_with_lambda_vars(
+            resolved_lambda,
+            &element_column_name,
+            &element_var_name,
+            &element_type,
+            index_column_name.as_deref(),
+            index_var_name.as_deref(),
+        )?;
+
+        let mut params = vec![element_var_name];
+        if let Some(idx_name) = index_var_name {
+            params.push(idx_name);
+        }
+
+        let lambda_expr = Expr::Lambda(Lambda::new(params, body));
+        return Ok(Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(SparkArrayFilter::new()),
+            vec![array_expr, lambda_expr],
+        )));
+    }
+
+    // Fallback: ScalarUDF path for lambdas with outer-column captures
     let mut udf_args = vec![array_expr];
     udf_args.extend(outer_column_exprs);
 
-    // Create the filter UDF with appropriate constructor based on what's present
-    let filter_udf = if outer_columns.is_empty() {
-        if let Some(idx_name) = index_column_name {
-            SparkArrayFilterExpr::with_index_column(
-                resolved_lambda,
-                element_type,
-                element_column_name,
-                idx_name,
-            )
-        } else {
-            SparkArrayFilterExpr::with_column_name(
-                resolved_lambda,
-                element_type,
-                element_column_name,
-            )
-        }
+    let filter_udf = if let Some(idx_name) = index_column_name {
+        SparkArrayFilterExpr::with_outer_columns(
+            resolved_lambda,
+            element_type,
+            element_column_name,
+            Some(idx_name),
+            outer_columns,
+        )
     } else {
         SparkArrayFilterExpr::with_outer_columns(
             resolved_lambda,
             element_type,
             element_column_name,
-            index_column_name,
+            None,
             outer_columns,
         )
     };
@@ -113,6 +138,43 @@ fn filter_lambda(input: LambdaFunctionInput) -> PlanResult<Expr> {
         func: Arc::new(ScalarUDF::from(filter_udf)),
         args: udf_args,
     }))
+}
+
+/// Walk `expr` replacing `Column(synthetic_id)` references with `LambdaVariable` nodes.
+fn replace_synthetic_columns_with_lambda_vars(
+    expr: Expr,
+    elem_id: &str,
+    elem_name: &str,
+    elem_type: &DataType,
+    idx_id: Option<&str>,
+    idx_name: Option<&str>,
+) -> PlanResult<Expr> {
+    let elem_field = Arc::new(Field::new(elem_name, elem_type.clone(), true));
+    let idx_field = idx_name.map(|name| Arc::new(Field::new(name, DataType::Int64, false)));
+
+    let result = expr.transform(|e| match &e {
+        Expr::Column(Column { name, relation: None, .. })
+            if name.as_str() == elem_id =>
+        {
+            Ok(Transformed::yes(Expr::LambdaVariable(LambdaVariable::new(
+                elem_name.to_string(),
+                Some(Arc::clone(&elem_field)),
+            ))))
+        }
+        Expr::Column(Column { name, relation: None, .. })
+            if idx_id.map_or(false, |id| name.as_str() == id) =>
+        {
+            let field = idx_field
+                .as_ref()
+                .and_then(|_f| idx_name.map(|n| Arc::new(Field::new(n, DataType::Int64, false))));
+            Ok(Transformed::yes(Expr::LambdaVariable(LambdaVariable::new(
+                idx_name.unwrap_or("i").to_string(),
+                field,
+            ))))
+        }
+        _ => Ok(Transformed::no(e)),
+    })?;
+    Ok(result.data)
 }
 
 /// Higher-order (lambda) function handlers.

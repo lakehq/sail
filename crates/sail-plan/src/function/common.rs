@@ -204,10 +204,14 @@ pub struct LambdaFunctionInput {
     pub resolved_lambda: expr::Expr,
     /// The element type extracted from the array
     pub element_type: DataType,
-    /// The column name for the lambda element variable
+    /// The synthetic column name used in the resolved lambda for the element variable
     pub element_column_name: String,
-    /// The column name for the optional index variable (if lambda has two args)
+    /// The original lambda variable name for the element (e.g., "x" in `x -> x > 5`)
+    pub element_var_name: String,
+    /// The synthetic column name used in the resolved lambda for the optional index variable
     pub index_column_name: Option<String>,
+    /// The original lambda variable name for the index (e.g., "i" in `(x, i) -> ...`)
+    pub index_var_name: Option<String>,
     /// External columns referenced in the lambda with their types
     pub outer_columns: Vec<(String, DataType)>,
     /// Full column expressions for outer columns (for UDF arguments)
