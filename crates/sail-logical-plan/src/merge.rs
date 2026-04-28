@@ -315,6 +315,8 @@ pub struct RowLevelWriteNode {
     write_plan: Option<Arc<LogicalPlan>>,
     /// Plan yielding touched file paths (MERGE targeted rewrite).
     touched_files_plan: Option<Arc<LogicalPlan>>,
+    /// Plan yielding file path and file-local row index for MERGE rows deleted via DVs.
+    deletion_vector_plan: Option<Arc<LogicalPlan>>,
     /// Condition for DELETE/UPDATE (passed through to physical planner).
     #[educe(PartialOrd(ignore))]
     condition: Option<ExprWithSource>,
@@ -338,6 +340,7 @@ impl RowLevelWriteNode {
         raw_input_schema: DFSchemaRef,
         write_plan: Arc<LogicalPlan>,
         touched_files_plan: Arc<LogicalPlan>,
+        deletion_vector_plan: Option<Arc<LogicalPlan>>,
         options: MergeIntoOptions,
         schema: DFSchemaRef,
     ) -> Self {
@@ -354,6 +357,7 @@ impl RowLevelWriteNode {
             raw_input_schema,
             write_plan: Some(write_plan),
             touched_files_plan: Some(touched_files_plan),
+            deletion_vector_plan,
             condition: None,
             merge_options: Some(options),
             schema,
@@ -377,6 +381,7 @@ impl RowLevelWriteNode {
             raw_input_schema,
             write_plan: None,
             touched_files_plan: None,
+            deletion_vector_plan: None,
             condition,
             merge_options: None,
             target_format: format,
@@ -415,6 +420,10 @@ impl RowLevelWriteNode {
 
     pub fn touched_files_plan(&self) -> Option<&Arc<LogicalPlan>> {
         self.touched_files_plan.as_ref()
+    }
+
+    pub fn deletion_vector_plan(&self) -> Option<&Arc<LogicalPlan>> {
+        self.deletion_vector_plan.as_ref()
     }
 
     pub fn condition(&self) -> Option<&ExprWithSource> {
@@ -458,6 +467,9 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
         }
         if let Some(tp) = &self.touched_files_plan {
             inputs.push(tp.as_ref());
+        }
+        if let Some(dvp) = &self.deletion_vector_plan {
+            inputs.push(dvp.as_ref());
         }
         inputs
     }
@@ -526,6 +538,15 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
         } else {
             None
         };
+        let deletion_vector_plan = if self.deletion_vector_plan.is_some() {
+            Some(Arc::new(iter.next().ok_or_else(|| {
+                DataFusionError::Internal(
+                    "RowLevelWriteNode: missing deletion_vector_plan input".into(),
+                )
+            })?))
+        } else {
+            None
+        };
         Ok(Self {
             command: self.command,
             raw_target: self.raw_target.clone(),
@@ -533,6 +554,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             raw_input_schema: self.raw_input_schema.clone(),
             write_plan,
             touched_files_plan,
+            deletion_vector_plan,
             condition: self.condition.clone(),
             merge_options: self.merge_options.clone(),
             target_format: self.target_format.clone(),
@@ -554,11 +576,16 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
 pub struct MergeExpansion {
     pub write_plan: LogicalPlan,
     pub touched_files_plan: LogicalPlan,
+    pub deletion_vector_plan: Option<LogicalPlan>,
     pub output_schema: DFSchemaRef,
     pub options: MergeIntoOptions,
 }
 
-pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpansion> {
+pub fn expand_merge(
+    node: &MergeIntoNode,
+    path_column: &str,
+    row_index_column: Option<&str>,
+) -> Result<MergeExpansion> {
     let target_plan = node.target.as_ref().clone();
     let source_plan = node.source.as_ref().clone();
     let mut options = node.options().clone();
@@ -661,15 +688,25 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         })
         .collect();
 
-    // Ensure file path column (if present) is preserved even when desired_target_names was shorter.
-    // Always project the file path column to keep it available downstream.
-    let already_present = target_proj_exprs
+    // Ensure MERGE metadata columns are preserved even when desired_target_names was shorter.
+    let path_already_present = target_proj_exprs
         .iter()
         .any(|expr| matches!(expr, Expr::Alias(alias) if alias.name == path_column));
-    if !already_present {
+    if !path_already_present {
         target_proj_exprs.push(
             Expr::Column(Column::from_name(path_column.to_string())).alias(path_column.to_string()),
         );
+    }
+    if let Some(row_index_column) = row_index_column {
+        let row_index_already_present = target_proj_exprs
+            .iter()
+            .any(|expr| matches!(expr, Expr::Alias(alias) if alias.name == row_index_column));
+        if !row_index_already_present {
+            target_proj_exprs.push(
+                Expr::Column(Column::from_name(row_index_column.to_string()))
+                    .alias(row_index_column.to_string()),
+            );
+        }
     }
 
     trace!(
@@ -714,6 +751,9 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     }
     // keep path column mapping stable if present
     target_rename_map.insert(path_column.to_string(), path_column.to_string());
+    if let Some(row_index_column) = row_index_column {
+        target_rename_map.insert(row_index_column.to_string(), row_index_column.to_string());
+    }
     // keep row id stable if present
     target_rename_map.insert(
         TARGET_ROW_ID_COLUMN.to_string(),
@@ -835,8 +875,13 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
             .filter(insert_filter)?
             .build()?;
 
-        let projection_exprs =
-            build_insert_only_projection(&options, target_schema, source_schema, path_column)?;
+        let projection_exprs = build_insert_only_projection(
+            &options,
+            target_schema,
+            source_schema,
+            path_column,
+            row_index_column,
+        )?;
         let projected = LogicalPlanBuilder::from(filtered)
             .project(projection_exprs)?
             .build()?;
@@ -847,6 +892,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         return Ok(MergeExpansion {
             write_plan: projected,
             touched_files_plan: touched_plan,
+            deletion_vector_plan: None,
             output_schema: command_schema,
             options,
         });
@@ -858,6 +904,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         source_plan,
         should_check_cardinality,
         path_column,
+        row_index_column,
     )
 }
 
@@ -868,6 +915,7 @@ fn build_default_merge_expansion(
     source_plan: LogicalPlan,
     should_check_cardinality: bool,
     path_column: &str,
+    row_index_column: Option<&str>,
 ) -> Result<MergeExpansion> {
     let target_schema = target_plan.schema();
     let source_schema = source_plan.schema();
@@ -967,14 +1015,19 @@ fn build_default_merge_expansion(
 
     let delete_expr = delete_pred.unwrap_or_else(|| lit(false));
     let insert_expr = insert_pred.unwrap_or_else(|| lit(false));
-    let active_expr = target_present.and(not(delete_expr)).or(insert_expr);
+    let active_expr = target_present.and(not(delete_expr.clone())).or(insert_expr);
 
     let filtered = LogicalPlanBuilder::from(join.as_ref().clone())
         .filter(active_expr)?
         .build()?;
 
-    let projection_exprs =
-        build_merge_projection(&options, target_schema, source_schema, path_column)?;
+    let projection_exprs = build_merge_projection(
+        &options,
+        target_schema,
+        source_schema,
+        path_column,
+        row_index_column,
+    )?;
     trace!("projection exprs: {:?}", &projection_exprs);
     let projected = LogicalPlanBuilder::from(filtered)
         .project(projection_exprs.clone())?
@@ -991,11 +1044,26 @@ fn build_default_merge_expansion(
         .project(vec![col(path_column).alias(path_column.to_string())])?
         .build()?;
 
+    let deletion_vector_plan = if let Some(row_index_column) = row_index_column {
+        Some(
+            LogicalPlanBuilder::from(join.as_ref().clone())
+                .filter(delete_expr)?
+                .project(vec![
+                    col(path_column).alias(path_column.to_string()),
+                    col(row_index_column).alias(row_index_column.to_string()),
+                ])?
+                .build()?,
+        )
+    } else {
+        None
+    };
+
     let command_schema = Arc::new(DFSchema::empty());
 
     Ok(MergeExpansion {
         write_plan: projected.clone(),
         touched_files_plan: touched_plan,
+        deletion_vector_plan,
         output_schema: command_schema,
         options,
     })
@@ -1159,6 +1227,7 @@ fn build_insert_only_projection(
     target_schema: &DFSchemaRef,
     source_schema: &DFSchemaRef,
     path_column: &str,
+    row_index_column: Option<&str>,
 ) -> Result<Vec<Expr>> {
     // Match existing MERGE behavior: produce one output row per inserted source row,
     // with clause order determining first-match semantics.
@@ -1179,7 +1248,10 @@ fn build_insert_only_projection(
         .collect();
 
     for field in target_schema.fields().iter() {
-        if field.name() == path_column || field.name() == TARGET_ROW_ID_COLUMN {
+        if field.name() == path_column
+            || row_index_column.is_some_and(|c| field.name() == c)
+            || field.name() == TARGET_ROW_ID_COLUMN
+        {
             continue;
         }
         let name = field.name().clone();
@@ -1404,11 +1476,16 @@ fn build_merge_projection(
     target_schema: &DFSchemaRef,
     source_schema: &DFSchemaRef,
     path_column: &str,
+    row_index_column: Option<&str>,
 ) -> Result<Vec<Expr>> {
     let mut cases: Vec<(String, Vec<(Expr, Expr)>)> = target_schema
         .fields()
         .iter()
-        .filter(|f| f.name() != path_column && f.name() != TARGET_ROW_ID_COLUMN)
+        .filter(|f| {
+            f.name() != path_column
+                && row_index_column.is_none_or(|c| f.name() != c)
+                && f.name() != TARGET_ROW_ID_COLUMN
+        })
         .map(|f| (f.name().clone(), Vec::new()))
         .collect();
 
@@ -1520,7 +1597,10 @@ fn build_merge_projection(
 
     let mut projections = Vec::new();
     for field in target_schema.fields() {
-        if field.name() == path_column || field.name() == TARGET_ROW_ID_COLUMN {
+        if field.name() == path_column
+            || row_index_column.is_some_and(|c| field.name() == c)
+            || field.name() == TARGET_ROW_ID_COLUMN
+        {
             continue;
         }
         let name = field.name();

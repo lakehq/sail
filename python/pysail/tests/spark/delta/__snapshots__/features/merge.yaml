@@ -2086,6 +2086,32 @@ data:
     - actionType: insert
   timestamp: <timestamp>
 ---
+name: "test_matched_deletes_use_deletion_vectors_while_unmatched_rows_are_inserted"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1010
+    numAddedFiles: 2
+    numFiles: 1
+    numOutputBytes: 1010
+    numOutputFiles: 1
+    numOutputRows: 1
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    matchedPredicates:
+    - actionType: delete
+      predicate: 's . flag = ''delete'' '
+    mergePredicate: 't . id = s . id '
+    notMatchedBySourcePredicates: []
+    notMatchedPredicates:
+    - actionType: insert
+  timestamp: <timestamp>
+---
 name: "test_rows_missing_from_the_source_are_deleted_after_updates"
 data:
   clientVersion: sail-delta-lake.x.x.x

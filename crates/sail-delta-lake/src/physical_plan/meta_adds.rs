@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
+    Array, ArrayRef, AsArray, Int32Array, Int64Array, MapArray, RecordBatch, StringArray,
+    StructArray,
 };
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
@@ -16,14 +17,22 @@ use crate::spec::{Add, DeletionVectorDescriptor, StorageType};
 const COL_SIZE_BYTES: &str = "size_bytes";
 const COL_MODIFICATION_TIME: &str = "modification_time";
 const COL_STATS_JSON: &str = "stats_json";
+const COL_TAGS: &str = "tags";
+const COL_BASE_ROW_ID: &str = "baseRowId";
+const COL_DEFAULT_ROW_COMMIT_VERSION: &str = "defaultRowCommitVersion";
+const COL_CLUSTERING_PROVIDER: &str = "clusteringProvider";
 const COL_PARTITION_SCAN: &str = "partition_scan";
 const COL_DELETION_VECTOR: &str = "deletionVector";
 
-const RESERVED_META_COLUMNS: [&str; 9] = [
+const RESERVED_META_COLUMNS: [&str; 13] = [
     PATH_COLUMN,
     COL_SIZE_BYTES,
     COL_MODIFICATION_TIME,
     COL_STATS_JSON,
+    COL_TAGS,
+    COL_BASE_ROW_ID,
+    COL_DEFAULT_ROW_COMMIT_VERSION,
+    COL_CLUSTERING_PROVIDER,
     FIELD_NAME_STATS_PARSED,
     COL_PARTITION_SCAN,
     COMMIT_VERSION_COLUMN,
@@ -81,6 +90,18 @@ pub fn decode_adds_from_meta_batch(
         .map(|c| cast(c, &DataType::Utf8).unwrap_or_else(|_| Arc::clone(c)));
     let stats_arr: Option<&StringArray> = stats_arr
         .as_ref()
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+    let tags_arr: Option<&MapArray> = batch
+        .column_by_name(COL_TAGS)
+        .and_then(|c| c.as_any().downcast_ref::<MapArray>());
+    let base_row_id_arr: Option<&Int64Array> = batch
+        .column_by_name(COL_BASE_ROW_ID)
+        .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+    let default_row_commit_version_arr: Option<&Int64Array> = batch
+        .column_by_name(COL_DEFAULT_ROW_COMMIT_VERSION)
+        .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
+    let clustering_provider_arr: Option<&StringArray> = batch
+        .column_by_name(COL_CLUSTERING_PROVIDER)
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
 
     let partition_columns: Vec<String> = match partition_columns {
@@ -149,6 +170,28 @@ pub fn decode_adds_from_meta_batch(
                 Some(a.value(row).to_string())
             }
         });
+        let tags = extract_string_map(tags_arr, row)?;
+        let base_row_id = base_row_id_arr.and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row))
+            }
+        });
+        let default_row_commit_version = default_row_commit_version_arr.and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row))
+            }
+        });
+        let clustering_provider = clustering_provider_arr.and_then(|a| {
+            if a.is_null(row) {
+                None
+            } else {
+                Some(a.value(row).to_string())
+            }
+        });
 
         let mut partition_values: HashMap<String, Option<String>> =
             HashMap::with_capacity(part_arrays.len());
@@ -170,17 +213,61 @@ pub fn decode_adds_from_meta_batch(
             modification_time,
             data_change: true,
             stats,
-            tags: None,
+            tags,
             deletion_vector: extract_dv_from_struct(dv_arr, row),
-            base_row_id: None,
-            default_row_commit_version: None,
-            clustering_provider: None,
+            base_row_id,
+            default_row_commit_version,
+            clustering_provider,
             commit_version,
             commit_timestamp,
         });
     }
 
     Ok(adds)
+}
+
+fn extract_string_map(
+    map_arr: Option<&MapArray>,
+    row: usize,
+) -> Result<Option<HashMap<String, Option<String>>>> {
+    let Some(map_arr) = map_arr else {
+        return Ok(None);
+    };
+    if map_arr.is_null(row) {
+        return Ok(None);
+    }
+
+    let keys = map_arr
+        .keys()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DataFusionError::Plan("metadata map key column must be Utf8".to_string()))?;
+    let values = map_arr
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| {
+            DataFusionError::Plan("metadata map value column must be Utf8".to_string())
+        })?;
+
+    let offsets = map_arr.value_offsets();
+    let start =
+        usize::try_from(offsets[row]).map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let end =
+        usize::try_from(offsets[row + 1]).map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let mut out = HashMap::with_capacity(end.saturating_sub(start));
+    for idx in start..end {
+        if keys.is_null(idx) {
+            continue;
+        }
+        let value = if values.is_null(idx) {
+            None
+        } else {
+            Some(values.value(idx).to_string())
+        };
+        out.insert(keys.value(idx).to_string(), value);
+    }
+    Ok(Some(out))
 }
 
 /// Extract a `DeletionVectorDescriptor` from a struct array at the given row.
@@ -253,11 +340,23 @@ mod tests {
 
     #[test]
     fn decode_adds_extracts_commit_metadata() -> Result<()> {
+        let tags = Arc::new(
+            MapArray::new_from_strings(
+                vec!["purpose"].into_iter(),
+                &StringArray::from(vec![Some("merge")]),
+                &[0, 1],
+            )
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?,
+        );
         let schema = Arc::new(datafusion::arrow::datatypes::Schema::new(vec![
             Field::new(PATH_COLUMN, DataType::Utf8, false),
             Field::new("size_bytes", DataType::Int64, true),
             Field::new("modification_time", DataType::Int64, true),
             Field::new(COL_STATS_JSON, DataType::Utf8, true),
+            Field::new(COL_TAGS, tags.data_type().clone(), true),
+            Field::new(COL_BASE_ROW_ID, DataType::Int64, true),
+            Field::new(COL_DEFAULT_ROW_COMMIT_VERSION, DataType::Int64, true),
+            Field::new(COL_CLUSTERING_PROVIDER, DataType::Utf8, true),
             Field::new(COMMIT_VERSION_COLUMN, DataType::Int64, true),
             Field::new(COMMIT_TIMESTAMP_COLUMN, DataType::Int64, true),
             Field::new("p", DataType::Utf8, true),
@@ -269,6 +368,10 @@ mod tests {
                 Arc::new(Int64Array::from(vec![Some(10)])),
                 Arc::new(Int64Array::from(vec![Some(20)])),
                 Arc::new(StringArray::from(vec![None::<&str>])),
+                tags,
+                Arc::new(Int64Array::from(vec![Some(100)])),
+                Arc::new(Int64Array::from(vec![Some(7)])),
+                Arc::new(StringArray::from(vec![Some("liquid")])),
                 Arc::new(Int64Array::from(vec![Some(7)])),
                 Arc::new(Int64Array::from(vec![Some(42)])),
                 Arc::new(StringArray::from(vec![Some("p1")])),
@@ -280,6 +383,13 @@ mod tests {
         assert_eq!(adds.len(), 1);
         assert_eq!(adds[0].commit_version, Some(7));
         assert_eq!(adds[0].commit_timestamp, Some(42));
+        assert_eq!(
+            adds[0].tags.as_ref().and_then(|tags| tags.get("purpose")),
+            Some(&Some("merge".to_string()))
+        );
+        assert_eq!(adds[0].base_row_id, Some(100));
+        assert_eq!(adds[0].default_row_commit_version, Some(7));
+        assert_eq!(adds[0].clustering_provider.as_deref(), Some("liquid"));
         Ok(())
     }
 }

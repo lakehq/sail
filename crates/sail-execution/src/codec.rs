@@ -90,9 +90,9 @@ use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
-    DeletionVectorWriterExec, DeltaCastColumnExpr, DeltaCommitExec, DeltaDiscoveryExec,
-    DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
-    DeltaWriterExec, RelaxedTzCastExec,
+    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCastColumnExpr, DeltaCommitExec,
+    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
+    DeltaScanByAddsExec, DeltaWriterExec, RelaxedTzCastExec,
 };
 use sail_delta_lake::spec::DeltaOperation;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
@@ -1049,6 +1049,37 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     operation,
                 )?))
             }
+            NodeKind::DeletionVectorRowsWriter(gen::DeletionVectorRowsWriterExecNode {
+                input,
+                adds_input,
+                table_url,
+                path_column,
+                row_index_column,
+                version,
+                operation_json,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let adds_input = self.try_decode_plan(&adds_input, ctx)?;
+                let table_url = Url::parse(&table_url)
+                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let operation = if let Some(s) = operation_json.as_ref() {
+                    Some(
+                        serde_json::from_str::<DeltaOperation>(s)
+                            .map_err(|e| plan_datafusion_err!("{e}"))?,
+                    )
+                } else {
+                    None
+                };
+                Ok(Arc::new(DeletionVectorRowsWriterExec::new(
+                    input,
+                    adds_input,
+                    table_url,
+                    path_column,
+                    row_index_column,
+                    version,
+                    operation,
+                )?))
+            }
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1788,6 +1819,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 condition,
                 table_schema,
                 version: dv_writer_exec.version(),
+                operation_json,
+            })
+        } else if let Some(dv_rows_writer_exec) =
+            node.as_any().downcast_ref::<DeletionVectorRowsWriterExec>()
+        {
+            let input = self.try_encode_plan(dv_rows_writer_exec.input().clone())?;
+            let adds_input = self.try_encode_plan(dv_rows_writer_exec.adds_input().clone())?;
+            let operation_json = if let Some(op) = dv_rows_writer_exec.operation() {
+                Some(serde_json::to_string(op).map_err(|e| plan_datafusion_err!("{e}"))?)
+            } else {
+                None
+            };
+            NodeKind::DeletionVectorRowsWriter(gen::DeletionVectorRowsWriterExecNode {
+                input,
+                adds_input,
+                table_url: dv_rows_writer_exec.table_url().to_string(),
+                path_column: dv_rows_writer_exec.path_column().to_string(),
+                row_index_column: dv_rows_writer_exec.row_index_column().to_string(),
+                version: dv_rows_writer_exec.version(),
                 operation_json,
             })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
