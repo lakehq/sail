@@ -222,7 +222,7 @@ def test_csv_read_uppercase_extension_file(spark, tmp_path, ext):
     data_path = tmp_path / f"data.{ext}"
     data_path.write_text("name,age\nAlice,30\n")
     df = spark.read.format("csv").option("header", "true").load(str(data_path))
-    assert df.collect() == [Row(name="Alice", age="30")]
+    assert df.collect() == [Row(name="Alice", age=30)]
 
 
 @pytest.mark.parametrize("ext", ["CSV", "Csv"])
@@ -235,8 +235,8 @@ def test_csv_read_uppercase_extension_directory(spark, tmp_path, ext):
     (path / f"part-1.{ext}").write_text("name,age\nBob,40\n")
     df = spark.read.format("csv").option("header", "true").load(str(path))
     assert sorted(df.collect(), key=safe_sort_key) == [
-        Row(name="Alice", age="30"),
-        Row(name="Bob", age="40"),
+        Row(name="Alice", age=30),
+        Row(name="Bob", age=40),
     ]
 
 
