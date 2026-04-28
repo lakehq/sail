@@ -1,20 +1,24 @@
 #!/usr/bin/env python
+# ruff: noqa: S608, T201
 """TPC-H / TPC-DS benchmark runner for Sail development.
 
 Subcommands
 -----------
 * ``run``  - generate (or reuse) the dataset with DuckDB, then run a chosen
-  suite of queries against an in-process (or remote) Sail Spark Connect
-  server and persist the per-query timings as JSON.
-* ``plot`` - compare two (or more) result files and emit a bar chart.  A
-  ``--ylim`` cap keeps a single slow query from squashing the rest of the
-  chart; bars that exceed the cap are clipped and annotated with the real
-  value above the cap line.
+    suite of queries against an in-process (or remote) Sail Spark Connect
+    server and persist the per-query timings as JSON. The generated data uses
+    one folder per table with parquet part files, and row-group sizing follows
+    the sampling approach used by LakeBench's DuckDB TPC-DS generator.
+* ``plot`` - compare two (or more) result labels or files and emit a bar
+    chart.  A ``--ylim`` cap keeps a single slow query from squashing the rest
+    of the chart; bars that exceed the cap are clipped and annotated with the
+    real value above the cap line.
 * ``list`` - list available queries for a suite.
+* ``results`` - list benchmark result files and their labels.
 
 Layout (everything lives in the gitignored ``opt/`` tree):
 
-* Generated parquet data       : ``opt/benchmark-data/<suite>_sf<sf>/``
+* Generated parquet data       : ``opt/benchmark-data/<suite>_sf<sf>_rg<mb>mb_<codec>/``
 * JSON benchmark result files  : ``opt/benchmark-results/``
 * Generated comparison plots   : ``opt/benchmark-results/plots/``
 
@@ -27,7 +31,8 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
-import os
+import re
+import shutil
 import statistics
 import sys
 import time
@@ -46,11 +51,46 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = REPO_ROOT / "opt" / "benchmark-data"
 RESULTS_ROOT = REPO_ROOT / "opt" / "benchmark-results"
 PLOTS_ROOT = RESULTS_ROOT / "plots"
+DATASET_LAYOUT_VERSION = 2
+DEFAULT_TARGET_ROW_GROUP_SIZE_MB = 128
+DEFAULT_COMPRESSION = "zstd"
+SAMPLE_ROWS = 1_000_000
+SF_TOLERANCE = 1e-12
+MIN_COMPARISON_DATASETS = 2
 QUERY_ROOTS = {
     "tpch": REPO_ROOT / "python" / "pysail" / "data" / "tpch" / "queries",
     "tpcds": REPO_ROOT / "python" / "pysail" / "data" / "tpcds" / "queries",
 }
 QUERY_COUNTS = {"tpch": 22, "tpcds": 99}
+TABLE_NAMES = {
+    "tpch": ("customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"),
+    "tpcds": (
+        "call_center",
+        "catalog_page",
+        "catalog_returns",
+        "catalog_sales",
+        "customer",
+        "customer_address",
+        "customer_demographics",
+        "date_dim",
+        "household_demographics",
+        "income_band",
+        "inventory",
+        "item",
+        "promotion",
+        "reason",
+        "ship_mode",
+        "store",
+        "store_returns",
+        "store_sales",
+        "time_dim",
+        "warehouse",
+        "web_page",
+        "web_returns",
+        "web_sales",
+        "web_site",
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -64,29 +104,176 @@ def _format_sf(sf: float) -> str:
     return str(sf).replace(".", "_")
 
 
-def dataset_dir(suite: str, sf: float) -> Path:
-    return DATA_ROOT / f"{suite}_sf{_format_sf(sf)}"
+def _safe_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "value"
 
 
-def generate_dataset(suite: str, sf: float, *, force: bool = False) -> Path:
+def _normalize_compression(compression: str) -> str:
+    normalized = compression.strip().lower()
+    if not re.fullmatch(r"[A-Za-z0-9_]+", normalized):
+        msg = f"unsupported parquet compression name: {compression!r}"
+        raise ValueError(msg)
+    return normalized
+
+
+def _sql_string(value: str | Path) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def dataset_dir(
+    suite: str,
+    sf: float,
+    *,
+    target_row_group_size_mb: int = DEFAULT_TARGET_ROW_GROUP_SIZE_MB,
+    compression: str = DEFAULT_COMPRESSION,
+) -> Path:
+    codec = _safe_name(_normalize_compression(compression))
+    return DATA_ROOT / f"{suite}_sf{_format_sf(sf)}_rg{target_row_group_size_mb}mb_{codec}"
+
+
+def _parquet_table_paths(data_dir: Path) -> dict[str, Path]:
+    paths: dict[str, Path] = {}
+    if not data_dir.exists():
+        return paths
+    for child in sorted(data_dir.iterdir()):
+        if child.name.startswith("."):
+            continue
+        if child.is_file() and child.suffix == ".parquet":
+            paths[child.stem] = child
+        elif child.is_dir() and any(child.glob("*.parquet")):
+            paths[child.name] = child
+    return paths
+
+
+def _expected_dataset_metadata(
+    suite: str,
+    sf: float,
+    target_row_group_size_mb: int,
+    compression: str,
+) -> dict[str, str | float | int]:
+    return {
+        "layout_version": DATASET_LAYOUT_VERSION,
+        "suite": suite,
+        "sf": sf,
+        "generator": "duckdb",
+        "storage": "table-directories",
+        "target_row_group_size_mb": target_row_group_size_mb,
+        "compression": _normalize_compression(compression),
+    }
+
+
+def _dataset_is_reusable(data_dir: Path, expected: dict[str, str | float | int]) -> tuple[bool, dict | None]:
+    marker = data_dir / ".complete"
+    if not marker.exists():
+        return False, None
+    try:
+        meta = json.loads(marker.read_text())
+    except json.JSONDecodeError:
+        return False, None
+    for key, value in expected.items():
+        if meta.get(key) != value:
+            return False, meta
+    tables = meta.get("tables") or []
+    table_paths = _parquet_table_paths(data_dir)
+    if not tables or any(table not in table_paths for table in tables):
+        return False, meta
+    return True, meta
+
+
+def _estimate_target_rows(
+    conn,
+    table: str,
+    out_dir: Path,
+    target_row_group_size_mb: int,
+    compression: str,
+) -> int:
+    import pyarrow.parquet as pq
+
+    sample_file = out_dir / f".{table}_sample.parquet"
+    if sample_file.exists():
+        sample_file.unlink()
+    try:
+        conn.sql(
+            f"COPY (SELECT * FROM {_quote_identifier(table)} LIMIT {SAMPLE_ROWS}) "
+            f"TO {_sql_string(sample_file)} "
+            f"(FORMAT PARQUET, COMPRESSION {_sql_string(compression)})"
+        )
+        with pq.ParquetFile(sample_file) as parquet_file:
+            total_rows = 0
+            total_bytes = 0
+            for i in range(parquet_file.metadata.num_row_groups):
+                row_group = parquet_file.metadata.row_group(i)
+                total_rows += row_group.num_rows
+                total_bytes += row_group.total_byte_size
+        if total_rows <= 0 or total_bytes <= 0:
+            return 1
+        avg_row_size = total_bytes / total_rows
+        target_size_bytes = target_row_group_size_mb * 1024 * 1024
+        return max(int(target_size_bytes / avg_row_size), 1)
+    finally:
+        if sample_file.exists():
+            sample_file.unlink()
+
+
+def _write_table(conn, table: str, target_dir: Path, target_rows: int, compression: str) -> None:
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    conn.sql(
+        f"COPY {_quote_identifier(table)} TO {_sql_string(target_dir)} "
+        f"(FORMAT PARQUET, COMPRESSION {_sql_string(compression)}, "
+        f"ROW_GROUP_SIZE {target_rows}, PER_THREAD_OUTPUT, OVERWRITE)"
+    )
+
+
+def generate_dataset(
+    suite: str,
+    sf: float,
+    *,
+    force: bool = False,
+    target_row_group_size_mb: int = DEFAULT_TARGET_ROW_GROUP_SIZE_MB,
+    compression: str = DEFAULT_COMPRESSION,
+    duckdb_threads: int | None = None,
+) -> Path:
     """Generate the suite's dataset with DuckDB if not already cached.
 
-    Each table is exported as a single parquet file. A ``.complete`` marker
-    file records the generated table list and SF.
+    Each table is exported to a directory containing parquet part files. The
+    ``ROW_GROUP_SIZE`` passed to DuckDB is estimated from a sample parquet file,
+    following LakeBench's DuckDB TPC generator approach.
     """
     import duckdb  # local import keeps ``--help`` light
 
-    out_dir = dataset_dir(suite, sf)
-    marker = out_dir / ".complete"
-    if marker.exists() and not force:
-        meta = json.loads(marker.read_text())
-        print(f"[data] reusing {suite} sf={sf} at {out_dir} ({len(meta['tables'])} tables)")
+    if target_row_group_size_mb <= 0:
+        msg = "--target-row-group-size-mb must be positive"
+        raise ValueError(msg)
+    if duckdb_threads is not None and duckdb_threads <= 0:
+        msg = "--duckdb-threads must be positive"
+        raise ValueError(msg)
+
+    compression = _normalize_compression(compression)
+    out_dir = dataset_dir(suite, sf, target_row_group_size_mb=target_row_group_size_mb, compression=compression)
+    expected = _expected_dataset_metadata(suite, sf, target_row_group_size_mb, compression)
+
+    reusable, meta = _dataset_is_reusable(out_dir, expected)
+    if reusable and not force:
+        tables = (meta or {}).get("tables", [])
+        print(f"[data] reusing {suite} sf={sf} at {out_dir} ({len(tables)} tables)")
         return out_dir
 
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[data] generating {suite} sf={sf} via DuckDB into {out_dir}")
+    print(
+        f"[data] generating {suite} sf={sf} via DuckDB into {out_dir} "
+        f"(row-group target={target_row_group_size_mb} MiB, compression={compression})"
+    )
     conn = duckdb.connect()
     try:
+        if duckdb_threads is not None:
+            conn.sql(f"PRAGMA threads={duckdb_threads}")
         # DuckDB ships these as built-in extensions and auto-loads them
         # when the call is made.
         if suite == "tpch":
@@ -97,20 +284,34 @@ def generate_dataset(suite: str, sf: float, *, force: bool = False) -> Path:
             msg = f"unknown suite: {suite}"
             raise ValueError(msg)
 
-        tables = [row[0] for row in conn.sql("SHOW TABLES").fetchall()]
+        generated = {row[0] for row in conn.sql("SHOW TABLES").fetchall()}
+        tables = [table for table in TABLE_NAMES[suite] if table in generated]
+        missing = set(TABLE_NAMES[suite]) - generated
+        if missing:
+            msg = f"DuckDB did not generate expected {suite} table(s): {sorted(missing)}"
+            raise RuntimeError(msg)
         for table in tables:
-            target = out_dir / f"{table}.parquet"
-            tmp = target.with_suffix(".parquet.tmp")
-            if tmp.exists():
-                tmp.unlink()
-            # Quoting the identifier defends against any future reserved-word table name.
-            conn.sql(f"COPY \"{table}\" TO '{tmp.as_posix()}' (FORMAT PARQUET)")
-            tmp.replace(target)
-            print(f"[data]  wrote {target.name}")
+            target_rows = _estimate_target_rows(conn, table, out_dir, target_row_group_size_mb, compression)
+            target_dir = out_dir / table
+            _write_table(conn, table, target_dir, target_rows, compression)
+            conn.sql(f"DROP TABLE {_quote_identifier(table)}")
+            part_count = len(list(target_dir.glob("*.parquet")))
+            print(f"[data]  wrote {table}/ ({part_count} parquet file(s), row_group_size={target_rows} rows)")
     finally:
         conn.close()
 
-    marker.write_text(json.dumps({"suite": suite, "sf": sf, "tables": tables}, indent=2))
+    marker = out_dir / ".complete"
+    marker.write_text(
+        json.dumps(
+            {
+                **expected,
+                "tables": tables,
+                "sample_rows": SAMPLE_ROWS,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+        )
+    )
     return out_dir
 
 
@@ -148,10 +349,10 @@ def sail_session(remote: str | None) -> Iterator[SparkSession]:
 
 
 def load_tables(spark: SparkSession, data_dir: Path) -> list[str]:
-    tables: list[str] = []
-    for parquet in sorted(data_dir.glob("*.parquet")):
-        name = parquet.stem
-        spark.read.parquet(str(parquet)).createOrReplaceTempView(name)
+    table_paths = _parquet_table_paths(data_dir)
+    tables = []
+    for name, path in sorted(table_paths.items()):
+        spark.read.parquet(str(path)).createOrReplaceTempView(name)
         tables.append(name)
     if not tables:
         msg = f"no parquet files found under {data_dir}"
@@ -169,14 +370,13 @@ def parse_query_arg(arg: str | None, suite: str) -> list[str]:
     if not arg or arg == "all":
         return [f"q{i}" for i in range(1, total + 1)]
     out: list[str] = []
-    for token in arg.split(","):
-        token = token.strip()
+    for raw_token in arg.split(","):
+        token = raw_token.strip()
         if not token:
             continue
         if "-" in token:
             lo, hi = token.split("-", 1)
-            for i in range(int(lo), int(hi) + 1):
-                out.append(f"q{i}")
+            out.extend(f"q{i}" for i in range(int(lo), int(hi) + 1))
         else:
             out.append(token if token.startswith("q") else f"q{token}")
     # Validate.
@@ -228,7 +428,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     sf = args.sf
     queries = parse_query_arg(args.queries, suite)
 
-    data_dir = generate_dataset(suite, sf, force=args.regenerate_data)
+    data_dir = generate_dataset(
+        suite,
+        sf,
+        force=args.regenerate_data,
+        target_row_group_size_mb=args.target_row_group_size_mb,
+        compression=args.compression,
+        duckdb_threads=args.duckdb_threads,
+    )
 
     results: dict[str, QueryResult] = {q: QueryResult() for q in queries}
 
@@ -270,6 +477,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         "url": args.url,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "data_dir": str(data_dir),
+        "data_layout_version": DATASET_LAYOUT_VERSION,
+        "target_row_group_size_mb": args.target_row_group_size_mb,
+        "compression": _normalize_compression(args.compression),
         "results": {q: asdict(r) for q, r in results.items()},
     }
 
@@ -302,19 +512,112 @@ def _summary_value(qr: dict, stat: str) -> float | None:
     return qr.get(key)
 
 
+@dataclass(frozen=True)
+class ResultRecord:
+    path: Path
+    label: str
+    suite: str
+    sf: float | None
+    timestamp: str
+
+
+def _relative_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _read_result_record(path: Path) -> ResultRecord | None:
+    if path.name == "index.json":
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    label = payload.get("label")
+    suite = payload.get("suite")
+    if not isinstance(label, str) or suite not in QUERY_COUNTS:
+        return None
+    sf = payload.get("sf")
+    return ResultRecord(
+        path=path,
+        label=label,
+        suite=suite,
+        sf=float(sf) if sf is not None else None,
+        timestamp=str(payload.get("timestamp") or ""),
+    )
+
+
+def _iter_result_records(results_dir: Path) -> list[ResultRecord]:
+    records = []
+    for path in sorted(results_dir.glob("*.json")):
+        record = _read_result_record(path)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _same_sf(left: float | None, right: float | None) -> bool:
+    if left is None or right is None:
+        return left is right
+    return abs(left - right) < SF_TOLERANCE
+
+
+def _resolve_result_ref(ref: str, *, suite: str | None, sf: float | None, results_dir: Path) -> Path:
+    path = Path(ref)
+    if path.is_file():
+        return path
+    if path.suffix == ".json" or "/" in ref or "\\" in ref:
+        msg = f"result file not found: {ref}"
+        raise FileNotFoundError(msg)
+
+    matches = [record for record in _iter_result_records(results_dir) if record.label == ref]
+    if suite is not None:
+        matches = [record for record in matches if record.suite == suite]
+    if sf is not None:
+        matches = [record for record in matches if _same_sf(record.sf, sf)]
+
+    if not matches:
+        available = sorted({record.label for record in _iter_result_records(results_dir)})
+        hint = f" Available labels: {', '.join(available)}" if available else " No benchmark results found."
+        msg = f"could not resolve benchmark result label {ref!r}.{hint}"
+        raise FileNotFoundError(msg)
+
+    matches.sort(key=lambda record: (record.timestamp, record.path.name), reverse=True)
+    chosen = matches[0]
+    if len(matches) > 1:
+        print(f"[plot] label {ref!r} matched {len(matches)} result files; using latest: {_relative_path(chosen.path)}")
+    else:
+        print(f"[plot] label {ref!r} -> {_relative_path(chosen.path)}")
+    return chosen.path
+
+
 def cmd_plot(args: argparse.Namespace) -> int:
     try:
-        import matplotlib
+        import matplotlib as mpl
 
-        matplotlib.use("Agg")
+        mpl.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
         print("matplotlib is required for `plot`. Install with: pip install matplotlib", file=sys.stderr)
         return 2
 
-    files = [Path(p) for p in args.files]
-    if len(files) < 1:
-        print("plot requires at least one --file", file=sys.stderr)
+    refs = [*(args.refs or []), *(args.files or [])]
+    if not refs:
+        print("plot requires at least one label or --file", file=sys.stderr)
+        return 2
+
+    try:
+        files = [
+            _resolve_result_ref(ref, suite=args.suite, sf=args.sf, results_dir=Path(args.results_dir)) for ref in refs
+        ]
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if args.labels and len(args.labels) != len(files):
+        print("the number of --label/--legend-label values must match the number of plotted results", file=sys.stderr)
         return 2
 
     datasets: list[dict] = []
@@ -322,12 +625,21 @@ def cmd_plot(args: argparse.Namespace) -> int:
         d = json.loads(f.read_text())
         d["_path"] = str(f)
         datasets.append(d)
+    display_labels = [
+        args.labels[i] if args.labels and i < len(args.labels) else d.get("label") or Path(d["_path"]).stem
+        for i, d in enumerate(datasets)
+    ]
 
     suites = {d["suite"] for d in datasets}
     if len(suites) > 1:
         print(f"refusing to plot mixed suites: {suites}", file=sys.stderr)
         return 2
     suite = suites.pop()
+
+    scale_factors = {d.get("sf") for d in datasets}
+    if len(scale_factors) > 1:
+        print(f"refusing to plot mixed scale factors: {scale_factors}", file=sys.stderr)
+        return 2
 
     # Union of queries across all datasets, in natural q-order.
     all_queries = sorted(
@@ -347,7 +659,7 @@ def cmd_plot(args: argparse.Namespace) -> int:
     colors = plt.cm.tab10.colors  # type: ignore[attr-defined]
 
     for i, d in enumerate(datasets):
-        label = args.labels[i] if args.labels and i < len(args.labels) else d.get("label") or Path(d["_path"]).stem
+        label = display_labels[i]
         values: list[float] = []
         clipped: list[bool] = []
         errors: list[bool] = []
@@ -382,7 +694,7 @@ def cmd_plot(args: argparse.Namespace) -> int:
             if errors[idx]:
                 ax.text(
                     bar.get_x() + bar.get_width() / 2,
-                    (cap or max(values + [0.001])) * 0.02,
+                    (cap or max([*values, 0.001])) * 0.02,
                     "ERR",
                     ha="center",
                     va="bottom",
@@ -427,9 +739,9 @@ def cmd_plot(args: argparse.Namespace) -> int:
     print(f"[plot] wrote {out}")
 
     # Print a small comparison table when there are >= 2 datasets.
-    if len(datasets) >= 2:
+    if len(datasets) >= MIN_COMPARISON_DATASETS:
         base = datasets[0]
-        print(f"\n  query  {'  '.join(d.get('label') or Path(d['_path']).stem for d in datasets)}  vs-base")
+        print(f"\n  query  {'  '.join(display_labels)}  vs-base")
         for q in all_queries:
             base_v = _summary_value(base["results"].get(q) or {}, args.stat)
             row = [q.ljust(6)]
@@ -457,6 +769,29 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_results(args: argparse.Namespace) -> int:
+    records = _iter_result_records(Path(args.results_dir))
+    if args.suite is not None:
+        records = [record for record in records if record.suite == args.suite]
+    if args.sf is not None:
+        records = [record for record in records if _same_sf(record.sf, args.sf)]
+    if args.label is not None:
+        records = [record for record in records if record.label == args.label]
+    records.sort(key=lambda record: (record.suite, record.sf or -1.0, record.label, record.timestamp))
+
+    if not records:
+        print("no benchmark results found")
+        return 0
+
+    print(f"{'label':24} {'suite':6} {'sf':8} {'timestamp':35} path")
+    for record in records:
+        sf = "" if record.sf is None else f"{record.sf:g}"
+        print(
+            f"{record.label[:24]:24} {record.suite:6} {sf:8} {record.timestamp[:35]:35} {_relative_path(record.path)}"
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -474,6 +809,24 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--warmup", action="store_true", help="run one warm-up query before timing")
     p_run.add_argument("--label", type=str, default=None, help="label embedded in the result file")
     p_run.add_argument(
+        "--target-row-group-size-mb",
+        type=int,
+        default=DEFAULT_TARGET_ROW_GROUP_SIZE_MB,
+        help=f"target parquet row-group size in MiB for generated data (default: {DEFAULT_TARGET_ROW_GROUP_SIZE_MB})",
+    )
+    p_run.add_argument(
+        "--compression",
+        type=str,
+        default=DEFAULT_COMPRESSION,
+        help=f"DuckDB parquet compression for generated data (default: {DEFAULT_COMPRESSION})",
+    )
+    p_run.add_argument(
+        "--duckdb-threads",
+        type=int,
+        default=None,
+        help="DuckDB thread count used during data generation (default: DuckDB decides)",
+    )
+    p_run.add_argument(
         "--url",
         type=str,
         default=None,
@@ -484,8 +837,22 @@ def main(argv: list[str] | None = None) -> int:
     p_run.set_defaults(func=cmd_run)
 
     p_plot = sub.add_parser("plot", help="plot/compare benchmark result files")
-    p_plot.add_argument("--file", dest="files", action="append", required=True, help="result JSON file (repeatable)")
-    p_plot.add_argument("--label", dest="labels", action="append", help="optional override label per --file")
+    p_plot.add_argument(
+        "refs",
+        nargs="*",
+        help="result labels or JSON file paths; labels resolve to the latest matching result",
+    )
+    p_plot.add_argument("--file", dest="files", action="append", help="result JSON file (repeatable; legacy form)")
+    p_plot.add_argument("--suite", choices=["tpch", "tpcds"], default=None, help="suite filter for label lookup")
+    p_plot.add_argument("--sf", type=float, default=None, help="scale-factor filter for label lookup")
+    p_plot.add_argument("--results-dir", type=str, default=str(RESULTS_ROOT), help="directory to search for labels")
+    p_plot.add_argument(
+        "--legend-label",
+        "--label",
+        dest="labels",
+        action="append",
+        help="optional legend override per plotted result",
+    )
     p_plot.add_argument(
         "--ylim",
         type=float,
@@ -504,6 +871,13 @@ def main(argv: list[str] | None = None) -> int:
     p_list = sub.add_parser("list", help="list available queries for a suite")
     p_list.add_argument("--suite", choices=["tpch", "tpcds"], required=True)
     p_list.set_defaults(func=cmd_list)
+
+    p_results = sub.add_parser("results", help="list benchmark result labels and files")
+    p_results.add_argument("--suite", choices=["tpch", "tpcds"], default=None)
+    p_results.add_argument("--sf", type=float, default=None)
+    p_results.add_argument("--label", type=str, default=None)
+    p_results.add_argument("--results-dir", type=str, default=str(RESULTS_ROOT))
+    p_results.set_defaults(func=cmd_results)
 
     args = parser.parse_args(argv)
     return args.func(args)
