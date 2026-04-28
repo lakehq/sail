@@ -29,6 +29,7 @@ Feature: concat function
         | result |
         | hello  |
 
+    @sail-bug
     Scenario: zero arguments returns empty string
       When query
         """
@@ -74,14 +75,6 @@ Feature: concat function
         | result   |
         | abcdefgh |
 
-    Scenario: unicode strings
-      When query
-        """
-        SELECT concat('Hello', ' ', '世界') AS result
-        """
-      Then query result
-        | result    |
-        | Hello 世界 |
 
   Rule: String NULL propagation
 

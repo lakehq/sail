@@ -8,7 +8,7 @@ use datafusion::arrow::compute::kernels::nullif::nullif;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
-use datafusion_common::{plan_err, ExprSchema, Result};
+use datafusion_common::{plan_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -123,11 +123,12 @@ impl ScalarUDFImpl for SparkConcat {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let return_type = args.return_field.data_type().clone();
         let mut null_mask = None;
         for arg in args.args.clone() {
             match arg {
                 ColumnarValue::Scalar(s) if s.is_null() => {
-                    return Ok(ColumnarValue::Scalar(s.clone()));
+                    return Ok(ColumnarValue::Scalar(ScalarValue::try_from(&return_type)?));
                 }
                 ColumnarValue::Array(a) => {
                     let mask = is_null(&a)?;
