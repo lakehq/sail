@@ -240,7 +240,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "product",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
