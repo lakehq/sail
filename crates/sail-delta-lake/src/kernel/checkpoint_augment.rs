@@ -27,7 +27,7 @@ pub(crate) struct AddAugmentationConfig {
 impl AddAugmentationConfig {
     pub(crate) fn from_metadata(metadata: &Metadata) -> DeltaResult<Self> {
         let properties = TableProperties::from(metadata.configuration().iter());
-        let write_stats_as_struct = properties.checkpoint_write_stats_as_struct.unwrap_or(false);
+        let write_stats_as_struct = properties.checkpoint_write_stats_as_struct.unwrap_or(true);
         let write_stats_as_json = properties.checkpoint_write_stats_as_json.unwrap_or(true);
         let column_mapping_mode = properties
             .column_mapping_mode

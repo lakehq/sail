@@ -569,6 +569,58 @@ def _load_checkpoint_parquet(location: Path, filename: str) -> list[dict]:
     return [_checkpoint_row_to_dict(table, i) for i in range(table.num_rows)]
 
 
+def _physical_name_for_column(location: Path, column: str) -> str:
+    """Return the Delta column mapping physical name for a top-level column."""
+    actions = _first_commit_actions(location)
+    metadata = actions.get("metaData")
+    assert metadata is not None, "metaData action not found in first delta log"
+    schema_string = metadata.get("schemaString")
+    assert isinstance(schema_string, str), "metaData.schemaString must be present"
+    schema = json.loads(schema_string)
+    for field in schema.get("fields", []):
+        if field.get("name") == column:
+            field_metadata = field.get("metadata", {})
+            physical_name = field_metadata.get("delta.columnMapping.physicalName", column)
+            assert isinstance(physical_name, str)
+            return physical_name
+    msg = f"column {column!r} not found in Delta schema"
+    raise AssertionError(msg)
+
+
+@then(parsers.parse("delta log add partitionValues in {location_var} uses physical name for column {column}"))
+def delta_log_add_partition_values_uses_physical_name(
+    location_var: str,
+    column: str,
+    variables: dict,
+) -> None:
+    """Assert column-mapped add.partitionValues keys use physical names."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    location_path = Path(location.path)
+    physical_name = _physical_name_for_column(location_path, column)
+    assert physical_name != column, f"column {column!r} is not column-mapped"
+
+    found_physical_key = False
+    for log_file in sorted((location_path / "_delta_log").glob("*.json")):
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line)
+                add = obj.get("add")
+                if not isinstance(add, dict):
+                    continue
+                partition_values = add.get("partitionValues", {})
+                assert column not in partition_values, (
+                    f"add.partitionValues should not use logical key {column!r}: {partition_values}"
+                )
+                if physical_name in partition_values:
+                    found_physical_key = True
+
+    assert found_physical_key, f"expected add.partitionValues to contain physical key {physical_name!r}"
+
+
 @then(parsers.parse("checkpoint parquet file {filename} in {location_var} contains add fields"))
 def checkpoint_parquet_contains_add_fields(
     filename: str,
@@ -608,6 +660,97 @@ def checkpoint_parquet_contains_add_fields(
                 matched = True
                 break
         assert matched, f"field {path!r}: expected {expected!r}, got {last_actual!r} across {len(add_rows)} add rows"
+
+
+@then(
+    parsers.parse(
+        "checkpoint parquet file {filename} in {location_var} contains physical partitionValues_parsed for column {column} with value {raw_value}"
+    )
+)
+def checkpoint_parquet_contains_physical_partition_value(
+    filename: str,
+    location_var: str,
+    column: str,
+    raw_value: str,
+    variables: dict,
+) -> None:
+    """Assert partitionValues_parsed uses a column mapping physical field name."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    location_path = Path(location.path)
+    physical_name = _physical_name_for_column(location_path, column)
+    assert physical_name != column, f"column {column!r} is not column-mapped"
+    expected = _parse_expected_value(raw_value)
+
+    rows = _load_checkpoint_parquet(location_path, filename)
+    add_rows = [row.get("add") for row in rows if row.get("add") is not None]
+    matched = False
+    last_actual: object = None
+    for add in add_rows:
+        partition_values = add.get("partitionValues_parsed")
+        if not isinstance(partition_values, dict):
+            continue
+        assert column not in partition_values, (
+            f"partitionValues_parsed should not use logical field {column!r}: {partition_values}"
+        )
+        last_actual = partition_values.get(physical_name)
+        if last_actual == expected:
+            matched = True
+            break
+
+    assert matched, (
+        f"field partitionValues_parsed.{physical_name!r}: expected {expected!r}, "
+        f"got {last_actual!r} across {len(add_rows)} add rows"
+    )
+
+
+@then(
+    parsers.parse(
+        "checkpoint parquet file {filename} in {location_var} contains physical stats_parsed {stats_kind} for column {column} with value {raw_value}"
+    )
+)
+def checkpoint_parquet_contains_physical_stats_value(
+    filename: str,
+    location_var: str,
+    stats_kind: str,
+    column: str,
+    raw_value: str,
+    variables: dict,
+) -> None:
+    """Assert stats_parsed uses a column mapping physical field name."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    assert stats_kind in {"minValues", "maxValues", "nullCount"}
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    location_path = Path(location.path)
+    physical_name = _physical_name_for_column(location_path, column)
+    assert physical_name != column, f"column {column!r} is not column-mapped"
+    expected = _parse_expected_value(raw_value)
+
+    rows = _load_checkpoint_parquet(location_path, filename)
+    add_rows = [row.get("add") for row in rows if row.get("add") is not None]
+    matched = False
+    last_actual: object = None
+    for add in add_rows:
+        stats = add.get("stats_parsed")
+        values = stats.get(stats_kind) if isinstance(stats, dict) else None
+        if not isinstance(values, dict):
+            continue
+        assert column not in values, f"stats_parsed.{stats_kind} should not use logical field {column!r}: {values}"
+        last_actual = values.get(physical_name)
+        if last_actual == expected:
+            matched = True
+            break
+
+    assert matched, (
+        f"field stats_parsed.{stats_kind}.{physical_name!r}: expected {expected!r}, "
+        f"got {last_actual!r} across {len(add_rows)} add rows"
+    )
 
 
 @then(parsers.parse("checkpoint parquet file {filename} in {location_var} does not contain add sub-field {field}"))
