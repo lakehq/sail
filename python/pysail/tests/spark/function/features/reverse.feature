@@ -194,7 +194,6 @@ Feature: reverse function
         | result     |
         | 51-01-4202 |
 
-    @sail-bug
     Scenario: TIMESTAMP is implicitly cast to string before reversing
       When query
         """
@@ -204,7 +203,6 @@ Feature: reverse function
         | result              |
         | 54:03:21 51-10-4202 |
 
-    @sail-bug
     Scenario: TIMESTAMP_NTZ is implicitly cast to string before reversing
       When query
         """

@@ -2,7 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, StringBuilder};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::functions::unicode::reverse::ReverseFunc;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -10,6 +10,7 @@ use datafusion_functions_nested::reverse::array_reverse_inner;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::spark_to_string::SparkToUtf8;
 
 /// Spark-compatible `reverse` function.
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#reverse>
@@ -147,6 +148,21 @@ impl ScalarUDFImpl for SparkReverse {
             reverse_binary(&args.args[0])
         } else if is_array_type(&dt) {
             make_scalar_function(array_reverse_inner)(&args.args)
+        } else if matches!(dt, DataType::Timestamp(_, _)) {
+            // Spark formats timestamps as "2024-01-15 12:30:45", but Arrow's native
+            // cast produces ISO 8601. Use SparkToUtf8 to get the correct representation.
+            let number_rows = args.number_rows;
+            let return_field = Arc::clone(&args.return_field);
+            let config_options = Arc::clone(&args.config_options);
+            let arg_field = Arc::new(Field::new("", DataType::Utf8, true));
+            let utf8_val = SparkToUtf8::new().invoke_with_args(args)?;
+            ReverseFunc::new().invoke_with_args(ScalarFunctionArgs {
+                args: vec![utf8_val],
+                arg_fields: vec![arg_field],
+                number_rows,
+                return_field,
+                config_options,
+            })
         } else {
             Err(unsupported_data_type_exec_err(
                 "reverse",
@@ -175,6 +191,10 @@ impl ScalarUDFImpl for SparkReverse {
                  The argument to the `reverse` function must be a string, binary, or array type, \
                  not `{dt}`."
             )
+        } else if matches!(dt, DataType::Timestamp(_, _)) {
+            // Keep as Timestamp — SparkToUtf8 is applied in invoke_with_args to get
+            // Spark-format strings ("2024-01-15 12:30:45") instead of Arrow ISO format.
+            Ok(vec![dt.clone()])
         } else {
             Ok(vec![DataType::Utf8])
         }
