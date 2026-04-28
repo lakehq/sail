@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
-use datafusion_expr::expr::{FieldMetadata, ScalarFunction};
+use datafusion_expr::expr::{Alias, FieldMetadata, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{Expr, LogicalPlan, Projection};
+use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
@@ -53,6 +54,32 @@ impl PlanResolver<'_> {
             self.rewrite_aggregate(input, expr, vec![], None, false, state)
         } else {
             let expr = self.rewrite_named_expressions(expr, state)?;
+            // Promote null-typed output expressions to string type to match Spark behavior.
+            // In Spark, an untyped NULL literal in a SELECT clause resolves to StringType.
+            let input_schema = input.schema();
+            let expr = expr
+                .into_iter()
+                .map(|e| {
+                    let data_type = e.get_type(input_schema.as_ref())?;
+                    if data_type != DataType::Null {
+                        return Ok(e);
+                    }
+                    match e {
+                        Expr::Alias(Alias {
+                            expr: inner,
+                            name,
+                            relation,
+                            metadata,
+                        }) => Ok(Expr::Alias(Alias {
+                            expr: Box::new(cast(*inner, DataType::Utf8)),
+                            name,
+                            relation,
+                            metadata,
+                        })),
+                        other => Ok(cast(other, DataType::Utf8)),
+                    }
+                })
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
             Ok(LogicalPlan::Projection(Projection::try_new(
                 expr,
                 Arc::new(input),

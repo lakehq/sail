@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
@@ -19,6 +21,7 @@ use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
@@ -324,18 +327,55 @@ fn date_format(expr: Expr, format: Expr) -> Expr {
     expr_fn::to_char(expr, format)
 }
 
-fn to_timestamp(args: Vec<Expr>) -> PlanResult<Expr> {
+fn to_timestamp_ltz(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let timezone = input.function_context.plan_config.session_timezone.clone();
+    if input.arguments.len() == 1 {
+        let arg = input.arguments.one()?;
+        let data_type = arg
+            .to_field(input.function_context.schema)?
+            .1
+            .data_type()
+            .clone();
+        if matches!(
+            data_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
+            Ok(Expr::ScalarFunction(expr::ScalarFunction {
+                func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(
+                    Some(timezone),
+                    false,
+                )?)),
+                args: vec![arg],
+            }))
+        } else {
+            Ok(cast(
+                arg,
+                DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
+            ))
+        }
+    } else if input.arguments.len() == 2 {
+        let (e, format) = input.arguments.two()?;
+        let format = to_chrono_fmt(format);
+        Ok(expr_fn::to_timestamp_micros(vec![e, format]))
+    } else {
+        Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"))
+    }
+}
+
+fn to_timestamp_ntz(args: Vec<Expr>) -> PlanResult<Expr> {
     if args.len() == 1 {
         Ok(cast(
             args.one()?,
             DataType::Timestamp(TimeUnit::Microsecond, None),
         ))
     } else if args.len() == 2 {
-        let (expr, format) = args.two()?;
+        let (e, format) = args.two()?;
         let format = to_chrono_fmt(format);
-        Ok(expr_fn::to_timestamp_micros(vec![expr, format]))
+        Ok(expr_fn::to_timestamp_micros(vec![e, format]))
     } else {
-        Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"))
+        Err(PlanError::invalid(
+            "to_timestamp_ntz requires 1 or 2 arguments",
+        ))
     }
 }
 
@@ -783,13 +823,11 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("to_date", F::custom(to_date)),
         ("to_time", F::var_arg(to_time)),
-        ("to_timestamp", F::var_arg(to_timestamp)),
-        // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
-        //  "Parses the timestamp with the format to a timestamp without time zone. Returns null with invalid input."
+        ("to_timestamp", F::custom(to_timestamp_ltz)),
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ltz.html
+        ("to_timestamp_ltz", F::custom(to_timestamp_ltz)),
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
-        ("to_timestamp_ltz", F::var_arg(to_timestamp)),
-        ("to_timestamp_ntz", F::var_arg(to_timestamp)),
+        ("to_timestamp_ntz", F::var_arg(to_timestamp_ntz)),
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
         ("trunc", F::binary(trunc)),
