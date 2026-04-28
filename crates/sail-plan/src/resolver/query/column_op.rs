@@ -329,8 +329,7 @@ impl PlanResolver<'_> {
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect();
                         final_meta.extend(new_meta.iter().cloned());
-                        let patched =
-                            Arc::new(Arc::unwrap_or_clone(field.clone()).with_metadata(final_meta));
+                        let patched = Arc::new((**field).clone().with_metadata(final_meta));
                         (qualifier.cloned(), patched)
                     } else {
                         (qualifier.cloned(), field.clone())
