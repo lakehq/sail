@@ -1,7 +1,8 @@
 use std::any::Any;
 use std::cmp::Ordering;
+use std::sync::Arc;
 
-use datafusion::arrow::array::BooleanArray;
+use datafusion::arrow::array::{BooleanArray, StringArray};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::compute::kernels::boolean::{is_null, or};
 use datafusion::arrow::compute::kernels::nullif::nullif;
@@ -52,6 +53,9 @@ impl ScalarUDFImpl for SparkConcat {
 
     /// [Credit]: <https://github.com/apache/datafusion/blob/7ccc6d7c55ae9dbcb7dee031f394bf11a03000ba/datafusion/functions-nested/src/concat.rs#L276-L310>
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.is_empty() {
+            return Ok(DataType::Utf8);
+        }
         if arg_types
             .iter()
             .any(|arg_type| matches!(arg_type, DataType::List(_)))
@@ -127,6 +131,11 @@ impl ScalarUDFImpl for SparkConcat {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.is_empty() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::new(),
+            ))));
+        }
         let return_type = args.return_field.data_type().clone();
         let mut null_mask = None;
         for arg in args.args.clone() {
@@ -205,16 +214,69 @@ fn cast_columnar_values(
 ) -> Result<Vec<ColumnarValue>> {
     values
         .into_iter()
-        .map(|value| match value {
-            ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar(scalar.cast_to(target_type)?))
-            }
-            ColumnarValue::Array(array) => {
-                let cast_array = cast(&array, target_type)?;
-                Ok(ColumnarValue::Array(cast_array))
+        .map(|value| {
+            let is_timestamp = matches!(value.data_type(), DataType::Timestamp(_, _));
+            match value {
+                ColumnarValue::Scalar(scalar) => {
+                    let casted = scalar.cast_to(target_type)?;
+                    if is_timestamp {
+                        Ok(ColumnarValue::Scalar(
+                            spark_format_timestamp_scalar(casted)?,
+                        ))
+                    } else {
+                        Ok(ColumnarValue::Scalar(casted))
+                    }
+                }
+                ColumnarValue::Array(array) => {
+                    let cast_array = cast(&array, target_type)?;
+                    if is_timestamp {
+                        Ok(ColumnarValue::Array(spark_format_timestamp_array(
+                            cast_array,
+                        )?))
+                    } else {
+                        Ok(ColumnarValue::Array(cast_array))
+                    }
+                }
             }
         })
         .collect()
+}
+
+/// Arrow formats timestamps as ISO 8601 (e.g. "2024-01-15T12:00:00Z").
+/// Spark uses a space separator and no timezone suffix (e.g. "2024-01-15 12:00:00").
+fn spark_format_timestamp_str(s: &str) -> String {
+    // Replace ISO 8601 'T' separator with a space
+    let s = s.replace('T', " ");
+    // Strip trailing timezone: Z, +HH:MM, -HH:MM, etc.
+    // The last digit of the time (or fractional seconds) marks the end of the value.
+    if let Some(idx) = s.rfind(|c: char| c.is_ascii_digit()) {
+        s[..=idx].to_string()
+    } else {
+        s
+    }
+}
+
+fn spark_format_timestamp_scalar(scalar: ScalarValue) -> Result<ScalarValue> {
+    match scalar {
+        ScalarValue::Utf8(Some(s)) => Ok(ScalarValue::Utf8(Some(spark_format_timestamp_str(&s)))),
+        ScalarValue::LargeUtf8(Some(s)) => Ok(ScalarValue::LargeUtf8(Some(
+            spark_format_timestamp_str(&s),
+        ))),
+        other => Ok(other),
+    }
+}
+
+fn spark_format_timestamp_array(array: Arc<dyn datafusion::arrow::array::Array>) -> Result<Arc<dyn datafusion::arrow::array::Array>> {
+    use datafusion::arrow::array::Array;
+    let string_array = array
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| datafusion_common::DataFusionError::Internal("expected StringArray after timestamp cast".to_string()))?;
+    let result: StringArray = string_array
+        .iter()
+        .map(|opt| opt.map(spark_format_timestamp_str))
+        .collect();
+    Ok(Arc::new(result))
 }
 
 /// Cast list arrays with Null element type to the target list type.
