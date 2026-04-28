@@ -185,13 +185,20 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
 
     let rows: &StringArray = downcast_arg!(&args[0], StringArray);
     let schema_str: &StringArray = downcast_arg!(&args[1], StringArray);
-    let schema_str: &str = if schema_str.is_empty() {
+    let schema_str: &str = if schema_str.is_empty() || schema_str.is_null(0) {
         return exec_err!(
-            "`{}` function requires a schema string, got an empty string",
+            "`{}` function requires a schema string, got an empty or null string",
             SparkFromJson::FROM_JSON_NAME
         );
     } else {
-        schema_str.value(0)
+        let s = schema_str.value(0);
+        if s.trim().is_empty() {
+            return exec_err!(
+                "`{}` function requires a schema string, got an empty string",
+                SparkFromJson::FROM_JSON_NAME
+            );
+        }
+        s
     };
 
     let options: SparkFromJsonOptions = if let Some(options) = args.get(2) {
@@ -461,32 +468,17 @@ fn json_value_to_scalar(
                 }
                 _ => ScalarValue::try_new_null(data_type),
             },
-            DataType::Decimal128(precision, scale) => match val {
-                Value::Number(n) => {
-                    if let Some(v) = n.as_f64() {
-                        let multiplier = 10_f64.powi(*scale as i32);
-                        Ok(ScalarValue::Decimal128(
-                            Some((v * multiplier).round() as i128),
-                            *precision,
-                            *scale,
-                        ))
-                    } else {
-                        ScalarValue::try_new_null(data_type)
-                    }
+            DataType::Decimal128(precision, scale) => {
+                let parse_decimal = |input: &str| -> Result<ScalarValue> {
+                    let unscaled = parse_decimal_to_i128(input, *precision, *scale)?;
+                    Ok(ScalarValue::Decimal128(Some(unscaled), *precision, *scale))
+                };
+                match val {
+                    Value::Number(n) => parse_decimal(&n.to_string()),
+                    Value::String(s) => parse_decimal(s),
+                    _ => ScalarValue::try_new_null(data_type),
                 }
-                Value::String(s) => {
-                    let v: f64 = s.parse().map_err(|e| {
-                        DataFusionError::Execution(format!("Failed to parse decimal: {e}"))
-                    })?;
-                    let multiplier = 10_f64.powi(*scale as i32);
-                    Ok(ScalarValue::Decimal128(
-                        Some((v * multiplier).round() as i128),
-                        *precision,
-                        *scale,
-                    ))
-                }
-                _ => ScalarValue::try_new_null(data_type),
-            },
+            }
             DataType::Struct(fields) => match val {
                 Value::Object(obj) => {
                     let arrays: Vec<ArrayRef> = fields
@@ -531,7 +523,7 @@ fn json_value_to_scalar(
                 }
                 _ => ScalarValue::try_new_null(data_type),
             },
-            DataType::Map(map_field, _keys_sorted) => match val {
+            DataType::Map(map_field, keys_sorted) => match val {
                 Value::Object(obj) => {
                     let DataType::Struct(entry_fields) = map_field.data_type() else {
                         return exec_err!("Expected struct entries field in Map type");
@@ -569,7 +561,7 @@ fn json_value_to_scalar(
                         offsets,
                         struct_array,
                         None,
-                        false,
+                        *keys_sorted,
                     )?;
                     Ok(ScalarValue::Map(Arc::new(map_array)))
                 }
@@ -578,6 +570,119 @@ fn json_value_to_scalar(
             _ => ScalarValue::try_new_null(data_type),
         },
     }
+}
+
+/// Parse a decimal string into an unscaled `i128` value for `Decimal128(precision, scale)`.
+///
+/// Handles integer, fractional, and scientific notation inputs. Fractional digits are
+/// padded or truncated (with rounding) to match the target scale. Validates that the
+/// result fits within the declared precision.
+fn parse_decimal_to_i128(input: &str, precision: u8, scale: i8) -> Result<i128> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Err(DataFusionError::Execution(
+            "Failed to parse decimal: empty string".to_string(),
+        ));
+    }
+
+    let (negative, rest) = if let Some(rest) = s.strip_prefix('-') {
+        (true, rest)
+    } else if let Some(rest) = s.strip_prefix('+') {
+        (false, rest)
+    } else {
+        (false, s)
+    };
+
+    // Split off scientific notation exponent (e.g. "1.5e3")
+    let (mantissa, exponent) = if let Some((m, e)) = rest.split_once(['e', 'E']) {
+        let exp: i32 = e.parse().map_err(|err| {
+            DataFusionError::Execution(format!("Failed to parse decimal exponent: {err}"))
+        })?;
+        (m, exp)
+    } else {
+        (rest, 0)
+    };
+
+    let (int_part, frac_part) = if let Some((i, f)) = mantissa.split_once('.') {
+        (i, f)
+    } else {
+        (mantissa, "")
+    };
+
+    if int_part.is_empty() && frac_part.is_empty() {
+        return Err(DataFusionError::Execution(
+            "Failed to parse decimal: missing digits".to_string(),
+        ));
+    }
+    if !int_part.bytes().all(|b| b.is_ascii_digit())
+        || !frac_part.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(DataFusionError::Execution(format!(
+            "Failed to parse decimal: invalid digits in '{input}'"
+        )));
+    }
+
+    // effective_scale = number of fractional digits minus the exponent
+    // e.g. "1.23e1" → frac_part.len()=2, exponent=1, effective_scale=1
+    let effective_scale = frac_part.len() as i32 - exponent;
+    let scale_delta = scale as i32 - effective_scale;
+
+    // Combine integer and fractional digits into one coefficient
+    let digits = format!("{int_part}{frac_part}");
+    let digits = digits.trim_start_matches('0');
+    let coefficient: i128 = if digits.is_empty() {
+        0
+    } else {
+        digits.parse::<i128>().map_err(|err| {
+            DataFusionError::Execution(format!("Failed to parse decimal coefficient: {err}"))
+        })?
+    };
+
+    // Scale the coefficient to match the target scale
+    let unscaled = if scale_delta >= 0 {
+        coefficient.checked_mul(10_i128.checked_pow(scale_delta as u32).ok_or_else(|| {
+            DataFusionError::Execution("Decimal scaling overflowed i128".to_string())
+        })?)
+    } else {
+        let divisor = 10_i128.checked_pow((-scale_delta) as u32).ok_or_else(|| {
+            DataFusionError::Execution("Decimal scaling overflowed i128".to_string())
+        })?;
+        let quotient = coefficient / divisor;
+        let remainder = coefficient % divisor;
+        // Round half-up
+        if remainder
+            .checked_mul(2)
+            .map(|twice| twice >= divisor)
+            .unwrap_or(true)
+        {
+            quotient.checked_add(1)
+        } else {
+            Some(quotient)
+        }
+    }
+    .ok_or_else(|| DataFusionError::Execution("Decimal scaling overflowed i128".to_string()))?;
+
+    let result = if negative {
+        unscaled.checked_neg().ok_or_else(|| {
+            DataFusionError::Execution("Decimal negation overflowed i128".to_string())
+        })?
+    } else {
+        unscaled
+    };
+
+    // Validate precision: count digits in the absolute value
+    let digit_count = if result == 0 {
+        1u32
+    } else {
+        result.unsigned_abs().to_string().len() as u32
+    };
+    if digit_count > precision as u32 {
+        return Err(DataFusionError::Execution(format!(
+            "Decimal value '{input}' exceeds declared precision {precision} and scale {scale}"
+        )));
+    }
+
+    Ok(result)
 }
 
 /// Parse a date string into a ScalarValue::Date32.
@@ -825,7 +930,13 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
             .entries()
             .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
             .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-            .map(|values| values.value(index).to_string())
+            .and_then(|values| {
+                if values.is_null(index) {
+                    None
+                } else {
+                    Some(values.value(index).to_string())
+                }
+            })
     } else {
         None
     }
