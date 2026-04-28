@@ -1,4 +1,3 @@
-
 use datafusion::arrow::array::builder::PrimitiveBuilder;
 use datafusion::arrow::array::{Array, AsArray, PrimitiveArray};
 use datafusion::arrow::datatypes::{DataType, Decimal128Type, DecimalType, Int32Type, Int64Type};

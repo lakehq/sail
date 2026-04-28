@@ -1,4 +1,3 @@
-
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};

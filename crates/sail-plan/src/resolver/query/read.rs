@@ -454,8 +454,9 @@ impl PlanResolver<'_> {
                             "unknown table function: {function_name}"
                         )));
                     };
-                let table_provider = table_function
-                    .create_table_provider_with_args(TableFunctionArgs::new(&arguments, &self.ctx.state()))?;
+                let table_provider = table_function.create_table_provider_with_args(
+                    TableFunctionArgs::new(&arguments, &self.ctx.state()),
+                )?;
                 self.resolve_table_provider_with_rename(
                     table_provider,
                     function_name,

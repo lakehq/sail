@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"left\")])"
+        "failure": "not implemented: lambda function: array_sort with comparator"
       }
     },
     {
@@ -141,7 +141,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "failure": "not implemented: lambda function: exists"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "failure": "not implemented: lambda function: exists"
       }
     },
     {
@@ -281,7 +281,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"x\")])"
+        "success": "ok"
       }
     },
     {

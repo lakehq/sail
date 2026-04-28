@@ -125,7 +125,10 @@ mod tests {
         let result = rule.optimize(join, &config).unwrap();
 
         assert_eq!(result.name(), "HashJoinExec");
-        assert_eq!(result.children()[0].output_partitioning().partition_count(), 1);
+        assert_eq!(
+            result.children()[0].output_partitioning().partition_count(),
+            1
+        );
         assert_eq!(result.children()[0].name(), "CoalescePartitionsExec");
     }
 

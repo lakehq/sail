@@ -1,4 +1,3 @@
-
 use datafusion::arrow::array::{
     as_large_list_array, as_list_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait,
 };
