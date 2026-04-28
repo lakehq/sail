@@ -94,3 +94,135 @@ Feature: from_json function parses JSON strings into structured types
       Then query result
         | result    |
         | {1, 2.5}  |
+
+    Scenario: Parse tinyint smallint and float types
+      When query
+        """
+        SELECT from_json('{"a":1, "b":2, "c":3.5}', 'a TINYINT, b SMALLINT, c FLOAT') AS result
+        """
+      Then query result
+        | result      |
+        | {1, 2, 3.5} |
+
+  Rule: Array parsing
+    Scenario: Parse top-level array of integers
+      When query
+        """
+        SELECT from_json('[1, 2, 3]', 'ARRAY<INT>') AS result
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
+    Scenario: Parse empty array
+      When query
+        """
+        SELECT from_json('[]', 'ARRAY<INT>') AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: Null input returns null for array
+      When query
+        """
+        SELECT from_json(CAST(NULL AS STRING), 'ARRAY<INT>') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Invalid JSON returns null for array
+      When query
+        """
+        SELECT from_json('not json', 'ARRAY<INT>') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Map parsing
+    Scenario: Parse top-level map
+      When query
+        """
+        SELECT from_json('{"a":1, "b":2}', 'MAP<STRING, INT>') AS result
+        """
+      Then query result
+        | result          |
+        | {a -> 1, b -> 2} |
+
+    Scenario: Null input returns null for map
+      When query
+        """
+        SELECT from_json(CAST(NULL AS STRING), 'MAP<STRING, INT>') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Date parsing
+    Scenario: Parse date field
+      When query
+        """
+        SELECT from_json('{"d":"2024-01-15"}', 'd DATE') AS result
+        """
+      Then query result
+        | result       |
+        | {2024-01-15} |
+
+    Scenario: Parse date with custom format
+      When query
+        """
+        SELECT from_json('{"d":"15/01/2024"}', 'd DATE', map('dateFormat', 'dd/MM/yyyy')) AS result
+        """
+      Then query result
+        | result       |
+        | {2024-01-15} |
+
+  Rule: Decimal parsing
+    Scenario: Parse decimal from number
+      When query
+        """
+        SELECT from_json('{"v":3.14}', 'v DECIMAL(10,2)') AS result
+        """
+      Then query result
+        | result |
+        | {3.14} |
+
+    Scenario: Parse decimal from string
+      When query
+        """
+        SELECT from_json('{"v":"3.14"}', 'v DECIMAL(10,2)') AS result
+        """
+      Then query result
+        | result |
+        | {3.14} |
+
+  Rule: Nested collections in struct
+    Scenario: Parse struct with nested array
+      When query
+        """
+        SELECT from_json('{"items":[1,2,3]}', 'STRUCT<items: ARRAY<INT>>') AS result
+        """
+      Then query result
+        | result        |
+        | {[1, 2, 3]}   |
+
+    Scenario: Parse struct with nested map
+      When query
+        """
+        SELECT from_json('{"m":{"x":1,"y":2}}', 'STRUCT<m: MAP<STRING, INT>>') AS result
+        """
+      Then query result
+        | result               |
+        | {{x -> 1, y -> 2}}   |
+
+  Rule: String coercion
+    Scenario: Parse number as string type
+      When query
+        """
+        SELECT from_json('{"a":123}', 'a STRING') AS result
+        """
+      Then query result
+        | result |
+        | {123}  |
