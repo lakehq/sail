@@ -213,3 +213,38 @@ def test_csv_format_path(spark, tmp_path):
     csv_file.write_text("1,Alice\n2,Bob\n")
     df = spark.sql(f"SELECT * FROM csv.`{escape_sql_identifier(str(csv_file))}`")  # noqa: S608
     assert df.count() == 2  # noqa: PLR2004
+
+
+@pytest.mark.parametrize("ext", ["CSV", "Csv", "cSv"])
+def test_csv_read_uppercase_extension_file(spark, tmp_path, ext):
+    # Spark matches file extensions case-insensitively; a file named
+    # `data.CSV` should be readable just like `data.csv`.
+    data_path = tmp_path / f"data.{ext}"
+    data_path.write_text("name,age\nAlice,30\n")
+    df = spark.read.format("csv").option("header", "true").load(str(data_path))
+    assert df.collect() == [Row(name="Alice", age="30")]
+
+
+@pytest.mark.parametrize("ext", ["CSV", "Csv"])
+def test_csv_read_uppercase_extension_directory(spark, tmp_path, ext):
+    # Same case-insensitive matching when the path is a directory and we
+    # rely on extension filtering to pick up the files inside it.
+    path = tmp_path / "csv_upper_dir"
+    path.mkdir()
+    (path / f"part-0.{ext}").write_text("name,age\nAlice,30\n")
+    (path / f"part-1.{ext}").write_text("name,age\nBob,40\n")
+    df = spark.read.format("csv").option("header", "true").load(str(path))
+    assert sorted(df.collect(), key=safe_sort_key) == [
+        Row(name="Alice", age="30"),
+        Row(name="Bob", age="40"),
+    ]
+
+
+def test_csv_read_uppercase_extension_compressed(spark, sample_pandas_df, tmp_path):
+    # Compressed-extension matching should also be case-insensitive: a file
+    # named `*.CSV.GZ` must still be discovered as a gzipped CSV.
+    path = tmp_path / "csv_upper_gz"
+    path.mkdir()
+    sample_pandas_df.to_csv(str(path / "sample.CSV.GZ"), index=False, compression="gzip")
+    read_df = spark.read.format("csv").option("header", "true").option("compression", "gzip").load(str(path))
+    assert len(sample_pandas_df) == read_df.count()

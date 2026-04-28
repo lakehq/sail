@@ -120,12 +120,9 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     )))
 }
 
-/// Case-insensitive equivalent of [`str::ends_with`] for ASCII suffixes.
-///
-/// File extensions like `.csv` are written in lowercase by upstream
-/// `FileFormat` implementations, but users may have files with uppercase
-/// (or mixed-case) extensions such as `.CSV`. Spark treats extensions
-/// case-insensitively, so we match the same behavior here.
+/// Like [`str::ends_with`], but ignores ASCII case so paths such as
+/// `data.CSV` match the lowercase `.csv` extension that upstream
+/// `FileFormat` implementations report. Spark behaves the same way.
 fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
     s.len() >= suffix.len()
         && s.as_bytes()[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
