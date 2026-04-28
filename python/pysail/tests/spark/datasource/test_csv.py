@@ -241,10 +241,11 @@ def test_csv_read_uppercase_extension_directory(spark, tmp_path, ext):
 
 
 def test_csv_read_uppercase_extension_compressed(spark, sample_pandas_df, tmp_path):
-    # Compressed-extension matching should also be case-insensitive: a file
-    # named `*.CSV.GZ` must still be discovered as a gzipped CSV.
-    path = tmp_path / "csv_upper_gz"
-    path.mkdir()
-    sample_pandas_df.to_csv(str(path / "sample.CSV.GZ"), index=False, compression="gzip")
-    read_df = spark.read.format("csv").option("header", "true").option("compression", "gzip").load(str(path))
+    # Compressed-extension matching should also be case-insensitive: pointing
+    # the reader directly at a `*.CSV.GZ` file (without an explicit
+    # `compression` option) must still discover it as a gzipped CSV via
+    # extension inference.
+    file_path = tmp_path / "sample.CSV.GZ"
+    sample_pandas_df.to_csv(str(file_path), index=False, compression="gzip")
+    read_df = spark.read.format("csv").option("header", "true").load(str(file_path))
     assert len(sample_pandas_df) == read_df.count()
