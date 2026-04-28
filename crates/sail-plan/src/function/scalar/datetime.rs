@@ -331,11 +331,8 @@ fn to_timestamp_ltz(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let timezone = input.function_context.plan_config.session_timezone.clone();
     if input.arguments.len() == 1 {
         let arg = input.arguments.one()?;
-        let data_type = arg
-            .to_field(input.function_context.schema)?
-            .1
-            .data_type()
-            .clone();
+        let (_, field) = arg.to_field(input.function_context.schema)?;
+        let data_type = field.data_type().clone();
         if matches!(
             data_type,
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
