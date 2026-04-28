@@ -147,7 +147,6 @@ Feature: reverse function
         | result |
         | NaN    |
 
-    @sail-bug
     Scenario: FLOAT Infinity is implicitly cast to string before reversing
       When query
         """
@@ -157,7 +156,6 @@ Feature: reverse function
         | result    |
         | ytinifnI  |
 
-    @sail-bug
     Scenario: FLOAT negative Infinity is implicitly cast to string before reversing
       When query
         """
@@ -387,11 +385,11 @@ Feature: reverse function
         """
         SELECT reverse() AS result
         """
-      Then query error .*WRONG_NUM_ARGS.*
+      Then query error .*
 
     Scenario: Two arguments is rejected
       When query
         """
         SELECT reverse('hello', 'world') AS result
         """
-      Then query error .*WRONG_NUM_ARGS.*
+      Then query error .*

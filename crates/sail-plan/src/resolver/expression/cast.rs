@@ -80,7 +80,10 @@ impl PlanResolver<'_> {
         };
         let override_string_cast = matches!(
             expr_type,
-            DataType::Date32
+            DataType::Float16
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Date32
                 | DataType::Date64
                 | DataType::Time32(_)
                 | DataType::Time64(_)

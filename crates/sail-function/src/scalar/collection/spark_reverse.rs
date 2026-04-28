@@ -54,6 +54,16 @@ fn is_binary_type(dt: &DataType) -> bool {
     )
 }
 
+fn needs_spark_format(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Timestamp(_, _)
+    )
+}
+
 fn append_reversed_bytes<'a, I>(iter: I, builder: &mut StringBuilder, buf: &mut Vec<u8>)
 where
     I: Iterator<Item = Option<&'a [u8]>>,
@@ -134,8 +144,8 @@ impl ScalarUDFImpl for SparkReverse {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            dt if is_array_type(dt) || is_string_type(dt) => Ok(dt.clone()),
+        match arg_types.first() {
+            Some(dt) if is_array_type(dt) || is_string_type(dt) => Ok(dt.clone()),
             _ => Ok(DataType::Utf8),
         }
     }
@@ -148,9 +158,11 @@ impl ScalarUDFImpl for SparkReverse {
             reverse_binary(&args.args[0])
         } else if is_array_type(&dt) {
             make_scalar_function(array_reverse_inner)(&args.args)
-        } else if matches!(dt, DataType::Timestamp(_, _)) {
-            // Spark formats timestamps as "2024-01-15 12:30:45", but Arrow's native
-            // cast produces ISO 8601. Use SparkToUtf8 to get the correct representation.
+        } else if needs_spark_format(&dt) {
+            // Arrow's native cast diverges from Spark for some types:
+            //   float Infinity → "inf" (Arrow) vs "Infinity" (Spark)
+            //   timestamp     → ISO 8601 (Arrow) vs "2024-01-15 12:30:45" (Spark)
+            // SparkToUtf8 uses sail's ArrayFormatter which matches Spark semantics.
             let number_rows = args.number_rows;
             let return_field = Arc::clone(&args.return_field);
             let config_options = Arc::clone(&args.config_options);
@@ -191,9 +203,7 @@ impl ScalarUDFImpl for SparkReverse {
                  The argument to the `reverse` function must be a string, binary, or array type, \
                  not `{dt}`."
             )
-        } else if matches!(dt, DataType::Timestamp(_, _)) {
-            // Keep as Timestamp — SparkToUtf8 is applied in invoke_with_args to get
-            // Spark-format strings ("2024-01-15 12:30:45") instead of Arrow ISO format.
+        } else if needs_spark_format(dt) {
             Ok(vec![dt.clone()])
         } else {
             Ok(vec![DataType::Utf8])
