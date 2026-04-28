@@ -182,22 +182,26 @@ def test_parquet_read_with_custom_extension(spark, sample_pandas_df, tmp_path):
     assert read_df.count() == expected_count
     assert actual_rows(read_df) == expected_rows
 
+    # Empty string disables extension filtering entirely.
+    read_df = spark.read.option("extension", "").parquet(str(directory))
+    assert read_df.count() == expected_count
+    assert actual_rows(read_df) == expected_rows
+
     # SQL CREATE TABLE with OPTIONS (fileExtension '.hive').
+    # Use a separate directory so DROP TABLE side effects don't affect other cases.
+    sql_directory = tmp_path / "parquet_custom_extension_sql"
+    sql_directory.mkdir()
+    sample_pandas_df.to_parquet(str(sql_directory / "data.hive"))
     table_name = "parquet_custom_extension_table"
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
     try:
         spark.sql(
             f"CREATE TABLE {table_name} USING parquet "
             f"OPTIONS (fileExtension '.hive') "
-            f"LOCATION '{escape_sql_string_literal(str(directory))}'"
+            f"LOCATION '{escape_sql_string_literal(str(sql_directory))}'"
         )
         read_df = spark.sql(f"SELECT * FROM {table_name}")  # noqa: S608
         assert read_df.count() == expected_count
         assert actual_rows(read_df) == expected_rows
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
-
-    # Empty string disables extension filtering entirely.
-    read_df = spark.read.option("extension", "").parquet(str(directory))
-    assert read_df.count() == expected_count
-    assert actual_rows(read_df) == expected_rows
