@@ -88,6 +88,24 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     if let Some(file_extension) = file_extension.clone() {
         options.file_extension = file_extension;
     };
+    // DataFusion's scan-time listing filters with case-sensitive `ends_with`
+    // against `options.file_extension`. The base extension here comes from the
+    // `FileFormat` (always lowercase), so files named e.g. `data.CSV` would be
+    // dropped at scan time even though we accepted them above. Replace it with
+    // the actual case observed on disk so DataFusion's filter accepts them.
+    //
+    // TODO: this only carries one case-variant through to scan time. A
+    // directory containing a mix (e.g. both `data.csv` and `data.CSV`) will
+    // keep the canonical lowercase variant when present and otherwise fall
+    // back to the dominant observed case, silently dropping the other
+    // variants. Properly supporting mixed-case extensions requires
+    // bypassing DataFusion's case-sensitive
+    // `ListingTableUrl::list_prefixed_files` filter — e.g. via a custom
+    // `TableProvider` that does its own listing, or by upstreaming
+    // case-insensitive matching into DataFusion.
+    if let Some(observed) = observed_file_extension_case(&file_groups, &options.file_extension) {
+        options.file_extension = observed;
+    }
 
     let mut schemas = vec![];
     for (store, files) in file_groups.iter() {
@@ -126,6 +144,45 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
 fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
     s.len() >= suffix.len()
         && s.as_bytes()[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+}
+
+/// Inspect the listed files and return the case-variant of `file_extension`
+/// to hand off to DataFusion's case-sensitive scan-time filter.
+///
+/// Prefers the original (lowercase) `file_extension` when at least one file
+/// already matches it exactly, so mixed-case directories keep working for
+/// the canonical case. Otherwise falls back to the most common case-variant
+/// observed on disk (e.g. `.CSV`) so a directory of uniformly uppercase
+/// files is still readable.
+///
+/// `file_extension` is ASCII, so the suffix slice always lands on a UTF-8
+/// char boundary.
+fn observed_file_extension_case(
+    file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
+    file_extension: &str,
+) -> Option<String> {
+    if file_extension.is_empty() {
+        return None;
+    }
+    let len = file_extension.len();
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut exact_match = false;
+    for (_, object_metas) in file_groups {
+        for object_meta in object_metas {
+            let path = object_meta.location.as_ref();
+            if ends_with_ignore_ascii_case(path, file_extension) {
+                let observed = &path[path.len() - len..];
+                if observed == file_extension {
+                    exact_match = true;
+                }
+                *counts.entry(observed.to_string()).or_default() += 1;
+            }
+        }
+    }
+    if exact_match {
+        return Some(file_extension.to_string());
+    }
+    counts.into_iter().max_by_key(|(_, c)| *c).map(|(k, _)| k)
 }
 
 fn resolve_listing_file_extension(
