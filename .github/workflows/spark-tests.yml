@@ -48,7 +48,7 @@ jobs:
 
       - name: Install grpc_health_probe
         run: |
-          wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.26/grpc_health_probe-linux-amd64"
+          wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.48/grpc_health_probe-linux-amd64"
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
@@ -117,8 +117,10 @@ jobs:
 
       - name: Shutdown Spark Connect Server
         if: ${{ !cancelled() }}
+        # TODO: investigate if the sleep is still needed for grcov
         run: |
           scripts/spark-tests/stop-server.sh
+          sleep 10
 
       # Generate coverage report after Spark tests
       - name: Generate coverage report

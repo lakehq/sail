@@ -2,20 +2,17 @@
   {
     "module": "pyspark.sql.functions",
     "function": "is_variant_null",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "parse_json",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_variant",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -38,8 +35,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "try_variant_get",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -56,7 +52,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "variant_get",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "variant_to_json",
+    "status": "supported",
+    "note": "This is Sail exclusive (not available in PySpark or Spark SQL)."
   }
 ]

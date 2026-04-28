@@ -13,9 +13,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::Session;
+use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
-use datafusion::datasource::TableProvider;
+use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
@@ -28,6 +28,8 @@ use sail_data_source::options::gen::{
 use sail_data_source::options::{BuildPartialOptions, PartialOptions};
 use url::Url;
 
+use crate::datasource::provider::IcebergTableProvider;
+use crate::logical::IcebergTableSource;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::spec::{PartitionSpec, Schema, Snapshot};
@@ -52,26 +54,13 @@ impl TableFormat for IcebergTableFormat {
         "iceberg"
     }
 
-    async fn create_provider(
+    async fn create_source(
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let SourceInfo {
-            paths,
-            schema: _,
-            constraints: _,
-            partition_by: _,
-            bucket_by: _,
-            sort_order: _,
-            options,
-        } = info;
-
-        let table_url = Self::parse_table_url(paths).await?;
-        let iceberg_options = resolve_iceberg_read_options(options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        create_iceberg_provider(ctx, table_url, iceberg_options).await
+    ) -> Result<Arc<dyn TableSource>> {
+        let provider = build_iceberg_provider(ctx, info).await?;
+        Ok(Arc::new(IcebergTableSource::new(provider)))
     }
 
     async fn create_writer(
@@ -90,6 +79,7 @@ impl TableFormat for IcebergTableFormat {
             sort_order,
             table_properties: _,
             options,
+            logical_schema: _,
         } = info;
 
         if bucket_by.is_some() {
@@ -109,15 +99,11 @@ impl TableFormat for IcebergTableFormat {
         let table_exists = exists_res.is_ok();
 
         match mode {
-            PhysicalSinkMode::ErrorIfExists => {
-                if table_exists {
-                    return plan_err!("Iceberg table already exists at path: {table_url}");
-                }
+            PhysicalSinkMode::ErrorIfExists if table_exists => {
+                return plan_err!("Iceberg table already exists at path: {table_url}");
             }
-            PhysicalSinkMode::IgnoreIfExists => {
-                if table_exists {
-                    return Ok(Arc::new(EmptyExec::new(input.schema())));
-                }
+            PhysicalSinkMode::IgnoreIfExists if table_exists => {
+                return Ok(Arc::new(EmptyExec::new(input.schema())));
             }
             PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
                 return not_impl_err!("predicate or partition overwrite for Iceberg");
@@ -146,9 +132,9 @@ impl TableFormat for IcebergTableFormat {
                             format_partition_exprs(&partition_by)
                         );
                     }
-                    PhysicalSinkMode::Overwrite => {
+                    PhysicalSinkMode::Overwrite
                         // For overwrite mode, check if schema overwrite is allowed
-                        if !iceberg_options.overwrite_schema {
+                        if !iceberg_options.overwrite_schema => {
                             return plan_err!(
                                 "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                                 Set overwriteSchema=true to change partitioning.",
@@ -156,7 +142,6 @@ impl TableFormat for IcebergTableFormat {
                                 format_partition_exprs(&partition_by)
                             );
                         }
-                    }
                     _ => {}
                 }
             }
@@ -190,15 +175,43 @@ impl TableFormat for IcebergTableFormat {
     }
 }
 
-/// Create an Iceberg table provider for reading
+/// Create an Iceberg table provider for reading.
 pub async fn create_iceberg_provider(
     ctx: &dyn Session,
     table_url: Url,
     options: IcebergReadOptions,
 ) -> Result<Arc<dyn TableProvider>> {
+    Ok(create_iceberg_provider_concrete(ctx, table_url, options).await?)
+}
+
+pub(crate) async fn create_iceberg_provider_concrete(
+    ctx: &dyn Session,
+    table_url: Url,
+    options: IcebergReadOptions,
+) -> Result<Arc<IcebergTableProvider>> {
     let table = Table::load(ctx, table_url).await?;
     let provider = table.to_provider(&options)?;
     Ok(Arc::new(provider))
+}
+
+async fn build_iceberg_provider(
+    ctx: &dyn Session,
+    info: SourceInfo,
+) -> Result<Arc<IcebergTableProvider>> {
+    let SourceInfo {
+        paths,
+        schema: _,
+        constraints: _,
+        partition_by: _,
+        bucket_by: _,
+        sort_order: _,
+        options,
+    } = info;
+
+    let table_url = IcebergTableFormat::parse_table_url(paths).await?;
+    let iceberg_options = resolve_iceberg_read_options(options)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    create_iceberg_provider_concrete(ctx, table_url, iceberg_options).await
 }
 
 /// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).

@@ -161,8 +161,6 @@ Feature: array filter with lambda
         | result |
         | [3, 5] |
 
-    # TODO: IS NOT NULL not yet supported in lambda context - lambda variable not resolved
-    @skip
     Scenario: Filter with IS NOT NULL predicate
       When query
         """
@@ -172,8 +170,6 @@ Feature: array filter with lambda
         | result    |
         | [1, 3, 5] |
 
-    # TODO: IS NULL not yet supported in lambda context - lambda variable not resolved
-    @skip
     Scenario: Filter with IS NULL predicate
       When query
         """
@@ -181,7 +177,7 @@ Feature: array filter with lambda
         """
       Then query result
         | result       |
-        | [null, null] |
+        | [NULL, NULL] |
 
   Rule: Filter with different data types
 
@@ -261,8 +257,6 @@ Feature: array filter with lambda
 
   Rule: Filter with operators
 
-    # TODO: BETWEEN not yet supported in lambda context
-    @skip
     Scenario: Filter with BETWEEN
       When query
         """
@@ -274,16 +268,14 @@ Feature: array filter with lambda
 
   Rule: Filter with functions in predicate
 
-    # TODO: Function calls like abs() not yet supported in lambda context
-    @skip
-    Scenario: Filter with abs function
+    Scenario: Filter with function call in predicate
       When query
         """
-        SELECT filter(array(-3, -1, 0, 2, 4), x -> abs(x) > 1) AS result
+        SELECT filter(array('a', 'bb', 'ccc'), x -> length(x) > 1) AS result
         """
       Then query result
         | result      |
-        | [-3, 2, 4]  |
+        | [bb, ccc]   |
 
     Scenario: Filter with arithmetic in predicate
       When query

@@ -14,9 +14,17 @@ use std::collections::HashMap;
 
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{
-    ColumnMappingMode, DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, StructType,
-    TableFeature,
+    ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata,
+    Protocol, StructType, TableFeature,
 };
+
+/// Check if a Delta StructType schema contains any columns with generation expressions.
+pub fn schema_has_generated_columns(schema: &StructType) -> bool {
+    schema.fields().any(|f| {
+        f.get_config_value(&ColumnMetadataKey::GenerationExpression)
+            .is_some()
+    })
+}
 
 /// Evolve table schema and update metadata according to column mapping mode.
 pub fn evolve_schema(
@@ -74,6 +82,7 @@ pub fn protocol_for_create(
     enable_column_mapping: bool,
     enable_timestamp_ntz: bool,
     enable_in_commit_timestamps: bool,
+    enable_generated_columns: bool,
     configuration: &HashMap<String, String>,
 ) -> DeltaResult<Protocol> {
     let mut reader_features = Vec::new();
@@ -89,6 +98,9 @@ pub fn protocol_for_create(
     }
     if enable_in_commit_timestamps {
         writer_features.push(TableFeature::InCommitTimestamp);
+    }
+    if enable_generated_columns {
+        writer_features.push(TableFeature::GeneratedColumns);
     }
 
     // Extract features from `delta.feature.<name> = "supported"|"enabled"` configuration entries.
@@ -118,6 +130,21 @@ pub fn protocol_for_create(
                     )));
                 }
             }
+        }
+    }
+
+    // `delta.enableDeletionVectors = "true"` implicitly activates DeletionVectors.
+    // Setting the metadata property is sufficient—`delta.feature.deletionVectors` is
+    // not also required.
+    if configuration
+        .get("delta.enableDeletionVectors")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+    {
+        if !reader_features.contains(&TableFeature::DeletionVectors) {
+            reader_features.push(TableFeature::DeletionVectors);
+        }
+        if !writer_features.contains(&TableFeature::DeletionVectors) {
+            writer_features.push(TableFeature::DeletionVectors);
         }
     }
 
@@ -158,7 +185,7 @@ mod tests {
 
     #[test]
     fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {
-        let protocol = protocol_for_create(false, false, true, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, true, false, &HashMap::new())?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(protocol.reader_features(), None);
@@ -177,7 +204,7 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "enabled".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -193,7 +220,7 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -205,7 +232,7 @@ mod tests {
     fn protocol_for_create_activates_v2_checkpoint_from_checkpoint_policy() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.checkpointPolicy".to_string(), "v2".to_string());
-        let protocol = protocol_for_create(false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -217,7 +244,7 @@ mod tests {
     fn protocol_for_create_classic_policy_does_not_activate_v2_checkpoint() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.checkpointPolicy".to_string(), "classic".to_string());
-        let protocol = protocol_for_create(false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 2);
         assert!(!protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -234,7 +261,7 @@ mod tests {
             "delta.feature.v2Checkpiont".to_string(), // intentional typo
             "supported".to_string(),
         );
-        let Err(err) = protocol_for_create(false, false, false, &config) else {
+        let Err(err) = protocol_for_create(false, false, false, false, &config) else {
             panic!("expected protocol_for_create to error on unknown feature name");
         };
         let msg = err.to_string();
@@ -253,7 +280,7 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "true".to_string(), // invalid
         );
-        let Err(err) = protocol_for_create(false, false, false, &config) else {
+        let Err(err) = protocol_for_create(false, false, false, false, &config) else {
             panic!("expected protocol_for_create to error on invalid feature value");
         };
         let msg = err.to_string();
@@ -261,5 +288,36 @@ mod tests {
             msg.contains("true"),
             "error message should include the bad value: {msg}"
         );
+    }
+
+    #[test]
+    fn protocol_for_create_activates_deletion_vectors_from_enable_property() -> DeltaResult<()> {
+        // `delta.enableDeletionVectors = true` alone must register the DeletionVectors feature
+        // in both reader and writer features.
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.enableDeletionVectors".to_string(),
+            "true".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::DeletionVectors));
+        assert!(protocol.has_writer_feature(&TableFeature::DeletionVectors));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_deletion_vectors_not_activated_when_disabled() -> DeltaResult<()> {
+        // `delta.enableDeletionVectors = false` must NOT register the feature.
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.enableDeletionVectors".to_string(),
+            "false".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        assert!(!protocol.has_reader_feature(&TableFeature::DeletionVectors));
+        assert!(!protocol.has_writer_feature(&TableFeature::DeletionVectors));
+        Ok(())
     }
 }

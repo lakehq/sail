@@ -13,11 +13,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
@@ -611,7 +611,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map_err(|e| match e {
                 apis::Error::ResponseError(apis::ResponseContent { status, .. }) => {
                     if status == 404 {
-                        CatalogError::NotFound("namespace", quote_namespace_if_needed(database))
+                        CatalogError::NotFound(
+                            CatalogObject::Namespace,
+                            quote_namespace_if_needed(database),
+                        )
                     } else {
                         CatalogError::External(format!(
                             "Failed to load namespace {}: {e}",
@@ -686,10 +689,40 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     ) -> CatalogResult<()> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
-        let DropDatabaseOptions {
-            if_exists,
-            cascade: _,
-        } = options;
+        let DropDatabaseOptions { if_exists, cascade } = options;
+
+        if cascade {
+            // For CASCADE, first drop all tables and views in the namespace before dropping the namespace.
+            let prefix = catalog_config
+                .props
+                .get(REST_CATALOG_PROP_PREFIX)
+                .map(|s| s.as_str());
+            let ns_string = Self::namespace_string(database);
+            let tables_result = client
+                .catalog_api_api()
+                .list_tables(&ns_string, None, None, prefix)
+                .await;
+            if let Ok(tables) = tables_result {
+                for identifier in tables.identifiers.unwrap_or_default() {
+                    let _ = client
+                        .catalog_api_api()
+                        .drop_table(&ns_string, &identifier.name, Some(true), prefix)
+                        .await;
+                }
+            }
+            let views_result = client
+                .catalog_api_api()
+                .list_views(&ns_string, None, None, prefix)
+                .await;
+            if let Ok(views) = views_result {
+                for identifier in views.identifiers.unwrap_or_default() {
+                    let _ = client
+                        .catalog_api_api()
+                        .drop_view(&ns_string, &identifier.name, prefix)
+                        .await;
+                }
+            }
+        }
 
         match client
             .catalog_api_api()
@@ -851,7 +884,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     if status == 404 =>
                 {
                     CatalogError::NotFound(
-                        "table",
+                        CatalogObject::Table,
                         format!(
                             "{}.{}",
                             quote_namespace_if_needed(database),
@@ -938,6 +971,17 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             }
             Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
+    }
+
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "alter table in Iceberg catalog".to_string(),
+        ))
     }
 
     async fn create_view(

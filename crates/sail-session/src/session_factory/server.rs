@@ -121,6 +121,7 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config);
         self.apply_execution_parquet_config(&mut config);
+        self.apply_optimizer_config(&mut config);
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -208,6 +209,11 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+    }
+
+    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
+        let optimizer = &mut config.options_mut().optimizer;
+        optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {

@@ -260,11 +260,21 @@ impl PlanResolver<'_> {
                 return Err(PlanError::invalid("invalid scalar function clause"));
             }
             if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+                if f.eval_type().is_table_function() {
+                    return Err(PlanError::AnalysisError(format!(
+                        "user-defined table function cannot be used as a scalar function: {function_name}"
+                    )));
+                }
+                let output_type = f.output_type().cloned().ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "unresolved UDF {function_name} has no scalar return type"
+                    ))
+                })?;
                 let function = PythonUdf {
                     python_version: f.python_version().to_string(),
                     eval_type: f.eval_type(),
                     command: f.command().to_vec(),
-                    output_type: f.output_type().clone(),
+                    output_type,
                 };
                 self.resolve_python_udf_expr(
                     function,
@@ -713,11 +723,59 @@ fn transform_lambda_variables_with_index(
             })
         }
 
+        spec::Expr::IsNull(inner) => {
+            let transformed = transform_lambda_variables_with_index(
+                inner,
+                lambda_var_names,
+                element_field_id,
+                index_field_id,
+            )?;
+            Ok(spec::Expr::IsNull(Box::new(transformed)))
+        }
+        spec::Expr::IsNotNull(inner) => {
+            let transformed = transform_lambda_variables_with_index(
+                inner,
+                lambda_var_names,
+                element_field_id,
+                index_field_id,
+            )?;
+            Ok(spec::Expr::IsNotNull(Box::new(transformed)))
+        }
+        spec::Expr::Between {
+            expr: inner,
+            negated,
+            low,
+            high,
+        } => {
+            let transformed_expr = transform_lambda_variables_with_index(
+                inner,
+                lambda_var_names,
+                element_field_id,
+                index_field_id,
+            )?;
+            let transformed_low = transform_lambda_variables_with_index(
+                low,
+                lambda_var_names,
+                element_field_id,
+                index_field_id,
+            )?;
+            let transformed_high = transform_lambda_variables_with_index(
+                high,
+                lambda_var_names,
+                element_field_id,
+                index_field_id,
+            )?;
+            Ok(spec::Expr::Between {
+                expr: Box::new(transformed_expr),
+                negated: *negated,
+                low: Box::new(transformed_low),
+                high: Box::new(transformed_high),
+            })
+        }
+
         // Literals and other non-recursive expressions pass through unchanged
         spec::Expr::Literal(_) => Ok(expr.clone()),
 
-        // For other expression types, we may need to add more cases
-        // For now, return as-is
         _ => Ok(expr.clone()),
     }
 }

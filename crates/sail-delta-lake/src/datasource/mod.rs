@@ -38,7 +38,6 @@ pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
 pub mod expressions;
-pub mod provider;
 pub mod pruning;
 pub mod scan;
 pub mod schema;
@@ -48,7 +47,6 @@ pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use expressions::{
     collect_physical_columns, get_pushdown_filters, simplify_expr, PredicateProperties,
 };
-pub use provider::DeltaTableProvider;
 pub use pruning::{prune_files, PruningResult};
 pub use scan::build_file_scan_config;
 pub use schema::df_logical_schema;

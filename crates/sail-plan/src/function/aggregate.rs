@@ -23,6 +23,8 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
+use sail_function::aggregate::product::ProductFunction;
+use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::struct_function::StructFunction;
@@ -114,6 +116,29 @@ fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn product(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = input
+        .arguments
+        .into_iter()
+        .map(|arg| {
+            expr::Expr::Cast(expr::Cast {
+                expr: Box::new(arg),
+                data_type: DataType::Float64,
+            })
+        })
+        .collect();
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(ProductFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MaxByFunction::new())),
@@ -143,6 +168,19 @@ fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(ModeFunction::new())),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn schema_of_variant_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(SchemaOfVariantAggFunction::new())),
         params: AggregateFunctionParams {
             args: input.arguments,
             distinct: input.distinct,
@@ -563,6 +601,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ),
         ("percentile_cont", F::custom(percentile_cont)),
         ("percentile_disc", F::custom(percentile_disc)),
+        ("product", F::custom(product)),
         ("regr_avgx", F::default(regr::regr_avgx_udaf)),
         ("regr_avgy", F::default(regr::regr_avgy_udaf)),
         ("regr_count", F::default(regr::regr_count_udaf)),
@@ -572,6 +611,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("regr_sxx", F::default(regr::regr_sxx_udaf)),
         ("regr_sxy", F::default(regr::regr_sxy_udaf)),
         ("regr_syy", F::default(regr::regr_syy_udaf)),
+        ("schema_of_variant_agg", F::custom(schema_of_variant_agg)),
         ("skewness", F::custom(skewness)),
         ("some", F::default(bool_and_or::bool_or_udaf)),
         ("std", F::default(stddev::stddev_udaf)),

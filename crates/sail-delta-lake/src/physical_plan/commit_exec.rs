@@ -20,6 +20,7 @@ use chrono::Utc;
 use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -35,7 +36,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, OperationMetrics};
-use crate::kernel::{DeltaOperation, SaveMode};
+use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
 use crate::physical_plan::action_schema::ExecCommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
 use crate::schema::{
@@ -43,7 +44,9 @@ use crate::schema::{
 };
 use crate::spec::{CommitAction, StructType};
 use crate::storage::{get_object_store_from_context, StorageConfig};
-use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
+use crate::table::{
+    create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
+};
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
 const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
@@ -59,6 +62,8 @@ pub struct DeltaCommitExec {
     table_exists: bool,
     sink_schema: SchemaRef,
     sink_mode: PhysicalSinkMode,
+    /// Per-commit user-defined metadata to record in `commitInfo.userMetadata`.
+    user_metadata: Option<String>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -71,6 +76,7 @@ impl DeltaCommitExec {
         table_exists: bool,
         sink_schema: SchemaRef,
         sink_mode: PhysicalSinkMode,
+        user_metadata: Option<String>,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
@@ -85,6 +91,7 @@ impl DeltaCommitExec {
             table_exists,
             sink_schema,
             sink_mode,
+            user_metadata,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
@@ -121,6 +128,10 @@ impl DeltaCommitExec {
 
     pub fn sink_mode(&self) -> &PhysicalSinkMode {
         &self.sink_mode
+    }
+
+    pub fn user_metadata(&self) -> Option<&str> {
+        self.user_metadata.as_deref()
     }
 }
 
@@ -169,6 +180,7 @@ impl ExecutionPlan for DeltaCommitExec {
             self.table_exists,
             self.sink_schema.clone(),
             self.sink_mode.clone(),
+            self.user_metadata.clone(),
         )))
     }
 
@@ -199,28 +211,30 @@ impl ExecutionPlan for DeltaCommitExec {
         let partition_columns = self.partition_columns.clone();
         let table_exists = self.table_exists;
         let sink_schema = self.sink_schema.clone();
+        let user_metadata = self.user_metadata.clone();
         let schema = self.schema();
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
-            let table = if table_exists {
-                open_table_with_object_store(
-                    table_url.clone(),
-                    object_store.clone(),
-                    storage_config.clone(),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
+            // For existing tables, open concurrently with a full snapshot while
+            // input data (Parquet writes from workers) is being drained.
+            let table_join = if table_exists {
+                let open_url = table_url.clone();
+                let open_store = Arc::clone(&object_store);
+                let open_storage = storage_config.clone();
+                Some(SpawnedTask::spawn(async move {
+                    open_table_with_object_store_and_table_config(
+                        open_url,
+                        open_store,
+                        open_storage,
+                        DeltaSnapshotConfig::default(),
+                    )
+                    .await
+                }))
             } else {
-                create_delta_table_with_object_store(
-                    table_url.clone(),
-                    object_store.clone(),
-                    storage_config.clone(),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                None
             };
 
             let mut total_rows = 0u64;
@@ -342,7 +356,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 } else {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
-                    let protocol = protocol_for_create(false, false, false, &HashMap::new())
+                    let protocol = protocol_for_create(false, false, false, false, &HashMap::new())
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let metadata = metadata_for_create_with_struct_type(
@@ -384,6 +398,23 @@ impl ExecutionPlan for DeltaCommitExec {
                 )
             };
 
+            // Await the concurrently-opened table, or create one for new tables.
+            // For existing tables the open() ran in the background while workers were
+            // writing Parquet; it should be complete (or nearly so) by now.
+            let table = if let Some(join) = table_join {
+                join.await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+            } else {
+                create_delta_table_with_object_store(
+                    table_url.clone(),
+                    object_store.clone(),
+                    storage_config.clone(),
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+            };
+
             let snapshot = if table_exists {
                 Some(
                     table
@@ -396,7 +427,9 @@ impl ExecutionPlan for DeltaCommitExec {
             let reference = snapshot.cloned();
 
             let finalized_commit = CommitBuilder::from(
-                CommitProperties::default().with_operation_metrics(operation_metrics),
+                CommitProperties::default()
+                    .with_operation_metrics(operation_metrics)
+                    .with_user_metadata(user_metadata),
             )
             .with_actions(final_actions)
             .build(reference, table.log_store(), operation)

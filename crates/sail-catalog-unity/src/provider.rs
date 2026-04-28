@@ -15,10 +15,10 @@ use std::str::FromStr;
 
 use arrow::datatypes::DataType;
 use reqwest::header::HeaderValue;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
@@ -425,7 +425,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("schema", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Schema, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get schema: {e}"))),
         }
@@ -693,7 +693,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("table", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Table, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get table: {e}"))),
         }
@@ -769,6 +769,20 @@ impl CatalogProvider for UnityCatalogProvider {
             }
             Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
+    }
+
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        // The Unity catalog does not currently propagate ALTER TABLE property changes to
+        // the Unity REST API. However, returning `NotSupported` here would abort a Delta
+        // storage-side commit that has already succeeded. Treat this as a no-op so the
+        // on-disk Delta table remains the source of truth until the REST integration
+        // is wired up.
+        Ok(())
     }
 
     async fn create_view(

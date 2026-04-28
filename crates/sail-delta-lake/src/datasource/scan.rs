@@ -108,13 +108,10 @@ pub fn build_file_scan_config(
     let mut per_file_stats: Vec<Arc<Statistics>> = Vec::new();
 
     for action in files.iter() {
-        if action.deletion_vector.is_some() {
-            // TODO: Implement deletion-vector-aware scans by excluding masked row ids during file
-            // reads instead of rejecting the file at planning time.
-            return Err(DataFusionError::NotImplemented(
-                "Reading Delta tables with Deletion Vectors is not yet supported".to_string(),
-            ));
-        }
+        // Files with deletion vectors are accepted: DV filtering is applied post-scan
+        // by DeltaScanByAddsExec which tracks row indices and excludes deleted rows.
+        // Note: the physical numRecords in stats is the total file record count
+        // (not accounting for DV deletions), which is correct for scan planning.
 
         let mut part =
             partitioned_file_from_action(action, &partition_columns_mapped, &complete_schema)?;
@@ -450,12 +447,7 @@ fn rewrite_data_file_location(table_root: Path, location: Path) -> Path {
         return location;
     }
 
-    Path::from(format!(
-        "{}{}{}",
-        table_root,
-        object_store::path::DELIMITER,
-        location
-    ))
+    table_root.parts().chain(location.parts()).collect()
 }
 
 fn looks_like_absolute_uri(path: &str) -> bool {
@@ -655,6 +647,21 @@ mod tests {
         assert_eq!(
             rewritten,
             Path::from("bucket/table/part=1/part-000.parquet")
+        );
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_preserves_percent_encoded_partition_dirs() {
+        #[expect(clippy::expect_used)]
+        let location =
+            Path::parse("ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet")
+                .expect("valid path");
+
+        let rewritten = rewrite_data_file_location(Path::from("bucket/table"), location);
+
+        assert_eq!(
+            rewritten.as_ref(),
+            "bucket/table/ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet"
         );
     }
 

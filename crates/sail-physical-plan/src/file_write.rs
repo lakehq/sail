@@ -54,6 +54,7 @@ pub async fn create_file_write_physical_plan(
             .into_iter()
             .map(|x| OptionLayer::OptionList { items: x })
             .collect(),
+        logical_schema: Some(logical_input.schema().clone()),
     };
     let registry = ctx.extension::<TableFormatRegistry>()?;
     registry.get(&format)?.create_writer(ctx, info).await

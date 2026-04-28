@@ -121,7 +121,8 @@ pub fn build_standard_write_layers(
     let writer = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
-        DeltaWriterExecOptions::from(ctx.options().clone()),
+        DeltaWriterExecOptions::from(ctx.options().clone())
+            .with_generation_expressions(ctx.generation_expressions().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         sink_mode.clone(),
@@ -140,6 +141,7 @@ pub fn build_standard_write_layers(
         ctx.table_exists(),
         original_schema,
         sink_mode.clone(),
+        ctx.options().user_metadata.clone(),
     )))
 }
 
@@ -459,6 +461,19 @@ async fn build_log_replay_pipeline_with_files(
     }
     if let Some(stats_expr) = stats_expr {
         final_proj.push((stats_expr, "stats_json".to_string()));
+    }
+
+    // Include the deletion vector struct so DeltaScanByAddsExec can apply per-file DV filtering.
+    let dv_field_name = if has_add_field("deletionVector") {
+        Some("deletionVector")
+    } else if has_add_field("deletion_vector") {
+        Some("deletion_vector")
+    } else {
+        None
+    };
+    if let Some(dv_field) = dv_field_name {
+        let dv_expr = simplify(guard_add(get_add_field(dv_field)))?;
+        final_proj.push((dv_expr, "deletionVector".to_string()));
     }
 
     // Replay key columns (consumed by replay; stripped from replay output schema).

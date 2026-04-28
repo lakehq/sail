@@ -21,6 +21,7 @@ use serde_json::{Map, Value};
 
 use crate::functions_nested_utils::opt_downcast_arg;
 use crate::functions_utils::make_scalar_function;
+use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
@@ -53,34 +54,23 @@ impl ToJsonOptions {
     pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
-    fn from_map(map: &MapArray) -> Self {
+    fn from_map(map: &MapArray) -> Result<Self> {
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(Self::convert_format)
+            .map(spark_datetime_format_to_chrono_strftime)
+            .transpose()?
             .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(Self::convert_format)
+            .map(spark_datetime_format_to_chrono_strftime)
+            .transpose()?
             .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
 
-        Self {
+        Ok(Self {
             timestamp_format,
             date_format,
-        }
-    }
-
-    /// Converts a Spark/Java-style format string (e.g., "yyyy-MM-dd")
-    /// into a format compatible with the `chrono` crate (e.g., "%Y-%m-%d").
-    fn convert_format(fmt: &str) -> String {
-        fmt.replace("yyyy", "%Y")
-            .replace("MM", "%m")
-            .replace("dd", "%d")
-            .replace("HH", "%H")
-            .replace("mm", "%M")
-            .replace("ss", "%S")
-            .replace("SSS", "%.3f")
-            .replace("SSSSSS", "%.6f")
+        })
     }
 }
 
@@ -192,7 +182,7 @@ fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 "[INVALID_OPTIONS.NON_MAP_FUNCTION] Invalid options: Must use the `map()` function for options.".to_string(),
             )
         })?;
-        ToJsonOptions::from_map(map_array)
+        ToJsonOptions::from_map(map_array)?
     } else {
         ToJsonOptions::default()
     };

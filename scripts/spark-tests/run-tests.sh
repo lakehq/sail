@@ -29,6 +29,7 @@ case "$(basename "${VIRTUAL_ENV}")" in
     test_run_name="${TEST_RUN_NAME:-ibis}"
     export IBIS_TESTING="1"
     export IBIS_TESTING_DATA_DIR="${project_path}/opt/ibis-testing-data"
+    export SPARK_REMOTE="${SPARK_REMOTE:-sc://localhost:50051}"
     ;;
   *)
     echo "Error: This is not a valid test environment."

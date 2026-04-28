@@ -369,9 +369,13 @@
 
 - key: user_metadata
   description: |
-    User-defined metadata to be stored in the commit info.
-  supported: false
-  rust_type: String
+    User-defined string stored in the `commitInfo.userMetadata` field of the
+    next Delta commit produced by this write.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
   scopes:
     - write
   origins:
@@ -379,7 +383,7 @@
       keys:
         - user_metadata
         - userMetadata
-      parser: crate::options::parsers::parse_string
+      parser: crate::options::parsers::parse_optional_string
 
 - key: optimize_write
   description: |
