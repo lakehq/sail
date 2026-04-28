@@ -10,7 +10,8 @@ use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
 use datafusion_common::{plan_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Expr, ExprSchemable, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ExprSchemable, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_functions_nested::concat::ArrayConcat;
 
@@ -28,7 +29,10 @@ impl Default for SparkConcat {
 impl SparkConcat {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::Exact(vec![]), TypeSignature::VariadicAny],
+                Volatility::Immutable,
+            ),
         }
     }
 }

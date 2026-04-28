@@ -29,7 +29,6 @@ Feature: concat function
         | result |
         | hello  |
 
-    @sail-bug
     Scenario: zero arguments returns empty string
       When query
         """
