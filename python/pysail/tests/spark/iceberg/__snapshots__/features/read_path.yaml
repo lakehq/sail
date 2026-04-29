@@ -8,7 +8,7 @@ data:
       ProjectionExec: expr=[id@0 as #3, value@1 as #4, category@2 as #5]
         IcebergScanByDataFilesExec: table_url=file://<table_url>
           IcebergDiscoveryExec: table_url=file://<table_url>, snapshot_id=<snapshot_id>, partition_scan=false
-            RepartitionExec: partitioning=RoundRobinBatch(<N>), input_partitions=<N>
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
               IcebergManifestScanExec: table_url=file://<table_url>, snapshot_id=<snapshot_id>
 ---
 name: "test_explain_select_with_default_options_uses_driver_file_scan"
@@ -26,5 +26,5 @@ data:
       ProjectionExec: expr=[id@0 as #3, name@1 as #4, value@2 as #5]
         IcebergScanByDataFilesExec: table_url=file://<table_url>
           IcebergDiscoveryExec: table_url=file://<table_url>, snapshot_id=<snapshot_id>, partition_scan=false
-            RepartitionExec: partitioning=RoundRobinBatch(<N>), input_partitions=<N>
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
               IcebergManifestScanExec: table_url=file://<table_url>, snapshot_id=<snapshot_id>

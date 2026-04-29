@@ -7,7 +7,7 @@ data:
     ProjectionExec: expr=[#3@0 as id, #4@1 as status, #5@2 as value]
       ProjectionExec: expr=[id@0 as #3, status@1 as #4, value@2 as #5]
         FilterExec: status@1 = active AND value@2 > 150 OR id@0 = 2
-          RepartitionExec: partitioning=RoundRobinBatch(<N>), input_partitions=<N>
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
             DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_filter/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, status, value], file_type=parquet, predicate=status@1 = active AND value@2 > 150 OR id@0 = 2, pruning_predicate=status_null_count@2 != row_count@3 AND status_min@0 <= active AND active <= status_max@1 AND value_null_count@5 != row_count@3 AND value_max@4 > 150 OR id_null_count@8 != row_count@3 AND id_min@6 <= 2 AND 2 <= id_max@7, required_guarantees=[]
 ---
 name: "test_explain_for_count_aggregation"
@@ -17,7 +17,7 @@ data:
     ProjectionExec: expr=[#3@0 as category, #4@1 as cnt]
       ProjectionExec: expr=[#2@0 as #3, count(Int64(1))@1 as #4]
         AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
-          RepartitionExec: partitioning=Hash([#2@0], <N>), input_partitions=<N>
+          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=2
             AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
               DataSourceExec: file_groups={2 groups: [[<tmp>/iceberg_explain_agg/data/category=1/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_explain_agg/data/category=2/part-<uuid>-00000000000000000001.parquet]]}, projection=[category@2 as #2], file_type=parquet
 ---
@@ -31,11 +31,11 @@ data:
           CoalescePartitionsExec
             ProjectionExec: expr=[id@0 as #2, value@1 as #3]
               FilterExec: id@0 > 0
-                RepartitionExec: partitioning=RoundRobinBatch(<N>), input_partitions=<N>
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                   DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_join_right/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value], file_type=parquet, predicate=id@0 > 0, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
           ProjectionExec: expr=[id@0 as #0, name@1 as #1]
             FilterExec: id@0 > 0
-              RepartitionExec: partitioning=RoundRobinBatch(<N>), input_partitions=<N>
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                 DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_join_left/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, name], file_type=parquet, predicate=id@0 > 0 AND DynamicFilter [ empty ], pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
 ---
 name: "test_explain_for_order_by_on_partitioned_table"
@@ -54,7 +54,7 @@ data:
     ProjectionExec: expr=[#2@0 as id, #3@1 as name]
       ProjectionExec: expr=[id@0 as #2, name@1 as #3]
         FilterExec: id@0 > 0
-          RepartitionExec: partitioning=RoundRobinBatch(<N>), input_partitions=<N>
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
             DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_prune/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, name], file_type=parquet, predicate=id@0 > 0, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
 ---
 name: "test_explain_shows_column_projection"
@@ -64,7 +64,7 @@ data:
     ProjectionExec: expr=[#4@0 as name, #5@1 as age]
       ProjectionExec: expr=[name@0 as #4, age@1 as #5]
         FilterExec: id@0 < 10, projection=[name@1, age@2]
-          RepartitionExec: partitioning=RoundRobinBatch(<N>), input_partitions=<N>
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
             DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_projection/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, name, age], file_type=parquet, predicate=id@0 < 10, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 < 10, required_guarantees=[]
 ---
 name: "test_explain_shows_partition_pruning_for_identity_partitioning"
