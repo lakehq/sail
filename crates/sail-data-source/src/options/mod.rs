@@ -6,6 +6,7 @@ use crate::error::DataSourceResult;
 pub mod gen {
     include!(concat!(env!("OUT_DIR"), "/options/socket.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/rate.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/console.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/delta.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/iceberg.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/parquet.rs"));

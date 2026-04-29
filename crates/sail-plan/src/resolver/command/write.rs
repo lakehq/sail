@@ -20,7 +20,7 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
 use sail_common_datafusion::datasource::{
-    find_option, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
+    find_path_in_options, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -222,8 +222,10 @@ impl PlanResolver<'_> {
                 .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
                 .await?,
             bucket_by: self.resolve_write_bucket_by(bucket_by.clone())?,
-            table_properties: vec![],
-            options,
+            options: options
+                .into_iter()
+                .map(|items| OptionLayer::OptionList { items })
+                .collect(),
         };
         let mut preconditions = vec![];
         match target {
@@ -307,15 +309,24 @@ impl PlanResolver<'_> {
                     let location = info.location.clone().ok_or_else(|| {
                         PlanError::invalid(format!("table does not have a location: {table:?}"))
                     })?;
-                    file_write_options
-                        .options
-                        .push(vec![("path".to_string(), location)]);
+                    file_write_options.options.push(OptionLayer::OptionList {
+                        items: vec![("path".to_string(), location)],
+                    });
                     file_write_options.format = info.format.clone();
-                    file_write_options.options.insert(0, info.options.clone());
-                    file_write_options.table_properties = info.properties.clone();
+                    file_write_options.options.insert(
+                        0,
+                        OptionLayer::TablePropertyList {
+                            items: info.properties.clone(),
+                        },
+                    );
                 } else {
+                    file_write_options.options.insert(
+                        0,
+                        OptionLayer::TablePropertyList {
+                            items: table_properties,
+                        },
+                    );
                     // Create or replace the table
-                    file_write_options.table_properties = table_properties.clone();
                     if file_write_options.format.is_empty() {
                         if let Some(format) = info.as_ref().map(|x| &x.format) {
                             file_write_options.format = format.clone();
@@ -325,14 +336,17 @@ impl PlanResolver<'_> {
                         }
                     }
                     if let Some(location) = info.as_ref().and_then(|x| x.location.as_ref()) {
-                        file_write_options
-                            .options
-                            .push(vec![("path".to_string(), location.clone())]);
+                        file_write_options.options.push(OptionLayer::OptionList {
+                            items: vec![("path".to_string(), location.clone())],
+                        });
                     } else {
                         let default_location = self.resolve_default_table_location(&table).await?;
-                        file_write_options
-                            .options
-                            .insert(0, vec![("path".to_string(), default_location)]);
+                        file_write_options.options.insert(
+                            0,
+                            OptionLayer::OptionList {
+                                items: vec![("path".to_string(), default_location)],
+                            },
+                        );
                     };
                     if file_write_options
                         .partition_by
@@ -344,15 +358,7 @@ impl PlanResolver<'_> {
                             "partition transforms are only supported for Iceberg tables",
                         ));
                     }
-                    let all_options: Vec<std::collections::HashMap<String, String>> =
-                        file_write_options
-                            .options
-                            .iter()
-                            .map(|set| set.iter().cloned().collect())
-                            .collect();
-                    let table_location = find_option(&all_options, "path")
-                        .or_else(|| find_option(&all_options, "location"))
-                        .unwrap_or_default();
+                    let table_location = find_path_in_options(&file_write_options.options);
                     let (if_not_exists, replace) = if matches!(mode, WriteMode::Append { .. }) {
                         (true, false)
                     } else if matches!(mode, WriteMode::Replace { .. }) {
@@ -375,15 +381,27 @@ impl PlanResolver<'_> {
                             generated_always_as: None,
                         })
                         .collect();
-                    // TODO: Revisit passing write options to CreateTableOptions.
-                    let create_table_options: Vec<(String, String)> = file_write_options
+                    // TODO: Revisit passing write options as table properties.
+                    let properties = file_write_options
                         .options
-                        .iter()
-                        .flatten()
-                        .filter(|(k, _)| {
-                            !k.eq_ignore_ascii_case("path") && !k.eq_ignore_ascii_case("location")
+                        .clone()
+                        .into_iter()
+                        .flat_map(|layer| match layer {
+                            OptionLayer::OptionList { items } => items
+                                .into_iter()
+                                .filter_map(|(k, v)| {
+                                    if !k.eq_ignore_ascii_case("path")
+                                        && !k.eq_ignore_ascii_case("location")
+                                    {
+                                        Some((format!("option.{k}"), v))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect(),
+                            OptionLayer::TablePropertyList { items } => items,
+                            _ => vec![],
                         })
-                        .cloned()
                         .collect();
                     let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                     let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
@@ -393,15 +411,14 @@ impl PlanResolver<'_> {
                             columns,
                             comment: None,
                             constraints: vec![],
-                            location: Some(table_location),
+                            location: table_location,
                             format: file_write_options.format.clone(),
                             partition_by,
                             sort_by,
                             bucket_by,
                             if_not_exists,
                             replace,
-                            options: create_table_options,
-                            properties: table_properties,
+                            properties,
                         },
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
@@ -492,7 +509,6 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                options,
                 properties,
             } => {
                 // When a table is created without column definitions
@@ -517,8 +533,8 @@ impl PlanResolver<'_> {
                         partition_by: vec![],
                         bucket_by: None,
                         sort_order: vec![],
-                        options: vec![OptionLayer::OptionList {
-                            items: options.to_vec(),
+                        options: vec![OptionLayer::TablePropertyList {
+                            items: properties.to_vec(),
                         }],
                     };
                     let source = table_format
@@ -561,7 +577,6 @@ impl PlanResolver<'_> {
                     partition_by,
                     sort_by,
                     bucket_by,
-                    options,
                     properties,
                 }))
             }
@@ -1146,7 +1161,6 @@ struct TableInfo {
     partition_by: Vec<CatalogPartitionField>,
     sort_by: Vec<CatalogTableSort>,
     bucket_by: Option<CatalogTableBucketBy>,
-    options: Vec<(String, String)>,
     properties: Vec<(String, String)>,
 }
 

@@ -5,7 +5,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{
-    OptionLayer, RowLevelCommand, RowLevelTargetInfo, RowLevelWriteInfo, TableFormatRegistry,
+    RowLevelCommand, RowLevelTargetInfo, RowLevelWriteInfo, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::file_delete::FileDeleteOptions;
@@ -32,10 +32,7 @@ pub async fn create_file_delete_physical_plan(
             table_name,
             path,
             partition_by: Vec::new(),
-            options: options
-                .into_iter()
-                .map(|x| OptionLayer::OptionList { items: x })
-                .collect(),
+            options,
         },
         condition,
         expanded_input: None,
