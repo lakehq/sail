@@ -1,3 +1,4 @@
+@reverse
 Feature: reverse function
 
   Rule: String reversal — basic usage
@@ -28,14 +29,14 @@ Feature: reverse function
         | result |
         |        |
 
-    Scenario: Reverse a string of only whitespace
+    Scenario: Reverse a string of only whitespace preserves length
       When query
         """
-        SELECT reverse('   ') AS result
+        SELECT length(reverse('   ')) AS result
         """
       Then query result
         | result |
-        |        |
+        | 3      |
 
     Scenario: Reverse a longer ASCII string
       When query
