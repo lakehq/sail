@@ -132,9 +132,9 @@ impl ScalarUDFImpl for SparkConcat {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.is_empty() {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::new(),
-            ))));
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                Some(String::new()),
+            )));
         }
         let return_type = args.return_field.data_type().clone();
         let mut null_mask = None;
@@ -220,9 +220,9 @@ fn cast_columnar_values(
                 ColumnarValue::Scalar(scalar) => {
                     let casted = scalar.cast_to(target_type)?;
                     if is_timestamp {
-                        Ok(ColumnarValue::Scalar(
-                            spark_format_timestamp_scalar(casted)?,
-                        ))
+                        Ok(ColumnarValue::Scalar(spark_format_timestamp_scalar(
+                            casted,
+                        )?))
                     } else {
                         Ok(ColumnarValue::Scalar(casted))
                     }
@@ -259,19 +259,25 @@ fn spark_format_timestamp_str(s: &str) -> String {
 fn spark_format_timestamp_scalar(scalar: ScalarValue) -> Result<ScalarValue> {
     match scalar {
         ScalarValue::Utf8(Some(s)) => Ok(ScalarValue::Utf8(Some(spark_format_timestamp_str(&s)))),
-        ScalarValue::LargeUtf8(Some(s)) => Ok(ScalarValue::LargeUtf8(Some(
-            spark_format_timestamp_str(&s),
-        ))),
+        ScalarValue::LargeUtf8(Some(s)) => {
+            Ok(ScalarValue::LargeUtf8(Some(spark_format_timestamp_str(&s))))
+        }
         other => Ok(other),
     }
 }
 
-fn spark_format_timestamp_array(array: Arc<dyn datafusion::arrow::array::Array>) -> Result<Arc<dyn datafusion::arrow::array::Array>> {
+fn spark_format_timestamp_array(
+    array: Arc<dyn datafusion::arrow::array::Array>,
+) -> Result<Arc<dyn datafusion::arrow::array::Array>> {
     use datafusion::arrow::array::Array;
     let string_array = array
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| datafusion_common::DataFusionError::Internal("expected StringArray after timestamp cast".to_string()))?;
+        .ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(
+                "expected StringArray after timestamp cast".to_string(),
+            )
+        })?;
     let result: StringArray = string_array
         .iter()
         .map(|opt| opt.map(spark_format_timestamp_str))
