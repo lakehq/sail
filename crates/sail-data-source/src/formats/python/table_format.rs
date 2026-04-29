@@ -211,7 +211,6 @@ impl TableFormat for PythonTableFormat {
             input,
             mode,
             partition_by,
-            table_properties: _,
             mut options,
             ..
         } = info;

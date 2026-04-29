@@ -30,8 +30,8 @@ pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
-use sail_common_datafusion::datasource::RowLevelOperationType;
 pub use sail_common_datafusion::datasource::OPERATION_COLUMN;
+use sail_common_datafusion::datasource::{OptionLayer, RowLevelOperationType};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
 #[educe(PartialOrd)]
@@ -160,7 +160,7 @@ pub struct MergeTargetInfo {
     pub format: String,
     pub location: String,
     pub partition_by: Vec<String>,
-    pub options: Vec<Vec<(String, String)>>,
+    pub options: Vec<OptionLayer>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -324,7 +324,7 @@ pub struct RowLevelWriteNode {
     target_location: String,
     target_table_name: Vec<String>,
     target_partition_by: Vec<String>,
-    target_options: Vec<Vec<(String, String)>>,
+    target_options: Vec<OptionLayer>,
     with_schema_evolution: bool,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
@@ -368,7 +368,7 @@ impl RowLevelWriteNode {
         format: String,
         location: String,
         table_name: Vec<String>,
-        options: Vec<Vec<(String, String)>>,
+        options: Vec<OptionLayer>,
     ) -> Self {
         Self {
             command: RowLevelCommand::Delete,
@@ -437,7 +437,7 @@ impl RowLevelWriteNode {
         &self.target_partition_by
     }
 
-    pub fn target_options(&self) -> &[Vec<(String, String)>] {
+    pub fn target_options(&self) -> &[OptionLayer] {
         &self.target_options
     }
 

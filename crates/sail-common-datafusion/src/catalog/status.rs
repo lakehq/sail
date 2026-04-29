@@ -44,7 +44,6 @@ pub enum TableKind {
         partition_by: Vec<CatalogPartitionField>,
         sort_by: Vec<CatalogTableSort>,
         bucket_by: Option<CatalogTableBucketBy>,
-        options: Vec<(String, String)>,
         properties: Vec<(String, String)>,
     },
     View {

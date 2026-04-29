@@ -76,8 +76,8 @@
       parser: crate::options::parsers::parse_bool
     - type: table_property
       keys:
-        - metadata_as_data_read
-        - metadataAsDataRead
+        - option.metadata_as_data_read
+        - option.metadataAsDataRead
       parser: crate::options::parsers::parse_bool
 
 ### Write-Only Options ###
