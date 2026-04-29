@@ -279,20 +279,6 @@ impl UnityCatalogProvider {
 
         let comment = comment.or(get_property(&properties, "comment"));
 
-        let options: Vec<_> = properties
-            .extract_if(|k, _| k.trim().to_lowercase().starts_with("options."))
-            .map(|(k, v)| {
-                let trimmed = k.trim().to_string();
-                let stripped =
-                    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("options.") {
-                        trimmed[8..].to_string()
-                    } else {
-                        trimmed
-                    };
-                (stripped, v)
-            })
-            .collect();
-
         if let Some(created_at) = created_at {
             properties.insert("created_at".to_string(), created_at.to_string());
         }
@@ -330,7 +316,6 @@ impl UnityCatalogProvider {
                 partition_by: identity_partition_fields(&partition_by),
                 sort_by: vec![],
                 bucket_by: None,
-                options,
                 properties,
             },
         })
@@ -531,7 +516,6 @@ impl CatalogProvider for UnityCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
-            options,
             properties,
         } = options;
 
@@ -626,10 +610,6 @@ impl CatalogProvider for UnityCatalogProvider {
             .collect::<CatalogResult<Vec<_>>>()?;
 
         let mut props = HashMap::new();
-        // TODO: Is this correct for options?
-        for (k, v) in options {
-            props.insert(format!("options.{k}"), v);
-        }
         if let Some(c) = &comment {
             props.insert("comment".to_string(), c.to_string());
         }
