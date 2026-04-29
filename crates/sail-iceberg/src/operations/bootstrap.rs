@@ -72,6 +72,10 @@ pub async fn bootstrap_new_table(
         .partition_spec
         .clone()
         .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+    let (format_version, table_properties) =
+        crate::properties::metadata_properties_from_table_properties(
+            &commit_info.table_properties,
+        )?;
 
     // Create a minimal transaction context (no parent snapshot)
     let empty_snapshot = SnapshotBuilder::new()
@@ -90,7 +94,7 @@ pub async fn bootstrap_new_table(
         Arc::new(iceberg_schema.clone()),
         iceberg_schema.schema_id(),
         partition_spec.clone(),
-        FormatVersion::V2,
+        format_version,
         crate::spec::ManifestContentType::Data,
     );
 
@@ -119,10 +123,10 @@ pub async fn bootstrap_new_table(
         })
         .ok_or_else(|| DataFusionError::Plan("No snapshot in bootstrap commit".to_string()))?;
 
-    // Build minimal TableMetadata V2
+    // Build minimal TableMetadata
     let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     let table_meta = TableMetadata {
-        format_version: FormatVersion::V2,
+        format_version,
         table_uuid: None,
         location: table_url.to_string(),
         last_sequence_number: 1,
@@ -133,7 +137,7 @@ pub async fn bootstrap_new_table(
         partition_specs: vec![partition_spec.clone()],
         default_spec_id: partition_spec.spec_id(),
         last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
-        properties: std::collections::HashMap::new(),
+        properties: table_properties,
         current_snapshot_id: Some(snapshot.snapshot_id()),
         snapshots: vec![snapshot.clone()],
         snapshot_log: vec![SnapshotLog {

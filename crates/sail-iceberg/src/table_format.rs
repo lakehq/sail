@@ -37,7 +37,7 @@ use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::physical_plan::IcebergWriterExecOptions;
-use crate::spec::{FormatVersion, MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
+use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::{find_latest_metadata_file, Table};
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_exprs,
@@ -95,6 +95,7 @@ impl TableFormat for IcebergTableFormat {
         }
 
         let table_url = Self::parse_table_url(vec![path]).await?;
+        let table_properties = collect_iceberg_table_properties(&options);
         let iceberg_options = resolve_iceberg_write_options(options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -161,11 +162,13 @@ impl TableFormat for IcebergTableFormat {
             existing_partition_columns.unwrap_or_default()
         };
 
+        let mut options = IcebergWriterExecOptions::from(iceberg_options);
+        options.table_properties = table_properties;
         let table_config = IcebergTableConfig {
             table_url,
             partition_columns: resolved_partition_columns,
             table_exists,
-            options: IcebergWriterExecOptions::from(iceberg_options),
+            options,
         };
 
         let physical_sort = sort_order.map(|req| {
@@ -218,7 +221,7 @@ impl TableFormat for IcebergTableFormat {
             let mut table_meta = TableMetadata::from_json(&bytes)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            apply_iceberg_table_property_changes(&mut table_meta, &changes, if_exists)?;
+            crate::properties::apply_table_property_changes(&mut table_meta, &changes, if_exists)?;
 
             let current_version = parse_metadata_version_from_path(&latest_meta).unwrap_or(0);
             let next_version = current_version + 1;
@@ -446,71 +449,14 @@ fn resolve_iceberg_write_options(
     partial.finalize()
 }
 
-fn apply_iceberg_table_property_changes(
-    table_meta: &mut TableMetadata,
-    changes: &[(String, Option<String>)],
-    if_exists: bool,
-) -> Result<()> {
-    let mut properties = table_meta.properties.clone();
-    let mut format_version = table_meta.format_version;
-
-    for (key, value) in changes {
-        match value {
-            Some(value) => {
-                if key == "format-version" {
-                    format_version = upgrade_format_version(format_version, value)?;
-                } else if !is_reserved_iceberg_table_property(key) {
-                    properties.insert(key.clone(), value.clone());
-                }
-            }
-            None => {
-                if !if_exists && !properties.contains_key(key) {
-                    return plan_err!(
-                        "cannot remove property '{key}' because it is not set on the table"
-                    );
-                }
-                if !is_reserved_iceberg_table_property(key) {
-                    properties.remove(key);
-                }
-            }
-        }
-    }
-
-    table_meta.properties = properties;
-    table_meta.format_version = format_version;
-    Ok(())
-}
-
-fn is_reserved_iceberg_table_property(key: &str) -> bool {
-    matches!(
-        key,
-        "format-version"
-            | "uuid"
-            | "snapshot-count"
-            | "current-snapshot-summary"
-            | "current-snapshot-id"
-            | "current-snapshot-timestamp-ms"
-            | "current-schema"
-            | "default-partition-spec"
-            | "default-sort-order"
-    )
-}
-
-fn upgrade_format_version(current: FormatVersion, requested: &str) -> Result<FormatVersion> {
-    let requested = requested.parse::<i32>().map_err(|_| {
-        DataFusionError::Plan(format!("invalid Iceberg format-version value: {requested}"))
-    })?;
-    let current_i32 = current as i32;
-    if requested < current_i32 {
-        return plan_err!(
-            "cannot downgrade Iceberg table format version from v{current_i32} to v{requested}"
-        );
-    }
-    match requested {
-        1 => Ok(FormatVersion::V1),
-        2 => Ok(FormatVersion::V2),
-        _ => plan_err!("cannot upgrade Iceberg table to unsupported format version v{requested}"),
-    }
+fn collect_iceberg_table_properties(options: &[OptionLayer]) -> Vec<(String, String)> {
+    options
+        .iter()
+        .flat_map(|layer| match layer {
+            OptionLayer::TablePropertyList { items } => items.clone(),
+            _ => vec![],
+        })
+        .collect()
 }
 
 fn parse_metadata_version_from_path(path: &str) -> Option<i32> {

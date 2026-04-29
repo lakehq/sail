@@ -295,6 +295,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: commit_meta.requirements,
+                table_properties: commit_meta.table_properties,
                 operation: commit_meta.operation,
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,

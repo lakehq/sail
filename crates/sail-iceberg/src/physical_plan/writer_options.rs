@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 pub struct IcebergWriterExecOptions {
     pub merge_schema: bool,
     pub overwrite_schema: bool,
+    pub table_properties: Vec<(String, String)>,
 }
 
 impl From<IcebergWriteOptions> for IcebergWriterExecOptions {
@@ -27,6 +28,7 @@ impl From<IcebergWriteOptions> for IcebergWriterExecOptions {
         Self {
             merge_schema: options.merge_schema,
             overwrite_schema: options.overwrite_schema,
+            table_properties: vec![],
         }
     }
 }
