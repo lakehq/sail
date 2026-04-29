@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, StringArray, StructArray};
+use datafusion::arrow::array::{Array, NullBufferBuilder, StringArray, StructArray};
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -538,9 +538,8 @@ fn is_skipping_eligible_datatype(data_type: &PrimitiveType) -> bool {
 /// Parse a column of `stats` JSON strings into a typed [`StructArray`] that mirrors
 /// `target_schema`.
 ///
-/// Empty strings and nulls produce a struct row whose fields are all null, matching the
-/// semantics expected by both the metadata-as-data replay pipeline and the snapshot
-/// materialization path.
+/// Empty strings and nulls produce a null struct row, preserving the distinction between
+/// missing stats and stats with fields set to null.
 pub(crate) fn parse_stats_json_array(
     json: &StringArray,
     target_schema: &ArrowSchemaRef,
@@ -552,10 +551,17 @@ pub(crate) fn parse_stats_json_array(
         .sum::<usize>()
         .max(num_rows + 1);
     let mut json_lines = String::with_capacity(estimated);
+    let mut validity = NullBufferBuilder::new(num_rows);
     for value in json.iter() {
         match value {
-            Some(value) if !value.is_empty() => json_lines.push_str(value),
-            _ => json_lines.push_str("{}"),
+            Some(value) if !value.is_empty() => {
+                json_lines.push_str(value);
+                validity.append_non_null();
+            }
+            _ => {
+                json_lines.push_str("{}");
+                validity.append_null();
+            }
         }
         json_lines.push('\n');
     }
@@ -568,7 +574,12 @@ pub(crate) fn parse_stats_json_array(
         Some(batch) => batch.map_err(DeltaTableError::generic_err)?,
         None => RecordBatch::new_empty(Arc::clone(target_schema)),
     };
-    Ok(parsed.into())
+    let parsed: StructArray = parsed.into();
+    Ok(StructArray::try_new(
+        parsed.fields().clone(),
+        parsed.columns().to_vec(),
+        validity.finish(),
+    )?)
 }
 
 #[cfg(test)]
@@ -693,6 +704,8 @@ mod tests {
             .unwrap();
         assert_eq!(num_records.value(0), 3);
         assert_eq!(num_records.value(1), 0);
+        assert!(parsed.is_null(2));
+        assert!(parsed.is_null(3));
         assert!(num_records.is_null(2));
         assert!(num_records.is_null(3));
 
