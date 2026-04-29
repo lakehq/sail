@@ -105,7 +105,6 @@ pub(crate) fn table_to_status(
             partition_by,
             sort_by: vec![],
             bucket_by: None,
-            options: vec![],
             properties,
         },
     })

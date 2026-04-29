@@ -271,7 +271,6 @@ impl OneLakeCatalogProvider {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                options: vec![],
                 properties: vec![],
             },
         })

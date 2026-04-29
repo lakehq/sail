@@ -5,18 +5,11 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::{internal_err, Result};
 use sail_common_datafusion::datasource::{
-    MergePredicateInfo, OperationOverride, OptionLayer, RowLevelCommand, RowLevelTargetInfo,
-    RowLevelWriteInfo, TableFormatRegistry,
+    MergePredicateInfo, OperationOverride, RowLevelCommand, RowLevelTargetInfo, RowLevelWriteInfo,
+    TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::merge::RowLevelWriteNode;
-
-fn convert_options(options: &[Vec<(String, String)>]) -> Vec<OptionLayer> {
-    options
-        .iter()
-        .map(|set| OptionLayer::OptionList { items: set.clone() })
-        .collect()
-}
 
 /// Creates a physical execution plan for a unified `RowLevelWriteNode`.
 ///
@@ -31,7 +24,7 @@ pub async fn create_row_level_write_physical_plan(
         table_name: node.target_table_name().to_vec(),
         path: node.target_location().to_string(),
         partition_by: node.target_partition_by().to_vec(),
-        options: convert_options(node.target_options()),
+        options: node.target_options().to_vec(),
     };
 
     let format = node.target_format().to_string();
