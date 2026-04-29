@@ -177,7 +177,16 @@ def normalize_plan_text(plan_text: str) -> str:
     text = re.sub(r"file_groups=\{[^}]+\}", _normalize_file_groups_block, text)
 
     text = re.sub(r"Bytes=Exact\(\d+\)", r"Bytes=Exact(<bytes>)", text)
-    return re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)
+    text = re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)
+
+    # Normalize partition counts that vary by machine (target_partitions = num_cpus).
+    text = re.sub(
+        r"(partitioning=(?:Hash\([^,]+,\s*|RoundRobinBatch\())\d+(\)?)",
+        lambda m: m.group(1) + "<N>" + m.group(2),
+        text,
+    )
+    text = re.sub(r"input_partitions=\d+", "input_partitions=<N>", text)
+    return text
 
 
 def _collect_plan(query: str, spark) -> str:
