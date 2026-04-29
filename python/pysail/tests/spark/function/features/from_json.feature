@@ -226,3 +226,367 @@ Feature: from_json function parses JSON strings into structured types
       Then query result
         | result |
         | {123}  |
+
+    Scenario: Parse boolean value as string type
+      When query
+        """
+        SELECT from_json('{"a":true}', 'a STRING') AS result
+        """
+      Then query result
+        | result |
+        | {true} |
+
+    Scenario: Parse null value as string type
+      When query
+        """
+        SELECT from_json('{"a":null}', 'a STRING') AS result
+        """
+      Then query result
+        | result   |
+        | {NULL}   |
+
+    Scenario: Parse float value as string type
+      When query
+        """
+        SELECT from_json('{"a":1.5}', 'a STRING') AS result
+        """
+      Then query result
+        | result  |
+        | {1.5}   |
+
+  Rule: Batch processing
+    Scenario: Parse multiple valid JSON rows as struct
+      When query
+        """
+        SELECT from_json(json_str, 'a INT, b STRING') AS result
+        FROM VALUES
+          ('{"a":1,"b":"x"}'),
+          ('{"a":2,"b":"y"}'),
+          ('{"a":3,"b":"z"}')
+        AS t(json_str)
+        ORDER BY result.a
+        """
+      Then query result ordered
+        | result   |
+        | {1, x}   |
+        | {2, y}   |
+        | {3, z}   |
+
+    Scenario: Parse batch with mixed valid invalid and null rows
+      When query
+        """
+        SELECT from_json(json_str, 'a INT') AS result
+        FROM VALUES
+          ('{"a":10}'),
+          (NULL),
+          ('not json'),
+          ('{"a":20}')
+        AS t(json_str)
+        ORDER BY result.a NULLS FIRST
+        """
+      Then query result ordered
+        | result  |
+        | NULL    |
+        | {NULL}  |
+        | {10}    |
+        | {20}    |
+
+    Scenario: Parse multiple rows returning arrays
+      When query
+        """
+        SELECT from_json(json_str, 'ARRAY<INT>') AS result
+        FROM VALUES
+          ('[1, 2]'),
+          ('[3, 4, 5]'),
+          ('[]')
+        AS t(json_str)
+        ORDER BY size(result)
+        """
+      Then query result ordered
+        | result      |
+        | []          |
+        | [1, 2]      |
+        | [3, 4, 5]   |
+
+    Scenario: Parse multiple rows returning maps
+      When query
+        """
+        SELECT from_json(json_str, 'MAP<STRING, INT>') AS result
+        FROM VALUES
+          ('{"x":1}'),
+          ('{"y":2}')
+        AS t(json_str)
+        ORDER BY to_json(result)
+        """
+      Then query result ordered
+        | result    |
+        | {x -> 1}  |
+        | {y -> 2}  |
+
+  Rule: Type mismatch returns null
+    Scenario: Boolean field with numeric JSON value returns null
+      When query
+        """
+        SELECT from_json('{"flag":1}', 'flag BOOLEAN') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Int field with string JSON value returns null
+      When query
+        """
+        SELECT from_json('{"n":"not_a_number"}', 'n INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Float field with string JSON value returns null
+      When query
+        """
+        SELECT from_json('{"f":"text"}', 'f DOUBLE') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Date field with numeric JSON value returns null
+      When query
+        """
+        SELECT from_json('{"d":20240115}', 'd DATE') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Nested struct field with non-object value returns null
+      When query
+        """
+        SELECT from_json('{"s":"not_object"}', 'STRUCT<s: STRUCT<x: INT>>') AS result
+        """
+      Then query result
+        | result   |
+        | {NULL}   |
+
+    Scenario: Nested array field with non-array value returns null
+      When query
+        """
+        SELECT from_json('{"arr":"not_array"}', 'STRUCT<arr: ARRAY<INT>>') AS result
+        """
+      Then query result
+        | result   |
+        | {NULL}   |
+
+    Scenario: Nested map field with non-object value returns null
+      When query
+        """
+        SELECT from_json('{"m":"not_map"}', 'STRUCT<m: MAP<STRING, INT>>') AS result
+        """
+      Then query result
+        | result   |
+        | {NULL}   |
+
+  Rule: Decimal edge cases
+    Scenario: Parse negative decimal from number
+      When query
+        """
+        SELECT from_json('{"v":-3.14}', 'v DECIMAL(10,2)') AS result
+        """
+      Then query result
+        | result  |
+        | {-3.14} |
+
+    Scenario: Parse negative decimal from string
+      When query
+        """
+        SELECT from_json('{"v":"-1.50"}', 'v DECIMAL(10,2)') AS result
+        """
+      Then query result
+        | result  |
+        | {-1.50} |
+
+    Scenario: Parse decimal with more fractional digits than scale truncates
+      When query
+        """
+        SELECT from_json('{"v":3.141}', 'v DECIMAL(10,2)') AS result
+        """
+      Then query result
+        | result |
+        | {3.14} |
+
+    Scenario: Parse large integer as decimal
+      When query
+        """
+        SELECT from_json('{"v":12345}', 'v DECIMAL(10,2)') AS result
+        """
+      Then query result
+        | result     |
+        | {12345.00} |
+
+  Rule: Array element type coverage
+    Scenario: Parse array of booleans
+      When query
+        """
+        SELECT from_json('[true, false, true]', 'ARRAY<BOOLEAN>') AS result
+        """
+      Then query result
+        | result               |
+        | [true, false, true]  |
+
+    Scenario: Parse array of strings
+      When query
+        """
+        SELECT from_json('["hello", "world"]', 'ARRAY<STRING>') AS result
+        """
+      Then query result
+        | result           |
+        | [hello, world]   |
+
+    Scenario: Parse array of doubles
+      When query
+        """
+        SELECT from_json('[1.1, 2.2, 3.3]', 'ARRAY<DOUBLE>') AS result
+        """
+      Then query result
+        | result          |
+        | [1.1, 2.2, 3.3] |
+
+    Scenario: Parse array of structs
+      When query
+        """
+        SELECT from_json('[{"x":1},{"x":2}]', 'ARRAY<STRUCT<x: INT>>') AS result
+        """
+      Then query result
+        | result          |
+        | [{1}, {2}]      |
+
+    Scenario: Parse array of arrays
+      When query
+        """
+        SELECT from_json('[[1,2],[3,4]]', 'ARRAY<ARRAY<INT>>') AS result
+        """
+      Then query result
+        | result              |
+        | [[1, 2], [3, 4]]    |
+
+    Scenario: Parse array with null elements
+      When query
+        """
+        SELECT from_json('[1, null, 3]', 'ARRAY<INT>') AS result
+        """
+      Then query result
+        | result          |
+        | [1, NULL, 3]    |
+
+  Rule: Struct edge cases
+    Scenario: Explicit JSON null value for a typed field returns null
+      When query
+        """
+        SELECT from_json('{"a":1,"b":null}', 'a INT, b STRING') AS result
+        """
+      Then query result
+        | result      |
+        | {1, NULL}   |
+
+    Scenario: Extra JSON fields not in schema are ignored
+      When query
+        """
+        SELECT from_json('{"a":1,"extra":"ignored","b":2}', 'a INT, b INT') AS result
+        """
+      Then query result
+        | result   |
+        | {1, 2}   |
+
+  Rule: Map edge cases
+    Scenario: Invalid JSON for map returns null
+      When query
+        """
+        SELECT from_json('not json', 'MAP<STRING, INT>') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Array input for map schema returns null
+      When query
+        """
+        SELECT from_json('[1,2,3]', 'MAP<STRING, INT>') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Map with string values
+      When query
+        """
+        SELECT from_json('{"key1":"val1","key2":"val2"}', 'MAP<STRING, STRING>') AS result
+        """
+      Then query result
+        | result                       |
+        | {key1 -> val1, key2 -> val2} |
+
+  Rule: Timestamp without timezone
+    Scenario: Parse timestamp without timezone using TIMESTAMP_NTZ schema
+      When query
+        """
+        SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ') AS result
+        """
+      Then query result
+        | result                    |
+        | {2024-06-15 10:30:00}     |
+
+    Scenario: Parse timestamp without timezone with custom format
+      When query
+        """
+        SELECT from_json('{"ts":"15/06/2024 10:30"}', 'ts TIMESTAMP_NTZ', map('timestampFormat', 'dd/MM/yyyy HH:mm')) AS result
+        """
+      Then query result
+        | result                    |
+        | {2024-06-15 10:30:00}     |
+
+  Rule: Null value handling
+    Scenario: JSON null for boolean field returns null
+      When query
+        """
+        SELECT from_json('{"flag":null}', 'flag BOOLEAN') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: JSON null for int field returns null
+      When query
+        """
+        SELECT from_json('{"n":null}', 'n INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: JSON null for decimal field returns null
+      When query
+        """
+        SELECT from_json('{"v":null}', 'v DECIMAL(10,2)') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: JSON null for date field returns null
+      When query
+        """
+        SELECT from_json('{"d":null}', 'd DATE') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: JSON null for timestamp field returns null
+      When query
+        """
+        SELECT from_json('{"ts":null}', 'ts TIMESTAMP') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
