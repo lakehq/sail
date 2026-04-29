@@ -264,7 +264,7 @@ def test_parquet_read_mixed_case_directory_with_schema(spark, sample_df, tmp_pat
 def test_parquet_read_uppercase_extension_partitioned_directory(spark, tmp_path):
     # Partitioned write produces a partitioned tree under a directory.
     # Renaming every leaf `.parquet` to `.PARQUET` must still let the table
-    # be read. We rely on partition discovery (no `.schema()`) since
+    # be read. Relies on partition discovery (no `.schema()`) since
     # `part` lives only in the directory name, not in the file.
     df_in = spark.createDataFrame(
         [(1, "a", "x"), (2, "b", "x"), (3, "c", "y")],
@@ -275,6 +275,28 @@ def test_parquet_read_uppercase_extension_partitioned_directory(spark, tmp_path)
     for f in src.rglob("*.parquet"):
         f.rename(f.with_suffix(".PARQUET"))
     df = spark.read.parquet(str(src))
+    rows = sorted(df.collect(), key=lambda r: r.id)
+    assert rows == [
+        Row(id=1, val="a", part="x"),
+        Row(id=2, val="b", part="x"),
+        Row(id=3, val="c", part="y"),
+    ]
+
+
+def test_parquet_read_uppercase_extension_partitioned_directory_with_schema(spark, tmp_path):
+    # Same as the previous test but with an explicit schema that includes
+    # the partition column. Spark recognizes `part` as a partition column
+    # from the directory structure even when a schema is supplied; Sail
+    # should match that so users migrating from Spark don't see a regression.
+    df_in = spark.createDataFrame(
+        [(1, "a", "x"), (2, "b", "x"), (3, "c", "y")],
+        "id INT, val STRING, part STRING",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("part").parquet(str(src), mode="overwrite")
+    for f in src.rglob("*.parquet"):
+        f.rename(f.with_suffix(".PARQUET"))
+    df = spark.read.schema("id INT, val STRING, part STRING").parquet(str(src))
     rows = sorted(df.collect(), key=lambda r: r.id)
     assert rows == [
         Row(id=1, val="a", part="x"),
