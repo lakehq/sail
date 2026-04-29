@@ -541,7 +541,7 @@ fn is_skipping_eligible_datatype(data_type: &PrimitiveType) -> bool {
 /// Empty strings and nulls produce a struct row whose fields are all null, matching the
 /// semantics expected by both the metadata-as-data replay pipeline and the snapshot
 /// materialization path.
-pub fn parse_stats_json_array(
+pub(crate) fn parse_stats_json_array(
     json: &StringArray,
     target_schema: &ArrowSchemaRef,
 ) -> DeltaResult<StructArray> {

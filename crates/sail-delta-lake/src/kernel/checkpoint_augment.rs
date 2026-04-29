@@ -12,7 +12,7 @@ use crate::kernel::snapshot::materialize::parse_partition_values_array;
 use crate::schema::make_physical_arrow_schema;
 use crate::spec::fields::{FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS_PARSED};
 use crate::spec::{
-    add_struct_type, parse_stats_json_array, stats_schema, ColumnMappingMode,
+    add_struct_type, parse_stats_json_array, stats_schema, ColumnMappingMode, ColumnMetadataKey,
     DeltaError as DeltaTableError, DeltaResult, Metadata, StructField, StructType, TableProperties,
 };
 
@@ -29,48 +29,51 @@ impl AddAugmentationConfig {
         let properties = TableProperties::from(metadata.configuration().iter());
         let write_stats_as_struct = properties.checkpoint_write_stats_as_struct.unwrap_or(true);
         let write_stats_as_json = properties.checkpoint_write_stats_as_json.unwrap_or(true);
-        let column_mapping_mode = properties
+        let explicit_column_mapping_mode = properties
             .column_mapping_mode
             .unwrap_or(ColumnMappingMode::None);
 
-        let (stats_parsed_schema, partition_values_parsed_schema) = if write_stats_as_struct {
-            let table_schema = metadata.parse_schema()?;
-            let partition_cols = metadata.partition_columns();
+        let (stats_parsed_schema, partition_values_parsed_schema, column_mapping_mode) =
+            if write_stats_as_struct {
+                let table_schema = metadata.parse_schema()?;
+                let column_mapping_mode =
+                    effective_column_mapping_mode(&table_schema, explicit_column_mapping_mode);
+                let partition_cols = metadata.partition_columns();
 
-            let non_partition_fields: Vec<StructField> = table_schema
-                .fields()
-                .filter(|field| !partition_cols.contains(&field.name().to_string()))
-                .cloned()
-                .collect();
-            let non_partition_schema = StructType::try_new(non_partition_fields)?;
-            let non_partition_arrow = ArrowSchema::try_from(&non_partition_schema)?;
-            let physical_non_partition_arrow =
-                make_physical_arrow_schema(&non_partition_arrow, column_mapping_mode);
-            let physical_non_partition_schema =
-                StructType::try_from(&physical_non_partition_arrow)?;
-            let stats_struct = stats_schema(&physical_non_partition_schema, &properties)?;
-            let stats_arrow = Arc::new(ArrowSchema::try_from(&stats_struct)?);
+                let non_partition_fields: Vec<StructField> = table_schema
+                    .fields()
+                    .filter(|field| !partition_cols.contains(&field.name().to_string()))
+                    .cloned()
+                    .collect();
+                let non_partition_schema = StructType::try_new(non_partition_fields)?;
+                let non_partition_arrow = ArrowSchema::try_from(&non_partition_schema)?;
+                let physical_non_partition_arrow =
+                    make_physical_arrow_schema(&non_partition_arrow, column_mapping_mode);
+                let physical_non_partition_schema =
+                    StructType::try_from(&physical_non_partition_arrow)?;
+                let stats_struct = stats_schema(&physical_non_partition_schema, &properties)?;
+                let stats_arrow = Arc::new(ArrowSchema::try_from(&stats_struct)?);
 
-            let partition_schema = if partition_cols.is_empty() {
-                None
+                let partition_schema = if partition_cols.is_empty() {
+                    None
+                } else {
+                    let partition_fields: Vec<StructField> = partition_cols
+                        .iter()
+                        .map(|col| {
+                            table_schema
+                                .fields()
+                                .find(|field| field.name() == col)
+                                .cloned()
+                                .ok_or_else(|| DeltaTableError::missing_column(col))
+                        })
+                        .collect::<DeltaResult<Vec<_>>>()?;
+                    Some(StructType::try_new(partition_fields)?)
+                };
+
+                (Some(stats_arrow), partition_schema, column_mapping_mode)
             } else {
-                let partition_fields: Vec<StructField> = partition_cols
-                    .iter()
-                    .map(|col| {
-                        table_schema
-                            .fields()
-                            .find(|field| field.name() == col)
-                            .cloned()
-                            .ok_or_else(|| DeltaTableError::missing_column(col))
-                    })
-                    .collect::<DeltaResult<Vec<_>>>()?;
-                Some(StructType::try_new(partition_fields)?)
+                (None, None, explicit_column_mapping_mode)
             };
-
-            (Some(stats_arrow), partition_schema)
-        } else {
-            (None, None)
-        };
 
         Ok(Self {
             write_stats_as_struct,
@@ -236,10 +239,9 @@ pub(crate) fn normalize_checkpoint_batch_for_decode(
 }
 
 fn stats_parsed_to_json_array(stats_parsed: &StructArray) -> DeltaResult<ArrayRef> {
-    let field = Arc::new(Field::new("stats", stats_parsed.data_type().clone(), true));
     let batch = RecordBatch::try_new(
-        Arc::new(ArrowSchema::new(vec![field])),
-        vec![Arc::new(stats_parsed.clone())],
+        Arc::new(ArrowSchema::new(stats_parsed.fields().clone())),
+        stats_parsed.columns().to_vec(),
     )?;
     let mut buffer = Vec::new();
     {
@@ -248,20 +250,44 @@ fn stats_parsed_to_json_array(stats_parsed: &StructArray) -> DeltaResult<ArrayRe
         writer.finish().map_err(DeltaTableError::generic_err)?;
     }
     let text = String::from_utf8(buffer).map_err(DeltaTableError::generic_err)?;
-    let values = text
-        .lines()
-        .map(|line| -> DeltaResult<Option<String>> {
-            let value = serde_json::from_str::<serde_json::Value>(line)
-                .map_err(DeltaTableError::generic_err)?;
-            value
-                .get("stats")
-                .filter(|value| !value.is_null())
-                .map(serde_json::to_string)
-                .transpose()
-                .map_err(DeltaTableError::generic_err)
-        })
-        .collect::<DeltaResult<Vec<_>>>()?;
+    let mut lines = text.lines();
+    let mut values = Vec::with_capacity(stats_parsed.len());
+    for row in 0..stats_parsed.len() {
+        let line = lines.next().ok_or_else(|| {
+            DeltaTableError::generic("stats JSON writer produced fewer rows than expected")
+        })?;
+        if stats_parsed.is_null(row) {
+            values.push(None);
+        } else {
+            values.push(Some(line.to_string()));
+        }
+    }
+    if lines.next().is_some() {
+        return Err(DeltaTableError::generic(
+            "stats JSON writer produced more rows than expected",
+        ));
+    }
     Ok(Arc::new(StringArray::from(values)))
+}
+
+fn effective_column_mapping_mode(
+    table_schema: &StructType,
+    explicit: ColumnMappingMode,
+) -> ColumnMappingMode {
+    if matches!(explicit, ColumnMappingMode::None)
+        && table_schema.fields().any(|field| {
+            field
+                .metadata()
+                .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+                && field
+                    .metadata()
+                    .contains_key(ColumnMetadataKey::ColumnMappingId.as_ref())
+        })
+    {
+        ColumnMappingMode::Name
+    } else {
+        explicit
+    }
 }
 
 fn add_field_refs() -> DeltaResult<Vec<FieldRef>> {
