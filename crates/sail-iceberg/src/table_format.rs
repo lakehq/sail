@@ -13,10 +13,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
+use futures::StreamExt;
+use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
@@ -30,14 +33,17 @@ use sail_data_source::options::{BuildPartialOptions, PartialOptions};
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
+use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::physical_plan::IcebergWriterExecOptions;
-use crate::spec::{PartitionSpec, Schema, Snapshot};
+use crate::spec::{FormatVersion, MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::{find_latest_metadata_file, Table};
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_exprs,
 };
+
+const MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES: usize = 5;
 
 /// Iceberg implementation of [`TableFormat`].
 #[derive(Debug, Default)]
@@ -175,6 +181,143 @@ impl TableFormat for IcebergTableFormat {
         let exec = builder.build().await?;
         Ok(exec)
     }
+
+    async fn alter_table_properties(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        changes: Vec<(String, Option<String>)>,
+        if_exists: bool,
+    ) -> Result<()> {
+        let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
+
+        let initial_latest_meta = find_latest_metadata_file(&object_store, &table_url).await?;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let latest_meta = if attempt == 1 {
+                initial_latest_meta.clone()
+            } else {
+                find_latest_metadata_file(&object_store, &table_url).await?
+            };
+
+            let meta_path = object_store::path::Path::from(latest_meta.as_str());
+            let bytes = store_ctx
+                .base
+                .get(&meta_path)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .bytes()
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let mut table_meta = TableMetadata::from_json(&bytes)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            apply_iceberg_table_property_changes(&mut table_meta, &changes, if_exists)?;
+
+            let current_version = parse_metadata_version_from_path(&latest_meta).unwrap_or(0);
+            let next_version = current_version + 1;
+            let existing_for_next = metadata_files_for_version(&store_ctx, next_version).await?;
+            if !existing_for_next.is_empty() {
+                log::warn!(
+                    "Detected existing Iceberg metadata files for version {}: {:?}. Retrying attempt {}",
+                    next_version,
+                    existing_for_next,
+                    attempt
+                );
+                if attempt >= MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES {
+                    return Err(alter_table_properties_conflict_error());
+                }
+                continue;
+            }
+
+            let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
+            table_meta.last_updated_ms = timestamp_ms;
+            table_meta.metadata_log.push(MetadataLog {
+                timestamp_ms,
+                metadata_file: latest_meta.clone(),
+            });
+
+            let new_meta_bytes = table_meta
+                .to_json()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let new_meta_rel = format!(
+                "metadata/{:05}-{}.metadata.json",
+                next_version,
+                uuid::Uuid::new_v4()
+            );
+            let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+            let put_opts = object_store::PutOptions {
+                mode: object_store::PutMode::Create,
+                ..Default::default()
+            };
+            let payload = object_store::PutPayload::from(Bytes::from(new_meta_bytes));
+            match store_ctx
+                .prefixed
+                .put_opts(&new_meta_path, payload, put_opts)
+                .await
+            {
+                Ok(_) => {}
+                Err(object_store::Error::AlreadyExists { .. }) => {
+                    log::warn!(
+                        "Iceberg metadata file {} already exists for version {}. Retrying attempt {}",
+                        new_meta_rel,
+                        next_version,
+                        attempt
+                    );
+                    if attempt >= MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES {
+                        return Err(alter_table_properties_conflict_error());
+                    }
+                    continue;
+                }
+                Err(e) => return Err(DataFusionError::External(Box::new(e))),
+            }
+
+            let version_files = metadata_files_for_version(&store_ctx, next_version).await?;
+            let conflict_after_write = version_files.iter().any(|path| path != &new_meta_rel);
+            if conflict_after_write {
+                log::warn!(
+                    "Concurrent Iceberg metadata writes detected for version {}: {:?}. Retrying attempt {}",
+                    next_version,
+                    version_files,
+                    attempt
+                );
+                if let Err(err) = store_ctx.prefixed.delete(&new_meta_path).await {
+                    log::warn!(
+                        "Failed to delete conflicted Iceberg metadata file {}: {:?}",
+                        new_meta_rel,
+                        err
+                    );
+                }
+                if attempt >= MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES {
+                    return Err(alter_table_properties_conflict_error());
+                }
+                continue;
+            }
+
+            let metadata_filename = new_meta_rel
+                .rsplit('/')
+                .next()
+                .unwrap_or(new_meta_rel.as_str())
+                .to_string();
+            let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+            store_ctx
+                .prefixed
+                .put(
+                    &hint_path,
+                    object_store::PutPayload::from(Bytes::from(metadata_filename.into_bytes())),
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            return Ok(());
+        }
+    }
 }
 
 /// Create an Iceberg table provider for reading.
@@ -301,4 +444,103 @@ fn resolve_iceberg_write_options(
         partial.merge(layer.build_partial_options()?);
     }
     partial.finalize()
+}
+
+fn apply_iceberg_table_property_changes(
+    table_meta: &mut TableMetadata,
+    changes: &[(String, Option<String>)],
+    if_exists: bool,
+) -> Result<()> {
+    let mut properties = table_meta.properties.clone();
+    let mut format_version = table_meta.format_version;
+
+    for (key, value) in changes {
+        match value {
+            Some(value) => {
+                if key == "format-version" {
+                    format_version = upgrade_format_version(format_version, value)?;
+                } else if !is_reserved_iceberg_table_property(key) {
+                    properties.insert(key.clone(), value.clone());
+                }
+            }
+            None => {
+                if !if_exists && !properties.contains_key(key) {
+                    return plan_err!(
+                        "cannot remove property '{key}' because it is not set on the table"
+                    );
+                }
+                if !is_reserved_iceberg_table_property(key) {
+                    properties.remove(key);
+                }
+            }
+        }
+    }
+
+    table_meta.properties = properties;
+    table_meta.format_version = format_version;
+    Ok(())
+}
+
+fn is_reserved_iceberg_table_property(key: &str) -> bool {
+    matches!(
+        key,
+        "format-version"
+            | "uuid"
+            | "snapshot-count"
+            | "current-snapshot-summary"
+            | "current-snapshot-id"
+            | "current-snapshot-timestamp-ms"
+            | "current-schema"
+            | "default-partition-spec"
+            | "default-sort-order"
+    )
+}
+
+fn upgrade_format_version(current: FormatVersion, requested: &str) -> Result<FormatVersion> {
+    let requested = requested.parse::<i32>().map_err(|_| {
+        DataFusionError::Plan(format!("invalid Iceberg format-version value: {requested}"))
+    })?;
+    let current_i32 = current as i32;
+    if requested < current_i32 {
+        return plan_err!(
+            "cannot downgrade Iceberg table format version from v{current_i32} to v{requested}"
+        );
+    }
+    match requested {
+        1 => Ok(FormatVersion::V1),
+        2 => Ok(FormatVersion::V2),
+        _ => plan_err!("cannot upgrade Iceberg table to unsupported format version v{requested}"),
+    }
+}
+
+fn parse_metadata_version_from_path(path: &str) -> Option<i32> {
+    let filename = path.rsplit('/').next()?;
+    if let Some(version) = filename
+        .strip_prefix('v')
+        .and_then(|s| s.strip_suffix(".metadata.json"))
+    {
+        return version.parse::<i32>().ok();
+    }
+    filename
+        .split_once('-')
+        .and_then(|(version, _)| version.parse::<i32>().ok())
+}
+
+async fn metadata_files_for_version(store_ctx: &StoreContext, version: i32) -> Result<Vec<String>> {
+    let prefix = object_store::path::Path::from("metadata/");
+    let mut stream = store_ctx.prefixed.list(Some(&prefix));
+    let mut matches = Vec::new();
+    while let Some(meta) = stream.next().await {
+        let meta = meta.map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if parse_metadata_version_from_path(meta.location.as_ref()) == Some(version) {
+            matches.push(meta.location.to_string());
+        }
+    }
+    Ok(matches)
+}
+
+fn alter_table_properties_conflict_error() -> DataFusionError {
+    DataFusionError::Execution(format!(
+        "Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES failed after {MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES} retries due to concurrent metadata updates"
+    ))
 }
