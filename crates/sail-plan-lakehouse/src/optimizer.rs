@@ -13,7 +13,10 @@ use sail_common_datafusion::datasource::{
 };
 use sail_delta_lake::DeltaTableSource;
 use sail_logical_plan::file_delete::FileDeleteNode;
-use sail_logical_plan::merge::{expand_merge, MergeIntoNode, RowLevelWriteNode};
+use sail_logical_plan::merge::{
+    expand_merge, MergeIntoNode, MergeMatchedAction, MergeNotMatchedBySourceAction,
+    RowLevelWriteNode,
+};
 
 /// Optimizer rule that expands row-level operations (DELETE, UPDATE, MERGE)
 /// into `RowLevelWriteNode` for lakehouse formats.
@@ -61,8 +64,9 @@ impl OptimizerRule for ExpandRowLevelOp {
 
 /// Expand `MergeIntoNode` → `RowLevelWriteNode(Merge)`.
 fn expand_merge_node(node: &MergeIntoNode) -> Result<Transformed<LogicalPlan>> {
-    let row_index_column = merge_target_supports_deletion_vectors(node.target().as_ref())?
-        .then_some(MERGE_ROW_INDEX_COLUMN);
+    let row_index_column = (merge_has_delete_actions(node)
+        && merge_target_supports_deletion_vectors(node.target().as_ref())?)
+    .then_some(MERGE_ROW_INDEX_COLUMN);
     let mut target_plan = ensure_merge_metadata_columns(
         node.target().as_ref().clone(),
         MERGE_FILE_COLUMN,
@@ -75,7 +79,7 @@ fn expand_merge_node(node: &MergeIntoNode) -> Result<Transformed<LogicalPlan>> {
         .map(|f| f.name().clone())
         .collect();
     trace!(
-        "rewrite target_plan schema after ensure_file_column: {:?}",
+        "rewrite target_plan schema after ensure_merge_metadata_columns: {:?}",
         &target_fields
     );
     if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN)
@@ -166,6 +170,18 @@ fn expand_delete_node(node: &FileDeleteNode) -> Result<Transformed<LogicalPlan>>
     Ok(Transformed::yes(LogicalPlan::Extension(Extension {
         node: Arc::new(write_node),
     })))
+}
+
+fn merge_has_delete_actions(node: &MergeIntoNode) -> bool {
+    node.options()
+        .matched_clauses
+        .iter()
+        .any(|clause| matches!(clause.action, MergeMatchedAction::Delete))
+        || node
+            .options()
+            .not_matched_by_source_clauses
+            .iter()
+            .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::Delete))
 }
 
 fn merge_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {

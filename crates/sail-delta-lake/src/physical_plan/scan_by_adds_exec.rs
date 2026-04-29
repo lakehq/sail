@@ -263,7 +263,40 @@ impl ScanByAddsStreamState {
             .clone()
             .filter(|name| self.output_schema.field_with_name(name).is_ok());
         if let Some(row_index_column) = row_index_column {
-            for add in &adds {
+            let bitmaps: Vec<Option<DeletionVectorBitmap>> =
+                if adds.iter().any(|add| add.deletion_vector.is_some()) {
+                    let table_url = self.table_url.clone();
+                    let object_store = self
+                        .context
+                        .runtime_env()
+                        .object_store_registry
+                        .get_store(&table_url)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    let dv_futures = adds.iter().map(|add| {
+                        let store = Arc::clone(&object_store);
+                        let url = table_url.clone();
+                        let dv_descriptor = add.deletion_vector.clone();
+                        async move {
+                            let Some(descriptor) = dv_descriptor else {
+                                return Ok(None);
+                            };
+                            let bitmap = crate::deletion_vector::read_deletion_vector(
+                                store.as_ref(),
+                                &url,
+                                &descriptor,
+                            )
+                            .await
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                            Ok::<_, DataFusionError>(Some(bitmap))
+                        }
+                    });
+                    futures::future::try_join_all(dv_futures).await?
+                } else {
+                    (0..adds.len()).map(|_| None).collect()
+                };
+
+            for (add, maybe_bitmap) in adds.iter().zip(bitmaps) {
                 let file_streams = self.build_bulk_scan(
                     snapshot,
                     log_store,
@@ -273,30 +306,11 @@ impl ScanByAddsStreamState {
                     &logical_names,
                 )?;
 
-                let maybe_bitmap = if let Some(descriptor) = &add.deletion_vector {
-                    let object_store = self
-                        .context
-                        .runtime_env()
-                        .object_store_registry
-                        .get_store(&self.table_url)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    Some(
-                        crate::deletion_vector::read_deletion_vector(
-                            object_store.as_ref(),
-                            &self.table_url,
-                            descriptor,
-                        )
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                    )
-                } else {
-                    None
-                };
-
+                let maybe_bitmap = maybe_bitmap.map(Arc::new);
                 for inner in file_streams {
                     let stream = append_row_index_stream(inner, row_index_column.clone())?;
                     if let Some(bitmap) = &maybe_bitmap {
-                        all_streams.push(dv_filter_stream(stream, Arc::new(bitmap.clone())));
+                        all_streams.push(dv_filter_stream(stream, Arc::clone(bitmap)));
                     } else {
                         all_streams.push(stream);
                     }

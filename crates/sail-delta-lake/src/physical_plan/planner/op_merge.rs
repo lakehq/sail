@@ -12,14 +12,18 @@
 
 use std::sync::Arc;
 
+use datafusion::arrow::compute::SortOptions;
 use datafusion::common::{internal_err, DataFusionError, Result};
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::{not_impl_err, JoinType, NullEquality};
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::datasource::{
@@ -208,6 +212,13 @@ pub async fn build_merge_plan_mor(
                 },
             )
             .await?;
+            let target_partitions = ctx.session().config().target_partitions().max(1);
+            let deletion_vector_plan =
+                hash_repartition_by_column(deletion_vector_plan, PATH_COLUMN, target_partitions)?;
+            let deletion_vector_plan =
+                sort_by_column_preserving_partitioning(deletion_vector_plan, PATH_COLUMN)?;
+            let touched_adds =
+                hash_repartition_by_column(touched_adds, PATH_COLUMN, target_partitions)?;
             let dv_writer: Arc<dyn ExecutionPlan> =
                 Arc::new(crate::physical_plan::DeletionVectorRowsWriterExec::new(
                     deletion_vector_plan,
@@ -232,6 +243,46 @@ pub async fn build_merge_plan_mor(
         PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
     )))
+}
+
+fn hash_repartition_by_column(
+    input: Arc<dyn ExecutionPlan>,
+    column_name: &str,
+    partition_count: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let idx = input
+        .schema()
+        .index_of(column_name)
+        .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
+    let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+        Arc::new(Column::new(column_name, idx));
+    Ok(Arc::new(RepartitionExec::try_new(
+        input,
+        Partitioning::Hash(vec![expr], partition_count.max(1)),
+    )?))
+}
+
+fn sort_by_column_preserving_partitioning(
+    input: Arc<dyn ExecutionPlan>,
+    column_name: &str,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let idx = input
+        .schema()
+        .index_of(column_name)
+        .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
+    let ordering = LexOrdering::new(vec![PhysicalSortExpr {
+        expr: Arc::new(Column::new(column_name, idx)),
+        options: SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    }])
+    .ok_or_else(|| {
+        DataFusionError::Internal("failed to create MERGE deletion-vector ordering".to_string())
+    })?;
+    Ok(Arc::new(
+        SortExec::new(ordering, input).with_preserve_partitioning(true),
+    ))
 }
 
 /// Build targeted writer input for Copy-on-Write MERGE.

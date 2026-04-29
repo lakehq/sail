@@ -310,6 +310,36 @@ Feature: Delta Lake Merge
         """
 
     @sail-only
+    Scenario: EXPLAIN for insert-only MERGE on a DV table does not request row indices
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag)
+          VALUES (s.id, s.value, s.flag)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN for MERGE delete on a DV table uses sorted partitioned DV rows
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.flag = 'delete' THEN
+          DELETE
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag)
+          VALUES (s.id, s.value, s.flag)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
     Scenario: Matched deletes use deletion vectors while unmatched rows are inserted
       Given statement
         """
