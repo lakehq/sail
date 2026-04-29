@@ -17,3 +17,5 @@ datafusion-expr = { workspace = true }
 futures = { workspace = true }
 tokio-stream = { workspace = true }
 lazy_static = { workspace = true }
+object_store = { workspace = true }
+async-stream = { workspace = true }

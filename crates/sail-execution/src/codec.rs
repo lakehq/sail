@@ -17,6 +17,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
@@ -208,6 +209,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::file_write_success_marker::FileWriteSuccessMarkerExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -1229,6 +1231,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let plan = self.try_decode_plan(&plan, ctx)?;
                 Ok(Arc::new(BarrierExec::new(preconditions, plan)))
             }
+            NodeKind::FileWriteSuccessMarker(gen::FileWriteSuccessMarkerExecNode {
+                input,
+                object_store_url,
+                output_dir,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let object_store_url = ObjectStoreUrl::parse(&object_store_url)?;
+                Ok(Arc::new(FileWriteSuccessMarkerExec::new(
+                    input,
+                    object_store_url,
+                    output_dir,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1912,6 +1927,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Barrier(gen::BarrierExecNode {
                 preconditions,
                 plan,
+            })
+        } else if let Some(marker_exec) = node.as_any().downcast_ref::<FileWriteSuccessMarkerExec>()
+        {
+            let input = self.try_encode_plan(marker_exec.input().clone())?;
+            NodeKind::FileWriteSuccessMarker(gen::FileWriteSuccessMarkerExecNode {
+                input,
+                object_store_url: marker_exec.object_store_url().to_string(),
+                output_dir: marker_exec.output_dir().to_string(),
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");

@@ -7199,6 +7199,7 @@ dependencies = [
  "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
+ "sail-physical-plan",
  "sail-sql-analyzer",
  "serde",
  "thiserror 2.0.18",
@@ -7474,11 +7475,13 @@ dependencies = [
 name = "sail-physical-plan"
 version = "0.6.1"
 dependencies = [
+ "async-stream",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
  "futures",
  "lazy_static",
+ "object_store",
  "sail-catalog",
  "sail-common-datafusion",
  "sail-logical-plan",

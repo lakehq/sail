@@ -61,6 +61,7 @@ message ExtendedPhysicalPlanNode {
     RelaxedTzCastExecNode relaxed_tz_cast = 46;
     SparkPartitionIdExecNode spark_partition_id = 47;
     DeletionVectorWriterExecNode deletion_vector_writer = 48;
+    FileWriteSuccessMarkerExecNode file_write_success_marker = 49;
   }
 }
 
@@ -767,4 +768,13 @@ message BarrierExecNode {
   repeated bytes preconditions = 1;
   // The main plan to execute after all preconditions are exhausted.
   bytes plan = 2;
+}
+
+message FileWriteSuccessMarkerExecNode {
+  // The wrapped file writer plan, encoded as a DataFusion PhysicalPlanNode.
+  bytes input = 1;
+  // The object store URL identifying the target store.
+  string object_store_url = 2;
+  // The output directory under which the `_SUCCESS` marker file is written.
+  string output_dir = 3;
 }

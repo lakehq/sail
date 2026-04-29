@@ -20,6 +20,7 @@ use sail_common_datafusion::datasource::{
     TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
+use sail_physical_plan::file_write_success_marker::FileWriteSuccessMarkerExec;
 
 use crate::utils::split_parquet_compression_string;
 
@@ -265,9 +266,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         };
         let conf = FileSinkConfig {
             original_url: path,
-            object_store_url,
+            object_store_url: object_store_url.clone(),
             file_group: Default::default(),
-            table_paths,
+            table_paths: table_paths.clone(),
             output_schema: input.schema(),
             table_partition_cols,
             insert_op: InsertOp::Append,
@@ -275,8 +276,19 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             file_extension,
             file_output_mode: FileOutputMode::Automatic,
         };
-        format
+        let writer = format
             .create_writer_physical_plan(input, ctx, conf, sort_order)
-            .await
+            .await?;
+        // Match Spark's default behavior of writing a `_SUCCESS` marker file under the
+        // output directory after a successful write.
+        let output_dir = table_paths
+            .first()
+            .map(|p| p.prefix().to_string())
+            .unwrap_or_default();
+        Ok(Arc::new(FileWriteSuccessMarkerExec::new(
+            writer,
+            object_store_url,
+            output_dir,
+        )))
     }
 }
