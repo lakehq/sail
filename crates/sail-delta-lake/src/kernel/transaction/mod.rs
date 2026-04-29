@@ -207,6 +207,7 @@ impl CommitData {
         mut app_metadata: HashMap<String, Value>,
         operation_metrics: OperationMetrics,
         app_transactions: Vec<Transaction>,
+        user_metadata: Option<String>,
     ) -> Self {
         let is_blind_append = Self::is_blind_append(&actions, &operation);
         let mut commit_info = actions
@@ -216,6 +217,9 @@ impl CommitData {
                 _ => None,
             })
             .unwrap_or_else(|| operation.get_commit_info());
+        if let Some(value) = user_metadata {
+            commit_info.user_metadata = Some(value);
+        }
         if commit_info.in_commit_timestamp.is_none() {
             commit_info.in_commit_timestamp = commit_info
                 .info
@@ -554,6 +558,7 @@ pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
     pub(crate) operation_metrics: OperationMetrics,
     pub(crate) app_transaction: Vec<Transaction>,
+    pub(crate) user_metadata: Option<String>,
     max_retries: usize,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
@@ -565,6 +570,7 @@ impl Default for CommitProperties {
             app_metadata: Default::default(),
             operation_metrics: Default::default(),
             app_transaction: Vec::new(),
+            user_metadata: None,
             max_retries: DEFAULT_RETRIES,
             create_checkpoint: true,
             cleanup_expired_logs: None,
@@ -580,6 +586,12 @@ impl CommitProperties {
         operation_metrics: impl Into<OperationMetrics>,
     ) -> Self {
         self.operation_metrics = operation_metrics.into();
+        self
+    }
+
+    /// Set the user-defined commit metadata string written to `commitInfo.userMetadata`.
+    pub(crate) fn with_user_metadata(mut self, user_metadata: Option<String>) -> Self {
+        self.user_metadata = user_metadata;
         self
     }
 }
@@ -636,6 +648,7 @@ impl From<CommitProperties> for CommitBuilder {
                 cleanup_expired_logs: value.cleanup_expired_logs,
             }),
             app_transaction: value.app_transaction,
+            user_metadata: value.user_metadata,
             ..Default::default()
         }
     }
@@ -647,6 +660,7 @@ pub struct CommitBuilder {
     app_metadata: HashMap<String, Value>,
     operation_metrics: OperationMetrics,
     app_transaction: Vec<Transaction>,
+    user_metadata: Option<String>,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -660,6 +674,7 @@ impl Default for CommitBuilder {
             app_metadata: HashMap::new(),
             operation_metrics: OperationMetrics::default(),
             app_transaction: Vec::new(),
+            user_metadata: None,
             max_retries: DEFAULT_RETRIES,
             post_commit_hook: None,
             post_commit_hook_handler: None,
@@ -724,6 +739,7 @@ impl CommitBuilder {
             self.app_metadata,
             self.operation_metrics,
             self.app_transaction,
+            self.user_metadata,
         );
         PreCommit {
             log_store,
@@ -1877,6 +1893,7 @@ mod tests {
             HashMap::new(),
             OperationMetrics::default(),
             vec![],
+            None,
         )
         .actions;
 

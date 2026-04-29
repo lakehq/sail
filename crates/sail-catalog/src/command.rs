@@ -131,6 +131,10 @@ pub enum CatalogCommand {
         table: Vec<String>,
         extended: bool,
     },
+    DescribeDatabase {
+        database: Vec<String>,
+        extended: bool,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -173,6 +177,7 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
+            CatalogCommand::DescribeDatabase { .. } => "DescribeDatabase",
         }
     }
 
@@ -206,6 +211,9 @@ impl CatalogCommand {
             }
             CatalogCommand::DescribeTable { .. } => {
                 ArrowSerializer::default().schema::<DescribeTableRow>()?
+            }
+            CatalogCommand::DescribeDatabase { .. } => {
+                ArrowSerializer::default().schema::<DescribeDatabaseRow>()?
             }
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
@@ -556,6 +564,45 @@ impl CatalogCommand {
                 manager.create_view(&view, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
+            CatalogCommand::DescribeDatabase { database, extended } => {
+                let status = manager.get_database(&database).await?;
+                let serializer = ArrowSerializer::default();
+
+                let mut rows: Vec<DescribeDatabaseRow> = vec![
+                    DescribeDatabaseRow {
+                        info_name: "Namespace Name".to_string(),
+                        info_value: quote_names_if_needed(&status.database),
+                    },
+                    DescribeDatabaseRow {
+                        info_name: "Comment".to_string(),
+                        info_value: status.comment.unwrap_or_default(),
+                    },
+                    DescribeDatabaseRow {
+                        info_name: "Location".to_string(),
+                        info_value: status.location.unwrap_or_default(),
+                    },
+                ];
+
+                if extended {
+                    let props = if status.properties.is_empty() {
+                        String::new()
+                    } else {
+                        let mut sorted_props = status.properties.clone();
+                        sorted_props.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        let entries: Vec<String> = sorted_props
+                            .iter()
+                            .map(|(k, v)| format!("({k},{v})"))
+                            .collect();
+                        format!("({})", entries.join(","))
+                    };
+                    rows.push(DescribeDatabaseRow {
+                        info_name: "Properties".to_string(),
+                        info_value: props,
+                    });
+                }
+
+                serializer.build_record_batch(&rows)?
+            }
         };
         Ok(batch)
     }
@@ -566,6 +613,12 @@ struct DescribeTableRow {
     col_name: String,
     data_type: String,
     comment: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DescribeDatabaseRow {
+    info_name: String,
+    info_value: String,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -95,37 +95,55 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                options: table_options,
-                properties: table_properties,
+                properties,
             } => {
-                self.resolve_table_kind_table(
-                    columns,
+                let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
+                let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
+                let temporal_options = self
+                    .resolve_time_travel_options(&format, temporal, state)
+                    .await?;
+                let info = SourceInfo {
+                    paths: location.map(|x| vec![x]).unwrap_or_default(),
+                    schema: Some(schema),
                     constraints,
-                    format,
-                    location,
-                    partition_by,
-                    sort_by,
-                    bucket_by,
-                    table_options,
-                    table_properties,
-                    temporal,
-                    options,
+                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
+                    bucket_by: bucket_by.map(|x| x.into()),
+                    sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
+                    // TODO: detect duplicated keys in each set of options
+                    options: vec![
+                        OptionLayer::TablePropertyList { items: properties },
+                        OptionLayer::OptionList { items: options },
+                        OptionLayer::OptionList {
+                            items: temporal_options,
+                        },
+                    ],
+                };
+                let registry = self.ctx.extension::<TableFormatRegistry>()?;
+                let table_source = registry
+                    .get(&format)?
+                    .create_source(&self.ctx.state(), info)
+                    .await?;
+                self.resolve_table_source_with_rename(
+                    table_source,
                     table_reference,
+                    None,
+                    vec![],
+                    None,
                     state,
-                )
-                .await?
+                )?
             }
             TableKind::View {
                 definition,
                 columns,
-                ..
+                comment: _,
+                properties: _,
             } => {
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for views",
                     ));
                 }
-                self.resolve_table_kind_view(definition, columns, table_reference.clone(), state)
+                self.resolve_table_view(definition, columns, table_reference.clone(), state)
                     .await?
             }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
@@ -174,64 +192,8 @@ impl PlanResolver<'_> {
         .await
     }
 
-    /// Resolves a physical table into a TableScan logical plan node.
-    #[expect(clippy::too_many_arguments)]
-    async fn resolve_table_kind_table(
-        &self,
-        columns: Vec<TableColumnStatus>,
-        constraints: Vec<sail_common_datafusion::catalog::CatalogTableConstraint>,
-        format: String,
-        location: Option<String>,
-        partition_by: Vec<sail_common_datafusion::catalog::CatalogPartitionField>,
-        sort_by: Vec<sail_common_datafusion::catalog::CatalogTableSort>,
-        bucket_by: Option<sail_common_datafusion::catalog::CatalogTableBucketBy>,
-        table_options: Vec<(String, String)>,
-        table_properties: Vec<(String, String)>,
-        temporal: Option<spec::TableTemporal>,
-        options: Vec<(String, String)>,
-        table_reference: impl Into<TableReference>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
-        let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
-        let temporal_options = self
-            .resolve_time_travel_options(&format, temporal, state)
-            .await?;
-        let info = SourceInfo {
-            paths: location.map(|x| vec![x]).unwrap_or_default(),
-            schema: Some(schema),
-            constraints,
-            partition_by: partition_by.into_iter().map(|field| field.column).collect(),
-            bucket_by: bucket_by.map(|x| x.into()),
-            sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
-            // TODO: detect duplicated keys in each set of options
-            options: vec![
-                OptionLayer::TablePropertyList {
-                    items: table_options.into_iter().chain(table_properties).collect(),
-                },
-                OptionLayer::OptionList { items: options },
-                OptionLayer::OptionList {
-                    items: temporal_options,
-                },
-            ],
-        };
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
-        let table_source = registry
-            .get(&format)?
-            .create_source(&self.ctx.state(), info)
-            .await?;
-        self.resolve_table_source_with_rename(
-            table_source,
-            table_reference,
-            None,
-            vec![],
-            None,
-            state,
-        )
-    }
-
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
-    async fn resolve_table_kind_view(
+    async fn resolve_table_view(
         &self,
         definition: String,
         columns: Vec<TableColumnStatus>,
@@ -491,11 +453,11 @@ impl PlanResolver<'_> {
         let info = SourceInfo {
             paths,
             schema,
-            // TODO: detect duplicated keys in the set of options
             constraints: Default::default(),
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
+            // TODO: detect duplicated keys in the set of options
             options: vec![OptionLayer::OptionList {
                 items: options.into_iter().collect(),
             }],
