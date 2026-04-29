@@ -140,6 +140,11 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .with_collect_stat(config.collect_statistics());
 
         let (schema, partition_by) = match schema {
+            // TODO: compression auto-detection runs only in the schema-
+            //  inference branch below. When the user supplies an explicit
+            //  schema we never list the files, so a `data.csv.gz` here
+            //  may require `option("compression", "gzip")`. Spark detects
+            //  compression independent of schema-inference.
             Some(schema) if !schema.fields().is_empty() => {
                 let (partition_by, schema) =
                     get_partition_columns_and_file_schema(&schema, partition_by)?;

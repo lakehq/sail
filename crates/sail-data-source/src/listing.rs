@@ -133,7 +133,11 @@ fn resolve_listing_file_extension(
     file_extension: &str,
     extension_with_compression: &str,
 ) -> Option<String> {
-    // TODO: Future work can support reading all files of the same `FileFormat` regardless of the file extension.
+    // TODO: compression detection only fires when a file's base extension
+    //  matches the format's canonical one (e.g. `.csv` for CSV). Files like
+    //  `data.tsv.gz` won't get GZIP applied automatically. Spark detects
+    //  compression from any trailing `.gz` / `.bz2` / `.xz` / `.zstd`
+    //  suffix regardless of base.
     let mut count_with_compression = 0;
     let mut count_without_compression = 0;
     for (_, object_metas) in file_groups {
@@ -157,7 +161,11 @@ fn infer_listing_file_extension(
     file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
     file_extension: &str,
 ) -> Option<(String, String)> {
-    // TODO: Future work can support reading all files of the same `FileFormat` regardless of the file extension.
+    // TODO: compression detection only fires when a file's base extension
+    //  matches the format's canonical one (e.g. `.csv` for CSV). Files like
+    //  `data.tsv.gz` won't get GZIP applied automatically. Spark detects
+    //  compression from any trailing `.gz` / `.bz2` / `.xz` / `.zstd`
+    //  suffix regardless of base.
     let mut counts: HashMap<(String, String), usize> = HashMap::new();
     let mut base_count = 0;
     for (_, object_metas) in file_groups {
