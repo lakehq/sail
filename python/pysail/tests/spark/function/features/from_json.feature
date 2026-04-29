@@ -872,3 +872,136 @@ Feature: from_json function parses JSON strings into structured types
       Then query result
         | result                |
         | {nums -> [1, 2, 3]}  |
+
+  Rule: TEXT (LargeUtf8) schema type
+    Scenario: Parse string value to TEXT field
+      When query
+        """
+        SELECT from_json('{"a":"hello"}', 'a TEXT') AS result
+        """
+      Then query result
+        | result  |
+        | {hello} |
+
+    Scenario: Parse number value to TEXT field coerces to string
+      When query
+        """
+        SELECT from_json('{"a":123}', 'a TEXT') AS result
+        """
+      Then query result
+        | result |
+        | {123}  |
+
+    Scenario: Parse boolean value to TEXT field coerces to string
+      When query
+        """
+        SELECT from_json('{"a":true}', 'a TEXT') AS result
+        """
+      Then query result
+        | result |
+        | {true} |
+
+  Rule: Schema types with no native json_value_to_scalar handling return null
+    Scenario: Parse JSON to BINARY field returns null
+      When query
+        """
+        SELECT from_json('{"b":"hello"}', 'b BINARY') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parse JSON to DATE64 field returns null
+      When query
+        """
+        SELECT from_json('{"d":"2024-01-15"}', 'd DATE64') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parse JSON to DECIMAL with precision greater than 38 returns null
+      When query
+        """
+        SELECT from_json('{"v":3.14}', 'v DECIMAL(40,2)') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parse JSON to TIME field returns null
+      When query
+        """
+        SELECT from_json('{"t":"12:00:00"}', 't TIME') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parse JSON to TIME(0) field (Time32) returns null
+      When query
+        """
+        SELECT from_json('{"t":"12:00:00"}', 't TIME(0)') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+  Rule: Timestamp schema precision variants
+    Scenario: Parse timestamp with second precision (TIMESTAMP_NTZ(0))
+      When query
+        """
+        SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ(0)') AS result
+        """
+      Then query result
+        | result                  |
+        | {2024-06-15 10:30:00}   |
+
+    Scenario: Parse timestamp with millisecond precision (TIMESTAMP_NTZ(3))
+      When query
+        """
+        SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ(3)') AS result
+        """
+      Then query result
+        | result                  |
+        | {2024-06-15 10:30:00}   |
+
+    Scenario: Parse timestamp with nanosecond precision (TIMESTAMP_NTZ(9))
+      When query
+        """
+        SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ(9)') AS result
+        """
+      Then query result
+        | result                  |
+        | {2024-06-15 10:30:00}   |
+
+    Scenario: Parse timestamp with TIMESTAMP_LTZ schema
+      When query
+        """
+        SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_LTZ') AS result
+        """
+      Then query result
+        | result                  |
+        | {2024-06-15 10:30:00}   |
+
+  Rule: Schema parsing errors
+    Scenario: Schema with unsupported type produces error
+      When query
+        """
+        SELECT from_json('{"a":1}', 'a GEOMETRY') AS result
+        """
+      Then query error .*
+
+    Scenario: Empty schema string produces error
+      When query
+        """
+        SELECT from_json('{"a":1}', '') AS result
+        """
+      Then query error .*
+
+    Scenario: Whitespace-only schema string produces error
+      When query
+        """
+        SELECT from_json('{"a":1}', '   ') AS result
+        """
+      Then query error .*
