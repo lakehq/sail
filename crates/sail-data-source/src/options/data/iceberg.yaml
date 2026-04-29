@@ -1,3 +1,8 @@
+# References:
+#   TableProperties:    https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/core/src/main/java/org/apache/iceberg/TableProperties.java
+#   SparkReadOptions:   https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/SparkReadOptions.java
+#   SparkWriteOptions:  https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/SparkWriteOptions.java
+
 ### Read-Only Options ###
 
 - key: use_ref
