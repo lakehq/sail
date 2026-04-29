@@ -197,25 +197,17 @@ impl ScalarFunctionBuilder {
 /// Contains the resolved array expression and the already-resolved lambda expression,
 /// along with metadata needed to create the UDF. The resolver handles all the complex
 /// lambda variable resolution and external column detection before calling the handler.
-pub struct LambdaFunctionInput {
-    /// The resolved array expression (first argument to the lambda function)
+pub struct LambdaFunctionInput<'a> {
     pub array_expr: expr::Expr,
-    /// The resolved lambda body expression (already resolved by the resolver)
     pub resolved_lambda: expr::Expr,
-    /// The element type extracted from the array
     pub element_type: DataType,
-    /// The synthetic column name used in the resolved lambda for the element variable
     pub element_column_name: String,
-    /// The original lambda variable name for the element (e.g., "x" in `x -> x > 5`)
     pub element_var_name: String,
-    /// The synthetic column name used in the resolved lambda for the optional index variable
     pub index_column_name: Option<String>,
-    /// The original lambda variable name for the index (e.g., "i" in `(x, i) -> ...`)
     pub index_var_name: Option<String>,
-    /// External columns referenced in the lambda with their types
     pub outer_columns: Vec<(String, DataType)>,
-    /// Full column expressions for outer columns (for UDF arguments)
     pub outer_column_exprs: Vec<expr::Expr>,
+    pub function_context: FunctionContextInput<'a>,
 }
 
 /// Builds a DataFusion expression from a lambda function call.
@@ -224,14 +216,14 @@ pub struct LambdaFunctionInput {
 /// The handler is responsible for creating the appropriate UDF from these
 /// resolved components.
 pub(crate) type LambdaFunction =
-    Arc<dyn Fn(LambdaFunctionInput) -> PlanResult<expr::Expr> + Send + Sync>;
+    Arc<dyn for<'a> Fn(LambdaFunctionInput<'a>) -> PlanResult<expr::Expr> + Send + Sync>;
 
 pub(crate) struct LambdaFunctionBuilder;
 
 impl LambdaFunctionBuilder {
     pub fn custom<F>(f: F) -> LambdaFunction
     where
-        F: Fn(LambdaFunctionInput) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+        F: for<'a> Fn(LambdaFunctionInput<'a>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
     {
         Arc::new(f)
     }

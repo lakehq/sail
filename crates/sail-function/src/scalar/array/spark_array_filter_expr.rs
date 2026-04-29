@@ -4,22 +4,42 @@ use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, Int32Array, ListAr
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::physical_plan::PhysicalExpr;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{exec_err, DFSchema, Result};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use once_cell::sync::OnceCell;
 
 /// Default column name for the lambda variable (used for display/testing).
 pub const LAMBDA_ELEMENT_COLUMN: &str = "__lambda_element__";
 
+/// Build the Arrow schema for the flattened batch (element + optional index + outer cols).
+/// Used both internally and by `filter_lambda` in sail-plan when pre-compiling the PhysicalExpr.
+pub fn build_batch_schema(
+    element_column_name: &str,
+    element_type: &DataType,
+    index_column_name: Option<&str>,
+    outer_columns: &[(String, DataType)],
+) -> Arc<Schema> {
+    let mut fields = vec![Field::new(element_column_name, element_type.clone(), true)];
+    if let Some(idx_col) = index_column_name {
+        fields.push(Field::new(idx_col, DataType::Int32, false));
+    }
+    for (col_name, col_type) in outer_columns {
+        fields.push(Field::new(col_name, col_type.clone(), true));
+    }
+    Arc::new(Schema::new(fields))
+}
+
 /// SparkArrayFilterExpr filters array elements using arbitrary DataFusion expressions.
 ///
-/// Unlike SparkArrayFilter which only supports simple comparisons (x > literal),
-/// this implementation evaluates full DataFusion expressions for each array element.
+/// The logical `Expr` is stored for codec serialization. The `PhysicalExpr` is compiled
+/// once — at planning time when constructed via `with_precompiled`, or lazily on first
+/// invocation (codec reconstruction path). `invoke_with_args` never creates a
+/// `SessionContext` more than once per UDF instance.
 ///
-/// The lambda variable in the expression is represented as a column reference.
-/// Optionally supports a second variable for the element index within each array.
 /// Supports external column references from the outer query context.
 /// At runtime:
 /// 1. All array elements are flattened into a single column (with optional index column)
@@ -29,9 +49,12 @@ pub const LAMBDA_ELEMENT_COLUMN: &str = "__lambda_element__";
 #[derive(Debug)]
 pub struct SparkArrayFilterExpr {
     signature: Signature,
-    /// The lambda expression to evaluate for each element.
-    lambda_expr: Expr,
-    /// The data type of array elements (needed to create the schema for evaluation).
+    /// Logical expression — kept for codec serialization/deserialization.
+    logical_expr: Expr,
+    /// Compiled physical expression. Set at planning time via `with_precompiled`;
+    /// populated lazily on first `invoke_with_args` call otherwise.
+    compiled: OnceCell<Arc<dyn PhysicalExpr>>,
+    /// The data type of array elements (needed to build the batch schema).
     element_type: DataType,
     /// The column name used in the expression for the lambda element variable.
     column_name: String,
@@ -43,55 +66,20 @@ pub struct SparkArrayFilterExpr {
 }
 
 impl SparkArrayFilterExpr {
-    pub fn new(lambda_expr: Expr, element_type: DataType) -> Self {
-        Self::with_column_name(lambda_expr, element_type, LAMBDA_ELEMENT_COLUMN.to_string())
-    }
-
-    pub fn with_column_name(
-        lambda_expr: Expr,
-        element_type: DataType,
-        column_name: String,
-    ) -> Self {
-        Self {
-            signature: Signature::any(1, Volatility::Immutable),
-            lambda_expr,
-            element_type,
-            column_name,
-            index_column_name: None,
-            outer_columns: Vec::new(),
-        }
-    }
-
-    pub fn with_index_column(
-        lambda_expr: Expr,
-        element_type: DataType,
-        column_name: String,
-        index_column_name: String,
-    ) -> Self {
-        Self {
-            signature: Signature::any(1, Volatility::Immutable),
-            lambda_expr,
-            element_type,
-            column_name,
-            index_column_name: Some(index_column_name),
-            outer_columns: Vec::new(),
-        }
-    }
-
-    /// Create a filter with external column references.
-    /// The outer_columns are passed as additional arguments after the array.
-    pub fn with_outer_columns(
-        lambda_expr: Expr,
+    /// Create a filter. The PhysicalExpr is compiled lazily on first invocation.
+    /// Used by tests and codec reconstruction.
+    pub fn new(
+        logical_expr: Expr,
         element_type: DataType,
         column_name: String,
         index_column_name: Option<String>,
         outer_columns: Vec<(String, DataType)>,
     ) -> Self {
-        // Signature: array + N outer columns
         let num_args = 1 + outer_columns.len();
         Self {
             signature: Signature::any(num_args, Volatility::Immutable),
-            lambda_expr,
+            logical_expr,
+            compiled: OnceCell::new(),
             element_type,
             column_name,
             index_column_name,
@@ -99,38 +87,80 @@ impl SparkArrayFilterExpr {
         }
     }
 
-    /// Returns a reference to the lambda expression.
-    pub fn lambda_expr(&self) -> &Expr {
-        &self.lambda_expr
+    /// Create a filter with a pre-compiled PhysicalExpr (planning-time path).
+    /// Used by `filter_lambda` to avoid any SessionContext creation in the hot path.
+    pub fn with_precompiled(
+        logical_expr: Expr,
+        physical_expr: Arc<dyn PhysicalExpr>,
+        element_type: DataType,
+        column_name: String,
+        index_column_name: Option<String>,
+        outer_columns: Vec<(String, DataType)>,
+    ) -> Self {
+        let num_args = 1 + outer_columns.len();
+        let compiled = OnceCell::new();
+        let _ = compiled.set(physical_expr);
+        Self {
+            signature: Signature::any(num_args, Volatility::Immutable),
+            logical_expr,
+            compiled,
+            element_type,
+            column_name,
+            index_column_name,
+            outer_columns,
+        }
     }
 
-    /// Returns a reference to the element data type.
+    pub fn logical_expr(&self) -> &Expr {
+        &self.logical_expr
+    }
+
     pub fn element_type(&self) -> &DataType {
         &self.element_type
     }
 
-    /// Returns a reference to the column name.
     pub fn column_name(&self) -> &str {
         &self.column_name
     }
 
-    /// Returns a reference to the optional index column name.
     pub fn index_column_name(&self) -> Option<&str> {
         self.index_column_name.as_deref()
     }
 
-    /// Returns a reference to the outer columns.
     pub fn outer_columns(&self) -> &[(String, DataType)] {
         &self.outer_columns
+    }
+
+    fn batch_schema(&self) -> Arc<Schema> {
+        build_batch_schema(
+            &self.column_name,
+            &self.element_type,
+            self.index_column_name.as_deref(),
+            &self.outer_columns,
+        )
+    }
+
+    /// Get or compile the PhysicalExpr. Compiles at most once per instance.
+    fn physical_expr(&self) -> Result<&Arc<dyn PhysicalExpr>> {
+        self.compiled.get_or_try_init(|| {
+            let schema = self.batch_schema();
+            let df_schema = DFSchema::try_from(schema)?;
+            SessionContext::new().create_physical_expr(self.logical_expr.clone(), &df_schema)
+        })
     }
 }
 
 impl Clone for SparkArrayFilterExpr {
     fn clone(&self) -> Self {
         let num_args = 1 + self.outer_columns.len();
+        let compiled = OnceCell::new();
+        if let Some(p) = self.compiled.get() {
+            let _ = compiled.set(Arc::clone(p));
+        }
         Self {
             signature: Signature::any(num_args, Volatility::Immutable),
-            lambda_expr: self.lambda_expr.clone(),
+            logical_expr: self.logical_expr.clone(),
+            compiled,
             element_type: self.element_type.clone(),
             column_name: self.column_name.clone(),
             index_column_name: self.index_column_name.clone(),
@@ -141,7 +171,7 @@ impl Clone for SparkArrayFilterExpr {
 
 impl PartialEq for SparkArrayFilterExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.lambda_expr == other.lambda_expr
+        self.logical_expr == other.logical_expr
             && self.element_type == other.element_type
             && self.column_name == other.column_name
             && self.index_column_name == other.index_column_name
@@ -151,7 +181,7 @@ impl PartialEq for SparkArrayFilterExpr {
 
 impl std::hash::Hash for SparkArrayFilterExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        format!("{:?}", self.lambda_expr).hash(state);
+        format!("{:?}", self.logical_expr).hash(state);
         self.element_type.hash(state);
         self.column_name.hash(state);
         self.index_column_name.hash(state);
@@ -207,7 +237,6 @@ impl ScalarUDFImpl for SparkArrayFilterExpr {
             ColumnarValue::Scalar(s) => s.to_array_of_size(1)?,
         };
 
-        // Extract outer column arrays
         let outer_arrays: Vec<ArrayRef> = args[1..]
             .iter()
             .map(|arg| match arg {
@@ -222,14 +251,6 @@ impl ScalarUDFImpl for SparkArrayFilterExpr {
 }
 
 impl SparkArrayFilterExpr {
-    /// Filter array without external columns (backwards compatible).
-    #[cfg(test)]
-    fn filter_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
-        self.filter_array_with_outer(array, &[])
-    }
-
-    /// Filter array with optional external column values.
-    /// External columns are broadcast so each array element sees its row's value.
     fn filter_array_with_outer(
         &self,
         array: &ArrayRef,
@@ -244,36 +265,13 @@ impl SparkArrayFilterExpr {
         let num_rows = list_array.len();
         let values = list_array.values();
 
-        // If empty, return as-is
         if values.is_empty() {
             return Ok(array.clone());
         }
 
-        // Build schema fields - always include element column
-        let mut fields = vec![Field::new(
-            &self.column_name,
-            self.element_type.clone(),
-            true,
-        )];
+        let arrow_schema = self.batch_schema();
 
-        // Optionally add index column (Int32 to match common array element types)
-        if let Some(ref index_col) = self.index_column_name {
-            fields.push(Field::new(index_col, DataType::Int32, false));
-        }
-
-        // Add outer column fields
-        for (col_name, col_type) in &self.outer_columns {
-            fields.push(Field::new(col_name, col_type.clone(), true));
-        }
-
-        let arrow_schema = Arc::new(Schema::new(fields));
-        let df_schema = DFSchema::try_from(arrow_schema.clone())?;
-
-        // Build columns for RecordBatch
         let mut columns: Vec<ArrayRef> = vec![values.clone()];
-
-        // Build row-to-element mapping for broadcasting outer columns
-        // For each element, we need to know which row it belongs to
         let mut element_to_row: Vec<usize> = Vec::with_capacity(values.len());
         let mut indices_for_index_col: Vec<i32> = Vec::with_capacity(values.len());
 
@@ -289,12 +287,10 @@ impl SparkArrayFilterExpr {
             }
         }
 
-        // If index column is needed, add it
         if self.index_column_name.is_some() {
             columns.push(Arc::new(Int32Array::from(indices_for_index_col)));
         }
 
-        // Broadcast outer columns: for each element, take the value from its row
         for outer_arr in outer_arrays {
             let take_indices = datafusion::arrow::array::UInt64Array::from(
                 element_to_row.iter().map(|&i| i as u64).collect::<Vec<_>>(),
@@ -304,15 +300,9 @@ impl SparkArrayFilterExpr {
             columns.push(broadcast_arr);
         }
 
-        // Create RecordBatch with all array elements (and optional indices and outer columns)
         let batch = RecordBatch::try_new(arrow_schema, columns)?;
+        let result = self.physical_expr()?.evaluate(&batch)?;
 
-        // Create PhysicalExpr with type coercion and evaluate
-        let physical_expr =
-            SessionContext::new().create_physical_expr(self.lambda_expr.clone(), &df_schema)?;
-        let result = physical_expr.evaluate(&batch)?;
-
-        // Extract boolean mask
         let mask = match result {
             ColumnarValue::Array(arr) => arr
                 .as_any()
@@ -329,7 +319,6 @@ impl SparkArrayFilterExpr {
             }
         };
 
-        // Build filtered arrays for each row
         let mut new_offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
         new_offsets.push(0);
         let mut keep_indices: Vec<usize> = Vec::new();
@@ -345,7 +334,6 @@ impl SparkArrayFilterExpr {
 
             let mut count = 0i32;
             for elem_idx in start..end {
-                // Check if mask value is true (and not null)
                 if mask.is_valid(elem_idx) && mask.value(elem_idx) {
                     keep_indices.push(elem_idx);
                     count += 1;
@@ -354,7 +342,6 @@ impl SparkArrayFilterExpr {
             new_offsets.push(new_offsets.last().unwrap_or(&0) + count);
         }
 
-        // Build the new values array by taking elements at keep_indices
         let new_values = if keep_indices.is_empty() {
             datafusion::arrow::array::new_empty_array(values.data_type())
         } else {
@@ -383,7 +370,7 @@ impl SparkArrayFilterExpr {
 mod tests {
     use datafusion::arrow::array::{Int32Array, Int32Builder, ListBuilder};
     use datafusion_common::exec_datafusion_err;
-    use datafusion_expr::{col, lit, Operator};
+    use datafusion_expr::{col, lit, Expr, Operator};
 
     use super::*;
 
@@ -397,6 +384,16 @@ mod tests {
         arr.as_any()
             .downcast_ref::<Int32Array>()
             .ok_or_else(|| exec_datafusion_err!("expected Int32Array"))
+    }
+
+    fn make_filter(lambda_expr: Expr, element_type: DataType) -> SparkArrayFilterExpr {
+        SparkArrayFilterExpr::new(
+            lambda_expr,
+            element_type,
+            LAMBDA_ELEMENT_COLUMN.to_string(),
+            None,
+            vec![],
+        )
     }
 
     #[test]
@@ -420,8 +417,8 @@ mod tests {
             right: Box::new(lit(2i32)),
         });
 
-        let filter = SparkArrayFilterExpr::new(lambda_expr, DataType::Int32);
-        let result = filter.filter_array(&array)?;
+        let filter = make_filter(lambda_expr, DataType::Int32);
+        let result = filter.filter_array_with_outer(&array, &[])?;
         let result_list = as_list(&result)?;
 
         assert_eq!(result_list.len(), 2);
@@ -465,8 +462,8 @@ mod tests {
             })),
         });
 
-        let filter = SparkArrayFilterExpr::new(lambda_expr, DataType::Int32);
-        let result = filter.filter_array(&array)?;
+        let filter = make_filter(lambda_expr, DataType::Int32);
+        let result = filter.filter_array_with_outer(&array, &[])?;
         let result_list = as_list(&result)?;
 
         assert_eq!(result_list.len(), 1);

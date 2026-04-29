@@ -234,6 +234,12 @@ impl PlanResolver<'_> {
                         index_var_name,
                         outer_columns,
                         outer_column_exprs,
+                        function_context: FunctionContextInput {
+                            argument_display_names: &[],
+                            plan_config: &self.config,
+                            session_context: self.ctx,
+                            schema,
+                        },
                     };
 
                     let result_expr = lambda_handler(lambda_input)?;

@@ -2,13 +2,15 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::expr::{self, HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{lit, Expr, ScalarUDF};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::higher_order::spark_array_filter::SparkArrayFilter;
-use sail_function::scalar::array::spark_array_filter_expr::SparkArrayFilterExpr;
+use sail_function::scalar::array::spark_array_filter_expr::{
+    build_batch_schema, SparkArrayFilterExpr,
+};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -87,6 +89,7 @@ fn filter_lambda(input: LambdaFunctionInput) -> PlanResult<Expr> {
         index_var_name,
         outer_columns,
         outer_column_exprs,
+        function_context,
     } = input;
 
     // Native HigherOrderUDF path — no outer column capture needed and element type is known
@@ -112,27 +115,33 @@ fn filter_lambda(input: LambdaFunctionInput) -> PlanResult<Expr> {
         )));
     }
 
-    // Fallback: ScalarUDF path for lambdas with outer-column captures
+    // Fallback: ScalarUDF path for lambdas with outer-column captures.
+    // Compile the PhysicalExpr once at planning time using the session state.
+    let schema = build_batch_schema(
+        &element_column_name,
+        &element_type,
+        index_column_name.as_deref(),
+        &outer_columns,
+    );
+    let df_schema = DFSchema::try_from(Arc::clone(&schema))
+        .map_err(|e| PlanError::internal(format!("filter lambda: failed to build schema: {e}")))?;
+    let physical_expr = function_context
+        .session_context
+        .state()
+        .create_physical_expr(resolved_lambda.clone(), &df_schema)
+        .map_err(|e| PlanError::internal(format!("filter lambda: compile failed: {e}")))?;
+
     let mut udf_args = vec![array_expr];
     udf_args.extend(outer_column_exprs);
 
-    let filter_udf = if let Some(idx_name) = index_column_name {
-        SparkArrayFilterExpr::with_outer_columns(
-            resolved_lambda,
-            element_type,
-            element_column_name,
-            Some(idx_name),
-            outer_columns,
-        )
-    } else {
-        SparkArrayFilterExpr::with_outer_columns(
-            resolved_lambda,
-            element_type,
-            element_column_name,
-            None,
-            outer_columns,
-        )
-    };
+    let filter_udf = SparkArrayFilterExpr::with_precompiled(
+        resolved_lambda,
+        physical_expr,
+        element_type,
+        element_column_name,
+        index_column_name,
+        outer_columns,
+    );
 
     Ok(Expr::ScalarFunction(expr::ScalarFunction {
         func: Arc::new(ScalarUDF::from(filter_udf)),

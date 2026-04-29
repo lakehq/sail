@@ -2052,7 +2052,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let udf = SparkArrayFilterExpr::with_outer_columns(
+                let udf = SparkArrayFilterExpr::new(
                     lambda_expr,
                     element_type,
                     column_name,
@@ -2448,7 +2448,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkArrayFilterExpr>() {
-            let lambda_expr = self.try_encode_logical_expr(func.lambda_expr())?;
+            let lambda_expr = self.try_encode_logical_expr(func.logical_expr())?;
             let element_type = self.try_encode_data_type(func.element_type())?;
             let column_name = func.column_name().to_string();
             let index_column_name = func.index_column_name().map(|s| s.to_string());

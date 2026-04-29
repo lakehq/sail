@@ -7318,6 +7318,7 @@ dependencies = [
  "jiter",
  "lazy_static",
  "num",
+ "once_cell",
  "ordered-float 5.3.0",
  "parquet-variant",
  "parquet-variant-compute",
