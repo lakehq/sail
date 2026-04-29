@@ -249,6 +249,41 @@ fn infer_listing_file_extension(
     }
 }
 
+/// Normalize the file extension case in `options.file_extension` to match the actual
+/// case observed on disk (e.g. `.CSV` instead of `.csv`), so that DataFusion's
+/// case-sensitive scan-time filter can find the files.
+///
+/// This should be called whenever the listing options are configured with a user-provided
+/// schema (i.e., schema inference is skipped), since `resolve_listing_schema` is only
+/// invoked for the schema-inference path.
+pub async fn normalize_listing_extension(
+    ctx: &dyn Session,
+    urls: &[ListingTableUrl],
+    options: &mut ListingOptions,
+    extension_with_compression: Option<&str>,
+) -> Result<()> {
+    let mut file_groups = vec![];
+    for url in urls {
+        let store = ctx.runtime_env().object_store(url)?;
+        let files: Vec<_> = list_all_files(
+            url,
+            ctx,
+            &store,
+            &options.file_extension,
+            extension_with_compression,
+        )
+        .await?
+        .take(10)
+        .try_collect()
+        .await?;
+        file_groups.push((store, files));
+    }
+    if let Some(observed) = observed_file_extension_case(&file_groups, &options.file_extension) {
+        options.file_extension = observed;
+    }
+    Ok(())
+}
+
 /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
 pub async fn list_all_files<'a>(
     url: &'a ListingTableUrl,

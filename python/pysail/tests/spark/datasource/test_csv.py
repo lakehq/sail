@@ -4,7 +4,7 @@ from collections.abc import Mapping
 
 import pytest
 from pyspark.sql import Row
-from pyspark.sql.types import StringType
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 from pysail.testing.spark.utils.sql import escape_sql_identifier
 
@@ -254,3 +254,21 @@ def test_csv_read_uppercase_extension_compressed(spark, tmp_path):
         Row(name="Alice", age=30),
         Row(name="Bob", age=40),
     ]
+
+
+@pytest.mark.parametrize("ext", ["CSV", "Csv", "cSv"])
+def test_csv_read_uppercase_extension_with_explicit_schema(spark, tmp_path, ext):
+    # When an explicit schema is provided, files with non-standard (uppercase)
+    # extensions must still be discovered and read correctly.
+    schema = StructType(
+        [StructField("name", StringType(), True), StructField("age", IntegerType(), True)]
+    )
+    data_path = tmp_path / f"data.{ext}"
+    data_path.write_text("Alice,30\n")
+    df = (
+        spark.read.format("csv")
+        .schema(schema)
+        .option("header", "false")
+        .load(str(data_path))
+    )
+    assert df.collect() == [Row(name="Alice", age=30)]

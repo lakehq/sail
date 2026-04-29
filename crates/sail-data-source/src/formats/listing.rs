@@ -141,6 +141,16 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
 
         let (schema, partition_by) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
+                // Even when the schema is explicitly provided, we still need to normalize the
+                // file extension case so that DataFusion's case-sensitive scan-time filter can
+                // find files with non-standard extensions (e.g., `data.CSV` vs `data.csv`).
+                crate::listing::normalize_listing_extension(
+                    ctx,
+                    &urls,
+                    &mut listing_options,
+                    extension_with_compression.as_deref(),
+                )
+                .await?;
                 let (partition_by, schema) =
                     get_partition_columns_and_file_schema(&schema, partition_by)?;
                 (Arc::new(schema), partition_by)
