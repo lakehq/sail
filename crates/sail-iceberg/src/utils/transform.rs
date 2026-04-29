@@ -92,7 +92,7 @@ pub fn apply_transform(
             ) => {
                 let micros = match field_type {
                     Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
-                        us_or_ns / 1_000
+                        us_or_ns.div_euclid(1_000)
                     }
                     _ => us_or_ns,
                 };
@@ -124,7 +124,7 @@ pub fn apply_transform(
             ) => {
                 let micros = match field_type {
                     Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
-                        us_or_ns / 1_000
+                        us_or_ns.div_euclid(1_000)
                     }
                     _ => us_or_ns,
                 };
@@ -153,7 +153,7 @@ pub fn apply_transform(
             ) => {
                 let micros = match field_type {
                     Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
-                        us_or_ns / 1_000
+                        us_or_ns.div_euclid(1_000)
                     }
                     _ => us_or_ns,
                 };
@@ -175,7 +175,7 @@ pub fn apply_transform(
             ) => {
                 let micros = match field_type {
                     Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
-                        us_or_ns / 1_000
+                        us_or_ns.div_euclid(1_000)
                     }
                     _ => us_or_ns,
                 };
