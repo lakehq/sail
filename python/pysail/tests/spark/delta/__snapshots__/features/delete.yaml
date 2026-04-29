@@ -642,12 +642,12 @@ data:
   operation: DELETE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 0
-    numAddedFiles: 0
-    numFiles: 0
-    numOutputBytes: 0
-    numOutputFiles: 0
-    numOutputRows: 0
+    numAddedBytes: 1837
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1837
+    numOutputFiles: 1
+    numOutputRows: 5
     numRemovedBytes: 1941
     numRemovedFiles: 1
     writeTimeMs: <time_ms>
