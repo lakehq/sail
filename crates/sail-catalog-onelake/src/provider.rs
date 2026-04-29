@@ -264,6 +264,7 @@ impl OneLakeCatalogProvider {
             name,
             statistics: None,
             kind: TableKind::Table {
+                table_type: None,
                 columns,
                 comment: info.comment,
                 constraints: vec![],

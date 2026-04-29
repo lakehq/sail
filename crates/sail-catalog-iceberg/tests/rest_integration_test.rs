@@ -598,6 +598,7 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -799,6 +800,7 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -988,6 +990,7 @@ async fn test_get_table() {
 
     let table = rest_catalog.get_table(&ns, "t2").await.unwrap();
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,

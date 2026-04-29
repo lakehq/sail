@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use futures::future::try_join_all;
@@ -21,11 +22,13 @@ use sail_catalog::provider::{
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatistics, TableStatus};
 use tokio::sync::Mutex;
+use url::Url;
 use volo_thrift::MaybeException;
 
 use crate::convert::{
-    build_database, build_generic_table, build_view, database_to_status, is_view_table,
-    table_to_status, validate_namespace, view_to_status, GenericTableFormat,
+    build_database, build_generic_table_with_location_kind, build_view, database_to_status,
+    is_view_table, table_to_status, validate_namespace, view_to_status, GenericTableFormat,
+    GenericTableLocation,
 };
 use crate::security::{KerberosMakeTransport, SaslQop};
 
@@ -217,6 +220,104 @@ fn connect_timeout(config: &HmsCatalogConfig) -> Duration {
         .connect_timeout_secs
         .map(Duration::from_secs)
         .unwrap_or(HMS_CONNECT_TIMEOUT)
+}
+
+fn qualify_table_location(
+    location: &str,
+    database_location: Option<&str>,
+) -> CatalogResult<String> {
+    let location = unwrap_relative_file_uri(location).unwrap_or_else(|| location.to_string());
+
+    if Url::parse(&location).is_ok() {
+        return Ok(location);
+    }
+
+    let path = Path::new(&location);
+    if path.is_absolute() {
+        return Url::from_file_path(path)
+            .map(|url| url.to_string())
+            .map_err(|_| {
+                CatalogError::InvalidArgument(format!(
+                    "Failed to convert absolute table location '{location}' to a file URI"
+                ))
+            });
+    }
+
+    let database_location = database_location.ok_or_else(|| {
+        CatalogError::InvalidArgument(format!(
+            "Cannot resolve relative table location '{}' without a database location",
+            location
+        ))
+    })?;
+    let database_url = Url::parse(&format!("{}/", database_location.trim_end_matches('/')))
+        .map_err(|err| {
+            CatalogError::InvalidArgument(format!(
+                "Failed to parse database location '{database_location}' while resolving table \
+                 location '{}': {err}",
+                location
+            ))
+        })?;
+
+    database_url
+        .join(&location)
+        .map(|url| url.to_string())
+        .map_err(|err| {
+            CatalogError::InvalidArgument(format!(
+                "Failed to resolve relative table location '{location}' against database location \
+             '{database_location}': {err}"
+            ))
+        })
+}
+
+fn qualify_database_location(
+    location: &str,
+    default_database_location: &str,
+) -> CatalogResult<String> {
+    let location = unwrap_relative_file_uri(location).unwrap_or_else(|| location.to_string());
+
+    if Url::parse(&location).is_ok() {
+        return Ok(location);
+    }
+
+    let path = Path::new(&location);
+    if path.is_absolute() {
+        return Url::from_file_path(path)
+            .map(|url| url.to_string())
+            .map_err(|_| {
+                CatalogError::InvalidArgument(format!(
+                    "Failed to convert absolute database location '{location}' to a file URI"
+                ))
+            });
+    }
+
+    let default_database_url = Url::parse(&format!(
+        "{}/",
+        default_database_location.trim_end_matches('/')
+    ))
+    .map_err(|err| {
+        CatalogError::InvalidArgument(format!(
+            "Failed to parse default database location '{default_database_location}' \
+                     while resolving database location '{location}': {err}"
+        ))
+    })?;
+
+    default_database_url
+        .join(&location)
+        .map(|url| url.to_string())
+        .map_err(|err| {
+            CatalogError::InvalidArgument(format!(
+                "Failed to resolve database location '{location}' against default database \
+                 location '{default_database_location}': {err}"
+            ))
+        })
+}
+
+fn unwrap_relative_file_uri(location: &str) -> Option<String> {
+    let path = location.strip_prefix("file:")?;
+    if path.starts_with('/') {
+        return None;
+    }
+    Some(path.trim_start_matches("./").to_string())
 }
 
 impl HmsCatalogProvider {
@@ -706,10 +807,25 @@ impl CatalogProvider for HmsCatalogProvider {
     async fn create_database(
         &self,
         database: &Namespace,
-        options: CreateDatabaseOptions,
+        mut options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
         let db_name = validate_namespace(database)?;
         let if_not_exists = options.if_not_exists;
+        if let Some(location) = options.location.as_deref() {
+            let default_database = Namespace::try_from(vec!["default"])?;
+            let default_database_location = self.get_database(&default_database).await?.location.ok_or_else(
+                || {
+                    CatalogError::External(
+                        "Default HMS database is missing a location; cannot qualify relative database location"
+                            .to_string(),
+                    )
+                },
+            )?;
+            options.location = Some(qualify_database_location(
+                location,
+                &default_database_location,
+            )?);
+        }
         let database = build_database(database, options)?;
         self.with_failover_attempt(|client, attempt| {
             let database = database.clone();
@@ -899,14 +1015,23 @@ impl CatalogProvider for HmsCatalogProvider {
             .iter()
             .map(|field| field.column.clone())
             .collect();
+        let database_location = self.get_database(database).await?.location;
+        let is_external = options.location.is_some();
+        let table_location = match options.location.as_deref() {
+            Some(location) => qualify_table_location(location, database_location.as_deref())?,
+            None => qualify_table_location(table, database_location.as_deref())?,
+        };
         let columns_for_metadata = options.columns.clone();
         let format_for_metadata = format.logical_format.to_string();
-        let mut hms_table = build_generic_table(
+        let mut hms_table = build_generic_table_with_location_kind(
             &db_name,
             table,
             options.columns,
             partition_columns,
-            options.location,
+            GenericTableLocation {
+                value: Some(table_location),
+                is_external,
+            },
             GenericTableFormat {
                 logical_format: format.logical_format,
                 storage: &format.storage_format,
@@ -1940,5 +2065,44 @@ mod tests {
         });
 
         assert_eq!(timeout, Duration::from_secs(12));
+    }
+
+    #[test]
+    fn test_qualify_table_location_joins_relative_path_to_database_location() {
+        let location =
+            super::qualify_table_location("tables/items", Some("s3://warehouse/db")).unwrap();
+
+        assert_eq!(location, "s3://warehouse/db/tables/items");
+    }
+
+    #[test]
+    fn test_qualify_table_location_converts_absolute_posix_path_to_file_uri() {
+        let location =
+            super::qualify_table_location("/tmp/items", Some("s3://warehouse/db")).unwrap();
+
+        assert_eq!(location, "file:///tmp/items");
+    }
+
+    #[test]
+    fn test_qualify_database_location_joins_relative_path_to_default_database_location() {
+        let location = super::qualify_database_location("custom/db", "s3://warehouse").unwrap();
+
+        assert_eq!(location, "s3://warehouse/custom/db");
+    }
+
+    #[test]
+    fn test_qualify_database_location_converts_absolute_posix_path_to_file_uri() {
+        let location =
+            super::qualify_database_location("/tmp/custom-db", "s3://warehouse").unwrap();
+
+        assert_eq!(location, "file:///tmp/custom-db");
+    }
+
+    #[test]
+    fn test_qualify_database_location_normalizes_relative_file_uri_from_sql_path_parsing() {
+        let location =
+            super::qualify_database_location("file:./relative/db", "s3://warehouse").unwrap();
+
+        assert_eq!(location, "s3://warehouse/relative/db");
     }
 }

@@ -393,6 +393,7 @@ impl IcebergRestCatalogProvider {
             name: table_name.to_string(),
             statistics: None,
             kind: TableKind::Table {
+                table_type: None,
                 columns,
                 comment,
                 constraints,
@@ -910,6 +911,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 name: identifier.name,
                 statistics: None,
                 kind: TableKind::Table {
+                    table_type: None,
                     columns: Vec::new(),
                     comment: None,
                     constraints: Vec::new(),

@@ -57,6 +57,7 @@ pub struct ColumnStatistics {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableKind {
     Table {
+        table_type: Option<String>,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         constraints: Vec<CatalogTableConstraint>,
@@ -108,7 +109,7 @@ impl TableKind {
 
     pub fn type_name(&self) -> &str {
         match self {
-            TableKind::Table { .. } => "MANAGED",
+            TableKind::Table { table_type, .. } => table_type.as_deref().unwrap_or("MANAGED"),
             TableKind::View { .. } => "VIEW",
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",

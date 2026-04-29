@@ -677,6 +677,7 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -883,6 +884,7 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -1051,6 +1053,7 @@ async fn test_get_table() {
     assert_eq!(table_ns.name, table_full_ns.name);
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,

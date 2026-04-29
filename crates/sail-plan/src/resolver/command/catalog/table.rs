@@ -48,11 +48,6 @@ impl PlanResolver<'_> {
         }
         let mut columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
-        let location = if let Some(location) = location {
-            location
-        } else {
-            self.resolve_default_table_location(&table).await?
-        };
         let format = self.resolve_catalog_table_format(file_format)?;
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
@@ -69,7 +64,7 @@ impl PlanResolver<'_> {
                 columns,
                 comment,
                 constraints,
-                location: Some(location),
+                location,
                 format,
                 partition_by,
                 sort_by,

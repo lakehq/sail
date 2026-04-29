@@ -224,6 +224,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             name: table.to_string(),
             statistics: None,
             kind: TableKind::Table {
+                table_type: None,
                 columns,
                 comment,
                 constraints,

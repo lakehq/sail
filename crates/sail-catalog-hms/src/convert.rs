@@ -29,9 +29,10 @@ pub(crate) const SPARK_STATS_NUM_ROWS_KEY: &str = "spark.sql.statistics.numRows"
 pub(crate) const HMS_TOTAL_SIZE_KEY: &str = "TOTAL_SIZE";
 pub(crate) const HMS_RAW_DATA_SIZE_KEY: &str = "RAW_DATA_SIZE";
 pub(crate) const HMS_ROW_COUNT_KEY: &str = "ROW_COUNT";
+pub(crate) const HMS_DDL_TIME_KEY: &str = "transient_lastDdlTime";
 pub(crate) const HIVE_DEFAULT_PARTITION_NAME: &str = "__HIVE_DEFAULT_PARTITION__";
-pub(crate) const MANAGED_TABLE_TYPE: &str = "MANAGED_TABLE";
 pub(crate) const EXTERNAL_TABLE_TYPE: &str = "EXTERNAL_TABLE";
+pub(crate) const MANAGED_TABLE_TYPE: &str = "MANAGED_TABLE";
 pub(crate) const VIRTUAL_VIEW_TYPE: &str = "VIRTUAL_VIEW";
 /// Placeholder owner matching Spark/Hive convention for unauthenticated contexts.
 /// Used as a literal owner name when no authenticated principal is available.
@@ -40,6 +41,11 @@ pub(crate) const DEFAULT_OWNER: &str = "user.name";
 pub(crate) struct GenericTableFormat<'a> {
     pub logical_format: &'a str,
     pub storage: &'a HiveStorageFormat,
+}
+
+pub(crate) struct GenericTableLocation {
+    pub value: Option<String>,
+    pub is_external: bool,
 }
 
 pub(crate) fn validate_namespace(namespace: &Namespace) -> CatalogResult<String> {
@@ -115,9 +121,8 @@ pub(crate) fn table_to_status(
     } else {
         hms_columns
     };
-    let location = storage
-        .and_then(|sd| sd.location.as_ref())
-        .map(ToString::to_string);
+    let location = table_location(storage, table.parameters.as_ref())
+        .map(|location| normalize_location_uri(&location));
     let format = table_provider_format(table.parameters.as_ref()).unwrap_or_else(|| {
         detect_hms_logical_format(
             storage
@@ -129,6 +134,11 @@ pub(crate) fn table_to_status(
     });
     let partition_by = identity_partition_fields(&partition_columns);
     let (sort_by, bucket_by) = restore_bucket_sort_from_properties(table.parameters.as_ref())?;
+    let table_type = match table.table_type.as_deref() {
+        Some(EXTERNAL_TABLE_TYPE) => Some("EXTERNAL".to_string()),
+        Some(MANAGED_TABLE_TYPE) => Some("MANAGED".to_string()),
+        _ => None,
+    };
 
     Ok(TableStatus {
         catalog: Some(catalog.to_string()),
@@ -136,6 +146,7 @@ pub(crate) fn table_to_status(
         name,
         statistics,
         kind: TableKind::Table {
+            table_type,
             columns,
             comment,
             constraints: vec![],
@@ -146,6 +157,49 @@ pub(crate) fn table_to_status(
             bucket_by,
             properties,
         },
+    })
+}
+
+fn normalize_location_uri(location: &str) -> String {
+    if location.starts_with("file:/") && !location.starts_with("file://") {
+        format!("file:///{}", location.trim_start_matches("file:/"))
+    } else {
+        location.to_string()
+    }
+}
+
+fn normalize_location_uri_for_hms_write(location: &str) -> String {
+    if location.starts_with("file:///") {
+        format!("file:/{}", location.trim_start_matches("file:///"))
+    } else {
+        location.to_string()
+    }
+}
+
+fn table_location(
+    storage: Option<&StorageDescriptor>,
+    parameters: Option<&AHashMap<FastStr, FastStr>>,
+) -> Option<String> {
+    storage.and_then(|sd| {
+        let path = sd
+            .serde_info
+            .as_ref()
+            .and_then(|serde| storage_path_property(serde.parameters.as_ref()));
+        let location = sd.location.as_ref().map(ToString::to_string);
+        if table_provider_format(parameters).is_some() {
+            path.or(location)
+        } else {
+            location.or(path)
+        }
+    })
+}
+
+fn storage_path_property(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Option<String> {
+    parameters.and_then(|parameters| {
+        parameters
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+            .map(|(_, value)| value.to_string())
     })
 }
 
@@ -240,12 +294,38 @@ pub(crate) fn build_database(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn build_generic_table(
     database_name: &str,
     table_name: &str,
     columns: Vec<CreateTableColumnOptions>,
     partition_columns: Vec<String>,
     location: Option<String>,
+    format: GenericTableFormat<'_>,
+    comment: Option<String>,
+    properties: Vec<(String, String)>,
+) -> CatalogResult<Table> {
+    build_generic_table_with_location_kind(
+        database_name,
+        table_name,
+        columns,
+        partition_columns,
+        GenericTableLocation {
+            value: location.clone(),
+            is_external: location.is_some(),
+        },
+        format,
+        comment,
+        properties,
+    )
+}
+
+pub(crate) fn build_generic_table_with_location_kind(
+    database_name: &str,
+    table_name: &str,
+    columns: Vec<CreateTableColumnOptions>,
+    partition_columns: Vec<String>,
+    location: GenericTableLocation,
     format: GenericTableFormat<'_>,
     comment: Option<String>,
     properties: Vec<(String, String)>,
@@ -264,16 +344,24 @@ pub(crate) fn build_generic_table(
             FastStr::from_static_str("delta"),
         );
     }
-
-    let table_type = if location.is_some() {
+    if location.is_external {
         parameters.get_or_insert_with(AHashMap::new).insert(
             FastStr::from_static_str(EXTERNAL_KEY),
             FastStr::from_static_str(EXTERNAL_TRUE),
         );
-        EXTERNAL_TABLE_TYPE
-    } else {
-        MANAGED_TABLE_TYPE
-    };
+    }
+
+    let storage_location = location
+        .value
+        .map(|location| normalize_location_uri_for_hms_write(&location));
+    let serde_parameters = storage_location.as_ref().map(|location| {
+        [(
+            FastStr::from_static_str("path"),
+            FastStr::from_string(location.clone()),
+        )]
+        .into_iter()
+        .collect()
+    });
 
     Ok(Table {
         db_name: Some(database_name.to_string().into()),
@@ -281,14 +369,26 @@ pub(crate) fn build_generic_table(
         owner: Some(DEFAULT_OWNER.into()),
         create_time: Some(current_time_secs()?),
         last_access_time: Some(current_time_secs()?),
-        table_type: Some(table_type.into()),
+        table_type: Some(
+            if location.is_external {
+                EXTERNAL_TABLE_TYPE
+            } else {
+                MANAGED_TABLE_TYPE
+            }
+            .into(),
+        ),
         sd: Some(StorageDescriptor {
             cols: Some(regular_columns),
-            location: location.map(Into::into),
+            location: location
+                .is_external
+                .then(|| storage_location.clone())
+                .flatten()
+                .map(Into::into),
             input_format: Some(format.storage.input_format.into()),
             output_format: Some(format.storage.output_format.into()),
             serde_info: Some(SerDeInfo {
                 serialization_lib: Some(format.storage.serde_library.into()),
+                parameters: serde_parameters,
                 ..Default::default()
             }),
             ..Default::default()
@@ -549,7 +649,8 @@ pub(crate) fn map_to_hashmap(
 pub(crate) fn filter_spark_properties(values: Vec<(String, String)>) -> Vec<(String, String)> {
     values
         .into_iter()
-        .filter(|(key, _)| !key.starts_with("spark.sql."))
+        .filter(|(key, _)| !key.starts_with("spark.sql.") && key != HMS_DDL_TIME_KEY)
+        .filter(|(key, _)| key != EXTERNAL_KEY)
         .collect()
 }
 
@@ -1454,11 +1555,11 @@ mod tests {
     use sail_common_datafusion::catalog::{ColumnStatistics, TableStatistics};
 
     use super::{
-        build_generic_table, build_view, database_to_status, inject_spark_metadata, is_view_table,
-        map_to_vec, read_large_table_prop, split_large_table_prop,
-        table_statistics_from_properties, table_statistics_to_properties, validate_namespace,
-        vec_to_map, GenericTableFormat, COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY,
-        SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
+        build_generic_table, build_generic_table_with_location_kind, build_view,
+        database_to_status, inject_spark_metadata, is_view_table, map_to_vec,
+        read_large_table_prop, split_large_table_prop, table_statistics_from_properties,
+        table_statistics_to_properties, validate_namespace, vec_to_map, GenericTableFormat,
+        COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
     };
 
     #[test]
@@ -1484,7 +1585,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_generic_table_marks_external_when_location_present() {
+    fn test_build_generic_table_marks_explicit_location_as_external_with_storage_path() {
         let table = build_generic_table(
             "default",
             "items",
@@ -1511,6 +1612,19 @@ mod tests {
             table.table_type.as_deref(),
             Some(super::EXTERNAL_TABLE_TYPE)
         );
+        assert_eq!(
+            table.sd.as_ref().and_then(|sd| sd.location.as_deref()),
+            Some("s3://warehouse/items")
+        );
+        assert_eq!(
+            table
+                .sd
+                .as_ref()
+                .and_then(|sd| sd.serde_info.as_ref())
+                .and_then(|serde| serde.parameters.as_ref())
+                .and_then(|parameters| parameters.get("path").map(|value| value.as_str())),
+            Some("s3://warehouse/items")
+        );
         let properties = map_to_vec(table.parameters.as_ref());
         assert!(properties
             .iter()
@@ -1518,6 +1632,46 @@ mod tests {
         assert!(properties
             .iter()
             .any(|(k, v)| k == COMMENT_KEY && v == "comment"));
+    }
+
+    #[test]
+    fn test_build_generic_table_can_write_managed_table_with_spark_storage_path() {
+        let table = build_generic_table_with_location_kind(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+            }],
+            vec![],
+            super::GenericTableLocation {
+                value: Some("s3://warehouse/default/items".to_string()),
+                is_external: false,
+            },
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(table.table_type.as_deref(), Some(super::MANAGED_TABLE_TYPE));
+        assert_eq!(table.sd.as_ref().and_then(|sd| sd.location.as_ref()), None);
+        assert_eq!(
+            table
+                .sd
+                .as_ref()
+                .and_then(|sd| sd.serde_info.as_ref())
+                .and_then(|serde| serde.parameters.as_ref())
+                .and_then(|parameters| parameters.get("path").map(|value| value.as_str())),
+            Some("s3://warehouse/default/items")
+        );
     }
 
     #[test]
@@ -1540,7 +1694,10 @@ mod tests {
                 storage: &HiveStorageFormat::parquet(),
             },
             None,
-            vec![],
+            vec![(
+                SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+                "parquet".to_string(),
+            )],
         )
         .unwrap();
 
@@ -1610,6 +1767,123 @@ mod tests {
         match status.kind {
             sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
                 assert_eq!(format, "textfile");
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_table_to_status_normalizes_spark_file_location_uri() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+            }],
+            vec![],
+            Some("file:/tmp/sail-hms/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![(
+                SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+                "parquet".to_string(),
+            )],
+        )
+        .unwrap();
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { location, .. } => {
+                assert_eq!(location.as_deref(), Some("file:///tmp/sail-hms/items"));
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_build_generic_table_writes_spark_style_storage_path_uri() {
+        let table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+            }],
+            vec![],
+            Some("file:///tmp/sail-hms/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![(
+                SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+                "parquet".to_string(),
+            )],
+        )
+        .unwrap();
+
+        assert_eq!(
+            table.sd.as_ref().and_then(|sd| sd.location.as_deref()),
+            Some("file:/tmp/sail-hms/items")
+        );
+        assert_eq!(
+            table
+                .sd
+                .as_ref()
+                .and_then(|sd| sd.serde_info.as_ref())
+                .and_then(|serde| serde.parameters.as_ref())
+                .and_then(|parameters| parameters.get("path").map(|value| value.as_str())),
+            Some("file:/tmp/sail-hms/items")
+        );
+    }
+
+    #[test]
+    fn test_table_to_status_prefers_spark_storage_path_over_sd_location() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+            }],
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![(
+                SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+                "parquet".to_string(),
+            )],
+        )
+        .unwrap();
+        table.sd.as_mut().unwrap().location = Some("s3://warehouse/placeholder".into());
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { location, .. } => {
+                assert_eq!(location.as_deref(), Some("s3://warehouse/items"));
             }
             other => panic!("expected table, got {other:?}"),
         }
@@ -1872,6 +2146,7 @@ mod tests {
             None,
             vec![
                 ("owner".to_string(), "sail".to_string()),
+                ("transient_lastDdlTime".to_string(), "1714399200".to_string()),
                 (
                     SPARK_SCHEMA_KEY.to_string(),
                     r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":false,"metadata":{}}]}"#
@@ -1888,13 +2163,7 @@ mod tests {
         else {
             panic!("expected table");
         };
-        assert_eq!(
-            properties,
-            vec![
-                ("EXTERNAL".to_string(), "TRUE".to_string()),
-                ("owner".to_string(), "sail".to_string())
-            ]
-        );
+        assert_eq!(properties, vec![("owner".to_string(), "sail".to_string())]);
 
         let view = build_view(
             "default",

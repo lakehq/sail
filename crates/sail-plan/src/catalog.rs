@@ -150,13 +150,13 @@ impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
     }
 
     fn table(status: TableStatus) -> Self::Table {
-        let table_type = match status.kind {
-            TableKind::Table { .. } => "MANAGED",
+        let table_type = match &status.kind {
+            TableKind::Table { table_type, .. } => table_type.as_deref().unwrap_or("MANAGED"),
             TableKind::View { .. } => "VIEW",
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
         };
-        let is_temporary = match status.kind {
+        let is_temporary = match &status.kind {
             TableKind::Table { .. } | TableKind::View { .. } => false,
             TableKind::TemporaryView { .. } | TableKind::GlobalTemporaryView { .. } => true,
         };

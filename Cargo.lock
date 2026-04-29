@@ -7012,6 +7012,7 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tokio",
+ "url",
  "volo",
  "volo-thrift",
 ]

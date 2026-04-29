@@ -501,6 +501,7 @@ impl PlanResolver<'_> {
         };
         match status.kind {
             TableKind::Table {
+                table_type: _,
                 mut columns,
                 comment: _,
                 constraints: _,

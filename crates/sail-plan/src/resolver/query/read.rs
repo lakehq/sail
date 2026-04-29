@@ -87,6 +87,7 @@ impl PlanResolver<'_> {
             .await?;
         let plan = match status.kind {
             TableKind::Table {
+                table_type: _,
                 columns,
                 comment: _,
                 constraints,
