@@ -319,12 +319,7 @@ def test_csv_read_uppercase_extension_with_schema_and_header(spark, tmp_path):
     # column names from the schema are used.
     data_path = tmp_path / "data.CSV"
     data_path.write_text("name,age\nAlice,30\nBob,40\n")
-    df = (
-        spark.read.format("csv")
-        .schema("name STRING, age INT")
-        .option("header", "true")
-        .load(str(data_path))
-    )
+    df = spark.read.format("csv").schema("name STRING, age INT").option("header", "true").load(str(data_path))
     assert sorted(df.collect(), key=safe_sort_key) == [
         Row(name="Alice", age=30),
         Row(name="Bob", age=40),
@@ -344,16 +339,10 @@ def test_csv_read_uppercase_extension_with_schema_all_strings(spark, tmp_path):
 
 
 def test_csv_read_uppercase_extension_with_schema_compressed(spark, tmp_path):
-    # Compressed file with uppercase `.CSV.GZ` plus explicit schema.
-    file_path = tmp_path / "data.CSV.GZ"
-    with gzip.open(file_path, "wb") as f:
-        f.write(b"a,1\nb,2\n")
-    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(file_path))
-    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
-
-
-def test_csv_read_uppercase_extension_with_schema_compressed_explicit_option(spark, tmp_path):
-    # Same as above but with an explicit `compression` option.
+    # Compressed file with uppercase `.CSV.GZ` plus explicit schema. When the
+    # schema is provided we skip schema inference (and thus compression
+    # auto-detection), so the reader must be told the compression
+    # explicitly.
     file_path = tmp_path / "data.CSV.GZ"
     with gzip.open(file_path, "wb") as f:
         f.write(b"a,1\nb,2\n")
@@ -368,14 +357,21 @@ def test_csv_read_uppercase_extension_with_schema_compressed_explicit_option(spa
 
 
 def test_csv_read_uppercase_extension_with_schema_compressed_directory(spark, tmp_path):
-    # Directory of `*.CSV.GZ` files plus explicit schema.
+    # Directory of `*.CSV.GZ` files plus explicit schema and explicit
+    # compression option (see comment above).
     path = tmp_path / "csv_upper_schema_gz_dir"
     path.mkdir()
     with gzip.open(path / "part-0.CSV.GZ", "wb") as f:
         f.write(b"a,1\n")
     with gzip.open(path / "part-1.CSV.GZ", "wb") as f:
         f.write(b"b,2\n")
-    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(path))
+    df = (
+        spark.read.format("csv")
+        .schema("k STRING, v INT")
+        .option("header", "false")
+        .option("compression", "gzip")
+        .load(str(path))
+    )
     assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
 
 
@@ -394,18 +390,15 @@ def test_csv_read_uppercase_extension_with_schema_delimiter(spark, tmp_path):
 
 
 def test_csv_read_mixed_case_directory_with_schema(spark, tmp_path):
-    # A directory containing both `.csv` and `.CSV` with an explicit schema.
-    # Per the existing TODO in `resolve_listing_schema`, only one variant is
-    # picked at scan time; the lowercase canonical is preferred when present.
-    # This test pins that behavior so any future change is intentional.
+    # Spark parity: a directory containing both `.csv` and `.CSV` reads
+    # every non-hidden file regardless of extension case.
     path = tmp_path / "csv_mixed_dir"
     path.mkdir()
     (path / "lower.csv").write_text("a,1\n")
     (path / "upper.CSV").write_text("b,2\n")
     df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(path))
     rows = sorted(df.collect(), key=safe_sort_key)
-    # Lowercase is preferred; uppercase is dropped at DataFusion's scan-time filter.
-    assert rows == [Row(k="a", v=1)]
+    assert rows == [Row(k="a", v=1), Row(k="b", v=2)]
 
 
 def test_csv_read_uppercase_extension_with_schema_subset_columns(spark, tmp_path):

@@ -163,7 +163,14 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             }
         };
 
+        // Clear the file-extension filter on the listing options so that
+        // DataFusion's scan-time listing accepts every file admitted by the
+        // URL (which in turn excludes hidden files via the default glob
+        // attached in `resolve_listing_urls`). This matches Spark's
+        // behavior of reading every non-hidden file in a directory
+        // regardless of its extension.
         let listing_options = listing_options
+            .with_file_extension("")
             .with_file_sort_order(vec![sort_order])
             .with_table_partition_cols(partition_by);
 

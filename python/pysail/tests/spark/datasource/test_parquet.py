@@ -245,9 +245,8 @@ def test_parquet_read_uppercase_extension_with_schema_subset_columns(spark, samp
 
 
 def test_parquet_read_mixed_case_directory_with_schema(spark, sample_df, tmp_path):
-    # Directory with both `.parquet` and `.PARQUET`. Lowercase canonical
-    # is preferred at scan time; uppercase variants get dropped (see TODO
-    # in `resolve_listing_schema`). Pinning current behavior.
+    # Spark parity: directory with both `.parquet` and `.PARQUET` reads
+    # every non-hidden file regardless of extension case.
     src = tmp_path / "src"
     sample_df.write.parquet(str(src), mode="overwrite")
     mixed = tmp_path / "mixed"
@@ -257,26 +256,9 @@ def test_parquet_read_mixed_case_directory_with_schema(spark, sample_df, tmp_pat
             f.rename(mixed / f"part-{i}.parquet")
         else:
             f.rename(mixed / f"part-{i}.PARQUET")
-    expected_lowercase_count = sum(1 for _ in mixed.glob("*.parquet")) - sum(
-        1 for _ in mixed.glob("*.PARQUET")
-    )
-    # `glob("*.parquet")` is case-insensitive on macOS APFS — so derive the
-    # lowercase count by string-comparing names directly.
-    lowercase_files = [p for p in mixed.iterdir() if p.suffix == ".parquet"]
     df = spark.read.schema(sample_df.schema).parquet(str(mixed))
-    # Read should return only the rows from lowercase files.
-    if lowercase_files:
-        # Read each lowercase file individually to compute expected rows.
-        expected = 0
-        for f in lowercase_files:
-            expected += spark.read.schema(sample_df.schema).parquet(str(f)).count()
-        assert df.count() == expected
-    else:
-        # No lowercase files in the mixed dir — uppercase-only fallback.
-        # This branch documents that the dominant-case fallback kicks in.
-        assert df.count() == sample_df.count()
-    # Silence unused-variable warning from bookkeeping above.
-    _ = expected_lowercase_count
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
 
 
 def test_parquet_read_uppercase_extension_partitioned_directory(spark, tmp_path):

@@ -142,15 +142,15 @@ def test_json_read_uppercase_extension_with_schema_subset_columns(spark, tmp_pat
 
 
 def test_json_read_mixed_case_directory_with_schema(spark, tmp_path):
-    # Directory containing both `.json` and `.JSON`. The lowercase canonical
-    # is preferred at scan time; uppercase variants get dropped (see TODO
-    # in `resolve_listing_schema`). Pinning current behavior.
+    # Spark parity: directory containing both `.json` and `.JSON` reads
+    # every non-hidden file regardless of extension case.
     path = tmp_path / "json_mixed_dir"
     path.mkdir()
     (path / "lower.json").write_text('{"id": 1, "value": "a"}\n')
     (path / "upper.JSON").write_text('{"id": 2, "value": "b"}\n')
     df = spark.read.format("json").schema("id INT, value STRING").load(str(path))
-    assert df.collect() == [Row(id=1, value="a")]
+    rows = sorted(df.collect(), key=lambda r: r.id)
+    assert rows == [Row(id=1, value="a"), Row(id=2, value="b")]
 
 
 def test_json_read_uppercase_extension_via_spark_json_helper(spark, tmp_path):
