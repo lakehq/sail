@@ -1,7 +1,9 @@
 from collections.abc import Mapping
 
 import pandas as pd
+import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.sql import Row
 
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier
@@ -169,3 +171,131 @@ def test_parquet_read_uppercase_extension(spark, sample_df, tmp_path):
     df = spark.read.parquet(str(dst))
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+# -----------------------------------------------------------------------------
+# Case-insensitive extension matching for Parquet, including the
+# schema-provided code path that bypasses Sail's listing-time extension
+# observation and relies solely on DataFusion's scan-time filter.
+# -----------------------------------------------------------------------------
+
+
+def _rename_part_files(src, dst, ext):
+    """Move every `*.parquet` file from `src` into `dst` with the given extension."""
+    dst.mkdir()
+    for i, f in enumerate(src.glob("*.parquet")):
+        f.rename(dst / f"part-{i}.{ext}")
+
+
+@pytest.mark.parametrize("ext", ["PARQUET", "Parquet", "ParQuet", "parqueT"])
+def test_parquet_read_uppercase_extension_file(spark, sample_df, tmp_path, ext):
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    _rename_part_files(src, dst, ext)
+    files = list(dst.glob(f"*.{ext}"))
+    assert files, "expected renamed parquet files"
+    df = spark.read.parquet(str(files[0]))
+    assert df.count() > 0
+
+
+@pytest.mark.parametrize("ext", ["PARQUET", "Parquet"])
+def test_parquet_read_uppercase_extension_with_schema_struct_file(spark, sample_df, tmp_path, ext):
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    _rename_part_files(src, dst, ext)
+    files = list(dst.glob(f"*.{ext}"))
+    # `sample_df` is tiny (4 rows) so a single output file is expected.
+    assert len(files) == 1
+    df = spark.read.schema(sample_df.schema).parquet(str(files[0]))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize("ext", ["PARQUET", "Parquet"])
+def test_parquet_read_uppercase_extension_with_schema_directory(spark, sample_df, tmp_path, ext):
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    _rename_part_files(src, dst, ext)
+    df = spark.read.schema(sample_df.schema).parquet(str(dst))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+def test_parquet_read_lowercase_extension_with_schema_regression(spark, sample_df, tmp_path):
+    # Regression: lowercase `.parquet` with schema must keep working.
+    path = str(tmp_path / "lower")
+    sample_df.write.parquet(path, mode="overwrite")
+    df = spark.read.schema(sample_df.schema).parquet(path)
+    assert df.count() == sample_df.count()
+
+
+def test_parquet_read_uppercase_extension_with_schema_subset_columns(spark, sample_df, tmp_path):
+    # Parquet column projection is by name: schema with one field should
+    # only return that column.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    dst = tmp_path / "dst"
+    _rename_part_files(src, dst, "PARQUET")
+    df = spark.read.schema("col1 STRING").parquet(str(dst))
+    assert df.columns == ["col1"]
+    assert df.count() == sample_df.count()
+
+
+def test_parquet_read_mixed_case_directory_with_schema(spark, sample_df, tmp_path):
+    # Directory with both `.parquet` and `.PARQUET`. Lowercase canonical
+    # is preferred at scan time; uppercase variants get dropped (see TODO
+    # in `resolve_listing_schema`). Pinning current behavior.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    mixed = tmp_path / "mixed"
+    mixed.mkdir()
+    for i, f in enumerate(src.glob("*.parquet")):
+        if i % 2 == 0:
+            f.rename(mixed / f"part-{i}.parquet")
+        else:
+            f.rename(mixed / f"part-{i}.PARQUET")
+    expected_lowercase_count = sum(1 for _ in mixed.glob("*.parquet")) - sum(
+        1 for _ in mixed.glob("*.PARQUET")
+    )
+    # `glob("*.parquet")` is case-insensitive on macOS APFS — so derive the
+    # lowercase count by string-comparing names directly.
+    lowercase_files = [p for p in mixed.iterdir() if p.suffix == ".parquet"]
+    df = spark.read.schema(sample_df.schema).parquet(str(mixed))
+    # Read should return only the rows from lowercase files.
+    if lowercase_files:
+        # Read each lowercase file individually to compute expected rows.
+        expected = 0
+        for f in lowercase_files:
+            expected += spark.read.schema(sample_df.schema).parquet(str(f)).count()
+        assert df.count() == expected
+    else:
+        # No lowercase files in the mixed dir — uppercase-only fallback.
+        # This branch documents that the dominant-case fallback kicks in.
+        assert df.count() == sample_df.count()
+    # Silence unused-variable warning from bookkeeping above.
+    _ = expected_lowercase_count
+
+
+def test_parquet_read_uppercase_extension_partitioned_directory(spark, tmp_path):
+    # Partitioned write produces a partitioned tree under a directory.
+    # Renaming the leaf files to uppercase must still let the table be read
+    # with an explicit schema.
+    df_in = spark.createDataFrame(
+        [(1, "a", "x"), (2, "b", "x"), (3, "c", "y")],
+        "id INT, val STRING, part STRING",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("part").parquet(str(src), mode="overwrite")
+    # Walk and rename every `.parquet` to `.PARQUET`.
+    for f in src.rglob("*.parquet"):
+        f.rename(f.with_suffix(".PARQUET"))
+    df = spark.read.schema("id INT, val STRING, part STRING").parquet(str(src))
+    rows = sorted(df.collect(), key=lambda r: r.id)
+    assert rows == [
+        Row(id=1, val="a", part="x"),
+        Row(id=2, val="b", part="x"),
+        Row(id=3, val="c", part="y"),
+    ]

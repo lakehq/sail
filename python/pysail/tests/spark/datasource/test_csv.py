@@ -4,7 +4,7 @@ from collections.abc import Mapping
 
 import pytest
 from pyspark.sql import Row
-from pyspark.sql.types import StringType
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 from pysail.testing.spark.utils.sql import escape_sql_identifier
 
@@ -254,3 +254,187 @@ def test_csv_read_uppercase_extension_compressed(spark, tmp_path):
         Row(name="Alice", age=30),
         Row(name="Bob", age=40),
     ]
+
+
+# -----------------------------------------------------------------------------
+# Case-insensitive extension matching when an explicit schema is supplied.
+#
+# When the user calls `.schema(...)` Sail skips schema inference (and thus the
+# observation step that aligns `options.file_extension` with the actual
+# on-disk case). DataFusion's scan-time listing then drops files whose
+# extension does not match the lowercase canonical (e.g. `.csv`). The tests
+# below cover that path across single files, directories, mixed case,
+# compression, and schema-shape variations.
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("ext", ["CSV", "Csv", "cSv", "CsV", "csV"])
+def test_csv_read_uppercase_extension_with_schema_struct_file(spark, tmp_path, ext):
+    data_path = tmp_path / f"data.{ext}"
+    data_path.write_text("a,1\nb,2\n")
+    schema = StructType(
+        [
+            StructField("k", StringType(), True),
+            StructField("v", IntegerType(), True),
+        ]
+    )
+    df = spark.read.format("csv").schema(schema).option("header", "false").load(str(data_path))
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
+
+
+@pytest.mark.parametrize("ext", ["CSV", "Csv"])
+def test_csv_read_uppercase_extension_with_schema_ddl_file(spark, tmp_path, ext):
+    # DDL-string schemas should behave the same as StructType.
+    data_path = tmp_path / f"data.{ext}"
+    data_path.write_text("a,1\nb,2\n")
+    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(data_path))
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
+
+
+@pytest.mark.parametrize("ext", ["CSV", "Csv"])
+def test_csv_read_uppercase_extension_with_schema_directory(spark, tmp_path, ext):
+    path = tmp_path / "csv_upper_schema_dir"
+    path.mkdir()
+    (path / f"part-0.{ext}").write_text("a,1\nb,2\n")
+    (path / f"part-1.{ext}").write_text("c,3\nd,4\n")
+    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(path))
+    assert sorted(df.collect(), key=safe_sort_key) == [
+        Row(k="a", v=1),
+        Row(k="b", v=2),
+        Row(k="c", v=3),
+        Row(k="d", v=4),
+    ]
+
+
+def test_csv_read_lowercase_extension_with_schema_regression(spark, tmp_path):
+    # Regression check: lowercase `.csv` with explicit schema must still work.
+    data_path = tmp_path / "data.csv"
+    data_path.write_text("a,1\nb,2\n")
+    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(data_path))
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
+
+
+def test_csv_read_uppercase_extension_with_schema_and_header(spark, tmp_path):
+    # `header=true` with an explicit schema: header line is consumed and
+    # column names from the schema are used.
+    data_path = tmp_path / "data.CSV"
+    data_path.write_text("name,age\nAlice,30\nBob,40\n")
+    df = (
+        spark.read.format("csv")
+        .schema("name STRING, age INT")
+        .option("header", "true")
+        .load(str(data_path))
+    )
+    assert sorted(df.collect(), key=safe_sort_key) == [
+        Row(name="Alice", age=30),
+        Row(name="Bob", age=40),
+    ]
+
+
+def test_csv_read_uppercase_extension_with_schema_all_strings(spark, tmp_path):
+    # Schema where every field is StringType.
+    data_path = tmp_path / "data.CSV"
+    data_path.write_text("a,1\nb,2\n")
+    schema = StructType([StructField("k", StringType(), True), StructField("v", StringType(), True)])
+    df = spark.read.format("csv").schema(schema).option("header", "false").load(str(data_path))
+    assert sorted(df.collect(), key=safe_sort_key) == [
+        Row(k="a", v="1"),
+        Row(k="b", v="2"),
+    ]
+
+
+def test_csv_read_uppercase_extension_with_schema_compressed(spark, tmp_path):
+    # Compressed file with uppercase `.CSV.GZ` plus explicit schema.
+    file_path = tmp_path / "data.CSV.GZ"
+    with gzip.open(file_path, "wb") as f:
+        f.write(b"a,1\nb,2\n")
+    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(file_path))
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
+
+
+def test_csv_read_uppercase_extension_with_schema_compressed_explicit_option(spark, tmp_path):
+    # Same as above but with an explicit `compression` option.
+    file_path = tmp_path / "data.CSV.GZ"
+    with gzip.open(file_path, "wb") as f:
+        f.write(b"a,1\nb,2\n")
+    df = (
+        spark.read.format("csv")
+        .schema("k STRING, v INT")
+        .option("header", "false")
+        .option("compression", "gzip")
+        .load(str(file_path))
+    )
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
+
+
+def test_csv_read_uppercase_extension_with_schema_compressed_directory(spark, tmp_path):
+    # Directory of `*.CSV.GZ` files plus explicit schema.
+    path = tmp_path / "csv_upper_schema_gz_dir"
+    path.mkdir()
+    with gzip.open(path / "part-0.CSV.GZ", "wb") as f:
+        f.write(b"a,1\n")
+    with gzip.open(path / "part-1.CSV.GZ", "wb") as f:
+        f.write(b"b,2\n")
+    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(path))
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
+
+
+def test_csv_read_uppercase_extension_with_schema_delimiter(spark, tmp_path):
+    # Custom delimiter combined with explicit schema and uppercase extension.
+    data_path = tmp_path / "data.CSV"
+    data_path.write_text("a|1\nb|2\n")
+    df = (
+        spark.read.format("csv")
+        .schema("k STRING, v INT")
+        .option("header", "false")
+        .option("delimiter", "|")
+        .load(str(data_path))
+    )
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
+
+
+def test_csv_read_mixed_case_directory_with_schema(spark, tmp_path):
+    # A directory containing both `.csv` and `.CSV` with an explicit schema.
+    # Per the existing TODO in `resolve_listing_schema`, only one variant is
+    # picked at scan time; the lowercase canonical is preferred when present.
+    # This test pins that behavior so any future change is intentional.
+    path = tmp_path / "csv_mixed_dir"
+    path.mkdir()
+    (path / "lower.csv").write_text("a,1\n")
+    (path / "upper.CSV").write_text("b,2\n")
+    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(path))
+    rows = sorted(df.collect(), key=safe_sort_key)
+    # Lowercase is preferred; uppercase is dropped at DataFusion's scan-time filter.
+    assert rows == [Row(k="a", v=1)]
+
+
+def test_csv_read_uppercase_extension_with_schema_subset_columns(spark, tmp_path):
+    # CSV column projection is positional, so a 1-column schema reads only
+    # the first column from each row.
+    data_path = tmp_path / "data.CSV"
+    data_path.write_text("a,1\nb,2\n")
+    df = spark.read.format("csv").schema("k STRING").option("header", "false").load(str(data_path))
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a"), Row(k="b")]
+
+
+def test_csv_read_uppercase_extension_with_schema_truncated_rows(spark, tmp_path):
+    # `allowTruncatedRows=true` plus explicit schema plus uppercase extension —
+    # the original repro from the bug report.
+    data_path = tmp_path / "data.CSV"
+    data_path.write_text("a,1\nb\n")
+    df = (
+        spark.read.format("csv")
+        .schema("k STRING, v INT")
+        .option("header", "false")
+        .option("allowTruncatedRows", "true")
+        .load(str(data_path))
+    )
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=None)]
+
+
+def test_csv_read_uppercase_extension_via_spark_csv_helper(spark, tmp_path):
+    # `spark.read.csv(...)` (no `.format("csv")`) must hit the same code path.
+    data_path = tmp_path / "data.CSV"
+    data_path.write_text("a,1\n")
+    df = spark.read.schema("k STRING, v INT").csv(str(data_path), header=False)
+    assert df.collect() == [Row(k="a", v=1)]
