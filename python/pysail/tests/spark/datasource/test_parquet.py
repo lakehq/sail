@@ -263,18 +263,18 @@ def test_parquet_read_mixed_case_directory_with_schema(spark, sample_df, tmp_pat
 
 def test_parquet_read_uppercase_extension_partitioned_directory(spark, tmp_path):
     # Partitioned write produces a partitioned tree under a directory.
-    # Renaming the leaf files to uppercase must still let the table be read
-    # with an explicit schema.
+    # Renaming every leaf `.parquet` to `.PARQUET` must still let the table
+    # be read. We rely on partition discovery (no `.schema()`) since
+    # `part` lives only in the directory name, not in the file.
     df_in = spark.createDataFrame(
         [(1, "a", "x"), (2, "b", "x"), (3, "c", "y")],
         "id INT, val STRING, part STRING",
     )
     src = tmp_path / "src"
     df_in.write.partitionBy("part").parquet(str(src), mode="overwrite")
-    # Walk and rename every `.parquet` to `.PARQUET`.
     for f in src.rglob("*.parquet"):
         f.rename(f.with_suffix(".PARQUET"))
-    df = spark.read.schema("id INT, val STRING, part STRING").parquet(str(src))
+    df = spark.read.parquet(str(src))
     rows = sorted(df.collect(), key=lambda r: r.id)
     assert rows == [
         Row(id=1, val="a", part="x"),

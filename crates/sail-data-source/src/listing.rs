@@ -26,30 +26,8 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     options_vec: Vec<OptionLayer>,
     listing_format: &ListingTableFormat<T>,
 ) -> Result<Arc<Schema>> {
-    // The logic is similar to `ListingOptions::infer_schema()`
-    // but here we also check for the existence of files.
-    let mut file_groups = vec![];
-    for url in urls {
-        let store = ctx.runtime_env().object_store(url)?;
-        let files: Vec<_> = list_all_files(
-            url,
-            ctx,
-            &store,
-            &options.file_extension,
-            extension_with_compression.as_deref(),
-        )
-        .await?
-        // Here we sample up to 10 files to infer the schema.
-        // The value is hard-coded here since DataFusion uses the same hard-coded value
-        // for operations such as `infer_partitions_from_path`.
-        // We can make it configurable if DataFusion makes those operations configurable
-        // as well in the future.
-        .take(10)
-        .try_collect()
-        .await?;
-        file_groups.push((store, files));
-    }
-
+    let file_groups =
+        list_sample_files(ctx, urls, options, extension_with_compression.as_deref()).await?;
     let empty = file_groups.iter().all(|(_, files)| files.is_empty());
     if empty {
         let urls = urls
@@ -60,34 +38,14 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
         return plan_err!("No files found in the specified paths: {urls}")?;
     }
 
-    let file_extension = if let Some(extension_with_compression) = extension_with_compression {
-        resolve_listing_file_extension(
-            &file_groups,
-            &options.file_extension,
-            extension_with_compression,
-        )
-    } else {
-        let result = infer_listing_file_extension(&file_groups, &options.file_extension);
-        if let Some(result) = result {
-            let (file_extension, compression_type) = result;
-            let file_compression_type = CompressionTypeVariant::from_str(
-                compression_type
-                    .strip_prefix(".")
-                    .unwrap_or(compression_type.as_str()),
-            )?;
-            options.format = listing_format.inner().create_read_format(
-                ctx,
-                options_vec.clone(),
-                Some(file_compression_type),
-            )?;
-            Some(file_extension)
-        } else {
-            None
-        }
-    };
-    if let Some(file_extension) = file_extension.clone() {
-        options.file_extension = file_extension;
-    };
+    apply_inferred_compression(
+        ctx,
+        options,
+        &file_groups,
+        extension_with_compression,
+        &options_vec,
+        listing_format,
+    )?;
 
     let mut schemas = vec![];
     for (store, files) in file_groups.iter() {
@@ -126,6 +84,115 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
 fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
     s.len() >= suffix.len()
         && s.as_bytes()[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+}
+
+/// List up to 10 files per URL into in-memory groups, suitable for
+/// schema inference and compression detection. The cap is hard-coded to
+/// match DataFusion's [`ListingOptions::infer_schema`] /
+/// `infer_partitions_from_path` (we can lift it once DataFusion makes
+/// those configurable).
+async fn list_sample_files(
+    ctx: &dyn Session,
+    urls: &[ListingTableUrl],
+    options: &ListingOptions,
+    extension_with_compression: Option<&str>,
+) -> Result<Vec<(Arc<dyn ObjectStore>, Vec<ObjectMeta>)>> {
+    // The logic is similar to `ListingOptions::infer_schema()`
+    // but here we also check for the existence of files.
+    let mut file_groups = vec![];
+    for url in urls {
+        let store = ctx.runtime_env().object_store(url)?;
+        let files: Vec<_> = list_all_files(
+            url,
+            ctx,
+            &store,
+            &options.file_extension,
+            extension_with_compression,
+        )
+        .await?
+        // Here we sample up to 10 files to infer the schema.
+        // The value is hard-coded here since DataFusion uses the same hard-coded value
+        // for operations such as `infer_partitions_from_path`.
+        // We can make it configurable if DataFusion makes those operations configurable
+        // as well in the future.
+        .take(10)
+        .try_collect()
+        .await?;
+        file_groups.push((store, files));
+    }
+    Ok(file_groups)
+}
+
+/// Inspect the suffixes in `file_groups` and, if a compressed variant is
+/// observed, rebuild `options.format` with the matching compression and
+/// update `options.file_extension`. Compression is carried by the
+/// `FileFormat` itself (DataFusion consults `format.compression_type()`
+/// when reading bytes), which is why we re-create the format here.
+fn apply_inferred_compression<T: ListingFormat>(
+    ctx: &dyn Session,
+    options: &mut ListingOptions,
+    file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
+    extension_with_compression: &Option<String>,
+    options_vec: &[OptionLayer],
+    listing_format: &ListingTableFormat<T>,
+) -> Result<()> {
+    let file_extension = if let Some(extension_with_compression) = extension_with_compression {
+        resolve_listing_file_extension(
+            file_groups,
+            &options.file_extension,
+            extension_with_compression,
+        )
+    } else {
+        let result = infer_listing_file_extension(file_groups, &options.file_extension);
+        if let Some(result) = result {
+            let (file_extension, compression_type) = result;
+            let file_compression_type = CompressionTypeVariant::from_str(
+                compression_type
+                    .strip_prefix(".")
+                    .unwrap_or(compression_type.as_str()),
+            )?;
+            options.format = listing_format.inner().create_read_format(
+                ctx,
+                options_vec.to_vec(),
+                Some(file_compression_type),
+            )?;
+            Some(file_extension)
+        } else {
+            None
+        }
+    };
+    if let Some(file_extension) = file_extension.clone() {
+        options.file_extension = file_extension;
+    };
+    Ok(())
+}
+
+/// Best-effort compression auto-detection for callers that bypass
+/// [`resolve_listing_schema`] (i.e. an explicit schema was provided).
+/// Lists a sample of files and applies any detected compression to
+/// `options`. Silently no-ops when the listing is empty so the
+/// downstream scan can surface "no files found" with full context.
+pub async fn detect_listing_compression<T: ListingFormat>(
+    ctx: &dyn Session,
+    urls: &[ListingTableUrl],
+    options: &mut ListingOptions,
+    extension_with_compression: &Option<String>,
+    options_vec: &[OptionLayer],
+    listing_format: &ListingTableFormat<T>,
+) -> Result<()> {
+    let file_groups =
+        list_sample_files(ctx, urls, options, extension_with_compression.as_deref()).await?;
+    if file_groups.iter().all(|(_, files)| files.is_empty()) {
+        return Ok(());
+    }
+    apply_inferred_compression(
+        ctx,
+        options,
+        &file_groups,
+        extension_with_compression,
+        options_vec,
+        listing_format,
+    )
 }
 
 fn resolve_listing_file_extension(

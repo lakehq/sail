@@ -140,12 +140,19 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .with_collect_stat(config.collect_statistics());
 
         let (schema, partition_by) = match schema {
-            // TODO: compression auto-detection runs only in the schema-
-            //  inference branch below. When the user supplies an explicit
-            //  schema we never list the files, so a `data.csv.gz` here
-            //  may require `option("compression", "gzip")`. Spark detects
-            //  compression independent of schema-inference.
             Some(schema) if !schema.fields().is_empty() => {
+                // Detect compression from the actual files so e.g.
+                // `data.csv.gz` plus an explicit schema works without
+                // `option("compression", "gzip")`.
+                crate::listing::detect_listing_compression(
+                    ctx,
+                    &urls,
+                    &mut listing_options,
+                    &extension_with_compression,
+                    &options,
+                    self,
+                )
+                .await?;
                 let (partition_by, schema) =
                     get_partition_columns_and_file_schema(&schema, partition_by)?;
                 (Arc::new(schema), partition_by)
