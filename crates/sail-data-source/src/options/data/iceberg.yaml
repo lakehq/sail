@@ -119,10 +119,10 @@
         - mergeSchema
       parser: crate::options::parsers::parse_bool
 
-### Spark Read Options Not Yet Implemented ###
+### Iceberg Read Options Not Yet Implemented ###
 
 - key: start_snapshot_id
-  description: "Spark Iceberg read option: start snapshot id for incremental scans."
+  description: Start snapshot id for incremental scans.
   supported: false
   rust_type: "Option<i64>"
   scopes: [read]
@@ -132,7 +132,7 @@
       parser: crate::options::parsers::parse_optional_i64
 
 - key: end_snapshot_id
-  description: "Spark Iceberg read option: end snapshot id for incremental scans."
+  description: End snapshot id for incremental scans.
   supported: false
   rust_type: "Option<i64>"
   scopes: [read]
@@ -142,7 +142,7 @@
       parser: crate::options::parsers::parse_optional_i64
 
 - key: start_timestamp
-  description: "Spark Iceberg read option: start timestamp for incremental scans."
+  description: Start timestamp for incremental scans.
   supported: false
   rust_type: "Option<String>"
   scopes: [read]
@@ -152,7 +152,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: end_timestamp
-  description: "Spark Iceberg read option: end timestamp for incremental scans."
+  description: End timestamp for incremental scans.
   supported: false
   rust_type: "Option<String>"
   scopes: [read]
@@ -162,7 +162,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: as_of_timestamp
-  description: "Spark Iceberg read option: timestamp in milliseconds for time travel."
+  description: Timestamp in milliseconds for time travel.
   supported: false
   rust_type: "Option<i64>"
   scopes: [read]
@@ -172,7 +172,7 @@
       parser: crate::options::parsers::parse_optional_i64
 
 - key: split_size
-  description: Spark Iceberg read option overriding read split target size.
+  description: Override the read split target size.
   supported: false
   rust_type: "Option<u64>"
   scopes: [read]
@@ -182,7 +182,7 @@
       parser: crate::options::parsers::parse_optional_u64
 
 - key: lookback
-  description: Spark Iceberg read option overriding split planning lookback.
+  description: Override split planning lookback.
   supported: false
   rust_type: "Option<usize>"
   scopes: [read]
@@ -192,7 +192,7 @@
       parser: crate::options::parsers::parse_optional_usize
 
 - key: file_open_cost
-  description: Spark Iceberg read option overriding split open file cost.
+  description: Override split open file cost.
   supported: false
   rust_type: "Option<u64>"
   scopes: [read]
@@ -202,7 +202,7 @@
       parser: crate::options::parsers::parse_optional_u64
 
 - key: vectorization_enabled
-  description: Spark Iceberg read option controlling vectorized reads.
+  description: Control vectorized reads.
   supported: false
   rust_type: "Option<bool>"
   scopes: [read]
@@ -212,7 +212,7 @@
       parser: crate::options::parsers::parse_optional_bool
 
 - key: vectorization_batch_size
-  description: Spark Iceberg read option overriding vectorized reader batch size.
+  description: Override vectorized reader batch size.
   supported: false
   rust_type: "Option<usize>"
   scopes: [read]
@@ -222,7 +222,7 @@
       parser: crate::options::parsers::parse_optional_usize
 
 - key: scan_task_set_id
-  description: Spark Iceberg read option for fetching a planned scan task set.
+  description: Fetch a planned scan task set by id.
   supported: false
   rust_type: "Option<String>"
   scopes: [read]
@@ -232,7 +232,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: streaming_skip_delete_snapshots
-  description: Spark Iceberg streaming read option for skipping delete snapshots.
+  description: Skip delete snapshots in streaming reads.
   supported: false
   rust_type: bool
   scopes: [read]
@@ -242,7 +242,7 @@
       parser: crate::options::parsers::parse_bool
 
 - key: streaming_skip_overwrite_snapshots
-  description: Spark Iceberg streaming read option for skipping overwrite snapshots.
+  description: Skip overwrite snapshots in streaming reads.
   supported: false
   rust_type: bool
   scopes: [read]
@@ -252,7 +252,7 @@
       parser: crate::options::parsers::parse_bool
 
 - key: locality
-  description: Spark Iceberg read option controlling locality reporting.
+  description: Control locality reporting.
   supported: false
   rust_type: "Option<bool>"
   scopes: [read]
@@ -262,7 +262,7 @@
       parser: crate::options::parsers::parse_optional_bool
 
 - key: stream_from_timestamp
-  description: Spark Iceberg streaming read option for the starting timestamp.
+  description: Starting timestamp for streaming reads.
   supported: false
   rust_type: "Option<String>"
   scopes: [read]
@@ -272,7 +272,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: streaming_max_files_per_micro_batch
-  description: Spark Iceberg streaming read option limiting files per micro-batch.
+  description: Limit files per streaming micro-batch.
   supported: false
   rust_type: "Option<usize>"
   scopes: [read]
@@ -282,7 +282,7 @@
       parser: crate::options::parsers::parse_optional_usize
 
 - key: streaming_max_rows_per_micro_batch
-  description: Spark Iceberg streaming read option limiting rows per micro-batch.
+  description: Limit rows per streaming micro-batch.
   supported: false
   rust_type: "Option<usize>"
   scopes: [read]
@@ -292,7 +292,7 @@
       parser: crate::options::parsers::parse_optional_usize
 
 - key: async_micro_batch_planning_enabled
-  description: Spark Iceberg streaming read option enabling async micro-batch planning.
+  description: Enable async streaming micro-batch planning.
   supported: false
   rust_type: bool
   scopes: [read]
@@ -302,7 +302,7 @@
       parser: crate::options::parsers::parse_bool
 
 - key: streaming_snapshot_polling_interval_ms
-  description: Spark Iceberg streaming read option for snapshot polling interval.
+  description: Snapshot polling interval for streaming reads.
   supported: false
   rust_type: "Option<u64>"
   scopes: [read]
@@ -312,7 +312,7 @@
       parser: crate::options::parsers::parse_optional_u64
 
 - key: async_queue_preload_file_limit
-  description: Spark Iceberg streaming read option limiting async preload files.
+  description: Limit async preload files for streaming reads.
   supported: false
   rust_type: "Option<usize>"
   scopes: [read]
@@ -322,7 +322,7 @@
       parser: crate::options::parsers::parse_optional_usize
 
 - key: async_queue_preload_row_limit
-  description: Spark Iceberg streaming read option limiting async preload rows.
+  description: Limit async preload rows for streaming reads.
   supported: false
   rust_type: "Option<usize>"
   scopes: [read]
@@ -332,7 +332,7 @@
       parser: crate::options::parsers::parse_optional_usize
 
 - key: aggregate_push_down_enabled
-  description: Spark Iceberg read option controlling aggregate pushdown.
+  description: Control aggregate pushdown.
   supported: false
   rust_type: bool
   scopes: [read]
@@ -341,10 +341,10 @@
       keys: [aggregate-push-down-enabled]
       parser: crate::options::parsers::parse_bool
 
-### Spark Write Options Not Yet Implemented ###
+### Iceberg Write Options Not Yet Implemented ###
 
 - key: write_branch
-  description: Spark Iceberg write option selecting a branch for writes.
+  description: Select a branch for writes.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -354,7 +354,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: write_format
-  description: Spark Iceberg write option overriding the file format.
+  description: Override the write file format.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -364,7 +364,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: target_file_size_bytes
-  description: Spark Iceberg write option overriding data file target size.
+  description: Override data file target size.
   supported: false
   rust_type: "Option<u64>"
   scopes: [write]
@@ -374,7 +374,7 @@
       parser: crate::options::parsers::parse_optional_u64
 
 - key: delete_format
-  description: Spark Iceberg write option overriding delete file format.
+  description: Override delete file format.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -384,7 +384,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: target_delete_file_size_bytes
-  description: Spark Iceberg write option overriding delete file target size.
+  description: Override delete file target size.
   supported: false
   rust_type: "Option<u64>"
   scopes: [write]
@@ -394,7 +394,7 @@
       parser: crate::options::parsers::parse_optional_u64
 
 - key: check_nullability
-  description: Spark Iceberg write option controlling nullability checks.
+  description: Control nullability checks.
   supported: false
   rust_type: bool
   scopes: [write]
@@ -404,7 +404,7 @@
       parser: crate::options::parsers::parse_bool
 
 - key: snapshot_property
-  description: Spark Iceberg write option prefix for custom snapshot summary properties.
+  description: Prefix for custom snapshot summary properties.
   supported: false
   rust_type: String
   scopes: [write]
@@ -414,7 +414,7 @@
       parser: crate::options::parsers::parse_string
 
 - key: fanout_enabled
-  description: Spark Iceberg write option overriding partitioned fanout.
+  description: Override partitioned fanout behavior.
   supported: false
   rust_type: bool
   scopes: [write]
@@ -424,7 +424,7 @@
       parser: crate::options::parsers::parse_bool
 
 - key: check_ordering
-  description: Spark Iceberg write option controlling field order checks.
+  description: Control field order checks.
   supported: false
   rust_type: bool
   scopes: [write]
@@ -434,7 +434,7 @@
       parser: crate::options::parsers::parse_bool
 
 - key: rewritten_file_scan_task_set_id
-  description: Spark Iceberg write option identifying files to replace.
+  description: Identify files to replace.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -444,7 +444,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: output_spec_id
-  description: Spark Iceberg write option overriding output partition spec id.
+  description: Override output partition spec id.
   supported: false
   rust_type: "Option<i64>"
   scopes: [write]
@@ -454,7 +454,7 @@
       parser: crate::options::parsers::parse_optional_i64
 
 - key: output_sort_order_id
-  description: Spark Iceberg write option overriding output sort order id.
+  description: Override output sort order id.
   supported: false
   rust_type: "Option<i64>"
   scopes: [write]
@@ -464,7 +464,7 @@
       parser: crate::options::parsers::parse_optional_i64
 
 - key: overwrite_mode
-  description: Spark Iceberg write option selecting overwrite mode.
+  description: Select overwrite mode.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -474,7 +474,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: distribution_mode
-  description: Spark Iceberg write option overriding write distribution mode.
+  description: Override write distribution mode.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -484,7 +484,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: use_table_distribution_and_ordering
-  description: Spark Iceberg write option controlling table distribution and ordering use.
+  description: Control whether table distribution and ordering are used for writes.
   supported: false
   rust_type: bool
   scopes: [write]
@@ -494,7 +494,7 @@
       parser: crate::options::parsers::parse_bool
 
 - key: validate_from_snapshot_id
-  description: Spark Iceberg write option selecting snapshot validation start point.
+  description: Select the snapshot validation start point.
   supported: false
   rust_type: "Option<i64>"
   scopes: [write]
@@ -504,7 +504,7 @@
       parser: crate::options::parsers::parse_optional_i64
 
 - key: isolation_level
-  description: Spark Iceberg write option selecting isolation level.
+  description: Select isolation level.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -514,7 +514,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: compression_codec
-  description: Spark Iceberg write option overriding compression codec.
+  description: Override compression codec.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -524,7 +524,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: compression_level
-  description: Spark Iceberg write option overriding compression level.
+  description: Override compression level.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -534,7 +534,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: compression_strategy
-  description: Spark Iceberg write option overriding compression strategy.
+  description: Override compression strategy.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -544,7 +544,7 @@
       parser: crate::options::parsers::parse_optional_string
 
 - key: advisory_partition_size
-  description: Spark Iceberg write option overriding advisory partition size.
+  description: Override advisory partition size.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -553,8 +553,8 @@
       keys: [advisory-partition-size]
       parser: crate::options::parsers::parse_optional_string
 
-- key: spark_delete_granularity
-  description: Spark Iceberg write option overriding delete granularity.
+- key: delete_granularity
+  description: Override delete granularity.
   supported: false
   rust_type: "Option<String>"
   scopes: [write]
@@ -1078,8 +1078,8 @@
       case_sensitive: true
       parser: crate::options::parsers::parse_u64
 
-- key: write_spark_properties
-  description: Iceberg table properties controlling Spark-specific write behavior.
+- key: write_engine_properties
+  description: Iceberg table properties controlling engine-specific write behavior.
   supported: false
   rust_type: String
   scopes: [write]
