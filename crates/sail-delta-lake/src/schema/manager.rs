@@ -295,8 +295,8 @@ mod tests {
         validate_row_tracking_materialized_column_names,
     };
     use crate::spec::{
-        ColumnMappingMode, DataType, DeltaResult, MetadataValue, StructField, StructType,
-        TableFeature,
+        ColumnMappingMode, DataType, DeltaError as DeltaTableError, DeltaResult, MetadataValue,
+        StructField, StructType, TableFeature,
     };
 
     #[test]
@@ -521,9 +521,18 @@ mod tests {
             "_row-commit-version-col-test".to_string(),
         );
 
-        let err =
-            validate_row_tracking_materialized_column_names(&schema, &cfg, ColumnMappingMode::None)
-                .unwrap_err();
+        let err = match validate_row_tracking_materialized_column_names(
+            &schema,
+            &cfg,
+            ColumnMappingMode::None,
+        ) {
+            Ok(()) => {
+                return Err(DeltaTableError::generic(
+                    "expected materialized row ID column name conflict",
+                ));
+            }
+            Err(err) => err,
+        };
         assert!(err.to_string().contains("conflicts with table column"));
         Ok(())
     }
@@ -545,9 +554,18 @@ mod tests {
             "_row-commit-version-col-test".to_string(),
         );
 
-        let err =
-            validate_row_tracking_materialized_column_names(&schema, &cfg, ColumnMappingMode::Name)
-                .unwrap_err();
+        let err = match validate_row_tracking_materialized_column_names(
+            &schema,
+            &cfg,
+            ColumnMappingMode::Name,
+        ) {
+            Ok(()) => {
+                return Err(DeltaTableError::generic(
+                    "expected materialized row ID physical column name conflict",
+                ));
+            }
+            Err(err) => err,
+        };
         assert!(err
             .to_string()
             .contains("conflicts with physical column name"));

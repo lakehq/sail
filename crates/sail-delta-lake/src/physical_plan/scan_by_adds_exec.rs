@@ -61,6 +61,18 @@ struct RowTrackingMaterializedColumns {
     row_commit_version: String,
 }
 
+struct BulkScanParams<'a> {
+    snapshot: &'a DeltaSnapshot,
+    log_store: &'a LogStoreRef,
+    session_state: &'a dyn datafusion::catalog::Session,
+    adds: &'a [crate::spec::Add],
+    file_schema: SchemaRef,
+    logical_names: &'a [String],
+    partition_columns: &'a [String],
+    materialized_columns: Option<&'a RowTrackingMaterializedColumns>,
+    disable_row_filtering: bool,
+}
+
 struct ScanByAddsStreamState {
     input: SendableRecordBatchStream,
     context: Arc<TaskContext>,
@@ -340,17 +352,17 @@ impl ScanByAddsStreamState {
                 };
 
             for (add, maybe_bitmap) in adds.iter().zip(bitmaps) {
-                let file_streams = self.build_bulk_scan(
+                let file_streams = self.build_bulk_scan(BulkScanParams {
                     snapshot,
                     log_store,
                     session_state,
-                    std::slice::from_ref(add),
-                    metadata_file_schema.clone(),
-                    &logical_names,
-                    &partition_columns,
-                    materialized_columns.as_ref(),
-                    maybe_bitmap.is_some(),
-                )?;
+                    adds: std::slice::from_ref(add),
+                    file_schema: metadata_file_schema.clone(),
+                    logical_names: &logical_names,
+                    partition_columns: &partition_columns,
+                    materialized_columns: materialized_columns.as_ref(),
+                    disable_row_filtering: maybe_bitmap.is_some(),
+                })?;
 
                 let maybe_bitmap = maybe_bitmap.map(Arc::new);
                 for mut inner in file_streams {
@@ -396,17 +408,17 @@ impl ScanByAddsStreamState {
             .partition(|a| a.deletion_vector.is_some() || wants_metadata);
 
         if !plain_adds.is_empty() {
-            let streams = self.build_bulk_scan(
+            let streams = self.build_bulk_scan(BulkScanParams {
                 snapshot,
                 log_store,
                 session_state,
-                &plain_adds,
-                file_schema.clone(),
-                &logical_names,
-                &partition_columns,
-                None,
-                false,
-            )?;
+                adds: &plain_adds,
+                file_schema: file_schema.clone(),
+                logical_names: &logical_names,
+                partition_columns: &partition_columns,
+                materialized_columns: None,
+                disable_row_filtering: false,
+            })?;
             all_streams.extend(streams);
         }
 
@@ -442,17 +454,17 @@ impl ScanByAddsStreamState {
             let bitmaps = futures::future::try_join_all(bitmap_futures).await?;
 
             for (add, bitmap) in per_file_adds.iter().zip(bitmaps) {
-                let file_streams = self.build_bulk_scan(
+                let file_streams = self.build_bulk_scan(BulkScanParams {
                     snapshot,
                     log_store,
                     session_state,
-                    std::slice::from_ref(add),
-                    metadata_file_schema.clone(),
-                    &logical_names,
-                    &partition_columns,
-                    materialized_columns.as_ref(),
-                    bitmap.is_some(),
-                )?;
+                    adds: std::slice::from_ref(add),
+                    file_schema: metadata_file_schema.clone(),
+                    logical_names: &logical_names,
+                    partition_columns: &partition_columns,
+                    materialized_columns: materialized_columns.as_ref(),
+                    disable_row_filtering: bitmap.is_some(),
+                })?;
 
                 let bitmap = bitmap.map(Arc::new);
                 for mut inner in file_streams {
@@ -554,15 +566,7 @@ impl ScanByAddsStreamState {
 
     fn build_bulk_scan(
         &self,
-        snapshot: &DeltaSnapshot,
-        log_store: &LogStoreRef,
-        session_state: &dyn datafusion::catalog::Session,
-        adds: &[crate::spec::Add],
-        file_schema: SchemaRef,
-        logical_names: &[String],
-        partition_columns: &[String],
-        materialized_columns: Option<&RowTrackingMaterializedColumns>,
-        disable_row_filtering: bool,
+        params: BulkScanParams<'_>,
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let wants_metadata = self.output_schema_has_row_tracking_metadata();
         let inner_projection = if wants_metadata {
@@ -573,13 +577,13 @@ impl ScanByAddsStreamState {
         let inner_logical_names_vec;
         let inner_logical_names: &[String] = if wants_metadata {
             inner_logical_names_vec = self.inner_logical_names_for_metadata_scan(
-                logical_names,
-                partition_columns,
-                materialized_columns,
+                params.logical_names,
+                params.partition_columns,
+                params.materialized_columns,
             );
             &inner_logical_names_vec
         } else {
-            logical_names
+            params.logical_names
         };
 
         let mut scan_config = self.scan_config.clone();
@@ -608,16 +612,16 @@ impl ScanByAddsStreamState {
                 .collect::<Vec<_>>(),
             None => inner_logical_names.to_vec(),
         };
-        let pushdown_filter = if wants_metadata || disable_row_filtering {
+        let pushdown_filter = if wants_metadata || params.disable_row_filtering {
             None
         } else {
             self.pushdown_filter.clone()
         };
 
         let file_scan_config = build_file_scan_config(
-            snapshot,
-            log_store,
-            adds,
+            params.snapshot,
+            params.log_store,
+            params.adds,
             &scan_config,
             FileScanParams {
                 pruning_mask: None,
@@ -627,8 +631,8 @@ impl ScanByAddsStreamState {
                 sort_order: None,
                 table_stats_mode: TableStatsMode::AddsOnly,
             },
-            session_state,
-            file_schema,
+            params.session_state,
+            params.file_schema,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
