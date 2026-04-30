@@ -309,7 +309,11 @@ impl CatalogProvider for MemoryCatalogProvider {
             .get_mut(table)
             .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.to_string()))?;
         match &mut status.kind {
-            TableKind::Table { properties, .. } => match options {
+            TableKind::Table {
+                location,
+                properties,
+                ..
+            } => match options {
                 AlterTableOptions::SetTableProperties {
                     properties: new_props,
                 } => {
@@ -333,6 +337,10 @@ impl CatalogProvider for MemoryCatalogProvider {
                         }
                         properties.retain(|(k, _)| k != key);
                     }
+                    Ok(())
+                }
+                AlterTableOptions::SetLocation { location: value } => {
+                    *location = Some(value);
                     Ok(())
                 }
             },

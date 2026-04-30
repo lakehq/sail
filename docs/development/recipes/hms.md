@@ -387,6 +387,58 @@ Consequence: Reference Spark reconstructs `storage.locationUri` and reads the
 Sail-written files through HMS. Sail still filters raw `spark.sql.*` metadata
 and raw `EXTERNAL` metadata from user-visible table properties.
 
+Decision: Alter-table interop should validate Spark's data-source table
+metadata rewrite path by changing non-location table properties and then
+re-reading the table from the other engine.
+
+Rationale: Spark's `HiveExternalCatalog.alterTable` re-adds the internal
+storage property `path`, preserves the old HMS storage location when the
+logical data location has not changed, and carries old `spark.sql.sources.*`
+metadata forward. The externally visible contract for Sail is that provider,
+location, table type, and row readability survive non-location alter-table
+operations.
+
+Decision: `ALTER TABLE ... SET LOCATION` must update both the HMS storage
+descriptor location and Spark's data-source `path` storage property.
+
+Rationale: Spark's HMS restore path treats `path` as the logical scan location
+for data-source tables. Updating only the HMS storage descriptor can leave Spark
+or Sail reconstructing the old path. The interop tests now verify Spark-to-Sail
+and Sail-to-Spark alter-location roundtrips by inserting an old row, changing
+location, inserting a new row, and requiring the other engine to see only the
+new row at the restored location.
+
+Decision: Sail writes to partitioned generic HMS tables should perform a
+post-write partition recovery step for identity partition directories.
+
+Rationale: Spark data-source tables expose dynamic partitions through HMS after
+write. Sail's generic Parquet writer materializes Spark-compatible partition
+directories, but HMS clients also need partition objects with raw logical values
+and partition locations. The post-write recovery scans partition directories
+after the data write completes and registers missing HMS partitions with
+`ignore_if_exists`, preserving idempotent append behavior.
+
+Decision: Partition recovery should discover directories through the configured
+object-store registry for non-file URI table locations, with local filesystem
+scanning reserved for bare local and `file:` paths.
+
+Rationale: HMS table locations are not guaranteed to be local paths. Spark's
+interop contract is the partition metadata visible through HMS, so recovery
+must not silently skip `s3://`, `abfs://`, `gs://`, or another registered object
+store just because it is not representable as a local path. A focused Rust test
+uses an in-memory object store to validate Spark-style escaped partition
+prefixes, raw logical partition values, and escaped partition locations without
+paying for the full HMS/Spark harness.
+
+Decision: HMS schema conversion preserves Spark timestamp LTZ and NTZ metadata
+when Spark's data-source schema JSON is available.
+
+Rationale: Spark stores both Hive column type strings and data-source schema
+JSON. Hive's `timestamp` type alone cannot distinguish LTZ from NTZ, so Sail
+uses Spark's JSON metadata to restore `timestamp` versus `timestamp_ntz`, and
+writes the same distinction for Spark to restore Sail-created tables. The
+interop tests validate schema shape and string-cast values in both directions.
+
 ## Interop Validation Backlog
 
 Keep non-location HMS/Spark discrepancies visible here until they are either
@@ -403,8 +455,27 @@ covered by focused tests or intentionally deferred.
 - Schema and format restoration: Spark-created and Sail-created tables should
   agree on provider, column names, column types, and nullability for supported
   types.
-- Partition metadata: partition columns, partition directory escaping, and
-  partition locations still need cross-engine read/write coverage.
+- Timestamp schema restoration: Spark-created and Sail-created `TIMESTAMP` and
+  `TIMESTAMP_NTZ` columns are covered in both directions. The contract is schema
+  restoration and stable string-cast values, not a full time-zone semantics
+  matrix.
+- Partition metadata: partition columns, HMS partition entries, and partition
+  locations are covered for space-containing and slash-containing values in
+  Spark-to-Sail and Sail-to-Spark partitioned Parquet interop.
+- Partition value escaping: Spark writes slash-containing partition values as
+  percent-escaped path segments (for example `region=a%2Fb`) and restores the
+  logical value as `a/b`. Sail-created HMS metadata now registers raw logical
+  partition values with escaped locations so reference Spark restores `a/b`,
+  and Sail decodes Spark/Hive escaped listing partition path segments before
+  exposing row values or evaluating filters.
+- Object-store partition recovery: non-file URI partition discovery is covered
+  by a focused Rust object-store test. The live HMS/Spark Python harness still
+  uses local Docker-visible paths, so S3/ABFS/GCS credential and service
+  compatibility remains a separate environment matrix rather than assumed from
+  this suite.
+- Alter-location behavior: Spark-to-Sail and Sail-to-Spark tests cover
+  `ALTER TABLE ... SET LOCATION` by checking restored location metadata and
+  readability of the new path only.
 - Database semantics: relative database `LOCATION` and relative table
   `LOCATION` should continue matching Spark's warehouse/database qualification
   behavior.

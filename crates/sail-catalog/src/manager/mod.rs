@@ -12,6 +12,7 @@ use crate::temp_view::TemporaryViewManager;
 pub mod catalog;
 pub mod database;
 pub mod function;
+pub mod partition;
 pub mod table;
 pub mod tracker;
 pub mod view;

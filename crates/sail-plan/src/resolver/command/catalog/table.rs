@@ -419,6 +419,9 @@ impl PlanResolver<'_> {
             spec::AlterTableOperation::UnsetTableProperties { keys, if_exists } => {
                 AlterTableOptions::UnsetTableProperties { keys, if_exists }
             }
+            spec::AlterTableOperation::SetLocation { location } => {
+                AlterTableOptions::SetLocation { location }
+            }
             spec::AlterTableOperation::Unknown => {
                 return Err(PlanError::todo("unsupported ALTER TABLE operation"));
             }

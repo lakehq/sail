@@ -1920,6 +1920,11 @@ fn from_ast_alter_table_operation(
                 if_exists: if_exists.is_some(),
             })
         }
+        AlterTableOperation::SetLocation { value, .. } => {
+            Ok(spec::AlterTableOperation::SetLocation {
+                location: from_ast_string(value)?,
+            })
+        }
         AlterTableOperation::RenameTable { .. }
         | AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::DropColumns { .. }
@@ -1928,7 +1933,6 @@ fn from_ast_alter_table_operation(
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
-        | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
         AlterTableOperation::AddColumns { items, .. }
         | AlterTableOperation::ReplaceColumns { items, .. } => {

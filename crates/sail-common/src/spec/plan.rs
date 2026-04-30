@@ -1301,6 +1301,7 @@ pub enum AlterTableOperation {
     Unknown,
     SetTableProperties { properties: Vec<(String, String)> },
     UnsetTableProperties { keys: Vec<String>, if_exists: bool },
+    SetLocation { location: String },
     // TODO: add all the alter table operations
 }
 

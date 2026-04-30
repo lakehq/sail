@@ -162,6 +162,7 @@ pub struct DropTemporaryViewOptions {
 pub enum AlterTableOptions {
     SetTableProperties { properties: Vec<(String, String)> },
     UnsetTableProperties { keys: Vec<String>, if_exists: bool },
+    SetLocation { location: String },
 }
 
 #[cfg(test)]

@@ -1,18 +1,27 @@
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::runtime_env::RuntimeEnv;
+use object_store::path::Path as ObjectStorePath;
+use object_store::ObjectStore;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::datasource::TableFormatRegistry;
+use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::datasource::{is_lakehouse_format, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    AlterTableOptions, CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
-    DropViewOptions,
+    AlterTableOptions, CreateDatabaseOptions, CreatePartitionsOptions, CreateTableOptions,
+    CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropTemporaryViewOptions, DropViewOptions, GetPartitionsOptions, PartitionStatus,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
@@ -81,6 +90,9 @@ pub enum CatalogCommand {
         table: Vec<String>,
         if_exists: bool,
         options: AlterTableOptions,
+    },
+    RecoverPartitions {
+        table: Vec<String>,
     },
     ListColumns {
         table: Vec<String>,
@@ -165,6 +177,7 @@ impl CatalogCommand {
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
             CatalogCommand::AlterTable { .. } => "AlterTable",
+            CatalogCommand::RecoverPartitions { .. } => "RecoverPartitions",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
@@ -225,6 +238,7 @@ impl CatalogCommand {
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::AlterTable { .. }
+            | CatalogCommand::RecoverPartitions { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
             | CatalogCommand::DropView { .. } => display.bools().schema()?,
@@ -395,37 +409,46 @@ impl CatalogCommand {
                 // update the catalog metadata, so we never end up with the two layers
                 // out of sync.
                 if let (Some(location), Some(format)) = (location, format) {
-                    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
-                        CatalogError::External(format!(
-                            "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
-                        ))
-                    })?;
-                    let table_format = registry.get(&format).map_err(|e| {
-                        CatalogError::External(format!(
-                            "unknown table format '{format}' for storage-backed ALTER TABLE: {e}"
-                        ))
-                    })?;
-                    let runtime = ctx.runtime_env();
-                    let (changes, if_exists_flag) = match &options {
-                        AlterTableOptions::SetTableProperties { properties } => (
-                            properties
-                                .iter()
-                                .map(|(k, v)| (k.clone(), Some(v.clone())))
-                                .collect::<Vec<_>>(),
-                            false,
-                        ),
-                        AlterTableOptions::UnsetTableProperties { keys, if_exists } => (
-                            keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>(),
-                            *if_exists,
-                        ),
-                    };
-                    table_format
-                        .alter_table_properties(runtime, &location, changes, if_exists_flag)
-                        .await
-                        .map_err(|e| CatalogError::External(e.to_string()))?;
+                    if is_lakehouse_format(&format) {
+                        let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                            CatalogError::External(format!(
+                                "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
+                            ))
+                        })?;
+                        let table_format = registry.get(&format).map_err(|e| {
+                            CatalogError::External(format!(
+                                "unknown table format '{format}' for storage-backed ALTER TABLE: {e}"
+                            ))
+                        })?;
+                        let runtime = ctx.runtime_env();
+                        let (changes, if_exists_flag) = match &options {
+                            AlterTableOptions::SetTableProperties { properties } => (
+                                properties
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), Some(v.clone())))
+                                    .collect::<Vec<_>>(),
+                                false,
+                            ),
+                            AlterTableOptions::UnsetTableProperties { keys, if_exists } => (
+                                keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>(),
+                                *if_exists,
+                            ),
+                            AlterTableOptions::SetLocation { .. } => (vec![], false),
+                        };
+                        if !changes.is_empty() {
+                            table_format
+                                .alter_table_properties(runtime, &location, changes, if_exists_flag)
+                                .await
+                                .map_err(|e| CatalogError::External(e.to_string()))?;
+                        }
+                    }
                 }
 
                 manager.alter_table(&table, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::RecoverPartitions { table } => {
+                recover_table_partitions(ctx, manager, &table).await?;
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::ListColumns { table } => {
@@ -608,6 +631,353 @@ impl CatalogCommand {
     }
 }
 
+async fn recover_table_partitions<C: SessionExtensionAccessor>(
+    ctx: &C,
+    manager: &CatalogManager,
+    table: &[String],
+) -> CatalogResult<()> {
+    let table_status = manager.get_table(table).await?;
+    let (location, partition_columns) = match table_status.kind {
+        TableKind::Table {
+            location: Some(location),
+            partition_by,
+            ..
+        } if !partition_by.is_empty() => (
+            location,
+            partition_by
+                .into_iter()
+                .map(|field| field.column)
+                .collect::<Vec<_>>(),
+        ),
+        _ => return Ok(()),
+    };
+    let discovered = if let Some((store, root)) =
+        object_store_root_from_table_location(ctx.runtime_env().as_ref(), &location)?
+    {
+        discover_object_store_partition_directories(
+            store.as_ref(),
+            &root,
+            &location,
+            &partition_columns,
+        )
+        .await?
+    } else if let Some(root) = local_path_from_table_location(&location) {
+        discover_partition_directories(&root, &location, &partition_columns)?
+    } else {
+        return Ok(());
+    };
+    if discovered.is_empty() {
+        return Ok(());
+    }
+
+    let existing_partitions = match manager
+        .get_partitions(table, GetPartitionsOptions::default())
+        .await
+    {
+        Ok(partitions) => partitions,
+        Err(CatalogError::NotSupported(_)) => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let existing = existing_partitions
+        .into_iter()
+        .map(|partition| canonical_partition_key(&partition.spec, &partition_columns))
+        .collect::<CatalogResult<HashSet<_>>>()?;
+    let partitions = discovered
+        .into_iter()
+        .filter_map(|partition| {
+            let key = canonical_partition_key(&partition.spec, &partition_columns).ok()?;
+            (!existing.contains(&key)).then_some(partition)
+        })
+        .collect::<Vec<_>>();
+    if partitions.is_empty() {
+        return Ok(());
+    }
+
+    match manager
+        .create_partitions(
+            table,
+            partitions,
+            CreatePartitionsOptions {
+                ignore_if_exists: true,
+            },
+        )
+        .await
+    {
+        Ok(()) | Err(CatalogError::NotSupported(_)) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn object_store_root_from_table_location(
+    runtime: &RuntimeEnv,
+    location: &str,
+) -> CatalogResult<Option<(Arc<dyn ObjectStore>, ObjectStorePath)>> {
+    if location.starts_with("file:") || !location.contains("://") {
+        return Ok(None);
+    }
+    let url = Url::parse(location)
+        .map_err(|e| CatalogError::External(format!("Invalid table location '{location}': {e}")))?;
+    let store = runtime.object_store(UrlRef(&url)).map_err(|e| {
+        CatalogError::External(format!(
+            "Failed to resolve object store for table location '{location}': {e}"
+        ))
+    })?;
+    let root = ObjectStorePath::from_url_path(url.path()).map_err(|e| {
+        CatalogError::External(format!(
+            "Invalid object store path for table location '{location}': {e}"
+        ))
+    })?;
+    Ok(Some((store, root)))
+}
+
+struct UrlRef<'a>(&'a Url);
+
+impl AsRef<Url> for UrlRef<'_> {
+    fn as_ref(&self) -> &Url {
+        self.0
+    }
+}
+
+async fn discover_object_store_partition_directories(
+    store: &dyn ObjectStore,
+    root: &ObjectStorePath,
+    table_location: &str,
+    partition_columns: &[String],
+) -> CatalogResult<Vec<PartitionStatus>> {
+    let mut partitions = Vec::new();
+    let mut stack = vec![(root.clone(), Vec::new())];
+    let table_location = table_location.trim_end_matches('/');
+
+    while let Some((dir, spec)) = stack.pop() {
+        if spec.len() == partition_columns.len() {
+            partitions.push(PartitionStatus {
+                spec,
+                location: Some(format!(
+                    "{}/{}",
+                    table_location,
+                    relative_object_store_partition_location(&dir, root)?
+                )),
+                parameters: HashMap::new(),
+                create_time: None,
+                last_access_time: None,
+                statistics: None,
+            });
+            continue;
+        }
+
+        let expected_column = &partition_columns[spec.len()];
+        let listing = store.list_with_delimiter(Some(&dir)).await.map_err(|e| {
+            CatalogError::External(format!(
+                "Failed to list partition directory '{}': {e}",
+                dir.as_ref()
+            ))
+        })?;
+        for child in listing.common_prefixes {
+            let Some(segment) = child.filename() else {
+                continue;
+            };
+            let Some((column, value)) = segment.split_once('=') else {
+                continue;
+            };
+            if !column.eq_ignore_ascii_case(expected_column) {
+                continue;
+            }
+            let mut spec = spec.clone();
+            spec.push((
+                expected_column.clone(),
+                unescape_partition_path_name(value)?,
+            ));
+            stack.push((child, spec));
+        }
+    }
+
+    Ok(partitions)
+}
+
+fn relative_object_store_partition_location(
+    dir: &ObjectStorePath,
+    root: &ObjectStorePath,
+) -> CatalogResult<String> {
+    let segments = dir
+        .prefix_match(root)
+        .ok_or_else(|| {
+            CatalogError::External(format!(
+                "Partition directory '{}' is not under table location '{}'",
+                dir.as_ref(),
+                root.as_ref()
+            ))
+        })?
+        .map(|part| part.as_ref().to_string())
+        .collect::<Vec<_>>();
+    Ok(segments.join("/"))
+}
+
+fn discover_partition_directories(
+    root: &Path,
+    table_location: &str,
+    partition_columns: &[String],
+) -> CatalogResult<Vec<PartitionStatus>> {
+    let mut partitions = Vec::new();
+    discover_partition_directories_inner(
+        root,
+        table_location.trim_end_matches('/'),
+        partition_columns,
+        Vec::new(),
+        &mut partitions,
+    )?;
+    Ok(partitions)
+}
+
+fn discover_partition_directories_inner(
+    dir: &Path,
+    table_location: &str,
+    partition_columns: &[String],
+    spec: Vec<(String, String)>,
+    partitions: &mut Vec<PartitionStatus>,
+) -> CatalogResult<()> {
+    if spec.len() == partition_columns.len() {
+        partitions.push(PartitionStatus {
+            spec,
+            location: Some(format!(
+                "{}/{}",
+                table_location,
+                relative_partition_location(dir, partition_columns.len())?
+            )),
+            parameters: HashMap::new(),
+            create_time: None,
+            last_access_time: None,
+            statistics: None,
+        });
+        return Ok(());
+    }
+
+    let expected_column = &partition_columns[spec.len()];
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        CatalogError::External(format!(
+            "Failed to list partition directory '{}': {e}",
+            dir.display()
+        ))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            CatalogError::External(format!(
+                "Failed to read partition directory entry '{}': {e}",
+                dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(segment) = path.file_name().and_then(|x| x.to_str()) else {
+            continue;
+        };
+        let Some((column, value)) = segment.split_once('=') else {
+            continue;
+        };
+        if !column.eq_ignore_ascii_case(expected_column) {
+            continue;
+        }
+        let mut spec = spec.clone();
+        spec.push((
+            expected_column.clone(),
+            unescape_partition_path_name(value)?,
+        ));
+        discover_partition_directories_inner(
+            &path,
+            table_location,
+            partition_columns,
+            spec,
+            partitions,
+        )?;
+    }
+    Ok(())
+}
+
+fn relative_partition_location(dir: &Path, partition_depth: usize) -> CatalogResult<String> {
+    let segments = dir
+        .components()
+        .rev()
+        .take(partition_depth)
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    if segments.len() != partition_depth {
+        return Err(CatalogError::External(format!(
+            "Partition directory '{}' is shallower than partition depth {partition_depth}",
+            dir.display()
+        )));
+    }
+    Ok(segments.into_iter().rev().collect::<Vec<_>>().join("/"))
+}
+
+fn canonical_partition_key(
+    spec: &[(String, String)],
+    partition_columns: &[String],
+) -> CatalogResult<Vec<String>> {
+    partition_columns
+        .iter()
+        .map(|column| {
+            let matches = spec
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case(column))
+                .collect::<Vec<_>>();
+            match matches.as_slice() {
+                [(_, value)] => Ok(value.clone()),
+                [] => Err(CatalogError::External(format!(
+                    "Partition spec is missing column '{column}'"
+                ))),
+                _ => Err(CatalogError::External(format!(
+                    "Partition spec has duplicate column '{column}'"
+                ))),
+            }
+        })
+        .collect()
+}
+
+fn local_path_from_table_location(location: &str) -> Option<PathBuf> {
+    let path = if let Some(path) = location.strip_prefix("file://") {
+        path.strip_prefix("localhost").unwrap_or(path)
+    } else if let Some(path) = location.strip_prefix("file:") {
+        path
+    } else if !location.contains("://") {
+        location
+    } else {
+        return None;
+    };
+    Some(PathBuf::from(path))
+}
+
+fn unescape_partition_path_name(value: &str) -> CatalogResult<String> {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err(CatalogError::External(format!(
+                    "Invalid partition path escape in '{value}'"
+                )));
+            }
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).map_err(|e| {
+                CatalogError::External(format!("Invalid partition path escape in '{value}': {e}"))
+            })?;
+            let byte = u8::from_str_radix(hex, 16).map_err(|e| {
+                CatalogError::External(format!("Invalid partition path escape in '{value}': {e}"))
+            })?;
+            output.push(byte);
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(output).map_err(|e| {
+        CatalogError::External(format!(
+            "Invalid UTF-8 partition path segment '{value}': {e}"
+        ))
+    })
+}
+
 #[derive(Serialize, Deserialize)]
 struct DescribeTableRow {
     col_name: String,
@@ -638,4 +1008,63 @@ struct ShowTableExtendedRow {
     table_name: String,
     is_temporary: bool,
     information: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use object_store::memory::InMemory;
+    use object_store::{ObjectStoreExt, PutPayload};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn discovers_partitions_from_object_store_prefixes() -> CatalogResult<()> {
+        let store = InMemory::new();
+        store
+            .put(
+                &ObjectStorePath::parse("warehouse/table/region=a%2Fb/part-0.parquet")
+                    .map_err(|e| CatalogError::External(e.to_string()))?,
+                PutPayload::from_static(b"one"),
+            )
+            .await
+            .map_err(|e| CatalogError::External(e.to_string()))?;
+        store
+            .put(
+                &ObjectStorePath::parse("warehouse/table/region=north/part-0.parquet")
+                    .map_err(|e| CatalogError::External(e.to_string()))?,
+                PutPayload::from_static(b"two"),
+            )
+            .await
+            .map_err(|e| CatalogError::External(e.to_string()))?;
+
+        let root = ObjectStorePath::parse("warehouse/table")
+            .map_err(|e| CatalogError::External(e.to_string()))?;
+        let mut partitions = discover_object_store_partition_directories(
+            &store,
+            &root,
+            "s3://bucket/warehouse/table",
+            &["region".to_string()],
+        )
+        .await?;
+        partitions.sort_by(|a, b| a.spec.cmp(&b.spec));
+
+        let actual = partitions
+            .into_iter()
+            .map(|partition| (partition.spec, partition.location))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    vec![("region".to_string(), "a/b".to_string())],
+                    Some("s3://bucket/warehouse/table/region=a%2Fb".to_string()),
+                ),
+                (
+                    vec![("region".to_string(), "north".to_string())],
+                    Some("s3://bucket/warehouse/table/region=north".to_string()),
+                ),
+            ]
+        );
+        Ok(())
+    }
 }

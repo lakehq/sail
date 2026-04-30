@@ -320,6 +320,14 @@ fn unwrap_relative_file_uri(location: &str) -> Option<String> {
     Some(path.trim_start_matches("./").to_string())
 }
 
+fn normalize_location_uri_for_hms_write(location: &str) -> String {
+    if location.starts_with("file:///") {
+        format!("file:/{}", location.trim_start_matches("file:///"))
+    } else {
+        location.to_string()
+    }
+}
+
 impl HmsCatalogProvider {
     pub fn new(
         name: String,
@@ -1160,6 +1168,17 @@ impl CatalogProvider for HmsCatalogProvider {
                                 )));
                             }
                         }
+                    }
+                    AlterTableOptions::SetLocation { location } => {
+                        let location = normalize_location_uri_for_hms_write(&location);
+                        let sd = hms_table.sd.get_or_insert_with(Default::default);
+                        sd.location = Some(location.clone().into());
+                        let serde = sd.serde_info.get_or_insert_with(Default::default);
+                        let serde_parameters = serde.parameters.get_or_insert_with(AHashMap::new);
+                        serde_parameters.insert(
+                            FastStr::from_static_str("path"),
+                            FastStr::from_string(location),
+                        );
                     }
                 }
 

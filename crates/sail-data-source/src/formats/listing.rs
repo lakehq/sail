@@ -228,6 +228,10 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // attached in `resolve_listing_urls`). This matches Spark's
         // behavior of reading every non-hidden file in a directory
         // regardless of its extension.
+        let partition_columns_for_decode = partition_by
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
         let listing_options = listing_options
             .with_file_extension("")
             .with_file_sort_order(vec![sort_order])
@@ -248,9 +252,12 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
         let config = crate::listing::rewrite_listing_partitions(config)?;
-        Ok(provider_as_source(Arc::new(
-            ListingTable::try_new(config)?.with_constraints(constraints),
-        )))
+        let provider = Arc::new(ListingTable::try_new(config)?.with_constraints(constraints));
+        let provider = crate::partition_decode::PartitionDecodeTableProvider::try_new(
+            provider,
+            partition_columns_for_decode,
+        )?;
+        Ok(provider_as_source(provider))
     }
 
     async fn create_writer(

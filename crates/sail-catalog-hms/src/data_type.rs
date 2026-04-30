@@ -124,7 +124,11 @@ pub fn hive_type_to_arrow(type_str: &str) -> CatalogResult<DataType> {
         "string" | "varchar" | "char" => Ok(DataType::Utf8),
         "binary" => Ok(DataType::Binary),
         "date" => Ok(DataType::Date32),
-        "timestamp" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+        "timestamp" => Ok(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(Arc::from("UTC")),
+        )),
+        "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         other => Err(CatalogError::InvalidArgument(format!(
             "Unknown Hive type: {other}"
         ))),
@@ -224,7 +228,13 @@ fn spark_data_type_json(data_type: &DataType) -> CatalogResult<Value> {
         | DataType::LargeBinary
         | DataType::BinaryView => json!("binary"),
         DataType::Date32 | DataType::Date64 => json!("date"),
-        DataType::Timestamp(_, _) => json!("timestamp"),
+        DataType::Timestamp(_, timezone) => {
+            if timezone.is_some() {
+                json!("timestamp")
+            } else {
+                json!("timestamp_ntz")
+            }
+        }
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field)
@@ -291,7 +301,11 @@ fn spark_json_to_arrow_data_type(value: &Value) -> CatalogResult<DataType> {
             "string" => Ok(DataType::Utf8),
             "binary" => Ok(DataType::Binary),
             "date" => Ok(DataType::Date32),
-            "timestamp" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+            "timestamp" => Ok(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some(Arc::from("UTC")),
+            )),
+            "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
             decimal if decimal.starts_with("decimal") => hive_type_to_arrow(decimal),
             other => Err(CatalogError::External(format!(
                 "Unsupported Spark schema type: {other}"
@@ -448,15 +462,18 @@ fn split_top_level_two(input: &str) -> CatalogResult<(&str, &str)> {
 }
 
 fn split_top_level(input: &str) -> Vec<&str> {
-    let mut depth = 0;
+    let mut angle_depth = 0;
+    let mut paren_depth = 0;
     let mut start = 0;
     let mut parts = Vec::new();
 
     for (idx, ch) in input.char_indices() {
         match ch {
-            '<' => depth += 1,
-            '>' => depth -= 1,
-            ',' if depth == 0 => {
+            '<' => angle_depth += 1,
+            '>' => angle_depth -= 1,
+            '(' => paren_depth += 1,
+            ')' => paren_depth -= 1,
+            ',' if angle_depth == 0 && paren_depth == 0 => {
                 parts.push(input[start..idx].trim());
                 start = idx + 1;
             }
@@ -498,6 +515,15 @@ mod tests {
     fn test_hive_to_arrow_nested_types() {
         let data_type = hive_type_to_arrow("array<struct<id:int,name:string>>").unwrap();
         assert!(matches!(data_type, DataType::List(_)));
+    }
+
+    #[test]
+    fn test_hive_to_arrow_nested_decimal_types() {
+        let data_type = hive_type_to_arrow(
+            "struct<items:array<struct<label:string,weight:decimal(5,2)>>,attrs:map<string,array<int>>>",
+        )
+        .unwrap();
+        assert!(matches!(data_type, DataType::Struct(_)));
     }
 
     #[test]
@@ -563,6 +589,14 @@ mod tests {
             (DataType::Date64, "date", "date"),
             (
                 DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
+                "timestamp",
+                "timestamp_ntz",
+            ),
+            (
+                DataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Microsecond,
+                    Some(Arc::from("UTC")),
+                ),
                 "timestamp",
                 "timestamp",
             ),
