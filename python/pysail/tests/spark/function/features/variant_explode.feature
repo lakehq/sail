@@ -334,3 +334,12 @@ Feature: variant_explode and variant_explode_outer
         | id | pos | key  | value |
         | 1  | 0   | NULL | 1     |
         | 3  | 0   | a    | 1     |
+
+  Rule: variant_explode rejects non-variant input during planning
+
+    Scenario: EXPLAIN variant_explode on plain array fails analysis
+      When query
+        """
+        EXPLAIN SELECT * FROM variant_explode(array(1, 2, 3))
+        """
+      Then query error (?i).*variant_explode expects a variant input.*

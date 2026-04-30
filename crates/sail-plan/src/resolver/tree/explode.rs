@@ -18,6 +18,7 @@ use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithP
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
+use sail_function::scalar::variant::utils::helper::try_field_as_variant_array;
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
@@ -37,6 +38,17 @@ impl ExplodeDataType {
             _ => plan_err!("only list or map can be exploded"),
         }
     }
+}
+
+fn ensure_variant_expr(expr: &Expr, schema: &dyn ExprSchema, function_name: &str) -> Result<()> {
+    let (_, field) = expr.to_field(schema)?;
+    if try_field_as_variant_array(field.as_ref()).is_err() {
+        return plan_err!(
+            "{function_name} expects a VARIANT input, got {:?}",
+            field.data_type()
+        );
+    }
+    Ok(())
 }
 
 pub(crate) struct ExplodeRewriter<'s> {
@@ -78,6 +90,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             ExplodeKind::InlineOuter => (false, true, true),
             ExplodeKind::VariantExplode | ExplodeKind::VariantExplodeOuter => {
                 let arg = args.one()?;
+                ensure_variant_expr(&arg, self.plan.schema(), func.name())?;
 
                 // Wrap the variant input with SparkVariantExplodeUdf to get
                 // List<Struct<pos, key, value>>, then unnest inline-style.
