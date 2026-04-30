@@ -950,7 +950,7 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
                         validate_decimal_precision_and_scale::<Decimal128Type>(precision, scale)
                             .map_err(|e| {
                                 DataFusionError::Plan(format!(
-                                    "Unsupported JSON schema type: '{other}': {e}"
+                                    "Invalid decimal precision/scale in '{other}': {e}"
                                 ))
                             })?;
                         return Ok(DataType::Decimal128(precision, scale));
