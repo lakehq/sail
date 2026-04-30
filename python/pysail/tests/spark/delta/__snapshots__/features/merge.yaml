@@ -1986,6 +1986,107 @@ data:
                 ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value]
                   DataSourceExec: partitions=1, partition_sizes=[1]
 ---
+name: "test_explain_for_insertonly_merge_on_a_dv_table_does_not_request_row_indices"
+data:
+  |-
+    == Physical Plan ==
+    DeltaCommitExec(table_path=file://<tmp>/merge_dv/)
+      CoalescePartitionsExec
+        DeltaWriterExec(table_path=file://<tmp>/merge_dv/)
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            ProjectionExec: expr=[__sail_src_id@0 as id, __sail_src_value@1 as value, __sail_src_flag@2 as flag]
+              HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, __sail_src_id@0)]
+                CoalescePartitionsExec
+                  DeltaScanByAddsExec(table_path=file://<tmp>/merge_dv/, version=0, projection=Some([0, 1, 2, 3]), limit=None, pushdown=false)
+                    DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
+                      DeltaLogReplayExec(table_path=file://<tmp>/merge_dv/, version=0)
+                        SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@7 ASC NULLS LAST], preserve_partitioning=[true]
+                          RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                            ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_dv/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_for_merge_delete_on_a_dv_table_uses_sorted_partitioned_dv_rows"
+data:
+  |-
+    == Physical Plan ==
+    DeltaCommitExec(table_path=file://<tmp>/merge_dv/)
+      CoalescePartitionsExec
+        UnionExec
+          DeltaWriterExec(table_path=file://<tmp>/merge_dv/)
+            ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@9 ELSE id@2 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_value@10 ELSE value@3 END as value, CASE WHEN __common_expr_1@0 THEN __sail_src_flag@11 ELSE flag@4 END as flag]
+              ProjectionExec: expr=[__common_expr_3@0 AND __sail_merge_source_row_present@11 IS NOT NULL as __common_expr_1, __common_expr_3@0 as __common_expr_2, id@1 as id, value@2 as value, flag@3 as flag, __sail_file_path@4 as __sail_file_path, __sail_file_row_index@5 as __sail_file_row_index, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_value@9 as __sail_src_value, __sail_src_flag@10 as __sail_src_flag, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+                ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NULL as __common_expr_3, id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_value@8 as __sail_src_value, __sail_src_flag@9 as __sail_src_flag, __sail_merge_source_row_present@10 as __sail_merge_source_row_present]
+                  FilterExec: __sail_file_path@3 IS NULL AND (__sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@10 IS NULL OR __sail_src_flag@9 != delete) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@10 IS NOT NULL)
+                    MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                      RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@5], 4), input_partitions=1
+                        HashJoinExec: mode=CollectLeft, join_type=Full, on=[(id@0, __sail_src_id@0)]
+                          CoalescePartitionsExec
+                            ProjectionExec: expr=[id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                              MonotonicIdExec: col=__sail_merge_target_row_id
+                                DeltaScanByAddsExec(table_path=file://<tmp>/merge_dv/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                  DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
+                                    DeltaLogReplayExec(table_path=file://<tmp>/merge_dv/, version=0)
+                                      SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@7 ASC NULLS LAST], preserve_partitioning=[true]
+                                        RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                                          ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_dv/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+                          ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
+                            DataSourceExec: partitions=1, partition_sizes=[1]
+          DeletionVectorRowsWriterExec: path_column=__sail_file_path, row_index_column=__sail_file_row_index
+            SortExec: expr=[__sail_file_path@0 ASC NULLS LAST], preserve_partitioning=[true]
+              RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+                FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND __sail_merge_source_row_present@10 IS NOT NULL AND __sail_src_flag@9 = delete, projection=[__sail_file_path@3, __sail_file_row_index@4]
+                  MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                    RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@5], 4), input_partitions=1
+                      HashJoinExec: mode=CollectLeft, join_type=Full, on=[(id@0, __sail_src_id@0)]
+                        CoalescePartitionsExec
+                          ProjectionExec: expr=[id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                            MonotonicIdExec: col=__sail_merge_target_row_id
+                              DeltaScanByAddsExec(table_path=file://<tmp>/merge_dv/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
+                                  DeltaLogReplayExec(table_path=file://<tmp>/merge_dv/, version=0)
+                                    SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@7 ASC NULLS LAST], preserve_partitioning=[true]
+                                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                                        ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_dv/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+                        ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
+                          DataSourceExec: partitions=1, partition_sizes=[1]
+            RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+              DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
+                  CoalescePartitionsExec
+                    AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                      RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[__sail_file_path@3 as __sail_file_path], aggr=[]
+                          FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@7 AND __sail_src_flag@9 = delete
+                            MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
+                              RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@5], 4), input_partitions=1
+                                HashJoinExec: mode=CollectLeft, join_type=Full, on=[(id@0, __sail_src_id@0)]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                      MonotonicIdExec: col=__sail_merge_target_row_id
+                                        DeltaScanByAddsExec(table_path=file://<tmp>/merge_dv/, version=0, projection=Some([0, 1, 2, 3, 4]), limit=None, pushdown=false)
+                                          DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
+                                            DeltaLogReplayExec(table_path=file://<tmp>/merge_dv/, version=0)
+                                              SortExec: expr=[__sail_delta_replay_path@6 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@7 ASC NULLS LAST], preserve_partitioning=[true]
+                                                RepartitionExec: partitioning=Hash([__sail_delta_replay_path@6], 4), input_partitions=4
+                                                  ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_dv/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+                                  ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
+                                    DataSourceExec: partitions=1, partition_sizes=[1]
+                  DeltaLogReplayExec(table_path=file://<tmp>/merge_dv/, version=0)
+                    SortExec: expr=[__sail_delta_replay_path@11 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@12 ASC NULLS LAST], preserve_partitioning=[true]
+                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@11], 4), input_partitions=4
+                        ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, tags) END as tags, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, baseRowId) END as baseRowId, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, defaultRowCommitVersion) END as defaultRowCommitVersion, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, clusteringProvider) END as clusteringProvider, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_dv/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+---
 name: "test_explain_shows_delta_log_meta_scan_under_merge_file_lookup"
 data:
   |-
@@ -2080,6 +2181,32 @@ data:
     writeTimeMs: <time_ms>
   operationParameters:
     matchedPredicates: []
+    mergePredicate: 't . id = s . id '
+    notMatchedBySourcePredicates: []
+    notMatchedPredicates:
+    - actionType: insert
+  timestamp: <timestamp>
+---
+name: "test_matched_deletes_use_deletion_vectors_while_unmatched_rows_are_inserted"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1010
+    numAddedFiles: 2
+    numFiles: 1
+    numOutputBytes: 1010
+    numOutputFiles: 1
+    numOutputRows: 1
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    matchedPredicates:
+    - actionType: delete
+      predicate: 's . flag = ''delete'' '
     mergePredicate: 't . id = s . id '
     notMatchedBySourcePredicates: []
     notMatchedPredicates:
