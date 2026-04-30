@@ -338,6 +338,7 @@ pub fn rewrite_listing_partitions(mut config: ListingTableConfig) -> Result<List
         .table_partition_cols
         .iter_mut()
         .for_each(|(_col, data_type)| {
+            // FIXME: infer concrete partition types (Int / Float / String) from observed values to match Spark's `partitionColumnTypeInference`.
             if matches!(data_type, DataType::Dictionary(_, _)) {
                 *data_type = DataType::Utf8;
             }
