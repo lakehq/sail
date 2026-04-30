@@ -2294,7 +2294,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
             || node_inner.is::<SparkFloor>()
-            || node_inner.is::<SparkFromCSV>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
