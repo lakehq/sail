@@ -455,8 +455,8 @@ fn split_iceberg_write_options_and_table_properties(
     let mut table_properties = Vec::new();
     let clean_options = options
         .into_iter()
-        .map(|layer| {
-            if let OptionLayer::TablePropertyList { items } = &layer {
+        .inspect(|layer| {
+            if let OptionLayer::TablePropertyList { items } = layer {
                 // Catalog-encoded OPTIONS are stored as `option.*` table properties.
                 // Keep them for option resolution, but do not commit them to Iceberg metadata.
                 table_properties.extend(
@@ -466,7 +466,6 @@ fn split_iceberg_write_options_and_table_properties(
                         .cloned(),
                 );
             }
-            layer
         })
         .collect();
     (clean_options, table_properties)
@@ -518,7 +517,7 @@ mod tests {
                 ("custom.key".to_string(), "custom-value".to_string()),
             ]
         );
-
+        #[expect(clippy::unwrap_used)]
         let iceberg_options = resolve_iceberg_write_options(clean_options).unwrap();
         assert!(iceberg_options.merge_schema);
         assert_eq!(
