@@ -171,9 +171,12 @@ impl SparkVariantExplodeUdf {
             let arr = scalar.to_array()?;
             let variant_array = VariantArray::try_new(arr.as_ref())?;
             match variant_array.iter().next().flatten() {
-                Some(variant @ (Variant::Object(_) | Variant::List(_))) => {
-                    explode_variant(variant, &mut pos_builder, &mut key_builder, &mut value_builder)
-                }
+                Some(variant @ (Variant::Object(_) | Variant::List(_))) => explode_variant(
+                    variant,
+                    &mut pos_builder,
+                    &mut key_builder,
+                    &mut value_builder,
+                ),
                 _ => 0,
             }
         };
@@ -252,8 +255,8 @@ fn build_list_array(
 #[cfg(test)]
 mod tests {
     use arrow::array::{Array, AsArray};
-    use datafusion::logical_expr::ReturnFieldArgs;
     use arrow_schema::Fields;
+    use datafusion::logical_expr::ReturnFieldArgs;
     use parquet_variant_compute::VariantArrayBuilder;
     use parquet_variant_json::JsonToVariant;
 
@@ -344,7 +347,10 @@ mod tests {
             panic!("expected list item struct");
         };
         let (_, value_field) = fields.find("value").expect("missing value field");
-        assert_eq!(value_field.extension_type_name(), variant_explode_value_field().extension_type_name());
+        assert_eq!(
+            value_field.extension_type_name(),
+            variant_explode_value_field().extension_type_name()
+        );
     }
 
     // --- Tests for explode_variant helper ---
@@ -524,13 +530,13 @@ mod tests {
         assert_eq!(
             lengths,
             vec![
-                Some(2),  // [1,2] → 2 elements
-                Some(1),  // {"a":1} → 1 field
-                Some(0),  // 42 → non-container → empty list
-                Some(0),  // SQL NULL → empty list
-                Some(0),  // [] → empty container
-                Some(0),  // {} → empty container
-                Some(0),  // variant null → empty list
+                Some(2), // [1,2] → 2 elements
+                Some(1), // {"a":1} → 1 field
+                Some(0), // 42 → non-container → empty list
+                Some(0), // SQL NULL → empty list
+                Some(0), // [] → empty container
+                Some(0), // {} → empty container
+                Some(0), // variant null → empty list
             ]
         );
         Ok(())
@@ -563,7 +569,9 @@ mod tests {
     #[test]
     fn test_udf_return_type() {
         let udf = SparkVariantExplodeUdf::new();
-        let result = udf.return_type(&[DataType::Struct(Fields::empty())]).unwrap();
+        let result = udf
+            .return_type(&[DataType::Struct(Fields::empty())])
+            .unwrap();
         let field = Field::new("result", result.clone(), true);
         assert_variant_value_field(&field);
         assert_eq!(result, variant_explode_return_type());

@@ -84,8 +84,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                 // Spark documents variant_explode and variant_explode_outer as
                 // both ignoring non-array/object inputs, including SQL NULL,
                 // variant null, and scalar variants.
-                let explode_arr =
-                    ScalarUDF::from(SparkVariantExplodeUdf::new()).call(vec![arg]);
+                let explode_arr = ScalarUDF::from(SparkVariantExplodeUdf::new()).call(vec![arg]);
 
                 let name = self.state.register_field_name("");
                 let out = vec![
