@@ -496,6 +496,22 @@ impl PlanFormatter for SparkPlanFormatter {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
+            "from_json" => {
+                let (arg, rest) = arguments.at_least_one()?;
+                // In Spark, from_json with a MAP schema uses "entries" as the display name.
+                if let Some(schema) = rest.first() {
+                    let s = schema.trim();
+                    let is_map = s.to_uppercase().starts_with("MAP<")
+                        || s.to_uppercase() == "MAP"
+                        || (s.starts_with('{')
+                            && s.contains("\"type\"")
+                            && s.contains("\"map\""));
+                    if is_map {
+                        return Ok("entries".to_string());
+                    }
+                }
+                Ok(format!("{name}({arg})"))
+            }
             "from_csv" | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))

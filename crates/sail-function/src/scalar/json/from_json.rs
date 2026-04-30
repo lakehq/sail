@@ -7,7 +7,7 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, internal_err, plan_err, ScalarValue};
+use datafusion_common::{exec_err, plan_err, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -124,13 +124,13 @@ impl ScalarUDFImpl for SparkFromJson {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let schema: &String = if let Some(schema) = scalar_arguments.get(1) {
+        let schema_str = if let Some(schema) = scalar_arguments.get(1) {
             match schema {
-                Some(ScalarValue::Utf8(Some(schema)))
-                | Some(ScalarValue::LargeUtf8(Some(schema)))
-                | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
-                _ => internal_err!("Expected UTF-8 schema string"),
-            }?
+                Some(ScalarValue::Utf8(Some(s)))
+                | Some(ScalarValue::LargeUtf8(Some(s)))
+                | Some(ScalarValue::Utf8View(Some(s))) => Some(s.as_str()),
+                _ => None,
+            }
         } else {
             return plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
@@ -139,7 +139,14 @@ impl ScalarUDFImpl for SparkFromJson {
             );
         };
 
-        let dt = parse_schema_to_data_type(schema, &self.session_timezone)?;
+        let dt = if let Some(schema) = schema_str {
+            parse_schema_to_data_type(schema, &self.session_timezone)?
+        } else {
+            // Schema argument is not a literal (e.g., schema_of_json(...)).
+            // Fall back to an empty struct since we cannot determine
+            // the exact output type at planning time.
+            DataType::Struct(Fields::empty())
+        };
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
@@ -767,6 +774,14 @@ fn parse_timestamp(
 fn parse_schema_to_data_type(schema: &str, session_timezone: &str) -> Result<DataType> {
     let schema = schema.trim();
 
+    // Try parsing as Spark JSON schema format (e.g., {"type":"struct","fields":[...]}).
+    // PySpark serializes DataType objects to JSON format via schema.json().
+    if schema.starts_with('{') || schema.starts_with('"') {
+        if let Ok(dt) = parse_spark_json_schema(schema, session_timezone) {
+            return Ok(dt);
+        }
+    }
+
     // Try parsing as a full type first (STRUCT<...>, ARRAY<...>, MAP<...>).
     let ast = sail_parser::parse_data_type(schema).or_else(|_| {
         // If that fails, treat as a bare field list and wrap in STRUCT<...>.
@@ -778,6 +793,144 @@ fn parse_schema_to_data_type(schema: &str, session_timezone: &str) -> Result<Dat
     let spec_dt = from_ast_data_type(ast)
         .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
     spec_to_arrow_data_type(&spec_dt, session_timezone)
+}
+
+/// Parses a Spark JSON schema string into an Arrow DataType.
+/// Spark serializes DataType objects to JSON format like:
+/// - Simple types: `"integer"`, `"string"`, `"boolean"`
+/// - Struct: `{"type":"struct","fields":[{"name":"a","type":"integer","nullable":true,"metadata":{}}]}`
+/// - Array: `{"type":"array","elementType":"integer","containsNull":true}`
+/// - Map: `{"type":"map","keyType":"string","valueType":"integer","valueContainsNull":true}`
+fn parse_spark_json_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
+    let json: Value = serde_json::from_str(schema)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to parse JSON schema: {e}")))?;
+    json_value_to_data_type(&json, session_timezone)
+}
+
+fn json_value_to_data_type(value: &Value, session_timezone: &str) -> Result<DataType> {
+    match value {
+        Value::String(s) => json_type_name_to_data_type(s, session_timezone),
+        Value::Object(map) => {
+            let type_str = map
+                .get("type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    DataFusionError::Plan("JSON schema object missing 'type' field".to_string())
+                })?;
+            match type_str {
+                "struct" => {
+                    let fields = map
+                        .get("fields")
+                        .and_then(|v| v.as_array())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(
+                                "Struct type missing 'fields' array".to_string(),
+                            )
+                        })?;
+                    let mut arrow_fields = Vec::with_capacity(fields.len());
+                    for field in fields {
+                        let name = field
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                DataFusionError::Plan(
+                                    "Struct field missing 'name'".to_string(),
+                                )
+                            })?;
+                        let nullable =
+                            field.get("nullable").and_then(|v| v.as_bool()).unwrap_or(true);
+                        let field_type = field.get("type").ok_or_else(|| {
+                            DataFusionError::Plan("Struct field missing 'type'".to_string())
+                        })?;
+                        let dt = json_value_to_data_type(field_type, session_timezone)?;
+                        arrow_fields.push(Arc::new(Field::new(name, dt, nullable)));
+                    }
+                    Ok(DataType::Struct(Fields::from(arrow_fields)))
+                }
+                "array" => {
+                    let element_type = map.get("elementType").ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Array type missing 'elementType'".to_string(),
+                        )
+                    })?;
+                    let contains_null = map
+                        .get("containsNull")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let dt = json_value_to_data_type(element_type, session_timezone)?;
+                    Ok(DataType::List(Arc::new(Field::new(
+                        SAIL_LIST_FIELD_NAME,
+                        dt,
+                        contains_null,
+                    ))))
+                }
+                "map" => {
+                    let key_type = map.get("keyType").ok_or_else(|| {
+                        DataFusionError::Plan("Map type missing 'keyType'".to_string())
+                    })?;
+                    let value_type = map.get("valueType").ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Map type missing 'valueType'".to_string(),
+                        )
+                    })?;
+                    let value_contains_null = map
+                        .get("valueContainsNull")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let key_dt = json_value_to_data_type(key_type, session_timezone)?;
+                    let value_dt = json_value_to_data_type(value_type, session_timezone)?;
+                    let fields = Fields::from(vec![
+                        Arc::new(Field::new(SAIL_MAP_KEY_FIELD_NAME, key_dt, false)),
+                        Arc::new(Field::new(
+                            SAIL_MAP_VALUE_FIELD_NAME,
+                            value_dt,
+                            value_contains_null,
+                        )),
+                    ]);
+                    Ok(DataType::Map(
+                        Arc::new(Field::new(
+                            SAIL_MAP_FIELD_NAME,
+                            DataType::Struct(fields),
+                            false,
+                        )),
+                        false,
+                    ))
+                }
+                other => {
+                    // Some types might be expressed as {"type": "simple_name"}
+                    json_type_name_to_data_type(other, session_timezone)
+                }
+            }
+        }
+        _ => Err(DataFusionError::Plan(format!(
+            "Unexpected JSON schema value: {value}"
+        ))),
+    }
+}
+
+fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Result<DataType> {
+    match type_name {
+        "null" | "void" => Ok(DataType::Null),
+        "boolean" => Ok(DataType::Boolean),
+        "byte" | "tinyint" => Ok(DataType::Int8),
+        "short" | "smallint" => Ok(DataType::Int16),
+        "integer" | "int" => Ok(DataType::Int32),
+        "long" | "bigint" => Ok(DataType::Int64),
+        "float" => Ok(DataType::Float32),
+        "double" => Ok(DataType::Float64),
+        "decimal" => Ok(DataType::Decimal128(10, 0)),
+        "string" => Ok(DataType::Utf8),
+        "binary" => Ok(DataType::Binary),
+        "date" => Ok(DataType::Date32),
+        "timestamp" | "timestamp_ltz" => Ok(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(Arc::from(session_timezone)),
+        )),
+        "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+        other => Err(DataFusionError::Plan(format!(
+            "Unsupported JSON schema type: '{other}'"
+        ))),
+    }
 }
 
 fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
