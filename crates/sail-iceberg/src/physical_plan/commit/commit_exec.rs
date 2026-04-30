@@ -43,8 +43,8 @@ use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
-use crate::utils::metadata::{metadata_files_for_version, parse_metadata_version_from_path};
 use crate::utils::get_object_store_from_context;
+use crate::utils::metadata::{metadata_files_for_version, parse_metadata_version_from_path};
 const MAX_COMMIT_RETRIES: usize = 5;
 
 #[derive(Debug)]
