@@ -14,6 +14,8 @@ pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
         "posexplode_outer" => Ok(ExplodeKind::PosExplodeOuter),
         "inline" => Ok(ExplodeKind::Inline),
         "inline_outer" => Ok(ExplodeKind::InlineOuter),
+        "variant_explode" => Ok(ExplodeKind::VariantExplode),
+        "variant_explode_outer" => Ok(ExplodeKind::VariantExplodeOuter),
         _ => Err(datafusion::error::DataFusionError::Plan(
             "Invalid explode function name".to_string(),
         )),
@@ -34,6 +36,8 @@ pub enum ExplodeKind {
     PosExplodeOuter,
     Inline,
     InlineOuter,
+    VariantExplode,
+    VariantExplodeOuter,
 }
 
 impl Explode {
@@ -62,6 +66,8 @@ impl ScalarUDFImpl for Explode {
             ExplodeKind::PosExplodeOuter => "posexplode_outer",
             ExplodeKind::Inline => "inline",
             ExplodeKind::InlineOuter => "inline_outer",
+            ExplodeKind::VariantExplode => "variant_explode",
+            ExplodeKind::VariantExplodeOuter => "variant_explode_outer",
         }
     }
 
@@ -70,12 +76,19 @@ impl ScalarUDFImpl for Explode {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types {
-            &[DataType::List(f)]
-            | &[DataType::LargeList(f)]
-            | &[DataType::FixedSizeList(f, _)]
-            | &[DataType::Map(f, _)] => Ok(f.data_type().clone()),
-            _ => plan_err!("{} should only be called with a list or map", self.name()),
+        match self.kind {
+            ExplodeKind::VariantExplode | ExplodeKind::VariantExplodeOuter => {
+                // variant_explode accepts a variant (struct) and returns struct<pos, key, value>
+                // but the actual return type is handled by the rewriter
+                Ok(arg_types.first().cloned().unwrap_or(DataType::Null))
+            }
+            _ => match &arg_types {
+                &[DataType::List(f)]
+                | &[DataType::LargeList(f)]
+                | &[DataType::FixedSizeList(f, _)]
+                | &[DataType::Map(f, _)] => Ok(f.data_type().clone()),
+                _ => plan_err!("{} should only be called with a list or map", self.name()),
+            },
         }
     }
 

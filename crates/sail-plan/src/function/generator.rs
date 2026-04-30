@@ -106,6 +106,14 @@ pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFu
             F::udf(Explode::new(ExplodeKind::PosExplodeOuter)),
         ),
         ("stack", F::custom(stack)),
+        (
+            "variant_explode",
+            F::udf(Explode::new(ExplodeKind::VariantExplode)),
+        ),
+        (
+            "variant_explode_outer",
+            F::udf(Explode::new(ExplodeKind::VariantExplodeOuter)),
+        ),
     ]
 }
 
@@ -114,6 +122,7 @@ pub fn get_outer_built_in_generator_functions(name: &str) -> &str {
         "explode" => "explode_outer",
         "inline" => "inline_outer",
         "posexplode" => "posexplode_outer",
+        "variant_explode" => "variant_explode_outer",
         _ => name,
     }
 }

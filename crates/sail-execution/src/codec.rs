@@ -191,6 +191,7 @@ use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
+use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
 use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;
@@ -2085,6 +2086,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
             "parse_json" => Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
+            "spark_variant_explode" => {
+                Ok(Arc::new(ScalarUDF::from(SparkVariantExplodeUdf::new())))
+            }
             "to_variant_object" => Ok(Arc::new(ScalarUDF::from(SparkToVariantObjectUdf::new()))),
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
@@ -2296,6 +2300,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkJsonToVariantUdf>()
+            || node_inner.is::<SparkVariantExplodeUdf>()
             || node_inner.is::<SparkToVariantObjectUdf>()
             || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkLastDay>()

@@ -17,6 +17,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::multi_expr::MultiExpr;
+use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
@@ -75,6 +76,47 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             ExplodeKind::PosExplodeOuter => (true, true, false),
             ExplodeKind::Inline => (false, false, true),
             ExplodeKind::InlineOuter => (false, true, true),
+            ExplodeKind::VariantExplode | ExplodeKind::VariantExplodeOuter => {
+                let arg = args.one()?;
+
+                // Wrap the variant input with SparkVariantExplodeUdf to get
+                // List<Struct<pos, key, value>>, then unnest inline-style.
+                // Spark documents variant_explode and variant_explode_outer as
+                // both ignoring non-array/object inputs, including SQL NULL,
+                // variant null, and scalar variants.
+                let explode_arr =
+                    ScalarUDF::from(SparkVariantExplodeUdf::new()).call(vec![arg]);
+
+                let name = self.state.register_field_name("");
+                let out = vec![
+                    ident(&name).field("pos").alias("pos"),
+                    ident(&name).field("key").alias("key"),
+                    ident(&name).field("value").alias("value"),
+                ];
+
+                let mut projections = self
+                    .plan
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect::<Vec<_>>();
+                projections.push(explode_arr.alias(&name));
+
+                let plan = mem::replace(&mut self.plan, empty_logical_plan());
+                let recursions = vec![];
+                self.plan = unnest_with_options(
+                    LogicalPlan::Projection(Projection::try_new(projections, Arc::new(plan))?),
+                    vec![Column::from_name(&name)],
+                    UnnestOptions {
+                        preserve_nulls: false,
+                        recursions,
+                    },
+                )?;
+
+                let out = ScalarUDF::from(MultiExpr::new()).call(out);
+                return Ok(Transformed::yes(out));
+            }
         };
         let arg = args.one()?;
         let arg_type = arg.get_type(self.plan.schema())?;
