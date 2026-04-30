@@ -174,9 +174,11 @@ def test_parquet_read_uppercase_extension(spark, sample_df, tmp_path):
 
 
 # -----------------------------------------------------------------------------
-# Case-insensitive extension matching for Parquet, including the
-# schema-provided code path that bypasses Sail's listing-time extension
-# observation and relies solely on DataFusion's scan-time filter.
+# Case-insensitive extension matching for Parquet, plus partition-aware reads.
+# Sail reads every non-hidden file in a directory regardless of extension case
+# (matching Spark). The tests below cover that across single files,
+# directories, partitioned trees, mixed case, schema-shape variations, and
+# user-supplied globs.
 # -----------------------------------------------------------------------------
 
 

@@ -315,8 +315,8 @@ def test_csv_read_uppercase_extension_file(spark, tmp_path, ext, infer_schema):
 @pytest.mark.parametrize("ext", ["CSV", "Csv"])
 @pytest.mark.parametrize("infer_schema", [True, False])
 def test_csv_read_uppercase_extension_directory(spark, tmp_path, ext, infer_schema):
-    # Same case-insensitive matching when the path is a directory and we
-    # rely on extension filtering to pick up the files inside it.
+    # Same case-insensitive matching for a directory of files. The reader
+    # admits every non-hidden file regardless of extension case.
     path = tmp_path / "csv_upper_dir"
     path.mkdir()
     (path / f"part-0.{ext}").write_text("name,age\nAlice,30\n")
@@ -349,12 +349,10 @@ def test_csv_read_uppercase_extension_compressed(spark, tmp_path, infer_schema):
 # -----------------------------------------------------------------------------
 # Case-insensitive extension matching when an explicit schema is supplied.
 #
-# When the user calls `.schema(...)` Sail skips schema inference (and thus the
-# observation step that aligns `options.file_extension` with the actual
-# on-disk case). DataFusion's scan-time listing then drops files whose
-# extension does not match the lowercase canonical (e.g. `.csv`). The tests
-# below cover that path across single files, directories, mixed case,
-# compression, and schema-shape variations.
+# Sail reads every non-hidden file in a directory regardless of extension
+# case (matching Spark). The tests below cover the schema-provided path
+# across single files, directories, mixed case, compression, and
+# schema-shape variations.
 # -----------------------------------------------------------------------------
 
 
@@ -429,27 +427,33 @@ def test_csv_read_uppercase_extension_with_schema_all_strings(spark, tmp_path):
 
 
 def test_csv_read_uppercase_extension_with_schema_compressed(spark, tmp_path):
-    # Compressed file with uppercase `.CSV.GZ` plus explicit schema. When the
-    # schema is provided we skip schema inference (and thus compression
-    # auto-detection), so the reader must be told the compression
-    # explicitly.
+    # Compressed file with uppercase `.CSV.GZ` plus explicit schema —
+    # compression is auto-detected from the extension on the schema-provided
+    # path too, so no `compression` option is needed.
     file_path = tmp_path / "data.CSV.GZ"
     with gzip.open(file_path, "wb") as f:
         f.write(b"a,1\nb,2\n")
-    df = (
-        spark.read.format("csv")
-        .schema("k STRING, v INT")
-        .option("header", "false")
-        .option("compression", "gzip")
-        .load(str(file_path))
-    )
+    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(file_path))
     assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
 
 
 def test_csv_read_uppercase_extension_with_schema_compressed_directory(spark, tmp_path):
-    # Directory of `*.CSV.GZ` files plus explicit schema and explicit
-    # compression option (see comment above).
+    # Directory of `*.CSV.GZ` files plus explicit schema. Same compression
+    # auto-detection applies to directories.
     path = tmp_path / "csv_upper_schema_gz_dir"
+    path.mkdir()
+    with gzip.open(path / "part-0.CSV.GZ", "wb") as f:
+        f.write(b"a,1\n")
+    with gzip.open(path / "part-1.CSV.GZ", "wb") as f:
+        f.write(b"b,2\n")
+    df = spark.read.format("csv").schema("k STRING, v INT").option("header", "false").load(str(path))
+    assert sorted(df.collect(), key=safe_sort_key) == [Row(k="a", v=1), Row(k="b", v=2)]
+
+
+def test_csv_read_uppercase_extension_with_schema_compressed_directory_explicit(spark, tmp_path):
+    # Same as `..._with_schema_compressed_directory` but the user passes the
+    # `compression` option explicitly. Both paths must produce the same result.
+    path = tmp_path / "csv_upper_schema_gz_dir_explicit"
     path.mkdir()
     with gzip.open(path / "part-0.CSV.GZ", "wb") as f:
         f.write(b"a,1\n")
