@@ -5,7 +5,10 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from pyspark.sql import SparkSession
+
+pytestmark = pytest.mark.hms_interop
 
 
 def _reference_catalog_table(reference_spark: SparkSession, database: str, table: str):

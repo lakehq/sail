@@ -6,7 +6,10 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from pyspark.sql import SparkSession
+
+pytestmark = pytest.mark.hms_interop
 
 
 def _describe_extended_properties(spark: SparkSession, table_fqn: str) -> dict[str, str]:

@@ -7,6 +7,10 @@ on:
         description: The Spark version to test
         type: string
         required: true
+      hms_interop_tests:
+        description: Run HMS Spark/Sail interoperability tests
+        type: boolean
+        default: false
     secrets:
       CODECOV_TOKEN:
         required: false
@@ -67,28 +71,34 @@ jobs:
           fi
 
       - name: Run Tests
-        run: hatch run pytest --pyargs pysail
+        if: ${{ !inputs.hms_interop_tests }}
+        run: hatch run pytest --pyargs pysail -m "not hms_interop"
+
+      - name: Run HMS Interop Tests
+        if: ${{ inputs.hms_interop_tests }}
+        run: hatch run pytest --pyargs pysail.tests.spark.hms -m hms_interop
 
       # Generate coverage report after Python tests
       - name: Generate coverage report
         run: |
           # Wait for background Rust toolchain installation to complete
           wait
+          coverage_name="${{ inputs.hms_interop_tests && 'python-hms-interop' || 'python' }}"
           BINARY_PATH=$(hatch run python -c 'import pysail._native; import os; print(os.path.dirname(pysail._native.__file__))')
           echo "Binary path: $BINARY_PATH"
           LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
           grcov target --binary-path "$BINARY_PATH" -s . \
             --llvm-path "$LLVM_PATH" \
             -t lcov --branch --ignore-not-existing \
-            -o coverage-python-${{ inputs.spark_version }}.info
+            -o coverage-${coverage_name}-${{ inputs.spark_version }}.info
 
       - name: Upload Python coverage to Codecov
         if: ${{ github.actor != 'dependabot[bot]' }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage-python-${{ inputs.spark_version }}.info
-          flags: python-unit-tests
-          name: python-unit-tests
+          files: coverage-${{ inputs.hms_interop_tests && 'python-hms-interop' || 'python' }}-${{ inputs.spark_version }}.info
+          flags: ${{ inputs.hms_interop_tests && 'python-hms-interop-tests' || 'python-unit-tests' }}
+          name: ${{ inputs.hms_interop_tests && 'python-hms-interop-tests' || 'python-unit-tests' }}
           fail_ci_if_error: true
           env_vars: OS

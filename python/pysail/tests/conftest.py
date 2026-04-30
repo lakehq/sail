@@ -31,6 +31,10 @@ def pytest_configure(config):
         "markers",
         "yamlsnapshot: add metadata to customize the YAML snapshot",
     )
+    config.addinivalue_line(
+        "markers",
+        "hms_interop: mark HMS Spark/Sail interoperability tests that require Docker-backed services",
+    )
 
     configure_sail_environment()
 
