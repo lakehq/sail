@@ -497,3 +497,54 @@ Feature: concat function
         SELECT concat(array(1, 2), NULL) AS result
         """
       Then query error .*
+
+  Rule: Timestamp coercion to string
+
+    Scenario: TIMESTAMP coerced to string with microseconds
+      When query
+        """
+        SELECT concat(TIMESTAMP '2024-01-15 12:00:00.123456') AS result
+        """
+      Then query result
+        | result                     |
+        | 2024-01-15 12:00:00.123456 |
+
+    Scenario: TIMESTAMP concatenated with string suffix
+      When query
+        """
+        SELECT concat(TIMESTAMP '2024-01-15 12:00:00', '_suffix') AS result
+        """
+      Then query result
+        | result                      |
+        | 2024-01-15 12:00:00_suffix  |
+
+    Scenario: string prefix concatenated with TIMESTAMP
+      When query
+        """
+        SELECT concat('prefix_', TIMESTAMP '2024-01-15 12:00:00') AS result
+        """
+      Then query result
+        | result                      |
+        | prefix_2024-01-15 12:00:00  |
+
+    Scenario: two TIMESTAMPs cast to string concatenated with separator
+      When query
+        """
+        SELECT concat(
+          CAST(TIMESTAMP '2024-01-15 12:00:00' AS STRING),
+          '_',
+          CAST(TIMESTAMP '2024-01-16 13:14:15' AS STRING)
+        ) AS result
+        """
+      Then query result
+        | result                                    |
+        | 2024-01-15 12:00:00_2024-01-16 13:14:15  |
+
+    Scenario: TIMESTAMP NULL with string returns NULL
+      When query
+        """
+        SELECT concat(CAST(NULL AS TIMESTAMP), 'x') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
