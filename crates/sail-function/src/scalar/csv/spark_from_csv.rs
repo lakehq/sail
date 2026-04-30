@@ -139,7 +139,13 @@ impl ScalarUDFImpl for SparkFromCSV {
                 Some(ScalarValue::Utf8(Some(s)))
                 | Some(ScalarValue::LargeUtf8(Some(s)))
                 | Some(ScalarValue::Utf8View(Some(s))) => Some(s.as_str()),
-                _ => None,
+                None => None,
+                Some(_) => {
+                    return plan_err!(
+                        "`{}` function requires the schema argument to be a string literal",
+                        Self::FROM_CSV_NAME
+                    );
+                }
             }
         } else {
             return plan_err!(

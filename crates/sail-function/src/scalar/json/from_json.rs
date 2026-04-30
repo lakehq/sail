@@ -129,7 +129,13 @@ impl ScalarUDFImpl for SparkFromJson {
                 Some(ScalarValue::Utf8(Some(s)))
                 | Some(ScalarValue::LargeUtf8(Some(s)))
                 | Some(ScalarValue::Utf8View(Some(s))) => Some(s.as_str()),
-                _ => None,
+                None => None,
+                Some(_) => {
+                    return plan_err!(
+                        "`{}` function requires the schema argument to be a string literal",
+                        Self::FROM_JSON_NAME
+                    );
+                }
             }
         } else {
             return plan_err!(
@@ -928,9 +934,28 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
             Some(Arc::from(session_timezone)),
         )),
         "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-        other => Err(DataFusionError::Plan(format!(
-            "Unsupported JSON schema type: '{other}'"
-        ))),
+        other => {
+            // Handle parameterized types like "decimal(precision,scale)"
+            if let Some(args) = other
+                .strip_prefix("decimal(")
+                .and_then(|x| x.strip_suffix(')'))
+            {
+                let mut parts = args.split(',').map(str::trim);
+                if let (Some(precision), Some(scale), None) =
+                    (parts.next(), parts.next(), parts.next())
+                {
+                    if let (Ok(precision), Ok(scale)) =
+                        (precision.parse::<u8>(), scale.parse::<i8>())
+                    {
+                        return Ok(DataType::Decimal128(precision, scale));
+                    }
+                }
+            }
+
+            Err(DataFusionError::Plan(format!(
+                "Unsupported JSON schema type: '{other}'"
+            )))
+        }
     }
 }
 
