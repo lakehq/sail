@@ -274,6 +274,7 @@ pub async fn create_delta_source(
 
     let scan_config = DeltaScanConfig {
         file_column_name: None,
+        row_index_column_name: None,
         wrap_partition_values: false,
         enable_parquet_pushdown: true,
         schema: match schema {

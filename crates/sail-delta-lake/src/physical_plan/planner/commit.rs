@@ -12,8 +12,8 @@
 //! This module eliminates duplication by providing:
 //!
 //! - [`assemble_commit_plan`]: builds the writer → (∪ remover) → coalesce → commit tail.
-//! - [`build_remove_from_touched_files`]: joins a touched-file plan with the log replay
-//!   pipeline to produce the Add-action stream consumed by `DeltaRemoveActionsExec`.
+//! - [`build_adds_from_touched_files`]: joins a touched-file plan with the log replay
+//!   pipeline to produce the Add-action stream consumed by row-level writers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -95,23 +95,23 @@ pub fn assemble_commit_plan(
     )))
 }
 
-/// Build a remove-action source from a set of touched file paths.
+/// Build an Add-action metadata source from a set of touched file paths.
 ///
 /// Joins the `touched_file_plan` (which yields `PATH_COLUMN` values for files that
 /// were modified) with a log replay pipeline to retrieve the full Add-action metadata.
-/// The output is suitable for feeding into [`DeltaRemoveActionsExec`].
-pub async fn build_remove_from_touched_files(
+pub async fn build_adds_from_touched_files(
     ctx: &PlannerContext<'_>,
     snapshot: &DeltaSnapshot,
     touched_file_plan: Arc<dyn ExecutionPlan>,
     table_url: &Url,
     version: i64,
     partition_columns: &[String],
+    log_replay_options: LogReplayOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let touched_plan = reset_plan_states(touched_file_plan)?;
 
     let meta_scan: Arc<dyn ExecutionPlan> =
-        build_log_replay_pipeline_with_options(ctx, snapshot, LogReplayOptions::default()).await?;
+        build_log_replay_pipeline_with_options(ctx, snapshot, log_replay_options).await?;
 
     let touched_schema = touched_plan.schema();
     let touched_idx = touched_schema
@@ -162,4 +162,27 @@ pub async fn build_remove_from_touched_files(
     )?);
 
     Ok(touched_adds)
+}
+
+/// Build a remove-action source from a set of touched file paths.
+///
+/// The output is suitable for feeding into [`DeltaRemoveActionsExec`].
+pub async fn build_remove_from_touched_files(
+    ctx: &PlannerContext<'_>,
+    snapshot: &DeltaSnapshot,
+    touched_file_plan: Arc<dyn ExecutionPlan>,
+    table_url: &Url,
+    version: i64,
+    partition_columns: &[String],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    build_adds_from_touched_files(
+        ctx,
+        snapshot,
+        touched_file_plan,
+        table_url,
+        version,
+        partition_columns,
+        LogReplayOptions::default(),
+    )
+    .await
 }
