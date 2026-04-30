@@ -504,7 +504,11 @@ impl PlanFormatter for SparkPlanFormatter {
                     let upper = s.to_uppercase();
                     let is_map = upper.starts_with("MAP<")
                         || upper == "MAP"
-                        || (s.starts_with('{') && s.contains("\"type\"") && s.contains("\"map\""));
+                        || (s.starts_with('{')
+                            && serde_json::from_str::<serde_json::Value>(s)
+                                .ok()
+                                .and_then(|v| v.get("type")?.as_str().map(|t| t == "map"))
+                                .unwrap_or(false));
                     if is_map {
                         return Ok("entries".to_string());
                     }

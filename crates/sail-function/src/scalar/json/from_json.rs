@@ -5,7 +5,7 @@ use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use datafusion::arrow::datatypes::*;
+use datafusion::arrow::datatypes::{validate_decimal_precision_and_scale, *};
 use datafusion::error::{DataFusionError, Result};
 use datafusion_common::{exec_err, plan_err, ScalarValue};
 use datafusion_expr::{
@@ -795,10 +795,10 @@ fn parse_schema_to_data_type(schema: &str, session_timezone: &str) -> Result<Dat
 
     // Try parsing as Spark JSON schema format (e.g., {"type":"struct","fields":[...]}).
     // PySpark serializes DataType objects to JSON format via schema.json().
+    // For inputs that clearly look like JSON, return the JSON parsing result directly
+    // so callers see the real error instead of a later DDL parsing failure.
     if schema.starts_with('{') || schema.starts_with('"') {
-        if let Ok(dt) = parse_spark_json_schema(schema, session_timezone) {
-            return Ok(dt);
-        }
+        return parse_spark_json_schema(schema, session_timezone);
     }
 
     // Try parsing as a full type first (STRUCT<...>, ARRAY<...>, MAP<...>).
@@ -947,6 +947,12 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
                     if let (Ok(precision), Ok(scale)) =
                         (precision.parse::<u8>(), scale.parse::<i8>())
                     {
+                        validate_decimal_precision_and_scale::<Decimal128Type>(precision, scale)
+                            .map_err(|e| {
+                                DataFusionError::Plan(format!(
+                                    "Unsupported JSON schema type: '{other}': {e}"
+                                ))
+                            })?;
                         return Ok(DataType::Decimal128(precision, scale));
                     }
                 }
@@ -1118,5 +1124,100 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
             })
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_simple_spark_json_schema_string() -> Result<()> {
+        let data_type = parse_schema_to_data_type(r#""integer""#, "UTC")?;
+        assert_eq!(data_type, DataType::Int32);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_struct_spark_json_schema_string() -> Result<()> {
+        let schema = r#"{
+            "type":"struct",
+            "fields":[
+                {"name":"a","type":"integer","nullable":true,"metadata":{}},
+                {"name":"b","type":"string","nullable":false,"metadata":{}}
+            ]
+        }"#;
+
+        let data_type = parse_schema_to_data_type(schema, "UTC")?;
+        assert_eq!(
+            data_type,
+            DataType::Struct(Fields::from(vec![
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Field::new("b", DataType::Utf8, false)),
+            ]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_array_spark_json_schema_string() -> Result<()> {
+        let schema = r#"{"type":"array","elementType":"integer","containsNull":true}"#;
+
+        let data_type = parse_schema_to_data_type(schema, "UTC")?;
+        assert_eq!(
+            data_type,
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_map_spark_json_schema_string() -> Result<()> {
+        let schema = r#"{
+            "type":"map",
+            "keyType":"string",
+            "valueType":"integer",
+            "valueContainsNull":true
+        }"#;
+
+        let data_type = parse_schema_to_data_type(schema, "UTC")?;
+        assert_eq!(
+            data_type,
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Arc::new(Field::new("key", DataType::Utf8, false)),
+                        Arc::new(Field::new("value", DataType::Int32, true)),
+                    ])),
+                    false,
+                )),
+                false,
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_decimal_spark_json_schema_string() -> Result<()> {
+        let simple_decimal = parse_schema_to_data_type(r#""decimal(10,2)""#, "UTC")?;
+        assert_eq!(simple_decimal, DataType::Decimal128(10, 2));
+
+        let struct_schema = r#"{
+            "type":"struct",
+            "fields":[
+                {"name":"amount","type":"decimal(12,4)","nullable":false,"metadata":{}}
+            ]
+        }"#;
+        let struct_decimal = parse_schema_to_data_type(struct_schema, "UTC")?;
+        assert_eq!(
+            struct_decimal,
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "amount",
+                DataType::Decimal128(12, 4),
+                false,
+            ))]))
+        );
+        Ok(())
     }
 }
