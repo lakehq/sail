@@ -2,15 +2,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
-    MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo,
-    SourceInfo, TableFormat, TableFormatRegistry,
+    find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
+    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::error::DataSourceResult;
@@ -23,15 +23,15 @@ use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
 use crate::physical_plan::planner::{
-    plan_delete, plan_delete_mor, plan_merge, DeltaPhysicalPlanner, DeltaPlannerConfig,
-    PlannerContext,
+    plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
+    DeltaPlannerConfig, PlannerContext,
 };
 use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
     DeltaOperation,
 };
 use crate::table::{open_table_with_object_store, open_table_with_object_store_and_table_config};
-use crate::{create_delta_provider, create_delta_source, DeltaTableError};
+use crate::{create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
 #[derive(Debug)]
@@ -70,39 +70,20 @@ impl TableFormat for DeltaTableFormat {
         create_delta_source(ctx, table_url, schema, options).await
     }
 
-    async fn create_provider(
-        &self,
-        ctx: &dyn Session,
-        info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let SourceInfo {
-            paths,
-            schema,
-            constraints: _,
-            partition_by: _,
-            bucket_by: _,
-            sort_order: _,
-            options,
-        } = info;
-        let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = resolve_delta_read_options(options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        create_delta_provider(ctx, table_url, schema, options).await
-    }
-
     async fn create_writer(
         &self,
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let path = info.path();
+        let Some(path) = find_path_in_options(&info.options) else {
+            return plan_err!("missing path in Delta table options");
+        };
         let SinkInfo {
             input,
             mode,
             partition_by,
             bucket_by,
             sort_order,
-            table_properties,
             options,
             logical_schema,
         } = info;
@@ -122,8 +103,7 @@ impl TableFormat for DeltaTableFormat {
             .collect::<Vec<_>>();
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        let (options, routed_table_properties) =
-            split_delta_write_options_and_table_properties(options);
+        let (options, table_properties) = split_delta_write_options_and_table_properties(options);
         let delta_options = resolve_delta_write_options(options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -151,24 +131,8 @@ impl TableFormat for DeltaTableFormat {
             Err(err) => return Err(DataFusionError::External(Box::new(err))),
         };
         let table_exists = table.is_some();
-        let mut metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
+        let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        if table_exists {
-            if !routed_table_properties.is_empty() {
-                let mut keys: Vec<_> = routed_table_properties.keys().cloned().collect();
-                keys.sort();
-                log::warn!(
-                    "ignoring write-time Delta table properties for existing table at {table_url}: {}",
-                    keys.join(", ")
-                );
-            }
-        } else {
-            let routed_metadata_configuration =
-                resolve_delta_metadata_configuration(&routed_table_properties)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            metadata_configuration.extend(routed_metadata_configuration);
-        }
 
         match mode {
             PhysicalSinkMode::ErrorIfExists if table_exists => {
@@ -261,7 +225,10 @@ impl TableFormat for DeltaTableFormat {
         // Determine the actual strategy: if the table has deletion vectors enabled,
         // override to MergeOnRead for DELETE operations. The trait-level merge_strategy()
         // only provides a default hint; here we inspect the actual table properties.
-        let effective_strategy = if info.command == RowLevelCommand::Delete {
+        let effective_strategy = if matches!(
+            info.command,
+            RowLevelCommand::Delete | RowLevelCommand::Merge
+        ) {
             detect_merge_strategy(ctx, &info)
                 .await
                 .unwrap_or(info.merge_strategy)
@@ -288,11 +255,20 @@ impl TableFormat for DeltaTableFormat {
                 let delete_ctx = PlannerContext::new(ctx, delete_config);
                 plan_delete_mor(&delete_ctx, condition).await
             }
-            // ── MoR for MERGE/UPDATE: not yet implemented ────────────────────
+            // ── Merge-on-Read MERGE ──────────────────────────────────────────
             (MergeStrategy::MergeOnRead, RowLevelCommand::Merge) => {
-                not_impl_err!(
-                    "Merge-on-Read strategy for MERGE is not yet implemented for Delta Lake"
-                )
+                let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+                let merge_config = DeltaPlannerConfig::new(
+                    table_url,
+                    delta_options,
+                    HashMap::new(),
+                    info.target.partition_by.clone(),
+                    None,
+                    true,
+                );
+                let merge_ctx = PlannerContext::new(ctx, merge_config);
+                plan_merge_mor(&merge_ctx, info).await
             }
             (MergeStrategy::MergeOnRead, RowLevelCommand::Update) => {
                 not_impl_err!(
@@ -661,8 +637,14 @@ fn split_delta_write_options_and_table_properties(
                 for (key, value) in items {
                     if let Some(property_key) = route_table_property_key(&key) {
                         table_properties.insert(property_key, value);
-                    } else {
+                    } else if key.starts_with("option.") {
+                        // Write option from the OPTIONS clause; keep in clean items
+                        // so that resolve_delta_write_options can process it.
                         clean_items.push((key, value));
+                    } else {
+                        // Custom user table property (e.g. from TBLPROPERTIES); include
+                        // it in the Delta metadata configuration as-is.
+                        table_properties.insert(key, value);
                     }
                 }
                 OptionLayer::TablePropertyList { items: clean_items }
@@ -718,5 +700,62 @@ mod tests {
             table_properties.get("delta.appendOnly"),
             Some(&"true".to_string())
         );
+    }
+
+    #[test]
+    fn test_split_delta_write_options_and_table_properties_from_table_property_list() {
+        // Simulate a TablePropertyList as produced for an existing catalog table.
+        // It may contain:
+        //   - known delta properties (e.g. delta.appendOnly) -> routed to table_properties
+        //   - option.* write options stored from the OPTIONS clause -> kept in clean items
+        //   - custom user TBLPROPERTIES (e.g. my.tag) -> forwarded to table_properties as-is
+        let options = vec![
+            OptionLayer::TablePropertyList {
+                items: vec![
+                    ("delta.appendOnly".to_string(), "true".to_string()),
+                    ("option.target_file_size".to_string(), "50000".to_string()),
+                    ("my.tag".to_string(), "custom-value".to_string()),
+                    ("keep.me".to_string(), "yes".to_string()),
+                ],
+            },
+            OptionLayer::OptionList {
+                items: vec![("path".to_string(), "/tmp/table".to_string())],
+            },
+        ];
+
+        let (clean_options, table_properties) =
+            split_delta_write_options_and_table_properties(options);
+
+        // delta.appendOnly routes to table_properties; option.* stays in clean items;
+        // custom properties (my.tag, keep.me) also go to table_properties.
+        assert_eq!(
+            table_properties.get("delta.appendOnly"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            table_properties.get("my.tag"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(table_properties.get("keep.me"), Some(&"yes".to_string()));
+        // option.target_file_size should NOT be in table_properties
+        assert_eq!(table_properties.get("option.target_file_size"), None);
+
+        // option.target_file_size and path remain as clean items
+        assert_eq!(clean_options.len(), 2);
+        match &clean_options[0] {
+            OptionLayer::TablePropertyList { items } => {
+                assert_eq!(
+                    items,
+                    &[("option.target_file_size".to_string(), "50000".to_string())]
+                );
+            }
+            _ => unreachable!("expected TablePropertyList"),
+        }
+        match &clean_options[1] {
+            OptionLayer::OptionList { items } => {
+                assert_eq!(items, &[("path".to_string(), "/tmp/table".to_string())]);
+            }
+            _ => unreachable!("expected OptionList"),
+        }
     }
 }

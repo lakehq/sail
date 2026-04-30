@@ -76,19 +76,32 @@ pub fn apply_transform(
             other => other,
         },
         // For time-based transforms, convert to integer offsets per Iceberg spec
-        Transform::Day => match value {
-            // If already days since epoch
-            Some(Literal::Primitive(PrimitiveLiteral::Int(v))) => {
-                Some(Literal::Primitive(PrimitiveLiteral::Int(v)))
-            }
-            // If timestamp in microseconds since epoch
-            Some(Literal::Primitive(PrimitiveLiteral::Long(us))) => {
-                let days = (us).div_euclid(86_400_000_000);
+        Transform::Day => match (field_type, value.clone()) {
+            (
+                Type::Primitive(PrimitiveType::Date),
+                Some(Literal::Primitive(PrimitiveLiteral::Int(v))),
+            ) => Some(Literal::Primitive(PrimitiveLiteral::Int(v))),
+            (
+                Type::Primitive(
+                    PrimitiveType::Timestamp
+                    | PrimitiveType::Timestamptz
+                    | PrimitiveType::TimestampNs
+                    | PrimitiveType::TimestamptzNs,
+                ),
+                Some(Literal::Primitive(PrimitiveLiteral::Long(us_or_ns))),
+            ) => {
+                let micros = match field_type {
+                    Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
+                        us_or_ns.div_euclid(1_000)
+                    }
+                    _ => us_or_ns,
+                };
+                let days = micros.div_euclid(86_400_000_000);
                 // Safe to downcast within reasonable date ranges used in tests
                 let days_i32 = i32::try_from(days).unwrap_or(i32::MAX);
                 Some(Literal::Primitive(PrimitiveLiteral::Int(days_i32)))
             }
-            other => other,
+            _ => value,
         },
         // Year: years since 1970 for date/timestamp
         Transform::Year => match (field_type, value.clone()) {
@@ -111,7 +124,7 @@ pub fn apply_transform(
             ) => {
                 let micros = match field_type {
                     Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
-                        us_or_ns / 1_000
+                        us_or_ns.div_euclid(1_000)
                     }
                     _ => us_or_ns,
                 };
@@ -140,7 +153,7 @@ pub fn apply_transform(
             ) => {
                 let micros = match field_type {
                     Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
-                        us_or_ns / 1_000
+                        us_or_ns.div_euclid(1_000)
                     }
                     _ => us_or_ns,
                 };
@@ -162,7 +175,7 @@ pub fn apply_transform(
             ) => {
                 let micros = match field_type {
                     Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
-                        us_or_ns / 1_000
+                        us_or_ns.div_euclid(1_000)
                     }
                     _ => us_or_ns,
                 };

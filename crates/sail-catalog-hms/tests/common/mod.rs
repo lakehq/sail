@@ -122,7 +122,6 @@ pub fn simple_table_options_with_format(
         bucket_by: None,
         if_not_exists: false,
         replace: false,
-        options: vec![],
         properties: vec![],
     }
 }

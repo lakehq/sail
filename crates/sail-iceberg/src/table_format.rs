@@ -13,14 +13,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::Session;
+use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
-use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
-    OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
+    TableFormatRegistry,
 };
 use sail_data_source::error::DataSourceResult;
 use sail_data_source::options::gen::{
@@ -64,14 +64,6 @@ impl TableFormat for IcebergTableFormat {
         Ok(Arc::new(IcebergTableSource::new(provider)))
     }
 
-    async fn create_provider(
-        &self,
-        ctx: &dyn Session,
-        info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
-        Ok(build_iceberg_provider(ctx, info).await?)
-    }
-
     async fn create_writer(
         &self,
         ctx: &dyn Session,
@@ -79,14 +71,15 @@ impl TableFormat for IcebergTableFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use datafusion::physical_plan::empty::EmptyExec;
 
-        let path = info.path();
+        let Some(path) = find_path_in_options(&info.options) else {
+            return plan_err!("missing path in Iceberg table options");
+        };
         let SinkInfo {
             input,
             mode,
             partition_by,
             bucket_by,
             sort_order,
-            table_properties: _,
             options,
             logical_schema: _,
         } = info;
