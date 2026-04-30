@@ -303,3 +303,103 @@ def test_parquet_read_uppercase_extension_partitioned_directory_with_schema(spar
         Row(id=2, val="b", part="x"),
         Row(id=3, val="c", part="y"),
     ]
+
+
+def test_parquet_hidden_files_are_excluded(spark, sample_df, tmp_path):
+    # `_SUCCESS`, `_committed_*`, and `.crc` files commonly land alongside
+    # parquet output. The default URL glob (`[!._]*`) must skip them so the
+    # parquet reader doesn't try to parse them as parquet.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    # Drop in a few hidden marker files of the kinds Spark / Hadoop tools
+    # write next to data files.
+    (src / "_SUCCESS").write_text("")
+    (src / "_committed_xyz").write_text("garbage")
+    (src / ".crc").write_text("garbage")
+    df = spark.read.parquet(str(src))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize("provide_schema", [True, False])
+def test_parquet_read_multi_level_partitioned_directory(spark, tmp_path, provide_schema):
+    # Two-level partition tree: `year=2024/month=11/...`. Partition discovery
+    # must walk both segments and surface both columns. Tested both with
+    # auto-discovery (no schema) and with an explicit schema that includes
+    # the partition columns.
+    df_in = spark.createDataFrame(
+        [
+            (1, "a", 2024, 10),
+            (2, "b", 2024, 11),
+            (3, "c", 2025, 1),
+        ],
+        "id INT, val STRING, year INT, month INT",
+    )
+    src = tmp_path / "src"
+    df_in.write.partitionBy("year", "month").parquet(str(src), mode="overwrite")
+    for f in src.rglob("*.parquet"):
+        f.rename(f.with_suffix(".PARQUET"))
+    if provide_schema:
+        df = spark.read.schema("id INT, val STRING, year INT, month INT").parquet(str(src))
+    else:
+        df = spark.read.parquet(str(src))
+    rows = sorted(df.collect(), key=lambda r: r.id)
+    assert rows == [
+        Row(id=1, val="a", year=2024, month=10),
+        Row(id=2, val="b", year=2024, month=11),
+        Row(id=3, val="c", year=2025, month=1),
+    ]
+
+
+@pytest.mark.parametrize("ext", ["parquet", "PARQUET"])
+def test_parquet_read_with_schema_column_projection(spark, sample_df, tmp_path, ext):
+    # Parquet natively supports column projection. Supplying a schema with a
+    # subset of the file's columns must return only those columns (without
+    # erroring like CSV does). Verified for both the lowercase and uppercase
+    # extension paths.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    if ext != "parquet":
+        for f in src.glob("*.parquet"):
+            f.rename(f.with_suffix(f".{ext}"))
+    df = spark.read.schema("col1 STRING").parquet(str(src))
+    assert df.columns == ["col1"]
+    assert df.count() == sample_df.count()
+    actual = sorted([r.col1 for r in df.collect()], key=lambda v: (v is not None, v))
+    expected = sorted([r.col1 for r in sample_df.collect()], key=lambda v: (v is not None, v))
+    assert actual == expected
+
+
+def test_parquet_read_with_user_supplied_glob(spark, sample_df, tmp_path):
+    # When the caller passes their own glob in the URL (e.g. `*.PARQUET`),
+    # our default hidden-file glob must not interfere. The user's pattern
+    # takes precedence, and the read should match exactly the files the
+    # user asked for — including dropping a co-located `.parquet` file.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    # Half the files become uppercase, half stay lowercase.
+    files = sorted(src.glob("*.parquet"))
+    for i, f in enumerate(files):
+        if i % 2 == 0:
+            f.rename(f.with_suffix(".PARQUET"))
+    upper_glob = str(src / "*.PARQUET")
+    df = spark.read.parquet(upper_glob)
+    # Expected = rows from only the renamed (uppercase) files.
+    expected_count = sum(spark.read.parquet(str(f)).count() for f in src.glob("*.PARQUET"))
+    assert df.count() == expected_count
+
+
+def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_path):
+    # A single uppercase-extension parquet file plus an explicit schema.
+    # Pinned in addition to the directory variant to make sure single-file
+    # URL handling (which goes through `head` instead of `list`) behaves
+    # the same way.
+    src = tmp_path / "src"
+    sample_df.write.parquet(str(src), mode="overwrite")
+    files = list(src.glob("*.parquet"))
+    assert len(files) == 1
+    upper = files[0].with_suffix(".PARQUET")
+    files[0].rename(upper)
+    df = spark.read.schema(sample_df.schema).parquet(str(upper))
+    assert df.count() == sample_df.count()
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
