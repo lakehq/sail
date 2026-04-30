@@ -56,9 +56,9 @@ Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
         INSERT INTO iceberg_create_table_format_version_test VALUES (1)
         """
       Then iceberg metadata contains
-        | path           | value                    |
-        | format-version | 1                        |
-        | properties     | {"custom.created":"yes"} |
+        | path               | value                    |
+        | $['format-version'] | 1                        |
+        | properties         | {"custom.created":"yes"} |
 
   @sail-only
   Rule: ALTER TABLE SET TBLPROPERTIES persists properties to Iceberg metadata
@@ -117,9 +117,9 @@ Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
         SET TBLPROPERTIES ('format-version' = '2', 'uuid' = 'not-persisted', 'custom.key' = 'hello')
         """
       Then iceberg metadata contains
-        | path           | value                                      |
-        | format-version | 2                                          |
-        | properties     | {"custom.created":"yes","custom.key":"hello"} |
+        | path               | value                                        |
+        | $['format-version'] | 2                                            |
+        | properties         | {"custom.created":"yes","custom.key":"hello"} |
 
   @sail-only
   Rule: ALTER TABLE UNSET TBLPROPERTIES persists removals to Iceberg metadata

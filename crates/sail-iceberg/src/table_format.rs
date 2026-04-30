@@ -18,7 +18,6 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
-use futures::StreamExt;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
@@ -39,6 +38,7 @@ use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig}
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::{find_latest_metadata_file, Table};
+use crate::utils::metadata::{metadata_files_for_version, parse_metadata_version_from_path};
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_exprs,
 };
@@ -457,32 +457,6 @@ fn collect_iceberg_table_properties(options: &[OptionLayer]) -> Vec<(String, Str
             _ => vec![],
         })
         .collect()
-}
-
-fn parse_metadata_version_from_path(path: &str) -> Option<i32> {
-    let filename = path.rsplit('/').next()?;
-    if let Some(version) = filename
-        .strip_prefix('v')
-        .and_then(|s| s.strip_suffix(".metadata.json"))
-    {
-        return version.parse::<i32>().ok();
-    }
-    filename
-        .split_once('-')
-        .and_then(|(version, _)| version.parse::<i32>().ok())
-}
-
-async fn metadata_files_for_version(store_ctx: &StoreContext, version: i32) -> Result<Vec<String>> {
-    let prefix = object_store::path::Path::from("metadata/");
-    let mut stream = store_ctx.prefixed.list(Some(&prefix));
-    let mut matches = Vec::new();
-    while let Some(meta) = stream.next().await {
-        let meta = meta.map_err(|e| DataFusionError::External(Box::new(e)))?;
-        if parse_metadata_version_from_path(meta.location.as_ref()) == Some(version) {
-            matches.push(meta.location.to_string());
-        }
-    }
-    Ok(matches)
 }
 
 fn alter_table_properties_conflict_error() -> DataFusionError {
