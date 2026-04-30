@@ -1,4 +1,65 @@
+@concat
 Feature: concat function
+
+  Rule: Basic concatenation
+
+    Scenario: concat two integer arrays
+      When query
+        """
+        SELECT concat(array(1, 2, 3), array(4, 5)) AS result
+        """
+      Then query result
+        | result          |
+        | [1, 2, 3, 4, 5] |
+
+    Scenario: concat two string arrays
+      When query
+        """
+        SELECT concat(array('a', 'b'), array('c')) AS result
+        """
+      Then query result
+        | result    |
+        | [a, b, c] |
+
+  Rule: Empty array handling
+
+    Scenario: concat empty array with typed array
+      When query
+        """
+        SELECT concat(array(), array(1, 2, 3)) AS result
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
+    Scenario: concat typed array with empty array
+      When query
+        """
+        SELECT concat(array(1, 2), array()) AS result
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+
+  Rule: Null propagation
+
+    Scenario: concat array with null returns null
+      When query
+        """
+        SELECT concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: concat null with array returns null
+      When query
+        """
+        SELECT concat(CAST(NULL AS ARRAY<INT>), array(1, 2)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
 
   Rule: String concatenation
 
@@ -73,7 +134,6 @@ Feature: concat function
       Then query result
         | result   |
         | abcdefgh |
-
 
   Rule: String NULL propagation
 
@@ -231,7 +291,7 @@ Feature: concat function
         SELECT concat(X'4865', X'6C6C6F') AS result
         """
       Then query result
-        | result          |
+        | result           |
         | [48 65 6C 6C 6F] |
 
     Scenario: single binary argument
@@ -319,24 +379,6 @@ Feature: concat function
 
   Rule: Array concatenation
 
-    Scenario: concat two integer arrays
-      When query
-        """
-        SELECT concat(array(1, 2, 3), array(4, 5)) AS result
-        """
-      Then query result
-        | result          |
-        | [1, 2, 3, 4, 5] |
-
-    Scenario: concat two string arrays
-      When query
-        """
-        SELECT concat(array('a', 'b'), array('c')) AS result
-        """
-      Then query result
-        | result    |
-        | [a, b, c] |
-
     Scenario: concat two boolean arrays
       When query
         """
@@ -352,8 +394,8 @@ Feature: concat function
         SELECT concat(array(array(1, 2)), array(array(3, 4))) AS result
         """
       Then query result
-        | result             |
-        | [[1, 2], [3, 4]]   |
+        | result           |
+        | [[1, 2], [3, 4]] |
 
     Scenario: concat array with null elements
       When query
@@ -373,26 +415,6 @@ Feature: concat function
         | result             |
         | [1, 2, 3, 4, 5, 6] |
 
-  Rule: Array empty handling
-
-    Scenario: concat empty array with typed array
-      When query
-        """
-        SELECT concat(array(), array(1, 2, 3)) AS result
-        """
-      Then query result
-        | result    |
-        | [1, 2, 3] |
-
-    Scenario: concat typed array with empty array
-      When query
-        """
-        SELECT concat(array(1, 2), array()) AS result
-        """
-      Then query result
-        | result |
-        | [1, 2] |
-
     Scenario: concat two empty arrays
       When query
         """
@@ -401,8 +423,6 @@ Feature: concat function
       Then query result
         | result |
         | []     |
-
-  Rule: Array NULL propagation
 
     Scenario: NULL typed array returns NULL
       When query
@@ -417,24 +437,6 @@ Feature: concat function
       When query
         """
         SELECT concat(CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<INT>)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: array with typed NULL array returns NULL
-      When query
-        """
-        SELECT concat(array(1, 2), CAST(NULL AS ARRAY<INT>)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario: typed NULL array with array returns NULL
-      When query
-        """
-        SELECT concat(CAST(NULL AS ARRAY<INT>), array(1, 2)) AS result
         """
       Then query result
         | result |
@@ -461,7 +463,7 @@ Feature: concat function
         FROM VALUES (array(1, 2), array(3)), (NULL, array(4)), (array(5), NULL) AS t(a, b)
         """
       Then query result
-        | result   |
+        | result    |
         | [1, 2, 3] |
         | NULL      |
         | NULL      |
