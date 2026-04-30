@@ -501,8 +501,9 @@ impl PlanFormatter for SparkPlanFormatter {
                 // In Spark, from_json with a MAP schema uses "entries" as the display name.
                 if let Some(schema) = rest.first() {
                     let s = schema.trim();
-                    let is_map = s.to_uppercase().starts_with("MAP<")
-                        || s.to_uppercase() == "MAP"
+                    let upper = s.to_uppercase();
+                    let is_map = upper.starts_with("MAP<")
+                        || upper == "MAP"
                         || (s.starts_with('{') && s.contains("\"type\"") && s.contains("\"map\""));
                     if is_map {
                         return Ok("entries".to_string());
