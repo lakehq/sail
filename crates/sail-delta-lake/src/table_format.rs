@@ -23,8 +23,8 @@ use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
 use crate::physical_plan::planner::{
-    plan_delete, plan_delete_mor, plan_merge, DeltaPhysicalPlanner, DeltaPlannerConfig,
-    PlannerContext,
+    plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
+    DeltaPlannerConfig, PlannerContext,
 };
 use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
@@ -225,7 +225,10 @@ impl TableFormat for DeltaTableFormat {
         // Determine the actual strategy: if the table has deletion vectors enabled,
         // override to MergeOnRead for DELETE operations. The trait-level merge_strategy()
         // only provides a default hint; here we inspect the actual table properties.
-        let effective_strategy = if info.command == RowLevelCommand::Delete {
+        let effective_strategy = if matches!(
+            info.command,
+            RowLevelCommand::Delete | RowLevelCommand::Merge
+        ) {
             detect_merge_strategy(ctx, &info)
                 .await
                 .unwrap_or(info.merge_strategy)
@@ -252,11 +255,20 @@ impl TableFormat for DeltaTableFormat {
                 let delete_ctx = PlannerContext::new(ctx, delete_config);
                 plan_delete_mor(&delete_ctx, condition).await
             }
-            // ── MoR for MERGE/UPDATE: not yet implemented ────────────────────
+            // ── Merge-on-Read MERGE ──────────────────────────────────────────
             (MergeStrategy::MergeOnRead, RowLevelCommand::Merge) => {
-                not_impl_err!(
-                    "Merge-on-Read strategy for MERGE is not yet implemented for Delta Lake"
-                )
+                let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+                let merge_config = DeltaPlannerConfig::new(
+                    table_url,
+                    delta_options,
+                    HashMap::new(),
+                    info.target.partition_by.clone(),
+                    None,
+                    true,
+                );
+                let merge_ctx = PlannerContext::new(ctx, merge_config);
+                plan_merge_mor(&merge_ctx, info).await
             }
             (MergeStrategy::MergeOnRead, RowLevelCommand::Update) => {
                 not_impl_err!(

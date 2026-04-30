@@ -46,13 +46,13 @@ pub use action_schema::{
 };
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
-pub use dv_writer_exec::DeletionVectorWriterExec;
+pub use dv_writer_exec::{DeletionVectorRowsWriterExec, DeletionVectorWriterExec};
 pub use expr_adapter::{DeltaCastColumnExpr, DeltaPhysicalExprAdapterFactory};
 pub use log_replay_exec::DeltaLogReplayExec;
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
 pub mod planner;
 pub use planner::{
-    plan_delete, plan_delete_mor, plan_merge, plan_update, DeltaPhysicalPlanner,
+    plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, plan_update, DeltaPhysicalPlanner,
     DeltaPlannerConfig, PlannerContext,
 };
 pub use relaxed_tz_exec::RelaxedTzCastExec;

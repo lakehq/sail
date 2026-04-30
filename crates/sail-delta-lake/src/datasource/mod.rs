@@ -240,6 +240,7 @@ impl DeltaScanConfigBuilder {
 
         Ok(DeltaScanConfig {
             file_column_name,
+            row_index_column_name: None,
             wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
@@ -256,6 +257,8 @@ impl DeltaScanConfigBuilder {
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
+    /// Include the file-local row index for each record.
+    pub row_index_column_name: Option<String>,
     /// Wrap partition values in a dictionary encoding
     pub wrap_partition_values: bool,
     /// Allow pushdown of the scan filter
