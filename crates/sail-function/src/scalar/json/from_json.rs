@@ -316,7 +316,20 @@ fn parse_json_to_list(
                     offsets.push(current_offset);
                     validity.push(true);
                 }
-                _ => {
+                Ok(value) => {
+                    // Spark wraps a non-array JSON value in an array when the target
+                    // type is an ArrayType (e.g., parsing '{"a":1}' as ARRAY<STRUCT<a:INT>>).
+                    all_values.push(json_value_to_scalar(
+                        Some(&value),
+                        element_field.data_type(),
+                        options,
+                        session_timezone,
+                    )?);
+                    current_offset += 1;
+                    offsets.push(current_offset);
+                    validity.push(true);
+                }
+                Err(_) => {
                     offsets.push(current_offset);
                     validity.push(false);
                 }
@@ -811,34 +824,26 @@ fn json_value_to_data_type(value: &Value, session_timezone: &str) -> Result<Data
     match value {
         Value::String(s) => json_type_name_to_data_type(s, session_timezone),
         Value::Object(map) => {
-            let type_str = map
-                .get("type")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    DataFusionError::Plan("JSON schema object missing 'type' field".to_string())
-                })?;
+            let type_str = map.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
+                DataFusionError::Plan("JSON schema object missing 'type' field".to_string())
+            })?;
             match type_str {
                 "struct" => {
                     let fields = map
                         .get("fields")
                         .and_then(|v| v.as_array())
                         .ok_or_else(|| {
-                            DataFusionError::Plan(
-                                "Struct type missing 'fields' array".to_string(),
-                            )
+                            DataFusionError::Plan("Struct type missing 'fields' array".to_string())
                         })?;
                     let mut arrow_fields = Vec::with_capacity(fields.len());
                     for field in fields {
-                        let name = field
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                DataFusionError::Plan(
-                                    "Struct field missing 'name'".to_string(),
-                                )
-                            })?;
-                        let nullable =
-                            field.get("nullable").and_then(|v| v.as_bool()).unwrap_or(true);
+                        let name = field.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                            DataFusionError::Plan("Struct field missing 'name'".to_string())
+                        })?;
+                        let nullable = field
+                            .get("nullable")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
                         let field_type = field.get("type").ok_or_else(|| {
                             DataFusionError::Plan("Struct field missing 'type'".to_string())
                         })?;
@@ -849,9 +854,7 @@ fn json_value_to_data_type(value: &Value, session_timezone: &str) -> Result<Data
                 }
                 "array" => {
                     let element_type = map.get("elementType").ok_or_else(|| {
-                        DataFusionError::Plan(
-                            "Array type missing 'elementType'".to_string(),
-                        )
+                        DataFusionError::Plan("Array type missing 'elementType'".to_string())
                     })?;
                     let contains_null = map
                         .get("containsNull")
@@ -869,9 +872,7 @@ fn json_value_to_data_type(value: &Value, session_timezone: &str) -> Result<Data
                         DataFusionError::Plan("Map type missing 'keyType'".to_string())
                     })?;
                     let value_type = map.get("valueType").ok_or_else(|| {
-                        DataFusionError::Plan(
-                            "Map type missing 'valueType'".to_string(),
-                        )
+                        DataFusionError::Plan("Map type missing 'valueType'".to_string())
                     })?;
                     let value_contains_null = map
                         .get("valueContainsNull")
