@@ -989,16 +989,31 @@
 
 - key: write_data_path
   description: Iceberg table property overriding the data file write location.
-  supported: false
-  rust_type: String
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
   scopes: [write]
   origins:
     - type: table_property
-      keys:
-        - write.data.path
-        - write.folder-storage.path
+      keys: [write.data.path]
       case_sensitive: true
-      parser: crate::options::parsers::parse_string
+      parser: crate::options::parsers::parse_optional_string
+
+- key: write_folder_storage_path
+  description: Legacy Iceberg table property alias for the data file write location.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: table_property
+      keys: [write.folder-storage.path]
+      case_sensitive: true
+      parser: crate::options::parsers::parse_optional_string
 
 - key: write_metadata_path
   description: Iceberg table property overriding the metadata file write location.

@@ -95,7 +95,7 @@ impl TableFormat for IcebergTableFormat {
         }
 
         let table_url = Self::parse_table_url(vec![path]).await?;
-        let table_properties = collect_iceberg_table_properties(&options);
+        let (options, table_properties) = split_iceberg_write_options_and_table_properties(options);
         let iceberg_options = resolve_iceberg_write_options(options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -449,18 +449,85 @@ fn resolve_iceberg_write_options(
     partial.finalize()
 }
 
-fn collect_iceberg_table_properties(options: &[OptionLayer]) -> Vec<(String, String)> {
-    options
-        .iter()
-        .flat_map(|layer| match layer {
-            OptionLayer::TablePropertyList { items } => items.clone(),
-            _ => vec![],
+fn split_iceberg_write_options_and_table_properties(
+    options: Vec<OptionLayer>,
+) -> (Vec<OptionLayer>, Vec<(String, String)>) {
+    let mut table_properties = Vec::new();
+    let clean_options = options
+        .into_iter()
+        .map(|layer| {
+            if let OptionLayer::TablePropertyList { items } = &layer {
+                // Catalog-encoded OPTIONS are stored as `option.*` table properties.
+                // Keep them for option resolution, but do not commit them to Iceberg metadata.
+                table_properties.extend(
+                    items
+                        .iter()
+                        .filter(|(key, _)| !key.starts_with("option."))
+                        .cloned(),
+                );
+            }
+            layer
         })
-        .collect()
+        .collect();
+    (clean_options, table_properties)
 }
 
 fn alter_table_properties_conflict_error() -> DataFusionError {
     DataFusionError::Execution(format!(
         "Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES failed after {MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES} retries due to concurrent metadata updates"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_iceberg_write_options_keeps_catalog_options_out_of_table_properties() {
+        let options = vec![
+            OptionLayer::TablePropertyList {
+                items: vec![
+                    ("option.metadataAsDataRead".to_string(), "true".to_string()),
+                    ("write.data.path".to_string(), "custom_data".to_string()),
+                    (
+                        "write.folder-storage.path".to_string(),
+                        "legacy_data".to_string(),
+                    ),
+                    ("custom.key".to_string(), "custom-value".to_string()),
+                ],
+            },
+            OptionLayer::OptionList {
+                items: vec![
+                    ("mergeSchema".to_string(), "true".to_string()),
+                    ("path".to_string(), "/tmp/table".to_string()),
+                ],
+            },
+        ];
+
+        let (clean_options, table_properties) =
+            split_iceberg_write_options_and_table_properties(options);
+
+        assert_eq!(
+            table_properties,
+            vec![
+                ("write.data.path".to_string(), "custom_data".to_string()),
+                (
+                    "write.folder-storage.path".to_string(),
+                    "legacy_data".to_string(),
+                ),
+                ("custom.key".to_string(), "custom-value".to_string()),
+            ]
+        );
+
+        let iceberg_options = resolve_iceberg_write_options(clean_options).unwrap();
+        assert!(iceberg_options.merge_schema);
+        assert_eq!(
+            iceberg_options.write_data_path.as_deref(),
+            Some("custom_data")
+        );
+        assert_eq!(
+            iceberg_options.write_folder_storage_path.as_deref(),
+            Some("legacy_data")
+        );
+    }
 }

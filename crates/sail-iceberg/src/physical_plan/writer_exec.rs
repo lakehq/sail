@@ -176,59 +176,70 @@ impl IcebergWriterExec {
         Self::resolve_data_dir_from_properties(&table_meta.properties, table_url)
     }
 
-    fn resolve_data_dir_from_properties(
-        properties: &std::collections::HashMap<String, String>,
+    fn resolve_data_dir_from_property_value(
+        value: Option<&str>,
         table_url: &Url,
-    ) -> String {
-        let data_dir = "data".to_string();
+    ) -> Option<String> {
+        let raw = value?.trim();
+        if raw.is_empty() {
+            return None;
+        }
+
         let base_path = crate::utils::url_to_object_path(table_url).ok();
-        if let Some(val) = properties
-            .get("write.data.path")
-            .or_else(|| properties.get("write.folder-storage.path"))
-        {
-            let raw = val.trim();
-            if !raw.is_empty() {
-                if let Ok(prop_url) = Url::parse(raw) {
-                    if prop_url.scheme() == table_url.scheme()
-                        && prop_url.host_str() == table_url.host_str()
-                    {
-                        if let (Ok(prop_path), Some(base_path)) = (
-                            crate::utils::url_to_object_path(&prop_url),
-                            base_path.as_ref(),
-                        ) {
-                            let prop_str = prop_path.as_ref();
-                            let base_str = base_path.as_ref();
-                            if let Some(stripped) = prop_str.strip_prefix(base_str) {
-                                let rel = stripped.trim_start_matches('/').trim_matches('/');
-                                if !rel.is_empty() {
-                                    return rel.to_string();
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    let prop_path = raw.replace('\\', "/");
-                    if prop_path.starts_with('/') {
-                        if let Some(base_path) = base_path.as_ref() {
-                            let base_str = base_path.as_ref();
-                            let prop_no_leading = prop_path.trim_start_matches('/');
-                            if let Some(stripped) = prop_no_leading.strip_prefix(base_str) {
-                                let rel = stripped.trim_start_matches('/').trim_matches('/');
-                                if !rel.is_empty() {
-                                    return rel.to_string();
-                                }
-                            }
-                        }
-                    } else {
-                        let rel = prop_path.trim_matches('/');
+        if let Ok(prop_url) = Url::parse(raw) {
+            if prop_url.scheme() == table_url.scheme()
+                && prop_url.host_str() == table_url.host_str()
+            {
+                if let (Ok(prop_path), Some(base_path)) = (
+                    crate::utils::url_to_object_path(&prop_url),
+                    base_path.as_ref(),
+                ) {
+                    let prop_str = prop_path.as_ref();
+                    let base_str = base_path.as_ref();
+                    if let Some(stripped) = prop_str.strip_prefix(base_str) {
+                        let rel = stripped.trim_start_matches('/').trim_matches('/');
                         if !rel.is_empty() {
-                            return rel.to_string();
+                            return Some(rel.to_string());
                         }
                     }
                 }
             }
+        } else {
+            let prop_path = raw.replace('\\', "/");
+            if prop_path.starts_with('/') {
+                if let Some(base_path) = base_path.as_ref() {
+                    let base_str = base_path.as_ref();
+                    let prop_no_leading = prop_path.trim_start_matches('/');
+                    if let Some(stripped) = prop_no_leading.strip_prefix(base_str) {
+                        let rel = stripped.trim_start_matches('/').trim_matches('/');
+                        if !rel.is_empty() {
+                            return Some(rel.to_string());
+                        }
+                    }
+                }
+            } else {
+                let rel = prop_path.trim_matches('/');
+                if !rel.is_empty() {
+                    return Some(rel.to_string());
+                }
+            }
         }
-        data_dir
+
+        None
+    }
+
+    fn resolve_data_dir_from_properties(
+        properties: &std::collections::HashMap<String, String>,
+        table_url: &Url,
+    ) -> String {
+        Self::resolve_data_dir_from_property_value(
+            properties
+                .get("write.data.path")
+                .or_else(|| properties.get("write.folder-storage.path"))
+                .map(String::as_str),
+            table_url,
+        )
+        .unwrap_or_else(|| "data".to_string())
     }
 }
 
@@ -457,7 +468,16 @@ impl ExecutionPlan for IcebergWriterExec {
                     iceberg_schema.clone(),
                     Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?),
                     Some(spec),
-                    Self::resolve_data_dir_from_properties(&metadata_properties, &table_url),
+                    Self::resolve_data_dir_from_property_value(
+                        options
+                            .write_data_path
+                            .as_deref()
+                            .or(options.write_folder_storage_path.as_deref()),
+                        &table_url,
+                    )
+                    .unwrap_or_else(|| {
+                        Self::resolve_data_dir_from_properties(&metadata_properties, &table_url)
+                    }),
                     sid,
                     Some(iceberg_schema),
                     Vec::new(),
