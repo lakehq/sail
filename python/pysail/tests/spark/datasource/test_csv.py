@@ -528,3 +528,16 @@ def test_csv_read_uppercase_extension_via_spark_csv_helper(spark, tmp_path):
     data_path.write_text("a,1\n")
     df = spark.read.schema("k STRING, v INT").csv(str(data_path), header=False)
     assert df.collect() == [Row(k="a", v=1)]
+
+
+def test_csv_read_dataframe_reader_round_trip(spark, tmp_path):
+    # Adapted from Spark 3.5's test for SPARK-42011 (Implement
+    # `DataFrameReader.csv`):
+    # https://github.com/apache/spark/blob/branch-3.5/python/pyspark/sql/tests/connect/test_connect_basic.py#L328-L336
+    # Round-trips a DataFrame through `.write.format("csv").save(...)` and
+    # `spark.read.csv(...)` to make sure the Spark Connect entrypoint reaches
+    # the CSV reader.
+    path = str(tmp_path / "csv_dataframe_reader_round_trip")
+    spark.createDataFrame([{"name": "Alice"}, {"name": "Bob"}]).write.mode("overwrite").format("csv").save(path)
+    actual = sorted(spark.read.csv(path).toPandas().to_dict(orient="records"), key=lambda r: r["_c0"])
+    assert actual == [{"_c0": "Alice"}, {"_c0": "Bob"}]
