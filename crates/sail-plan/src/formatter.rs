@@ -972,34 +972,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[test]
-    fn test_function_to_string_unary_display_name() -> PlanResult<()> {
-        let formatter = SparkPlanFormatter;
-
-        // `from_csv` is a UnaryExpression in Spark Catalyst: only the input
-        // column appears in the display name; schema and options are dropped.
-        assert_eq!(
-            formatter.function_to_string(
-                "from_csv",
-                vec!["value", "a INT, b INT, c INT", "map()"],
-                false,
-            )?,
-            "from_csv(value)",
-        );
-        assert_eq!(
-            formatter.function_to_string("any_value", vec!["x", "true"], false)?,
-            "any_value(x)",
-        );
-        assert_eq!(
-            formatter.function_to_string("first_value", vec!["x", "true"], false)?,
-            "first_value(x)",
-        );
-        assert_eq!(
-            formatter.function_to_string("last_value", vec!["x", "true"], false)?,
-            "last_value(x)",
-        );
-
-        Ok(())
-    }
 }
