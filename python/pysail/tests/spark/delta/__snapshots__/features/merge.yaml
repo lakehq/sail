@@ -2212,6 +2212,10 @@ data:
     numOutputFiles: 1
     numOutputRows: 1
     numRemovedFiles: 1
+    numTargetBytesAdded: 1010
+    numTargetFilesAdded: 2
+    numTargetFilesRemoved: 1
+    rewriteTimeMs: <time_ms>
     writeTimeMs: <time_ms>
   operationParameters:
     matchedPredicates:
