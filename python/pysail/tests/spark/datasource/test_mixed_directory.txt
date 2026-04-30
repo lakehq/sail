@@ -18,9 +18,9 @@ same fixture used by `test_mixed_directory.py`:
 
 # TODO: Sail strips a leading `"` from a CSV field; Spark keeps it (e.g. `value:"A"}` vs `"value":"A"}`).
 # NOTE: Sail handles this differently than Spark. Spark's expected output is:
-#       [Row({"id":1='Lower', value:"A"}='30'), Row({"id":1='Test', value:"A"}='50'), Row({"id":1='Upper', value:"A"}='50'), Row({"id":1='{"id":2', value:"A"}='value:"B"}'), Row({"id":1='{"id":2', value:"A"}='value:"b"}')]
+#       [Row({"id":1='Lower', "value":"A"}='30'), Row({"id":1='Test', "value":"A"}='50'), Row({"id":1='Upper', "value":"A"}='50'), Row({"id":1='{"id":2', "value":"A"}='"value":"B"}'), Row({"id":1='{"id":2', "value":"A"}='"value":"b"}')]
 >>> sorted(spark.read.format("csv").option("header", "true").load(MIXED_DIR).collect(), key=str)
-[Row(name='Lower', age='30'), Row(name='Test', age='50'), Row(name='Upper', age='50'), Row(name='{"id":2', age='value:"B"}'), Row(name='{"id":2', age='value:"b"}')]
+[Row({"id":1='Lower', value:"A"}='30'), Row({"id":1='Test', value:"A"}='50'), Row({"id":1='Upper', value:"A"}='50'), Row({"id":1='{"id":2', value:"A"}='value:"B"}'), Row({"id":1='{"id":2', value:"A"}='value:"b"}')]
 
 # TODO: Sail strips a leading `"` from a CSV field; Spark keeps it (e.g. `value:"A"}` vs `"value":"A"}`).
 >>> sorted(spark.read.format("csv").schema("k STRING, v STRING").option("header", "false").load(MIXED_DIR).collect(), key=str)

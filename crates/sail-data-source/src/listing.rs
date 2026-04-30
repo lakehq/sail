@@ -26,8 +26,7 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     options_vec: Vec<OptionLayer>,
     listing_format: &ListingTableFormat<T>,
 ) -> Result<Arc<Schema>> {
-    let file_groups =
-        list_sample_files(ctx, urls, options, extension_with_compression.as_deref()).await?;
+    let file_groups = list_sample_files(ctx, urls, extension_with_compression.as_deref()).await?;
     let empty = file_groups.iter().all(|(_, files)| files.is_empty());
     if empty {
         let urls = urls
@@ -86,15 +85,18 @@ fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
         && s.as_bytes()[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
 }
 
-/// List up to 10 files per URL into in-memory groups, suitable for
-/// schema inference and compression detection. The cap is hard-coded to
-/// match DataFusion's [`ListingOptions::infer_schema`] /
-/// `infer_partitions_from_path` (we can lift it once DataFusion makes
-/// those configurable).
+/// List up to 10 files per URL into in-memory groups, suitable for schema
+/// inference and compression detection.
+///
+/// The base file-extension filter is intentionally cleared (passed as `""`)
+/// so callers see every non-hidden file in the directory — matching Spark's
+/// behavior of reading every file regardless of extension. The hidden-file
+/// glob attached in [`crate::url::resolve_listing_urls`] still excludes
+/// `_*` / `.*` files. `extension_with_compression` is preserved so that an
+/// explicitly requested compressed variant still narrows the listing.
 async fn list_sample_files(
     ctx: &dyn Session,
     urls: &[ListingTableUrl],
-    options: &ListingOptions,
     extension_with_compression: Option<&str>,
 ) -> Result<Vec<(Arc<dyn ObjectStore>, Vec<ObjectMeta>)>> {
     // The logic is similar to `ListingOptions::infer_schema()`
@@ -102,22 +104,17 @@ async fn list_sample_files(
     let mut file_groups = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        let files: Vec<_> = list_all_files(
-            url,
-            ctx,
-            &store,
-            &options.file_extension,
-            extension_with_compression,
-        )
-        .await?
-        // Here we sample up to 10 files to infer the schema.
-        // The value is hard-coded here since DataFusion uses the same hard-coded value
-        // for operations such as `infer_partitions_from_path`.
-        // We can make it configurable if DataFusion makes those operations configurable
-        // as well in the future.
-        .take(10)
-        .try_collect()
-        .await?;
+        // Pass `""` so the base extension filter accepts every path (Spark parity).
+        let files: Vec<_> = list_all_files(url, ctx, &store, "", extension_with_compression)
+            .await?
+            // Here we sample up to 10 files to infer the schema.
+            // The value is hard-coded here since DataFusion uses the same hard-coded value
+            // for operations such as `infer_partitions_from_path`.
+            // We can make it configurable if DataFusion makes those operations configurable
+            // as well in the future.
+            .take(10)
+            .try_collect()
+            .await?;
         file_groups.push((store, files));
     }
     Ok(file_groups)
@@ -180,8 +177,7 @@ pub async fn detect_listing_compression<T: ListingFormat>(
     options_vec: &[OptionLayer],
     listing_format: &ListingTableFormat<T>,
 ) -> Result<()> {
-    let file_groups =
-        list_sample_files(ctx, urls, options, extension_with_compression.as_deref()).await?;
+    let file_groups = list_sample_files(ctx, urls, extension_with_compression.as_deref()).await?;
     if file_groups.iter().all(|(_, files)| files.is_empty()) {
         return Ok(());
     }
