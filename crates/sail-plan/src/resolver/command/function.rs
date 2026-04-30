@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
@@ -35,6 +37,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             function.command,
             Some(function.output_type),
+            function.output_metadata,
             deterministic,
         );
 
@@ -67,6 +70,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             function.command,
             function.return_type,
+            HashMap::new(),
             deterministic,
         );
         // PySpark UDTF is registered as a scalar UDF since it will be used as a stream UDF

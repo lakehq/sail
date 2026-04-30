@@ -14,7 +14,9 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::spark_to_string::{
+    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View, SparkUdtToUtf8,
+};
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
@@ -45,6 +47,13 @@ impl PlanResolver<'_> {
             };
             let expr = ScalarUDF::new_from_impl(SparkCastToVariant::new()).call(vec![expr]);
             return Ok(NamedExpr::new(name, expr));
+        }
+
+        // CAST(expr AS UserDefinedType) → raise AnalysisException (Spark behavior)
+        if matches!(cast_to_type, spec::DataType::UserDefined { .. }) {
+            return Err(PlanError::AnalysisError(
+                "[DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION] Cannot resolve \"CAST\" due to data type mismatch: you can't cast UDT to another UDT.".to_string(),
+            ));
         }
 
         // Extract the DayTimeInterval field unit before resolving to Arrow type,
@@ -95,6 +104,14 @@ impl PlanResolver<'_> {
                 | DataType::Struct(_)
                 | DataType::Map(_, _)
         );
+        // Check if the source expression's field has UDT jvm_class metadata.
+        // When a JVM UDT is cast to string, Spark uses the JVM UDT's toString
+        // format which wraps elements in parentheses instead of brackets.
+        let has_udt_jvm_class = expr
+            .to_field(schema)
+            .ok()
+            .and_then(|(_, field)| field.metadata().contains_key("udt.jvm_class").then_some(()))
+            .is_some();
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
                 if from.is_numeric() =>
@@ -143,11 +160,20 @@ impl PlanResolver<'_> {
                 tz, is_try,
             )?))
             .call(vec![expr]),
+            (_, DataType::Utf8, _) if override_string_cast && has_udt_jvm_class => {
+                ScalarUDF::new_from_impl(SparkUdtToUtf8::new()).call(vec![expr])
+            }
             (_, DataType::Utf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
             }
+            (_, DataType::LargeUtf8, _) if override_string_cast && has_udt_jvm_class => {
+                ScalarUDF::new_from_impl(SparkUdtToUtf8::new()).call(vec![expr])
+            }
             (_, DataType::LargeUtf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
+            }
+            (_, DataType::Utf8View, _) if override_string_cast && has_udt_jvm_class => {
+                ScalarUDF::new_from_impl(SparkUdtToUtf8::new()).call(vec![expr])
             }
             (_, DataType::Utf8View, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])

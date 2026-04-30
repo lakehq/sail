@@ -111,6 +111,7 @@ impl PlanResolver<'_> {
                     eval_type: f.eval_type(),
                     command: f.command().to_vec(),
                     output_type,
+                    output_metadata: f.output_metadata().iter().cloned().collect(),
                 };
                 self.resolve_python_udf_expr(
                     function,

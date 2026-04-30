@@ -1,9 +1,13 @@
 use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::Result;
 use datafusion_common::internal_err;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use sail_common::spec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -16,6 +20,8 @@ pub struct PySparkUnresolvedUDF {
     /// The output type of the UDF. `None` for UDTFs that use an `analyze` static method
     /// to determine the return type dynamically at query analysis time.
     output_type: Option<DataType>,
+    /// UDT metadata to attach to the output field (e.g., udt.python_class).
+    output_metadata: Vec<(String, String)>,
     deterministic: bool,
 }
 
@@ -26,8 +32,11 @@ impl PySparkUnresolvedUDF {
         eval_type: spec::PySparkUdfType,
         command: Vec<u8>,
         output_type: Option<DataType>,
+        output_metadata: HashMap<String, String>,
         deterministic: bool,
     ) -> Self {
+        let mut output_metadata_vec: Vec<(String, String)> = output_metadata.into_iter().collect();
+        output_metadata_vec.sort();
         Self {
             signature: Signature::variadic_any(match deterministic {
                 true => Volatility::Immutable,
@@ -38,6 +47,7 @@ impl PySparkUnresolvedUDF {
             eval_type,
             command,
             output_type,
+            output_metadata: output_metadata_vec,
             deterministic,
         }
     }
@@ -56,6 +66,10 @@ impl PySparkUnresolvedUDF {
 
     pub fn output_type(&self) -> Option<&DataType> {
         self.output_type.as_ref()
+    }
+
+    pub fn output_metadata(&self) -> &[(String, String)] {
+        &self.output_metadata
     }
 
     pub fn deterministic(&self) -> bool {
@@ -85,6 +99,13 @@ impl ScalarUDFImpl for PySparkUnresolvedUDF {
                 self.name()
             ),
         }
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Arc<Field>> {
+        let data_type = self.return_type(&[])?;
+        let metadata: HashMap<String, String> = self.output_metadata.iter().cloned().collect();
+        let field = Field::new(self.name(), data_type, true).with_metadata(metadata);
+        Ok(Arc::new(field))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
