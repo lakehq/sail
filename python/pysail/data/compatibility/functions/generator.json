@@ -31,17 +31,17 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "stack",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "variant_explode",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "variant_explode_outer",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "stack",
     "status": "supported"
   }
 ]
