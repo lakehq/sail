@@ -61,7 +61,6 @@ impl SchemaInfer for DefaultSchemaInfer {
     }
 }
 
-// TODO: support global configuration to ignore file extension (by setting it to empty)
 /// A trait for defining the specifics of a listing table format.
 pub trait ListingFormat: Debug + Send + Sync + 'static {
     fn name(&self) -> &'static str;
