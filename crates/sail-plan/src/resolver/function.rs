@@ -5,6 +5,7 @@ use datafusion_common::plan_err;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::data_type::extract_udt_metadata;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -24,32 +25,6 @@ pub(super) struct PythonUdtf {
     /// The return type of the UDTF. When `None`, the UDTF uses an `analyze` static method
     /// to determine the return type dynamically.
     pub return_type: Option<DataType>,
-}
-
-/// Extract UDT metadata from a spec data type.
-fn extract_udt_metadata(data_type: &spec::DataType) -> HashMap<String, String> {
-    let mut metadata = HashMap::new();
-    if let spec::DataType::UserDefined {
-        jvm_class,
-        python_class,
-        serialized_python_class,
-        ..
-    } = data_type
-    {
-        if let Some(jvm_class) = jvm_class {
-            metadata.insert("udt.jvm_class".to_string(), jvm_class.to_string());
-        }
-        if let Some(python_class) = python_class {
-            metadata.insert("udt.python_class".to_string(), python_class.to_string());
-        }
-        if let Some(serialized_python_class) = serialized_python_class {
-            metadata.insert(
-                "udt.serialized_python_class".to_string(),
-                serialized_python_class.to_string(),
-            );
-        }
-    }
-    metadata
 }
 
 impl PlanResolver<'_> {

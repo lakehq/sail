@@ -181,11 +181,12 @@ fn udt_value_to_string(array: &dyn Array, options: &FormatOptions<'static>) -> R
     let mut builder = GenericStringBuilder::<i32>::new();
     let formatter = ArrayFormatter::try_new(array, options)?;
     let nulls = array.nulls();
+    let mut buffer = String::new();
     for i in 0..array.len() {
         match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
             true => builder.append_null(),
             false => {
-                let mut buffer = String::new();
+                buffer.clear();
                 formatter.value(i).write(&mut buffer)?;
                 // Replace brackets with parentheses for JVM UDT toString format
                 if buffer.starts_with('[') && buffer.ends_with(']') {

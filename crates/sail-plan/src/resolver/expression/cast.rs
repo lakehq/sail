@@ -52,7 +52,7 @@ impl PlanResolver<'_> {
         // CAST(expr AS UserDefinedType) → raise AnalysisException (Spark behavior)
         if matches!(cast_to_type, spec::DataType::UserDefined { .. }) {
             return Err(PlanError::AnalysisError(
-                "[DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION] Cannot resolve \"CAST\" due to data type mismatch: you can't cast UDT to another UDT.".to_string(),
+                "[DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION] Cannot resolve \"CAST\" due to data type mismatch: casting to a UserDefinedType is not supported.".to_string(),
             ));
         }
 
@@ -166,15 +166,17 @@ impl PlanResolver<'_> {
             (_, DataType::Utf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
             }
-            (_, DataType::LargeUtf8, _) if override_string_cast && has_udt_jvm_class => {
-                ScalarUDF::new_from_impl(SparkUdtToUtf8::new()).call(vec![expr])
-            }
+            (_, DataType::LargeUtf8, _) if override_string_cast && has_udt_jvm_class => cast(
+                ScalarUDF::new_from_impl(SparkUdtToUtf8::new()).call(vec![expr]),
+                DataType::LargeUtf8,
+            ),
             (_, DataType::LargeUtf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
             }
-            (_, DataType::Utf8View, _) if override_string_cast && has_udt_jvm_class => {
-                ScalarUDF::new_from_impl(SparkUdtToUtf8::new()).call(vec![expr])
-            }
+            (_, DataType::Utf8View, _) if override_string_cast && has_udt_jvm_class => cast(
+                ScalarUDF::new_from_impl(SparkUdtToUtf8::new()).call(vec![expr]),
+                DataType::Utf8View,
+            ),
             (_, DataType::Utf8View, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
             }
