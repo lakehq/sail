@@ -61,6 +61,8 @@ pub struct LogReplayOptions {
     pub include_stats_json: bool,
     /// Whether to include `baseRowId` / `defaultRowCommitVersion` in the replay output.
     pub include_row_tracking: bool,
+    /// Whether to carry Add-action metadata fields needed to faithfully re-emit an Add action.
+    pub include_extended_add_metadata: bool,
     /// Optional inclusive log version range for commit JSON files.
     pub commit_version_range: Option<(i64, i64)>,
     /// Optional metadata-stage filter applied after log replay.
@@ -81,6 +83,7 @@ impl Default for LogReplayOptions {
             // Preserve current behavior: always project stats.
             include_stats_json: true,
             include_row_tracking: false,
+            include_extended_add_metadata: false,
             commit_version_range: None,
             log_filter: None,
             parquet_predicate: None,
@@ -92,6 +95,7 @@ fn replay_output_schema(
     partition_columns: &[(String, String)],
     include_stats_json: bool,
     include_row_tracking: bool,
+    include_extended_add_metadata: bool,
 ) -> SchemaRef {
     let mut fields = vec![
         Field::new(PATH_COLUMN, DataType::Utf8, true),
@@ -106,9 +110,26 @@ fn replay_output_schema(
     if include_stats_json {
         fields.push(Field::new("stats_json", DataType::Utf8, true));
     }
-    if include_row_tracking {
+    if include_extended_add_metadata {
+        let map_entries = DataType::Struct(
+            vec![
+                Arc::new(Field::new("key", DataType::Utf8, false)),
+                Arc::new(Field::new("value", DataType::Utf8, true)),
+            ]
+            .into(),
+        );
+        fields.push(Field::new(
+            "tags",
+            DataType::Map(Arc::new(Field::new("entries", map_entries, false)), false),
+            true,
+        ));
+    }
+    if include_row_tracking || include_extended_add_metadata {
         fields.push(Field::new("baseRowId", DataType::Int64, true));
         fields.push(Field::new("defaultRowCommitVersion", DataType::Int64, true));
+    }
+    if include_extended_add_metadata {
+        fields.push(Field::new("clusteringProvider", DataType::Utf8, true));
     }
     Arc::new(Schema::new(fields))
 }
@@ -149,6 +170,7 @@ pub fn build_standard_write_layers(
         ctx.table_exists(),
         original_schema,
         sink_mode.clone(),
+        ctx.options().user_metadata.clone(),
     )))
 }
 
@@ -289,6 +311,7 @@ async fn build_log_replay_pipeline_with_files(
                 &partition_columns,
                 options.include_stats_json,
                 options.include_row_tracking,
+                options.include_extended_add_metadata,
             )),
         );
 
@@ -390,6 +413,9 @@ async fn build_log_replay_pipeline_with_files(
     } else {
         "stats_json"
     };
+    let add_field_name = |names: &[&'static str]| -> Option<&'static str> {
+        names.iter().copied().find(|name| has_add_field(name))
+    };
 
     let get_add_field = |field_name: &str| get_field_expr(add_col_expr.clone(), field_name);
     let guard_add = |e: Expr| guard_with(add_is_not_null.clone(), e);
@@ -473,17 +499,46 @@ async fn build_log_replay_pipeline_with_files(
         final_proj.push((stats_expr, "stats_json".to_string()));
     }
 
-    if options.include_row_tracking {
-        let base_row_id_expr = simplify(Expr::Cast(Cast::new(
-            Box::new(guard_add(get_add_field("baseRowId"))),
-            DataType::Int64,
-        )))?;
-        final_proj.push((base_row_id_expr, "baseRowId".to_string()));
-        let default_rcv_expr = simplify(Expr::Cast(Cast::new(
-            Box::new(guard_add(get_add_field("defaultRowCommitVersion"))),
-            DataType::Int64,
-        )))?;
-        final_proj.push((default_rcv_expr, "defaultRowCommitVersion".to_string()));
+    if options.include_extended_add_metadata {
+        if let Some(field) = add_field_name(&["tags"]) {
+            final_proj.push((
+                simplify(guard_add(get_add_field(field)))?,
+                "tags".to_string(),
+            ));
+        }
+    }
+    if options.include_row_tracking || options.include_extended_add_metadata {
+        if let Some(field) = add_field_name(&["baseRowId", "base_row_id"]) {
+            final_proj.push((
+                simplify(Expr::Cast(Cast::new(
+                    Box::new(guard_add(get_add_field(field))),
+                    DataType::Int64,
+                )))?,
+                "baseRowId".to_string(),
+            ));
+        }
+        if let Some(field) =
+            add_field_name(&["defaultRowCommitVersion", "default_row_commit_version"])
+        {
+            final_proj.push((
+                simplify(Expr::Cast(Cast::new(
+                    Box::new(guard_add(get_add_field(field))),
+                    DataType::Int64,
+                )))?,
+                "defaultRowCommitVersion".to_string(),
+            ));
+        }
+    }
+    if options.include_extended_add_metadata {
+        if let Some(field) = add_field_name(&["clusteringProvider", "clustering_provider"]) {
+            final_proj.push((
+                simplify(Expr::Cast(Cast::new(
+                    Box::new(guard_add(get_add_field(field))),
+                    DataType::Utf8,
+                )))?,
+                "clusteringProvider".to_string(),
+            ));
+        }
     }
 
     // Include the deletion vector struct so DeltaScanByAddsExec can apply per-file DV filtering.

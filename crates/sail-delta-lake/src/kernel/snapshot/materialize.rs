@@ -74,7 +74,7 @@ fn build_partition_schema(
 
 fn build_stats_source_schema(snapshot: &DeltaSnapshot) -> DeltaResult<ArrowSchema> {
     let partition_columns = snapshot.metadata().partition_columns();
-    let mode = snapshot.column_mapping_mode();
+    let mode = snapshot.effective_column_mapping_mode();
     let non_partition_fields: Vec<Field> = snapshot
         .schema()
         .fields()
@@ -89,7 +89,7 @@ fn build_stats_source_schema(snapshot: &DeltaSnapshot) -> DeltaResult<ArrowSchem
 fn parse_scan_row_columns(raw: RecordBatch, snapshot: &DeltaSnapshot) -> DeltaResult<RecordBatch> {
     let mut fields = raw.schema().fields().to_vec();
     let mut columns = raw.columns().to_vec();
-    let mode = snapshot.column_mapping_mode();
+    let mode = snapshot.effective_column_mapping_mode();
 
     if let Some((stats_idx, _)) = raw.schema_ref().column_with_name(FIELD_NAME_STATS) {
         let stats_source_arrow = build_stats_source_schema(snapshot)?;
@@ -157,9 +157,14 @@ pub(crate) fn parse_partition_values_array(
 
     for row in 0..num_rows {
         if partitions.is_null(row) {
-            return Err(DeltaTableError::generic(
-                "Expected partition values map, found null entry.",
-            ));
+            for field in partition_schema.fields() {
+                let physical_name = field.physical_name(column_mapping_mode);
+                raw_collected
+                    .get_mut(physical_name)
+                    .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?
+                    .push(None);
+            }
+            continue;
         }
         let raw_values = collect_partition_row(&partitions.value(row))?;
 
@@ -184,7 +189,7 @@ pub(crate) fn parse_partition_values_array(
     let arrow_fields: Fields = Fields::from(
         partition_schema
             .fields()
-            .map(Field::try_from)
+            .map(|field| Field::try_from(&field.make_physical(column_mapping_mode)))
             .collect::<Result<Vec<Field>, _>>()?,
     );
 

@@ -147,6 +147,7 @@ pub async fn build_delete_plan(
         ctx.table_exists(),
         table_schema,
         operation,
+        ctx.options().user_metadata.clone(),
     )
 }
 
@@ -258,5 +259,6 @@ pub async fn build_delete_plan_mor(
         ctx.table_exists(),
         table_schema,
         sail_common_datafusion::datasource::PhysicalSinkMode::Append,
+        ctx.options().user_metadata.clone(),
     )))
 }

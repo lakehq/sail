@@ -317,6 +317,39 @@ def _read_delta_log_json_file(location: Path, filename: str) -> object:
         return json.load(f)
 
 
+def _resolve_delta_log_commit_file(location: Path, filename: str) -> Path:
+    direct_path = location / filename
+    if direct_path.exists():
+        return direct_path
+
+    delta_log_path = location / "_delta_log" / filename
+    if delta_log_path.exists():
+        return delta_log_path
+
+    msg = f"delta log commit file does not exist: {direct_path} or {delta_log_path}"
+    raise AssertionError(msg)
+
+
+def _load_delta_log_actions(location: Path, filename: str) -> list[dict]:
+    file_path = _resolve_delta_log_commit_file(location, filename)
+    actions = []
+    with file_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            obj = json.loads(stripped)
+            assert isinstance(obj, dict), f"delta log action must be an object: {obj!r}"
+            actions.append(obj)
+    assert actions, f"no delta log actions found in {file_path}"
+    return actions
+
+
+def _path_exists(obj: object, path: str) -> bool:
+    expr = _compile_jsonpath(path)
+    return bool(expr.find(obj))
+
+
 def _parse_version_list(raw: str) -> list[int]:
     versions = []
     for raw_part in raw.split(","):
@@ -335,6 +368,65 @@ def _parse_i64_list(raw: str) -> list[int]:
             continue
         values.append(int(value_text))
     return values
+
+
+@then(parsers.parse("delta log commit {filename} in {location_var} contains action"))
+def delta_log_commit_contains_action(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    datatable,
+) -> None:
+    """Assert a commit contains actions with expected path/value pairs."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    actions = _load_delta_log_actions(Path(location.path), filename)
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+        "expected datatable with columns: | path | value |"
+    )
+
+    for row in rows:
+        if not row or len(row) < 2:  # noqa: PLR2004
+            continue
+        path, raw_value = row[0], row[1]
+        expected = _parse_expected_value(raw_value)
+        matched = False
+        last_actual: object = None
+        for action in actions:
+            try:
+                actual = _get_by_path(action, path)
+            except KeyError:
+                continue
+            last_actual = actual
+            if actual == expected:
+                matched = True
+                break
+        assert matched, f"field {path!r}: expected {expected!r}, got {last_actual!r} across {len(actions)} actions"
+
+
+@then(parsers.parse("delta log commit {filename} in {location_var} has no action with sub-field {field} set"))
+def delta_log_commit_has_no_action_with_sub_field_set(
+    filename: str,
+    location_var: str,
+    field: str,
+    variables: dict,
+) -> None:
+    """Assert no action in a commit contains the given sub-field."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    actions = _load_delta_log_actions(Path(location.path), filename)
+    for action in actions:
+        assert not _path_exists(action, field), f"expected no action to contain sub-field {field!r}: {action!r}"
 
 
 @then(
@@ -551,31 +643,74 @@ def _latest_effective_protocol_and_metadata_from_variables(variables: dict) -> d
 
 
 def _checkpoint_row_to_dict(table, row_index: int) -> dict:
-    """Convert a single row of a pyarrow checkpoint Table to nested Python dicts."""
-    row = {}
-    for col_name in table.column_names:
-        col = table.column(col_name)
-        value = col[row_index].as_py()
-        row[col_name] = value
-    return row
+    """Convert one pyarrow checkpoint table row to nested Python objects."""
+    return {col_name: table.column(col_name)[row_index].as_py() for col_name in table.column_names}
 
 
 def _load_checkpoint_parquet(location: Path, filename: str) -> list[dict]:
-    """Load a checkpoint parquet file and return a list of nested dict rows."""
+    """Load a checkpoint parquet file and return nested row dictionaries."""
     try:
         import pyarrow.parquet as pq  # noqa: PLC0415
     except ModuleNotFoundError as e:  # pragma: no cover
         msg = "pyarrow is required for checkpoint parquet assertions"
         raise RuntimeError(msg) from e
 
-    log_dir = location / "_delta_log"
-    cp_path = log_dir / filename
-    assert cp_path.exists(), f"checkpoint parquet not found: {cp_path}"
-    table = pq.read_table(cp_path)
-    rows: list[dict] = []
-    for i in range(table.num_rows):
-        rows.append(_checkpoint_row_to_dict(table, i))  # noqa: PERF401
-    return rows
+    checkpoint_path = location / "_delta_log" / filename
+    assert checkpoint_path.exists(), f"checkpoint parquet not found: {checkpoint_path}"
+    table = pq.read_table(checkpoint_path)
+    return [_checkpoint_row_to_dict(table, i) for i in range(table.num_rows)]
+
+
+def _physical_name_for_column(location: Path, column: str) -> str:
+    """Return the Delta column mapping physical name for a top-level column."""
+    actions = _first_commit_actions(location)
+    metadata = actions.get("metaData")
+    assert metadata is not None, "metaData action not found in first delta log"
+    schema_string = metadata.get("schemaString")
+    assert isinstance(schema_string, str), "metaData.schemaString must be present"
+    schema = json.loads(schema_string)
+    for field in schema.get("fields", []):
+        if field.get("name") == column:
+            field_metadata = field.get("metadata", {})
+            physical_name = field_metadata.get("delta.columnMapping.physicalName", column)
+            assert isinstance(physical_name, str)
+            return physical_name
+    msg = f"column {column!r} not found in Delta schema"
+    raise AssertionError(msg)
+
+
+@then(parsers.parse("delta log add partitionValues in {location_var} uses physical name for column {column}"))
+def delta_log_add_partition_values_uses_physical_name(
+    location_var: str,
+    column: str,
+    variables: dict,
+) -> None:
+    """Assert column-mapped add.partitionValues keys use physical names."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    location_path = Path(location.path)
+    physical_name = _physical_name_for_column(location_path, column)
+    assert physical_name != column, f"column {column!r} is not column-mapped"
+
+    found_physical_key = False
+    for log_file in sorted((location_path / "_delta_log").glob("*.json")):
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line)
+                add = obj.get("add")
+                if not isinstance(add, dict):
+                    continue
+                partition_values = add.get("partitionValues", {})
+                assert column not in partition_values, (
+                    f"add.partitionValues should not use logical key {column!r}: {partition_values}"
+                )
+                if physical_name in partition_values:
+                    found_physical_key = True
+
+    assert found_physical_key, f"expected add.partitionValues to contain physical key {physical_name!r}"
 
 
 @then(parsers.parse("checkpoint parquet file {filename} in {location_var} contains add fields"))
@@ -585,12 +720,7 @@ def checkpoint_parquet_contains_add_fields(
     variables: dict,
     datatable,
 ) -> None:
-    """Assert fields inside the ``add`` struct of a checkpoint parquet file match expected values.
-
-    The datatable must have two columns ``path`` and ``value``. ``path`` is a JSONPath
-    expression into the ``add`` struct — for example ``stats_parsed.minValues.id``,
-    ``partitionValues_parsed.year``, ``baseRowId``, or ``defaultRowCommitVersion``.
-    """
+    """Assert fields inside the checkpoint ``add`` struct match expected values."""
     if is_jvm_spark():
         pytest.skip("Delta log assertions are Sail-only")
 
@@ -598,7 +728,7 @@ def checkpoint_parquet_contains_add_fields(
     assert location is not None, f"Variable {location_var!r} not found"
 
     rows = _load_checkpoint_parquet(Path(location.path), filename)
-    add_rows = [r.get("add") for r in rows if r.get("add") is not None]
+    add_rows = [row.get("add") for row in rows if row.get("add") is not None]
 
     assert datatable is not None, "expected a datatable: | path | value |"
     header, *dtable_rows = datatable
@@ -610,7 +740,6 @@ def checkpoint_parquet_contains_add_fields(
             continue
         path, raw_value = drow[0], drow[1]
         expected = _parse_expected_value(raw_value)
-        # Try each add row until one satisfies the path; report last actual on failure.
         last_actual: object = None
         matched = False
         for add in add_rows:
@@ -625,6 +754,97 @@ def checkpoint_parquet_contains_add_fields(
         assert matched, f"field {path!r}: expected {expected!r}, got {last_actual!r} across {len(add_rows)} add rows"
 
 
+@then(
+    parsers.parse(
+        "checkpoint parquet file {filename} in {location_var} contains physical partitionValues_parsed for column {column} with value {raw_value}"
+    )
+)
+def checkpoint_parquet_contains_physical_partition_value(
+    filename: str,
+    location_var: str,
+    column: str,
+    raw_value: str,
+    variables: dict,
+) -> None:
+    """Assert partitionValues_parsed uses a column mapping physical field name."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    location_path = Path(location.path)
+    physical_name = _physical_name_for_column(location_path, column)
+    assert physical_name != column, f"column {column!r} is not column-mapped"
+    expected = _parse_expected_value(raw_value)
+
+    rows = _load_checkpoint_parquet(location_path, filename)
+    add_rows = [row.get("add") for row in rows if row.get("add") is not None]
+    matched = False
+    last_actual: object = None
+    for add in add_rows:
+        partition_values = add.get("partitionValues_parsed")
+        if not isinstance(partition_values, dict):
+            continue
+        assert column not in partition_values, (
+            f"partitionValues_parsed should not use logical field {column!r}: {partition_values}"
+        )
+        last_actual = partition_values.get(physical_name)
+        if last_actual == expected:
+            matched = True
+            break
+
+    assert matched, (
+        f"field partitionValues_parsed.{physical_name!r}: expected {expected!r}, "
+        f"got {last_actual!r} across {len(add_rows)} add rows"
+    )
+
+
+@then(
+    parsers.parse(
+        "checkpoint parquet file {filename} in {location_var} contains physical stats_parsed {stats_kind} for column {column} with value {raw_value}"
+    )
+)
+def checkpoint_parquet_contains_physical_stats_value(
+    filename: str,
+    location_var: str,
+    stats_kind: str,
+    column: str,
+    raw_value: str,
+    variables: dict,
+) -> None:
+    """Assert stats_parsed uses a column mapping physical field name."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    assert stats_kind in {"minValues", "maxValues", "nullCount"}
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    location_path = Path(location.path)
+    physical_name = _physical_name_for_column(location_path, column)
+    assert physical_name != column, f"column {column!r} is not column-mapped"
+    expected = _parse_expected_value(raw_value)
+
+    rows = _load_checkpoint_parquet(location_path, filename)
+    add_rows = [row.get("add") for row in rows if row.get("add") is not None]
+    matched = False
+    last_actual: object = None
+    for add in add_rows:
+        stats = add.get("stats_parsed")
+        values = stats.get(stats_kind) if isinstance(stats, dict) else None
+        if not isinstance(values, dict):
+            continue
+        assert column not in values, f"stats_parsed.{stats_kind} should not use logical field {column!r}: {values}"
+        last_actual = values.get(physical_name)
+        if last_actual == expected:
+            matched = True
+            break
+
+    assert matched, (
+        f"field stats_parsed.{stats_kind}.{physical_name!r}: expected {expected!r}, "
+        f"got {last_actual!r} across {len(add_rows)} add rows"
+    )
+
+
 @then(parsers.parse("checkpoint parquet file {filename} in {location_var} does not contain add sub-field {field}"))
 def checkpoint_parquet_add_missing_field(
     filename: str,
@@ -632,11 +852,7 @@ def checkpoint_parquet_add_missing_field(
     field: str,
     variables: dict,
 ) -> None:
-    """Assert that the ``add`` struct does NOT have a direct sub-field named ``field``.
-
-    Useful to check that ``stats_parsed`` / ``partitionValues_parsed`` are absent when
-    the corresponding property is off.
-    """
+    """Assert the checkpoint ``add`` struct does not have a direct sub-field."""
     if is_jvm_spark():
         pytest.skip("Delta log assertions are Sail-only")
 
@@ -649,116 +865,15 @@ def checkpoint_parquet_add_missing_field(
         msg = "pyarrow is required for checkpoint parquet assertions"
         raise RuntimeError(msg) from e
 
-    log_dir = Path(location.path) / "_delta_log"
-    cp_path = log_dir / filename
-    assert cp_path.exists(), f"checkpoint parquet not found: {cp_path}"
-    schema = pq.read_schema(cp_path)
+    checkpoint_path = Path(location.path) / "_delta_log" / filename
+    assert checkpoint_path.exists(), f"checkpoint parquet not found: {checkpoint_path}"
+    schema = pq.read_schema(checkpoint_path)
     add_field = schema.field("add") if "add" in schema.names else None
     assert add_field is not None, "checkpoint schema must have an 'add' column"
     sub_names = {f.name for f in add_field.type}
     assert field not in sub_names, (
-        f"expected 'add' struct to NOT have sub-field {field!r}; found fields: {sorted(sub_names)}"
+        f"expected 'add' struct to not have sub-field {field!r}; found fields: {sorted(sub_names)}"
     )
-
-
-def _load_delta_log_actions(location: Path, filename: str) -> list[dict]:
-    """Parse an NDJSON Delta commit log file and return the list of action objects."""
-    file_path = location / filename
-    if not file_path.exists():
-        candidate = location / "_delta_log" / filename
-        if candidate.exists():
-            file_path = candidate
-    assert file_path.exists(), f"delta log file does not exist: {file_path}"
-    actions: list[dict] = []
-    with file_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            actions.append(json.loads(stripped))
-    return actions
-
-
-@then(parsers.parse("delta log commit {filename} in {location_var} contains action"))
-def delta_log_commit_action_contains(
-    filename: str,
-    location_var: str,
-    variables: dict,
-    datatable,
-) -> None:
-    """Assert that at least one action object in the NDJSON commit log has a specific
-    JSONPath-addressable field equal to an expected value.
-
-    The datatable must have two columns ``path`` and ``value``. ``path`` is a JSONPath
-    expression applied to each action object — for example ``add.baseRowId`` or
-    ``domainMetadata.configuration``. The assertion passes when ANY action in the file
-    yields a match; use separate rows to assert multiple invariants.
-    """
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
-    location = variables.get(location_var)
-    assert location is not None, f"Variable {location_var!r} not found"
-
-    actions = _load_delta_log_actions(Path(location.path), filename)
-
-    assert datatable is not None, "expected a datatable: | path | value |"
-    header, *rows = datatable
-    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
-        "expected datatable with columns: | path | value |"
-    )
-    for drow in rows:
-        if not drow or len(drow) < 2:  # noqa: PLR2004
-            continue
-        path, raw_value = drow[0], drow[1]
-        expected = _parse_expected_value(raw_value)
-        last_actual: object = None
-        matched = False
-        for action in actions:
-            try:
-                actual = _get_by_path(action, path)
-            except KeyError:
-                continue
-            last_actual = actual
-            if actual == expected:
-                matched = True
-                break
-        assert matched, (
-            f"field {path!r}: expected {expected!r}, no action matched (last seen {last_actual!r} over {len(actions)} actions)"
-        )
-
-
-@then(parsers.parse("delta log commit {filename} in {location_var} has no action with sub-field {field} set"))
-def delta_log_commit_no_action_with_subfield_set(
-    filename: str,
-    location_var: str,
-    field: str,
-    variables: dict,
-) -> None:
-    """Assert no NDJSON action has the given dot-path set to a non-null value.
-
-    ``field`` is a dotted path such as ``add.baseRowId``.
-    """
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
-    location = variables.get(location_var)
-    assert location is not None, f"Variable {location_var!r} not found"
-
-    actions = _load_delta_log_actions(Path(location.path), filename)
-    parts = field.split(".")
-    for action in actions:
-        cursor: object = action
-        found = True
-        for part in parts:
-            if isinstance(cursor, dict) and part in cursor:
-                cursor = cursor[part]
-            else:
-                found = False
-                break
-        if found and cursor is not None:
-            msg = f"expected no action to carry {field!r} set; found value {cursor!r} in action {action!r}"
-            raise AssertionError(msg)
 
 
 @then(parsers.parse("delta log commit {filename} in {location_var} has rowTracking high-water-mark {hwm:d}"))
@@ -768,9 +883,7 @@ def delta_log_commit_row_tracking_hwm(
     hwm: int,
     variables: dict,
 ) -> None:
-    """Assert an NDJSON commit contains a ``delta.rowTracking`` domainMetadata action whose
-    (JSON-encoded) ``configuration.rowIdHighWaterMark`` equals the given integer.
-    """
+    """Assert a commit has a ``delta.rowTracking`` high-water mark."""
     if is_jvm_spark():
         pytest.skip("Delta log assertions are Sail-only")
 
@@ -780,9 +893,7 @@ def delta_log_commit_row_tracking_hwm(
     actions = _load_delta_log_actions(Path(location.path), filename)
     for action in actions:
         dm = action.get("domainMetadata") if isinstance(action, dict) else None
-        if not isinstance(dm, dict):
-            continue
-        if dm.get("domain") != "delta.rowTracking":
+        if not isinstance(dm, dict) or dm.get("domain") != "delta.rowTracking":
             continue
         cfg = dm.get("configuration")
         if isinstance(cfg, str):

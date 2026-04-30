@@ -12,8 +12,8 @@
 //! This module eliminates duplication by providing:
 //!
 //! - [`assemble_commit_plan`]: builds the writer → (∪ remover) → coalesce → commit tail.
-//! - [`build_remove_from_touched_files`]: joins a touched-file plan with the log replay
-//!   pipeline to produce the Add-action stream consumed by `DeltaRemoveActionsExec`.
+//! - [`build_adds_from_touched_files`]: joins a touched-file plan with the log replay
+//!   pipeline to produce the Add-action stream consumed by row-level writers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,6 +63,7 @@ pub fn assemble_commit_plan(
     table_exists: bool,
     table_schema: SchemaRef,
     operation: Option<DeltaOperation>,
+    user_metadata: Option<String>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -90,21 +91,22 @@ pub fn assemble_commit_plan(
         table_exists,
         table_schema,
         PhysicalSinkMode::Append,
+        user_metadata,
     )))
 }
 
-/// Build a remove-action source from a set of touched file paths.
+/// Build an Add-action metadata source from a set of touched file paths.
 ///
 /// Joins the `touched_file_plan` (which yields `PATH_COLUMN` values for files that
 /// were modified) with a log replay pipeline to retrieve the full Add-action metadata.
-/// The output is suitable for feeding into [`DeltaRemoveActionsExec`].
-pub async fn build_remove_from_touched_files(
+pub async fn build_adds_from_touched_files(
     ctx: &PlannerContext<'_>,
     snapshot: &DeltaSnapshot,
     touched_file_plan: Arc<dyn ExecutionPlan>,
     table_url: &Url,
     version: i64,
     partition_columns: &[String],
+    log_replay_options: LogReplayOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let touched_plan = reset_plan_states(touched_file_plan)?;
 
@@ -119,8 +121,8 @@ pub async fn build_remove_from_touched_files(
         ctx,
         snapshot,
         LogReplayOptions {
-            include_row_tracking,
-            ..Default::default()
+            include_row_tracking: log_replay_options.include_row_tracking || include_row_tracking,
+            ..log_replay_options
         },
     )
     .await?;
@@ -174,4 +176,27 @@ pub async fn build_remove_from_touched_files(
     )?);
 
     Ok(touched_adds)
+}
+
+/// Build a remove-action source from a set of touched file paths.
+///
+/// The output is suitable for feeding into [`DeltaRemoveActionsExec`].
+pub async fn build_remove_from_touched_files(
+    ctx: &PlannerContext<'_>,
+    snapshot: &DeltaSnapshot,
+    touched_file_plan: Arc<dyn ExecutionPlan>,
+    table_url: &Url,
+    version: i64,
+    partition_columns: &[String],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    build_adds_from_touched_files(
+        ctx,
+        snapshot,
+        touched_file_plan,
+        table_url,
+        version,
+        partition_columns,
+        LogReplayOptions::default(),
+    )
+    .await
 }

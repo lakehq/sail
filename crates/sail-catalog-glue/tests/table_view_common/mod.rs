@@ -46,7 +46,6 @@ pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTab
         bucket_by: None,
         if_not_exists: false,
         replace: false,
-        options: vec![],
         properties: vec![],
     }
 }

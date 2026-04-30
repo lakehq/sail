@@ -38,7 +38,6 @@ pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
 pub mod expressions;
-pub mod provider;
 pub mod pruning;
 pub mod scan;
 pub mod schema;
@@ -48,7 +47,6 @@ pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use expressions::{
     collect_physical_columns, get_pushdown_filters, simplify_expr, PredicateProperties,
 };
-pub use provider::DeltaTableProvider;
 pub use pruning::{prune_files, PruningResult};
 pub use scan::build_file_scan_config;
 pub use schema::{
@@ -248,6 +246,7 @@ impl DeltaScanConfigBuilder {
 
         Ok(DeltaScanConfig {
             file_column_name,
+            row_index_column_name: None,
             wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
@@ -264,6 +263,8 @@ impl DeltaScanConfigBuilder {
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
+    /// Include the file-local row index for each record.
+    pub row_index_column_name: Option<String>,
     /// Wrap partition values in a dictionary encoding
     pub wrap_partition_values: bool,
     /// Allow pushdown of the scan filter

@@ -94,6 +94,7 @@ pub fn snapshot_exposes_row_tracking_metadata(snapshot: &DeltaSnapshot) -> bool 
 pub fn df_logical_schema(
     snapshot: &DeltaSnapshot,
     file_column_name: &Option<String>,
+    row_index_column_name: &Option<String>,
     commit_version_column_name: &Option<String>,
     commit_timestamp_column_name: &Option<String>,
     schema: Option<SchemaRef>,
@@ -140,6 +141,14 @@ pub fn df_logical_schema(
             commit_timestamp_column_name,
             ArrowDataType::Int64,
             true,
+        )));
+    }
+
+    if let Some(row_index_column_name) = row_index_column_name {
+        fields.push(Arc::new(Field::new(
+            row_index_column_name,
+            ArrowDataType::Int64,
+            false,
         )));
     }
 

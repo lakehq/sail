@@ -40,7 +40,9 @@ use crate::delta_log::{
     parse_commit_version_from_location, read_last_checkpoint_version_from_store,
     resolve_commit_timestamp_from_actions,
 };
-use crate::kernel::checkpoint_augment::AddAugmentationConfig;
+use crate::kernel::checkpoint_augment::{
+    normalize_checkpoint_batch_for_decode, AddAugmentationConfig,
+};
 use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
     checkpoint_path, last_checkpoint_path, sidecar_file_path, uuid_checkpoint_path, Action, Add,
@@ -479,7 +481,8 @@ fn encode_checkpoint_rows(
 }
 
 pub(crate) fn decode_checkpoint_rows(batch: &RecordBatch) -> DeltaResult<Vec<CheckpointActionRow>> {
-    serde_arrow::from_record_batch(batch).map_err(DeltaTableError::generic_err)
+    let batch = normalize_checkpoint_batch_for_decode(batch)?;
+    serde_arrow::from_record_batch(&batch).map_err(DeltaTableError::generic_err)
 }
 
 fn checkpoint_fields() -> DeltaResult<Vec<FieldRef>> {
@@ -673,7 +676,6 @@ impl<'a> CheckpointManager<'a> {
         let now_millis = Utc::now().timestamp_millis();
         let checkpoint_add_count = i64::try_from(state.adds.len())
             .map_err(|_| DeltaTableError::generic("add action count overflow"))?;
-
         let protocol = state.protocol.ok_or_else(|| {
             DeltaTableError::generic("Cannot create checkpoint without protocol action")
         })?;
@@ -1303,7 +1305,9 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::DateTime;
+    use datafusion::arrow::array::StructArray;
     use datafusion::arrow::datatypes::DataType as ArrowDataType;
+    use datafusion::arrow::record_batch::RecordBatch;
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
@@ -1320,10 +1324,15 @@ mod tests {
         Transaction,
     };
 
-    fn encode_rows_for_test(
+    fn encode_rows_for_test(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
+        encode_rows_with_properties(rows, std::iter::empty())
+    }
+
+    fn encode_rows_with_properties(
         rows: &Vec<CheckpointActionRow>,
-    ) -> DeltaResult<datafusion::arrow::record_batch::RecordBatch> {
-        let metadata = test_metadata(std::iter::empty())?;
+        configuration: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> DeltaResult<RecordBatch> {
+        let metadata = test_metadata(configuration)?;
         let augment = AddAugmentationConfig::from_metadata(&metadata)?;
         encode_checkpoint_rows(rows, &augment)
     }
@@ -1407,6 +1416,62 @@ mod tests {
                 .map(|add| add.path.as_str()),
             Some("part-000.parquet")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_row_can_omit_stats_json_and_decode_from_stats_parsed() -> DeltaResult<()> {
+        let stats =
+            r#"{"numRecords":3,"minValues":{"id":1},"maxValues":{"id":9},"nullCount":{"id":0}}"#;
+        let rows = vec![CheckpointActionRow {
+            add: Some(Add {
+                path: "part-000.parquet".to_string(),
+                partition_values: HashMap::new(),
+                size: 10,
+                modification_time: 20,
+                data_change: true,
+                stats: Some(stats.to_string()),
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+                clustering_provider: None,
+                commit_version: None,
+                commit_timestamp: None,
+            }),
+            ..Default::default()
+        }];
+        let batch = encode_rows_with_properties(
+            &rows,
+            [
+                ("delta.checkpoint.writeStatsAsStruct", "true"),
+                ("delta.checkpoint.writeStatsAsJson", "false"),
+            ],
+        )?;
+
+        let add = batch
+            .column_by_name("add")
+            .and_then(|column| column.as_any().downcast_ref::<StructArray>())
+            .ok_or_else(|| DeltaTableError::schema("checkpoint add column missing"))?;
+        let add_field_names = add
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert!(add_field_names.contains(&"stats_parsed"));
+        assert!(!add_field_names.contains(&"stats"));
+
+        let decoded = decode_checkpoint_rows(&batch)?;
+        let decoded_stats = decoded
+            .first()
+            .and_then(|row| row.add.as_ref())
+            .and_then(|add| add.stats.as_deref())
+            .ok_or_else(|| DeltaTableError::generic("decoded stats should be reconstructed"))?;
+        let decoded_json: serde_json::Value = serde_json::from_str(decoded_stats)?;
+        assert_eq!(decoded_json["numRecords"], 3);
+        assert_eq!(decoded_json["minValues"]["id"], 1);
+        assert_eq!(decoded_json["maxValues"]["id"], 9);
+        assert_eq!(decoded_json["nullCount"]["id"], 0);
         Ok(())
     }
 

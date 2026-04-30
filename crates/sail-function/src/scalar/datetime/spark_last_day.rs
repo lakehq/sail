@@ -6,7 +6,12 @@ use datafusion::arrow::array::{ArrayRef, AsArray, Date32Array};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::types::NativeType;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::preimage::PreimageResult;
+use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::{
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion_expr_common::interval_arithmetic::Interval;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
@@ -104,6 +109,51 @@ impl ScalarUDFImpl for SparkLastDay {
                 "The first argument of the Spark `last_day` function can only be a date, string or timestamp, but got {}", &arg_types[0]
             )
         }
+    }
+
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        _info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        if args.len() != 1 {
+            return Ok(PreimageResult::None);
+        }
+        let Expr::Literal(lit, _) = lit_expr else {
+            return Ok(PreimageResult::None);
+        };
+        let Some(d) = lit_as_date32(lit) else {
+            return Ok(PreimageResult::None);
+        };
+        let Some(date) = Date32Type::to_naive_date_opt(d) else {
+            return Ok(PreimageResult::None);
+        };
+        let Some(next_day) = date.checked_add_signed(Duration::days(1)) else {
+            return Ok(PreimageResult::None);
+        };
+        // If D is not the last day of any month the equality is
+        // unsatisfiable; returning a Range here would be unsound because
+        // the rewrite replaces the predicate (no outer re-filter).
+        if next_day.day() != 1 {
+            return Ok(PreimageResult::None);
+        }
+        let Some(first_of_month) = NaiveDate::from_ymd_opt(date.year(), date.month(), 1) else {
+            return Ok(PreimageResult::None);
+        };
+        let lo = ScalarValue::Date32(Some(Date32Type::from_naive_date(first_of_month)));
+        let hi = ScalarValue::Date32(Some(Date32Type::from_naive_date(next_day)));
+        Ok(PreimageResult::Range {
+            expr: args[0].clone(),
+            interval: Box::new(Interval::try_new(lo, hi)?),
+        })
+    }
+}
+
+fn lit_as_date32(v: &ScalarValue) -> Option<i32> {
+    match v {
+        ScalarValue::Date32(Some(d)) => Some(*d),
+        _ => None,
     }
 }
 

@@ -9,7 +9,12 @@ data:
   operationMetrics:
     executionTimeMs: <time_ms>
     numAddedFiles: 1
+    numCopiedRows: 0
+    numDeletedRows: 1
+    numDeletionVectorsAdded: 1
+    numDeletionVectorsUpdated: 0
     numRemovedFiles: 1
+    scanTimeMs: <time_ms>
   operationParameters:
     predicate: 'id = 2 '
   timestamp: <timestamp>

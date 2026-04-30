@@ -56,6 +56,7 @@ pub(crate) async fn plan_delta_scan(
     let full_logical_schema = df_logical_schema(
         snapshot,
         &config.file_column_name,
+        &config.row_index_column_name,
         &config.commit_version_column_name,
         &config.commit_timestamp_column_name,
         Some(schema.clone()),
@@ -224,7 +225,11 @@ pub(crate) async fn plan_delta_scan(
         .fields()
         .iter()
         .any(|f| is_metadata_struct_field(f));
-    let files = if has_dvs || wants_row_tracking_metadata {
+    let row_index_projected = config
+        .row_index_column_name
+        .as_ref()
+        .is_some_and(|name| logical_schema.field_with_name(name).is_ok());
+    let files = if has_dvs || row_index_projected || wants_row_tracking_metadata {
         None
     } else {
         files
