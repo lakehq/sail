@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 
-import pytest
 import pandas as pd
+import pytest
 from pandas.testing import assert_frame_equal
 
 from pysail.testing.spark.utils.files import get_data_directory_size
