@@ -167,6 +167,8 @@ def test_parquet_read_with_custom_extension(spark, sample_pandas_df, tmp_path):
     directory.mkdir()
     file_path = directory / "data.hive"
     sample_pandas_df.to_parquet(str(file_path))
+    # TODO: add a file with another extension and the file should be ignored
+    #   when the filtering logic is implemented properly
 
     expected_count = len(sample_pandas_df)
     expected_rows = sorted(sample_pandas_df.to_dict(orient="records"), key=safe_sort_key)
