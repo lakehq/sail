@@ -24,11 +24,20 @@ impl Transaction {
         schema: &Schema,
         partition_spec: &PartitionSpec,
     ) -> ManifestMetadata {
+        let format_version = if schema
+            .fields()
+            .iter()
+            .any(|field| field.field_type.contains_variant())
+        {
+            FormatVersion::V3
+        } else {
+            FormatVersion::V2
+        };
         ManifestMetadata::new(
             std::sync::Arc::new(schema.clone()),
             schema.schema_id(),
             partition_spec.clone(),
-            FormatVersion::V2,
+            format_version,
             ManifestContentType::Data,
         )
     }

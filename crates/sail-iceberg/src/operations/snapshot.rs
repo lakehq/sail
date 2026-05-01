@@ -101,6 +101,7 @@ impl<'a> SnapshotProducer<'a> {
                 ManifestContentType::Data,
             )
         };
+        let format_version = metadata.format_version;
         let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
         for df in &self.added_data_files {
             writer.add(df.clone());
@@ -179,10 +180,8 @@ impl<'a> SnapshotProducer<'a> {
                 .bytes()
                 .await
                 .map_err(|e| format!("Failed to read parent manifest list bytes: {}", e))?;
-            let parent_manifest_list = crate::spec::ManifestList::parse_with_version(
-                &manifest_list_data,
-                FormatVersion::V2,
-            )?;
+            let parent_manifest_list =
+                crate::spec::ManifestList::parse_with_version(&manifest_list_data, format_version)?;
             log::trace!(
                 "snapshot producer: found parent manifest files: {}",
                 parent_manifest_list.entries().len()
@@ -206,7 +205,7 @@ impl<'a> SnapshotProducer<'a> {
             "snapshot producer: new manifest list will have files: {}",
             total_manifest_count
         );
-        let list_bytes = list_writer.to_bytes(FormatVersion::V2)?;
+        let list_bytes = list_writer.to_bytes(format_version)?;
         let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
         let list_path = object_store::path::Path::from(list_rel.as_str());
         store_ctx

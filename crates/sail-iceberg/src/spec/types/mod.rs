@@ -176,6 +176,22 @@ impl Type {
             Type::Primitive(PrimitiveType::Float) | Type::Primitive(PrimitiveType::Double)
         )
     }
+
+    pub fn contains_variant(&self) -> bool {
+        match self {
+            Type::Primitive(PrimitiveType::Variant) => true,
+            Type::Primitive(_) => false,
+            Type::Struct(struct_type) => struct_type
+                .fields()
+                .iter()
+                .any(|field| field.field_type.contains_variant()),
+            Type::List(list_type) => list_type.element_field.field_type.contains_variant(),
+            Type::Map(map_type) => {
+                map_type.key_field.field_type.contains_variant()
+                    || map_type.value_field.field_type.contains_variant()
+            }
+        }
+    }
 }
 
 impl From<PrimitiveType> for Type {
@@ -245,6 +261,8 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
+    /// Semi-structured data encoded using the Parquet Variant encoding.
+    Variant,
 }
 
 impl PrimitiveType {
@@ -268,6 +286,7 @@ impl PrimitiveType {
                 | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(_))
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Variant, PrimitiveLiteral::Binary(_))
         )
     }
 
@@ -342,7 +361,9 @@ impl PrimitiveType {
             PrimitiveType::Uuid => {
                 return Err("uuid bound decoding not supported".to_string());
             }
-            PrimitiveType::Fixed(_) | PrimitiveType::Binary => PL::Binary(bytes.to_vec()),
+            PrimitiveType::Fixed(_) | PrimitiveType::Binary | PrimitiveType::Variant => {
+                PL::Binary(bytes.to_vec())
+            }
             PrimitiveType::Decimal { .. } => {
                 return Err("decimal bound decoding not supported".to_string());
             }
@@ -474,6 +495,7 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({})", size),
             PrimitiveType::Binary => write!(f, "binary"),
+            PrimitiveType::Variant => write!(f, "variant"),
         }
     }
 }

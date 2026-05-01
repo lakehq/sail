@@ -61,6 +61,33 @@ def _latest_metadata_path(table_location: Path) -> Path:
     return metadata_files[-1]
 
 
+def _get_by_path(obj: object, path: str) -> object:
+    value = obj
+    for part in path.split("."):
+        match = re.fullmatch(r"([^\[\]]+)((?:\[\d+\])*)", part)
+        assert match is not None, f"invalid metadata path: {path!r}"
+        key = match.group(1)
+        assert isinstance(value, dict), f"path {path!r} expected object before key {key!r}, got {value!r}"
+        assert key in value, f"path {path!r} missing key {key!r}"
+        value = value[key]
+        for raw_index in re.findall(r"\[(\d+)\]", match.group(2)):
+            index = int(raw_index)
+            assert isinstance(value, list), f"path {path!r} expected list before index {index}, got {value!r}"
+            assert 0 <= index < len(value), f"path {path!r} index {index} out of range"
+            value = value[index]
+    return value
+
+
+def _parse_expected_value(raw: str) -> object:
+    s = raw.strip()
+    if not s:
+        return ""
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        return raw
+
+
 def _ordered_snapshots(metadata: dict) -> list[dict]:
     snapshots_by_id = {
         snapshot["snapshot-id"]: snapshot for snapshot in metadata.get("snapshots", []) if "snapshot-id" in snapshot
@@ -384,6 +411,26 @@ def check_iceberg_metadata_has_snapshot(variables):
 
     assert "current-snapshot-id" in metadata, "no current-snapshot-id in metadata"
     assert metadata["current-snapshot-id"] is not None, "current-snapshot-id is null"
+
+
+@then("iceberg metadata contains")
+def check_iceberg_metadata_contains(variables, datatable) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg metadata inspection"
+
+    table_path = Path(location.path)
+    metadata = _find_latest_metadata(table_path)
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert header[:2] == ["path", "value"], "expected datatable header: path | value"
+    for row in rows:
+        if not row or not row[0].strip():
+            continue
+        path, raw = row[0], row[1] if len(row) > 1 else ""
+        expected = _parse_expected_value(raw)
+        actual = _get_by_path(metadata, path)
+        assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
 
 
 @then("iceberg metadata matches snapshot")

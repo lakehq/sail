@@ -115,6 +115,7 @@ pub struct MetadataLog {
 enum TableMetadataEnum {
     V1(TableMetadata),
     V2(TableMetadata),
+    V3(TableMetadata),
 }
 
 impl TableMetadata {
@@ -186,7 +187,9 @@ impl TableMetadata {
                         e
                     })
                     .map(|tm| match tm {
-                        TableMetadataEnum::V1(t) | TableMetadataEnum::V2(t) => t,
+                        TableMetadataEnum::V1(t)
+                        | TableMetadataEnum::V2(t)
+                        | TableMetadataEnum::V3(t) => t,
                     })
             }
             Err(e) => {

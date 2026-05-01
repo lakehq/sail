@@ -52,6 +52,42 @@ fn avro_primitive(prim: &PrimitiveType) -> AvroSchema {
             default: None,
         }),
         PrimitiveType::Binary => AvroSchema::Bytes,
+        PrimitiveType::Variant => {
+            let fields = vec![
+                AvroRecordField {
+                    name: "metadata".to_string(),
+                    doc: None,
+                    default: None,
+                    aliases: None,
+                    order: RecordFieldOrder::Ignore,
+                    position: 0,
+                    schema: AvroSchema::Bytes,
+                    custom_attributes: BTreeMap::new(),
+                },
+                AvroRecordField {
+                    name: "value".to_string(),
+                    doc: None,
+                    default: None,
+                    aliases: None,
+                    order: RecordFieldOrder::Ignore,
+                    position: 1,
+                    schema: AvroSchema::Bytes,
+                    custom_attributes: BTreeMap::new(),
+                },
+            ];
+            AvroSchema::Record(RecordSchema {
+                #[expect(clippy::unwrap_used)]
+                name: Name::new("variant").unwrap_or_else(|_| Name::new("variant_record").unwrap()),
+                aliases: None,
+                doc: None,
+                fields,
+                lookup: BTreeMap::from([
+                    ("metadata".to_string(), 0_usize),
+                    ("value".to_string(), 1_usize),
+                ]),
+                attributes: Default::default(),
+            })
+        }
         PrimitiveType::Decimal { precision, scale } => AvroSchema::Decimal(DecimalSchema {
             precision: *precision as usize,
             scale: *scale as usize,

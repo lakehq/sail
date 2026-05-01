@@ -75,7 +75,7 @@ impl ManifestList {
                 }
                 Ok(ManifestList::new(entries))
             }
-            FormatVersion::V2 => {
+            FormatVersion::V2 | FormatVersion::V3 => {
                 let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
                 let mut entries = Vec::new();
                 for value in reader {

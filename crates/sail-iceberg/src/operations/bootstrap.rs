@@ -51,6 +51,18 @@ impl SnapshotProduceOperation for BootstrapOperation {
     }
 }
 
+fn format_version_for_schema(schema: &IcebergSchema) -> FormatVersion {
+    if schema
+        .fields()
+        .iter()
+        .any(|field| field.field_type.contains_variant())
+    {
+        FormatVersion::V3
+    } else {
+        FormatVersion::V2
+    }
+}
+
 /// Bootstrap a new table when no metadata file exists
 ///
 /// This creates:
@@ -72,6 +84,7 @@ pub async fn bootstrap_new_table(
         .partition_spec
         .clone()
         .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+    let format_version = format_version_for_schema(&iceberg_schema);
 
     // Create a minimal transaction context (no parent snapshot)
     let empty_snapshot = SnapshotBuilder::new()
@@ -90,7 +103,7 @@ pub async fn bootstrap_new_table(
         Arc::new(iceberg_schema.clone()),
         iceberg_schema.schema_id(),
         partition_spec.clone(),
-        FormatVersion::V2,
+        format_version,
         crate::spec::ManifestContentType::Data,
     );
 
@@ -119,10 +132,10 @@ pub async fn bootstrap_new_table(
         })
         .ok_or_else(|| DataFusionError::Plan("No snapshot in bootstrap commit".to_string()))?;
 
-    // Build minimal TableMetadata V2
+    // Build minimal TableMetadata, using v3 when the schema requires v3 types.
     let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     let table_meta = TableMetadata {
-        format_version: FormatVersion::V2,
+        format_version,
         table_uuid: None,
         location: table_url.to_string(),
         last_sequence_number: 1,
@@ -211,6 +224,9 @@ pub async fn bootstrap_first_snapshot(
         .default_partition_spec()
         .cloned()
         .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+    let format_version = table_meta
+        .format_version
+        .max(format_version_for_schema(&schema_iceberg));
 
     // Create a minimal transaction context (no parent snapshot)
     let empty_snapshot = SnapshotBuilder::new()
@@ -229,7 +245,7 @@ pub async fn bootstrap_first_snapshot(
         Arc::new(schema_iceberg.clone()),
         schema_iceberg.schema_id(),
         partition_spec.clone(),
-        FormatVersion::V2,
+        format_version,
         crate::spec::ManifestContentType::Data,
     );
 
@@ -261,6 +277,7 @@ pub async fn bootstrap_first_snapshot(
     // Update table metadata with the new snapshot
     let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     table_meta.current_snapshot_id = Some(snapshot.snapshot_id());
+    table_meta.format_version = format_version;
     table_meta.snapshots.push(snapshot.clone());
     table_meta.snapshot_log.push(SnapshotLog {
         timestamp_ms: commit_timestamp_ms,

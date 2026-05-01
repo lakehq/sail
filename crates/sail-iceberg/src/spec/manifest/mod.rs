@@ -49,6 +49,7 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     let avro_schema = match version {
         FormatVersion::V1 => schema::data_file_schema_v2(partition_type),
         FormatVersion::V2 => schema::data_file_schema_v2(partition_type),
+        FormatVersion::V3 => schema::data_file_schema_v2(partition_type),
     };
     let mut writer = AvroWriter::new(&avro_schema, writer);
 
