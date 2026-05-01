@@ -1,3 +1,4 @@
+# ruff: noqa: RUF002, TC003
 """Minimal HMS smoke test – Sail can connect to HMS and list databases."""
 
 from __future__ import annotations
@@ -29,9 +30,9 @@ def test_hms_create_database_with_relative_location(
     """Sail resolves relative database LOCATION against the default warehouse path."""
     database = "hms_relative_location_db"
     relative_location = "relative/databases/hms_relative_location_db"
-    expected_location = (
-        f"{hms_warehouse_dir.as_uri().rstrip('/')}/{relative_location}"
-    ).replace("file:///", "file:/", 1)
+    expected_location = (f"{hms_warehouse_dir.as_uri().rstrip('/')}/{relative_location}").replace(
+        "file:///", "file:/", 1
+    )
 
     reference_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
     try:

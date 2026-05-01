@@ -1,3 +1,4 @@
+# ruff: noqa: S608, SLF001, TC002
 """HMS interop tests for managed tables under S3 database locations."""
 
 from __future__ import annotations
@@ -33,12 +34,7 @@ def _assert_sail_describes_s3_managed_table(
 
 
 def _reference_catalog_table(reference_spark_s3: SparkSession, database: str, table: str):
-    return (
-        reference_spark_s3._jsparkSession.sessionState()
-        .catalog()
-        .externalCatalog()
-        .getTable(database, table)
-    )
+    return reference_spark_s3._jsparkSession.sessionState().catalog().externalCatalog().getTable(database, table)
 
 
 def _scala_option_to_string(option) -> str | None:
@@ -131,11 +127,7 @@ def test_s3_sail_partitioned_managed_table_recovers_hms_partitions(
         table,
         location_prefix,
     )
-    partitions = {
-        row.partition for row in reference_spark_s3.sql(f"SHOW PARTITIONS {table_fqn}").collect()
-    }
+    partitions = {row.partition for row in reference_spark_s3.sql(f"SHOW PARTITIONS {table_fqn}").collect()}
     assert partitions == {"region=a%2Fb", "region=north"}
-    rows = reference_spark_s3.sql(
-        f"SELECT id, region FROM {table_fqn} ORDER BY id"
-    ).collect()
+    rows = reference_spark_s3.sql(f"SELECT id, region FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.region) for row in rows] == [(1, "north"), (2, "a/b")]

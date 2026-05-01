@@ -1,3 +1,4 @@
+# ruff: noqa: PLR2004, PT018, S608, TC002, TC003
 """Sail -> Spark roundtrip test through a shared HMS metastore."""
 
 from __future__ import annotations
@@ -252,12 +253,9 @@ def test_sail_creates_spark_reads_timestamp_types_parquet(
     assert fields["ts_ltz"].dataType.simpleString() == "timestamp"
     assert fields["ts_ntz"].dataType.simpleString() == "timestamp_ntz"
     rows = reference_spark.sql(
-        f"SELECT id, CAST(ts_ltz AS STRING) AS ts_ltz, CAST(ts_ntz AS STRING) AS ts_ntz "
-        f"FROM {table_fqn}"
+        f"SELECT id, CAST(ts_ltz AS STRING) AS ts_ltz, CAST(ts_ntz AS STRING) AS ts_ntz FROM {table_fqn}"
     ).collect()
-    assert [(r.id, r.ts_ltz, r.ts_ntz) for r in rows] == [
-        (1, "2024-01-02 03:04:05", "2024-01-02 03:04:05")
-    ]
+    assert [(r.id, r.ts_ltz, r.ts_ntz) for r in rows] == [(1, "2024-01-02 03:04:05", "2024-01-02 03:04:05")]
 
 
 def test_sail_creates_spark_reads_partitioned_parquet(
@@ -270,8 +268,7 @@ def test_sail_creates_spark_reads_partitioned_parquet(
     table_fqn = f"{hms_database}.{table}"
 
     hms_spark.sql(
-        f"CREATE TABLE {table_fqn} (id INT, name STRING, region STRING) "
-        "USING PARQUET PARTITIONED BY (region)"
+        f"CREATE TABLE {table_fqn} (id INT, name STRING, region STRING) USING PARQUET PARTITIONED BY (region)"
     )
     hms_spark.sql(
         f"""
@@ -282,17 +279,13 @@ def test_sail_creates_spark_reads_partitioned_parquet(
         """
     )
 
-    sail_rows = hms_spark.sql(
-        f"SELECT id, name, region FROM {table_fqn} ORDER BY id"
-    ).collect()
+    sail_rows = hms_spark.sql(f"SELECT id, name, region FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name, r.region) for r in sail_rows] == [
         (1, "alice", "north"),
         (2, "bob", "with space"),
         (3, "carol", "a/b"),
     ]
-    sail_filtered_rows = hms_spark.sql(
-        f"SELECT id FROM {table_fqn} WHERE region = 'a/b'"
-    ).collect()
+    sail_filtered_rows = hms_spark.sql(f"SELECT id FROM {table_fqn} WHERE region = 'a/b'").collect()
     assert [r.id for r in sail_filtered_rows] == [3]
 
     _assert_reference_spark_table(
@@ -302,27 +295,20 @@ def test_sail_creates_spark_reads_partitioned_parquet(
         table_type="MANAGED",
     )
     _assert_schema_partition_column(reference_spark, table_fqn, "region")
-    ref_partitions = {
-        row.partition
-        for row in reference_spark.sql(f"SHOW PARTITIONS {table_fqn}").collect()
-    }
+    ref_partitions = {row.partition for row in reference_spark.sql(f"SHOW PARTITIONS {table_fqn}").collect()}
     assert ref_partitions == {
         "region=a%2Fb",
         "region=north",
         "region=with space",
     }
-    ref_rows = reference_spark.sql(
-        f"SELECT id, name, region FROM {table_fqn} ORDER BY id"
-    ).collect()
+    ref_rows = reference_spark.sql(f"SELECT id, name, region FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name, r.region) for r in ref_rows] == [
         (1, "alice", "north"),
         (2, "bob", "with space"),
         (3, "carol", "a/b"),
     ]
 
-    filtered_rows = reference_spark.sql(
-        f"SELECT id FROM {table_fqn} WHERE region = 'a/b'"
-    ).collect()
+    filtered_rows = reference_spark.sql(f"SELECT id FROM {table_fqn} WHERE region = 'a/b'").collect()
     assert [r.id for r in filtered_rows] == [3]
 
 
@@ -337,9 +323,7 @@ def test_sail_creates_spark_reads_parquet_with_explicit_location(
     table_fqn = f"{hms_database}.{table}"
     location = f"{hms_warehouse_dir.as_uri().rstrip('/')}/{hms_database}/roundtrip_location_parquet"
 
-    hms_spark.sql(
-        f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION '{location}'"
-    )
+    hms_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION '{location}'")
     hms_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
 
     sail_rows = hms_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
@@ -370,8 +354,7 @@ def test_sail_creates_spark_reads_partitioned_parquet_with_file_uri_authority(
     location = f"file://localhost{location_path}"
 
     hms_spark.sql(
-        f"CREATE TABLE {table_fqn} (id INT, region STRING) "
-        f"USING PARQUET PARTITIONED BY (region) LOCATION '{location}'"
+        f"CREATE TABLE {table_fqn} (id INT, region STRING) USING PARQUET PARTITIONED BY (region) LOCATION '{location}'"
     )
     hms_spark.sql(
         f"""
@@ -387,17 +370,12 @@ def test_sail_creates_spark_reads_partitioned_parquet_with_file_uri_authority(
         table,
         table_type="EXTERNAL",
     )
-    ref_partitions = {
-        row.partition
-        for row in reference_spark.sql(f"SHOW PARTITIONS {table_fqn}").collect()
-    }
+    ref_partitions = {row.partition for row in reference_spark.sql(f"SHOW PARTITIONS {table_fqn}").collect()}
     assert ref_partitions == {
         "region=a%2Fb",
         "region=north",
     }
-    ref_rows = reference_spark.sql(
-        f"SELECT id, region FROM {table_fqn} ORDER BY id"
-    ).collect()
+    ref_rows = reference_spark.sql(f"SELECT id, region FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.region) for r in ref_rows] == [(1, "north"), (2, "a/b")]
 
 
@@ -411,8 +389,7 @@ def test_sail_creates_spark_reads_parquet_with_relative_location(
     table_fqn = f"{hms_database}.{table}"
 
     hms_spark.sql(
-        f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET "
-        "LOCATION 'relative/roundtrip_location_parquet'"
+        f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION 'relative/roundtrip_location_parquet'"
     )
     hms_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
 
@@ -442,9 +419,7 @@ def test_sail_alters_datasource_table_spark_still_reads_path_metadata(
 
     hms_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET")
     hms_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
-    hms_spark.sql(
-        f"ALTER TABLE {table_fqn} SET TBLPROPERTIES ('interop_note' = 'sail_altered')"
-    )
+    hms_spark.sql(f"ALTER TABLE {table_fqn} SET TBLPROPERTIES ('interop_note' = 'sail_altered')")
 
     _assert_reference_spark_table(
         reference_spark,
@@ -465,17 +440,10 @@ def test_sail_alters_datasource_table_location_spark_reads_new_path(
     """Sail ALTER TABLE SET LOCATION updates datasource path metadata for Spark."""
     table = "roundtrip_altered_location_parquet"
     table_fqn = f"{hms_database}.{table}"
-    old_location = (
-        f"{hms_warehouse_dir.as_uri().rstrip('/')}/{hms_database}/alter_location_old"
-    )
-    new_location = (
-        f"{hms_warehouse_dir.as_uri().rstrip('/')}/{hms_database}/alter_location_new"
-    )
+    old_location = f"{hms_warehouse_dir.as_uri().rstrip('/')}/{hms_database}/alter_location_old"
+    new_location = f"{hms_warehouse_dir.as_uri().rstrip('/')}/{hms_database}/alter_location_new"
 
-    hms_spark.sql(
-        f"CREATE TABLE {table_fqn} (id INT, name STRING) "
-        f"USING PARQUET LOCATION '{old_location}'"
-    )
+    hms_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION '{old_location}'")
     hms_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old')")
     hms_spark.sql(f"ALTER TABLE {table_fqn} SET LOCATION '{new_location}'")
     hms_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'new')")
@@ -487,9 +455,6 @@ def test_sail_alters_datasource_table_location_spark_reads_new_path(
         table_type="EXTERNAL",
     )
     spark_table = _reference_catalog_table(reference_spark, hms_database, table)
-    assert (
-        _normalize_file_uri(_scala_option_to_string(spark_table.storage().locationUri()))
-        == new_location
-    )
+    assert _normalize_file_uri(_scala_option_to_string(spark_table.storage().locationUri())) == new_location
     ref_rows = reference_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in ref_rows] == [(2, "new")]

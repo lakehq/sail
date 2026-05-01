@@ -1,3 +1,4 @@
+# ruff: noqa: ARG001, EM102, FLY002, S105, TC003, TRY003, TRY300
 """Pytest fixtures for HMS catalog interop tests."""
 
 from __future__ import annotations
@@ -32,11 +33,7 @@ def spark_doctest(
     request: pytest.FixtureRequest,
     doctest_namespace: dict[str, object],
 ) -> None:
-    spark_fixture = (
-        "hms_s3_spark"
-        if request.module.__name__.endswith("test_hms_s3_roundtrip")
-        else "hms_spark"
-    )
+    spark_fixture = "hms_s3_spark" if request.module.__name__.endswith("test_hms_s3_roundtrip") else "hms_spark"
     doctest_namespace["spark"] = request.getfixturevalue(spark_fixture)
 
 
@@ -112,9 +109,7 @@ def _spark_s3_options(endpoint: str) -> dict[str, str]:
         "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
         "spark.hadoop.fs.s3a.access.key": _MINIO_USER,
         "spark.hadoop.fs.s3a.secret.key": _MINIO_PASSWORD,
-        "spark.hadoop.fs.s3a.aws.credentials.provider": (
-            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
-        ),
+        "spark.hadoop.fs.s3a.aws.credentials.provider": ("org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"),
     }
 
 
@@ -167,11 +162,7 @@ def _wait_for_hms_catalog(remote_url: str, timeout: float) -> None:
     while time.monotonic() < deadline:
         spark = None
         try:
-            spark = (
-                SparkSession.builder.remote(remote_url)
-                .appName("hms_smoke_readiness")
-                .create()
-            )
+            spark = SparkSession.builder.remote(remote_url).appName("hms_smoke_readiness").create()
             configure_spark_session(spark)
             patch_spark_connect_session(spark)
             spark.sql("SHOW DATABASES").collect()
@@ -186,10 +177,7 @@ def _wait_for_hms_catalog(remote_url: str, timeout: float) -> None:
             if spark is not None:
                 spark.stop()
 
-    raise TimeoutError(
-        "Sail HMS catalog did not become queryable within "
-        f"{timeout}s; last error: {last_error}"
-    )
+    raise TimeoutError(f"Sail HMS catalog did not become queryable within {timeout}s; last error: {last_error}")
 
 
 def _run_sail_hms_server(
@@ -449,11 +437,7 @@ def hms_spark(hms_remote: str) -> Generator[SparkSession, None, None]:
         patch_spark_connect_session,
     )
 
-    spark = (
-        SparkSession.builder.remote(hms_remote)
-        .appName("hms_smoke_test")
-        .create()
-    )
+    spark = SparkSession.builder.remote(hms_remote).appName("hms_smoke_test").create()
     configure_spark_session(spark)
     patch_spark_connect_session(spark)
     yield spark
@@ -481,11 +465,7 @@ def hms_s3_spark(hms_s3_remote: str) -> Generator[SparkSession, None, None]:
         patch_spark_connect_session,
     )
 
-    spark = (
-        SparkSession.builder.remote(hms_s3_remote)
-        .appName("hms_s3_interop_test")
-        .create()
-    )
+    spark = SparkSession.builder.remote(hms_s3_remote).appName("hms_s3_interop_test").create()
     configure_spark_session(spark)
     patch_spark_connect_session(spark)
     yield spark
@@ -539,8 +519,7 @@ def reference_spark(
             .config("spark.sql.warehouse.dir", warehouse_uri)
             .config(
                 "spark.hadoop.javax.jdo.option.ConnectionURL",
-                "jdbc:derby:;databaseName="
-                f"{hms_warehouse_dir}/metastore_db;create=true",
+                f"jdbc:derby:;databaseName={hms_warehouse_dir}/metastore_db;create=true",
             )
             .enableHiveSupport()
             .getOrCreate()
@@ -576,8 +555,7 @@ def reference_spark_s3(
             .config("spark.sql.warehouse.dir", warehouse_uri)
             .config(
                 "spark.hadoop.javax.jdo.option.ConnectionURL",
-                "jdbc:derby:;databaseName="
-                f"{hms_warehouse_dir}/metastore_s3_db;create=true",
+                f"jdbc:derby:;databaseName={hms_warehouse_dir}/metastore_s3_db;create=true",
             )
         )
         for key, value in _spark_s3_options(hms_s3_endpoint).items():
