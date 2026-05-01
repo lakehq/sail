@@ -146,7 +146,7 @@ tonic-types = "0.14.5"
 # The `prost` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 prost-build = "0.14"
-prost = "0.14"
+prost = { version = "0.14", features = ["no-recursion-limit"] }
 prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
