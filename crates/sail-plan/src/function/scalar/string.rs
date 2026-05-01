@@ -364,7 +364,13 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     ) {
         // Spark casts STRING to numeric for formatting. Use DOUBLE to avoid
         // the decimal scale overflow check that DECIMAL(38,18) would trigger.
-        let numeric_value = value.cast_to(&DataType::Float64, schema.as_ref())?;
+        // Under ANSI=false an invalid string returns NULL (TRY_CAST semantics);
+        // under ANSI=true the cast errors, matching Spark's CAST_INVALID_INPUT.
+        let numeric_value = if input.function_context.plan_config.ansi_mode {
+            value.cast_to(&DataType::Float64, schema.as_ref())?
+        } else {
+            try_cast(value, DataType::Float64)
+        };
         Ok(ScalarUDF::from(SparkToChar::new()).call(vec![numeric_value, format]))
     } else {
         Err(PlanError::invalid(format!(

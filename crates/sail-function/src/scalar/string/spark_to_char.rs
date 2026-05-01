@@ -242,9 +242,13 @@ impl ScalarUDFImpl for SparkToChar {
                 let result = if use_integer_path {
                     scalar_to_i128(scalar)?.map(|v| format_spark_integer(v, &spec, &components))
                 } else {
-                    scalar_to_f64(scalar)?.and_then(|v| {
-                        format_spark_number_opt(v, &spec, &components, float_native_scale)
-                    })
+                    match scalar_to_f64(scalar)? {
+                        None => None,
+                        Some(v) => {
+                            check_float_decimal_overflow(v, float_native_scale)?;
+                            format_spark_number_opt(v, &spec, &components, float_native_scale)
+                        }
+                    }
                 };
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
             }
@@ -280,15 +284,22 @@ impl ScalarUDFImpl for SparkToChar {
                     Ok(ColumnarValue::Array(Arc::new(result)))
                 } else {
                     let f64_arr = cast_to_f64(arr)?;
-                    let result: StringArray = f64_arr
+                    let result: Result<StringArray> = f64_arr
                         .iter()
-                        .map(|opt| {
-                            opt.and_then(|v| {
-                                format_spark_number_opt(v, &spec, &components, float_native_scale)
-                            })
+                        .map(|opt| match opt {
+                            None => Ok(None),
+                            Some(v) => {
+                                check_float_decimal_overflow(v, float_native_scale)?;
+                                Ok(format_spark_number_opt(
+                                    v,
+                                    &spec,
+                                    &components,
+                                    float_native_scale,
+                                ))
+                            }
                         })
                         .collect();
-                    Ok(ColumnarValue::Array(Arc::new(result)))
+                    Ok(ColumnarValue::Array(Arc::new(result?)))
                 }
             }
         }
@@ -328,6 +339,23 @@ fn format_spark_integer(value: i128, spec: &RegexSpec, components: &NumberCompon
 /// `format_scale` but still within `native_scale`, the output is an overflow
 /// string — matching Spark's behavior where Float is implicitly cast to
 /// `Decimal(14, 7)` / `Decimal(30, 15)` before formatting.
+/// Spark casts Float32 to DECIMAL(14, 7) and Float64 to DECIMAL(30, 15) before
+/// `to_char`. Values whose magnitude reaches 10^7 (Float32) or 10^15 (Float64)
+/// overflow that Decimal type and Spark raises NUMERIC_VALUE_OUT_OF_RANGE.
+fn check_float_decimal_overflow(v: f64, float_native_scale: Option<usize>) -> Result<()> {
+    let Some(scale) = float_native_scale else {
+        return Ok(());
+    };
+    let (precision, threshold): (u8, f64) = if scale == 7 { (14, 1e7) } else { (30, 1e15) };
+    if v.is_finite() && v.abs() >= threshold {
+        return Err(generic_exec_err(
+            "to_char",
+            &format!("{v} cannot be represented as Decimal({precision}, {scale})"),
+        ));
+    }
+    Ok(())
+}
+
 fn format_spark_number_opt(
     value: f64,
     spec: &RegexSpec,
@@ -710,8 +738,10 @@ fn format_binary_impl(
         ColumnarValue::Array(arr) => {
             let casted = datafusion::arrow::compute::cast(arr, &DataType::Binary)?;
             let binary_arr = casted.as_binary::<i32>();
-            let result: Result<StringArray> =
-                binary_arr.iter().map(|opt| opt.map(convert).transpose()).collect();
+            let result: Result<StringArray> = binary_arr
+                .iter()
+                .map(|opt| opt.map(convert).transpose())
+                .collect();
             Ok(ColumnarValue::Array(Arc::new(result?)))
         }
     }
@@ -730,9 +760,8 @@ fn scalar_to_bytes(scalar: &ScalarValue) -> Result<Option<Vec<u8>>> {
 }
 
 fn binary_to_utf8(bytes: &[u8]) -> Result<String> {
-    String::from_utf8(bytes.to_vec()).map_err(|_| {
-        generic_exec_err("to_char", "binary value contains invalid UTF-8 bytes")
-    })
+    String::from_utf8(bytes.to_vec())
+        .map_err(|_| generic_exec_err("to_char", "binary value contains invalid UTF-8 bytes"))
 }
 
 fn binary_to_base64(bytes: &[u8]) -> Result<String> {

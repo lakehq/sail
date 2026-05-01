@@ -2026,3 +2026,119 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | NULL   |
         | NULL   |
+
+  Rule: ANSI mode - string coercion and decimal overflow (bug-hunt additions)
+
+    Scenario: ANSI false invalid string coerced to NULL
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT to_char('hello', '999') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: ANSI true invalid string errors
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_char('hello', '999') AS result
+        """
+      Then query error .*
+
+    @sail-bug
+    Scenario: ANSI false DECIMAL overflow returns NULL
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT to_char(CAST(99999 AS DECIMAL(5,2)), '999') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: ANSI true DECIMAL overflow errors
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_char(CAST(99999 AS DECIMAL(5,2)), '999') AS result
+        """
+      Then query error .*
+
+    Scenario: ANSI false multi-row mixed valid and invalid string
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT to_char(v, '999') AS result FROM VALUES ('1'), ('hello'), ('3') AS t(v)
+        """
+      Then query result ordered
+        | result |
+        |   1    |
+        | NULL   |
+        |   3    |
+
+  Rule: Binary formatting - edge cases (bug-hunt additions)
+
+    Scenario: binary with invalid UTF-8 bytes errors
+      When query
+        """
+        SELECT to_char(X'80FF', 'utf-8') AS result
+        """
+      Then query error .*
+
+    Scenario: binary with valid two-byte UTF-8 sequence
+      When query
+        """
+        SELECT to_char(X'C3A9', 'utf-8') AS result
+        """
+      Then query result
+        | result |
+        | é      |
+
+  Rule: Numeric formatting - FLOAT overflow (bug-hunt additions)
+
+    Scenario: FLOAT MAX value overflows any format and errors
+      When query
+        """
+        SELECT to_char(CAST(3.4028235E38 AS FLOAT), '999') AS result
+        """
+      Then query error .*
+
+  Rule: TIMESTAMP_NTZ formatting (bug-hunt additions)
+
+    Scenario: TIMESTAMP_NTZ with datetime format
+      When query
+        """
+        SELECT to_char(TIMESTAMP_NTZ '2024-03-15 09:30:00', 'yyyy-MM-dd HH:mm:ss') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-03-15 09:30:00 |
+
+    Scenario: TIMESTAMP_NTZ with microseconds format
+      When query
+        """
+        SELECT to_char(TIMESTAMP_NTZ '2024-03-15 09:30:00.123456', 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS result
+        """
+      Then query result
+        | result                        |
+        | 2024-03-15 09:30:00.123456    |
+
+    Scenario: NULL TIMESTAMP_NTZ with valid format returns NULL
+      When query
+        """
+        SELECT to_char(CAST(NULL AS TIMESTAMP_NTZ), 'yyyy-MM-dd HH:mm:ss') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: valid TIMESTAMP_NTZ with NULL format returns NULL
+      When query
+        """
+        SELECT to_char(TIMESTAMP_NTZ '2024-03-15 09:30:00', NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
