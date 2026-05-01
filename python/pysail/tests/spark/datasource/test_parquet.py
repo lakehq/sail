@@ -189,8 +189,6 @@ def test_parquet_read_with_custom_extension(spark, sample_pandas_df, tmp_path):
     assert read_df.count() == expected_count
     assert actual_rows(read_df) == expected_rows
 
-    pytest.skip("SQL not working yet")
-
     # SQL CREATE TABLE with OPTIONS (fileExtension '.hive').
     # Use a separate directory so DROP TABLE side effects don't affect other cases.
     sql_directory = tmp_path / "parquet_custom_extension_sql"
