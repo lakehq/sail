@@ -78,10 +78,10 @@ jobs:
           script: |
             const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
             const hasAnyLabel = (...names) => names.some(name => labels.includes(name));
-            core.setOutput('run_catalog_tests', hasAnyLabel('catalog tests', 'run catalog tests') ? 'true' : 'false');
-            core.setOutput('run_spark_tests', hasAnyLabel('spark tests', 'run spark tests') ? 'true' : 'false');
-            core.setOutput('run_hms_interop_tests', hasAnyLabel('hms interop tests', 'run hms interop tests') ? 'true' : 'false');
-            core.setOutput('run_ibis_tests', hasAnyLabel('ibis tests', 'run ibis tests') ? 'true' : 'false');
+            core.setOutput('run_catalog_tests', hasAnyLabel('run catalog tests', 'catalog tests') ? 'true' : 'false');
+            core.setOutput('run_spark_tests', hasAnyLabel('run spark tests', 'spark tests') ? 'true' : 'false');
+            core.setOutput('run_hms_interop_tests', hasAnyLabel('run hms interop tests', 'hms interop tests') ? 'true' : 'false');
+            core.setOutput('run_ibis_tests', hasAnyLabel('run ibis tests', 'ibis tests') ? 'true' : 'false');
 
   rust-tests:
     name: Rust Tests

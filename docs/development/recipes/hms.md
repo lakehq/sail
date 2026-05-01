@@ -86,7 +86,7 @@ The Kerberos HMS harness runs in the ignored catalog-test lane.
 
 On pull requests, that lane is enabled when either:
 
-- the PR has the `catalog tests` label
+- the PR has the `run catalog tests` label
 - the head commit message contains `[catalog test]` or `[catalog tests]`
 
 On pushes to `main`, the catalog-test lane runs automatically.
