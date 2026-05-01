@@ -99,18 +99,12 @@ pub(crate) fn table_to_status(
         // Otherwise, reconcile: if column names diverged, the table was
         // altered externally in Hive, so fall back to HMS columns unless
         // the respectSparkSchema storage property explicitly overrides this.
-        let is_datasource = table
-            .parameters
-            .as_ref()
-            .and_then(|p| p.get(SPARK_DATASOURCE_PROVIDER_KEY))
-            .is_some_and(|provider| !provider.trim().eq_ignore_ascii_case("hive"));
         let respect_spark_schema = storage
             .and_then(|sd| sd.serde_info.as_ref())
             .and_then(|serde| serde.parameters.as_ref())
             .and_then(|params| params.get("respectSparkSchema"))
             .is_some_and(|v| v.eq_ignore_ascii_case("true"));
-        if is_datasource
-            || is_sentinel_storage_descriptor(storage)
+        if is_sentinel_storage_descriptor(storage)
             || respect_spark_schema
             || schemas_match_ignoring_case_and_nullability(&spark_cols, &hms_columns)
         {
@@ -168,7 +162,7 @@ fn normalize_location_uri(location: &str) -> String {
     }
 }
 
-fn normalize_location_uri_for_hms_write(location: &str) -> String {
+pub(crate) fn normalize_location_uri_for_hms_write(location: &str) -> String {
     if location.starts_with("file:///") {
         format!("file:/{}", location.trim_start_matches("file:///"))
     } else {
@@ -379,11 +373,7 @@ pub(crate) fn build_generic_table_with_location_kind(
         ),
         sd: Some(StorageDescriptor {
             cols: Some(regular_columns),
-            location: location
-                .is_external
-                .then(|| storage_location.clone())
-                .flatten()
-                .map(Into::into),
+            location: storage_location.clone().map(Into::into),
             input_format: Some(format.storage.input_format.into()),
             output_format: Some(format.storage.output_format.into()),
             serde_info: Some(SerDeInfo {
@@ -852,6 +842,16 @@ pub(crate) fn table_statistics_to_properties(
     }
 
     Ok(props)
+}
+
+pub(crate) fn clear_table_statistics_properties(parameters: &mut AHashMap<FastStr, FastStr>) {
+    parameters.retain(|key, _| {
+        !key.starts_with("spark.sql.statistics.")
+            && !matches!(
+                key.as_str(),
+                HMS_TOTAL_SIZE_KEY | HMS_RAW_DATA_SIZE_KEY | HMS_ROW_COUNT_KEY
+            )
+    });
 }
 
 pub(crate) fn split_large_table_prop(
@@ -1662,7 +1662,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(table.table_type.as_deref(), Some(super::MANAGED_TABLE_TYPE));
-        assert_eq!(table.sd.as_ref().and_then(|sd| sd.location.as_ref()), None);
+        assert_eq!(
+            table.sd.as_ref().and_then(|sd| sd.location.as_deref()),
+            Some("s3://warehouse/default/items")
+        );
         assert_eq!(
             table
                 .sd
@@ -2033,6 +2036,45 @@ mod tests {
     }
 
     #[test]
+    fn test_clear_table_statistics_properties_removes_spark_and_native_hms_stats() {
+        let mut parameters = AHashMap::from_iter([
+            (
+                FastStr::from_static_str(super::SPARK_STATS_TOTAL_SIZE_KEY),
+                FastStr::from_static_str("100"),
+            ),
+            (
+                FastStr::from_static_str(super::SPARK_STATS_NUM_ROWS_KEY),
+                FastStr::from_static_str("5"),
+            ),
+            (
+                FastStr::from_static_str("spark.sql.statistics.colStats.id.version"),
+                FastStr::from_static_str("2"),
+            ),
+            (
+                FastStr::from_static_str(super::HMS_TOTAL_SIZE_KEY),
+                FastStr::from_static_str("999"),
+            ),
+            (
+                FastStr::from_static_str(super::HMS_RAW_DATA_SIZE_KEY),
+                FastStr::from_static_str("888"),
+            ),
+            (
+                FastStr::from_static_str(super::HMS_ROW_COUNT_KEY),
+                FastStr::from_static_str("77"),
+            ),
+            (
+                FastStr::from_static_str("owner"),
+                FastStr::from_static_str("sail"),
+            ),
+        ]);
+
+        super::clear_table_statistics_properties(&mut parameters);
+
+        assert_eq!(parameters.len(), 1);
+        assert_eq!(parameters.get("owner").map(|v| v.as_str()), Some("sail"));
+    }
+
+    #[test]
     fn test_table_to_status_restores_columns_from_spark_schema_properties() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let table = build_generic_table(
@@ -2373,6 +2415,49 @@ mod tests {
 
         // Spark schema and HMS schema diverged (different column names), so
         // reconciliation falls back to the HMS StorageDescriptor columns.
+        assert_eq!(columns.len(), 1);
+        assert_eq!(columns[0].name, "b");
+        assert_eq!(columns[0].data_type, DataType::Utf8);
+    }
+
+    #[test]
+    fn test_table_to_status_datasource_reconciliation_falls_back_to_hms_when_diverged() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "b".to_string(),
+                data_type: DataType::Utf8,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+            }],
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![
+                (
+                    SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+                    "parquet".to_string(),
+                ),
+                (
+                    SPARK_SCHEMA_KEY.to_string(),
+                    r#"{"type":"struct","fields":[{"name":"a","type":"integer","nullable":true,"metadata":{}}]}"#
+                        .to_string(),
+                ),
+            ],
+        )
+        .unwrap();
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        let columns = status.kind.columns();
+
         assert_eq!(columns.len(), 1);
         assert_eq!(columns[0].name, "b");
         assert_eq!(columns[0].data_type, DataType::Utf8);

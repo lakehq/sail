@@ -26,9 +26,9 @@ use url::Url;
 use volo_thrift::MaybeException;
 
 use crate::convert::{
-    build_database, build_generic_table_with_location_kind, build_view, database_to_status,
-    is_view_table, table_to_status, validate_namespace, view_to_status, GenericTableFormat,
-    GenericTableLocation,
+    build_database, build_generic_table_with_location_kind, build_view,
+    clear_table_statistics_properties, database_to_status, is_view_table, table_to_status,
+    validate_namespace, view_to_status, GenericTableFormat, GenericTableLocation,
 };
 use crate::security::{KerberosMakeTransport, SaslQop};
 
@@ -271,7 +271,7 @@ fn qualify_table_location(
 
 fn qualify_database_location(
     location: &str,
-    default_database_location: &str,
+    default_database_location: Option<&str>,
 ) -> CatalogResult<String> {
     let location = unwrap_relative_file_uri(location).unwrap_or_else(|| location.to_string());
 
@@ -290,6 +290,12 @@ fn qualify_database_location(
             });
     }
 
+    let default_database_location = default_database_location.ok_or_else(|| {
+        CatalogError::InvalidArgument(format!(
+            "Cannot resolve relative database location '{}' without a default database location",
+            location
+        ))
+    })?;
     let default_database_url = Url::parse(&format!(
         "{}/",
         default_database_location.trim_end_matches('/')
@@ -312,20 +318,30 @@ fn qualify_database_location(
         })
 }
 
+fn set_table_storage_location(
+    table: &mut Table,
+    location: &str,
+    database_location: Option<&str>,
+) -> CatalogResult<()> {
+    let location = qualify_table_location(location, database_location)?;
+    let location = crate::convert::normalize_location_uri_for_hms_write(&location);
+    let sd = table.sd.get_or_insert_with(Default::default);
+    sd.location = Some(location.clone().into());
+    let serde = sd.serde_info.get_or_insert_with(Default::default);
+    let serde_parameters = serde.parameters.get_or_insert_with(AHashMap::new);
+    serde_parameters.insert(
+        FastStr::from_static_str("path"),
+        FastStr::from_string(location),
+    );
+    Ok(())
+}
+
 fn unwrap_relative_file_uri(location: &str) -> Option<String> {
     let path = location.strip_prefix("file:")?;
     if path.starts_with('/') {
         return None;
     }
     Some(path.trim_start_matches("./").to_string())
-}
-
-fn normalize_location_uri_for_hms_write(location: &str) -> String {
-    if location.starts_with("file:///") {
-        format!("file:/{}", location.trim_start_matches("file:///"))
-    } else {
-        location.to_string()
-    }
 }
 
 impl HmsCatalogProvider {
@@ -821,17 +837,10 @@ impl CatalogProvider for HmsCatalogProvider {
         let if_not_exists = options.if_not_exists;
         if let Some(location) = options.location.as_deref() {
             let default_database = Namespace::try_from(vec!["default"])?;
-            let default_database_location = self.get_database(&default_database).await?.location.ok_or_else(
-                || {
-                    CatalogError::External(
-                        "Default HMS database is missing a location; cannot qualify relative database location"
-                            .to_string(),
-                    )
-                },
-            )?;
+            let default_database_location = self.get_database(&default_database).await?.location;
             options.location = Some(qualify_database_location(
                 location,
-                &default_database_location,
+                default_database_location.as_deref(),
             )?);
         }
         let database = build_database(database, options)?;
@@ -1024,7 +1033,7 @@ impl CatalogProvider for HmsCatalogProvider {
             .map(|field| field.column.clone())
             .collect();
         let database_location = self.get_database(database).await?.location;
-        let is_external = options.location.is_some();
+        let is_external = options.external;
         let table_location = match options.location.as_deref() {
             Some(location) => qualify_table_location(location, database_location.as_deref())?,
             None => qualify_table_location(table, database_location.as_deref())?,
@@ -1116,11 +1125,17 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<()> {
         let db_name = validate_namespace(database)?;
         let table_name = table.to_string();
+        let database_location = if matches!(options, AlterTableOptions::SetLocation { .. }) {
+            self.get_database(database).await?.location
+        } else {
+            None
+        };
 
         self.with_failover(|client| {
             let db_name = db_name.clone();
             let table_name = table_name.clone();
             let options = options.clone();
+            let database_location = database_location.clone();
             async move {
                 // Fetch the current table, mutate its properties, then call alter_table.
                 // This matches Spark's HMS catalog approach.
@@ -1170,15 +1185,11 @@ impl CatalogProvider for HmsCatalogProvider {
                         }
                     }
                     AlterTableOptions::SetLocation { location } => {
-                        let location = normalize_location_uri_for_hms_write(&location);
-                        let sd = hms_table.sd.get_or_insert_with(Default::default);
-                        sd.location = Some(location.clone().into());
-                        let serde = sd.serde_info.get_or_insert_with(Default::default);
-                        let serde_parameters = serde.parameters.get_or_insert_with(AHashMap::new);
-                        serde_parameters.insert(
-                            FastStr::from_static_str("path"),
-                            FastStr::from_string(location),
-                        );
+                        set_table_storage_location(
+                            &mut hms_table,
+                            &location,
+                            database_location.as_deref(),
+                        )?;
                     }
                 }
 
@@ -1251,8 +1262,7 @@ impl CatalogProvider for HmsCatalogProvider {
 
                 let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
 
-                // Remove all existing spark.sql.statistics.* properties
-                parameters.retain(|key, _| !key.starts_with("spark.sql.statistics."));
+                clear_table_statistics_properties(parameters);
 
                 // Inject new stats if present
                 if let Some(stats) = stats {
@@ -1758,6 +1768,7 @@ mod tests {
     use std::time::Duration;
 
     use arrow::datatypes::DataType;
+    use hive_metastore::{SerDeInfo, StorageDescriptor, Table};
     use pilota::FastStr;
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{
@@ -1792,6 +1803,7 @@ mod tests {
                 &Namespace::try_from(vec!["default"]).unwrap(),
                 "items",
                 CreateTableOptions {
+                    external: false,
                     columns: vec![CreateTableColumnOptions {
                         name: "id".to_string(),
                         data_type: DataType::Int64,
@@ -2104,7 +2116,8 @@ mod tests {
 
     #[test]
     fn test_qualify_database_location_joins_relative_path_to_default_database_location() {
-        let location = super::qualify_database_location("custom/db", "s3://warehouse").unwrap();
+        let location =
+            super::qualify_database_location("custom/db", Some("s3://warehouse")).unwrap();
 
         assert_eq!(location, "s3://warehouse/custom/db");
     }
@@ -2112,16 +2125,60 @@ mod tests {
     #[test]
     fn test_qualify_database_location_converts_absolute_posix_path_to_file_uri() {
         let location =
-            super::qualify_database_location("/tmp/custom-db", "s3://warehouse").unwrap();
+            super::qualify_database_location("/tmp/custom-db", Some("s3://warehouse")).unwrap();
 
         assert_eq!(location, "file:///tmp/custom-db");
     }
 
     #[test]
+    fn test_qualify_database_location_accepts_absolute_path_without_default_location() {
+        let location = super::qualify_database_location("/tmp/custom-db", None).unwrap();
+
+        assert_eq!(location, "file:///tmp/custom-db");
+    }
+
+    #[test]
+    fn test_qualify_database_location_accepts_url_without_default_location() {
+        let location = super::qualify_database_location("s3://warehouse/custom-db", None).unwrap();
+
+        assert_eq!(location, "s3://warehouse/custom-db");
+    }
+
+    #[test]
     fn test_qualify_database_location_normalizes_relative_file_uri_from_sql_path_parsing() {
         let location =
-            super::qualify_database_location("file:./relative/db", "s3://warehouse").unwrap();
+            super::qualify_database_location("file:./relative/db", Some("s3://warehouse")).unwrap();
 
         assert_eq!(location, "s3://warehouse/relative/db");
+    }
+
+    #[test]
+    fn test_set_table_storage_location_qualifies_relative_location() {
+        let mut table = Table {
+            sd: Some(StorageDescriptor {
+                serde_info: Some(SerDeInfo::default()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        super::set_table_storage_location(
+            &mut table,
+            "archive/items",
+            Some("s3://warehouse/default"),
+        )
+        .unwrap();
+
+        let sd = table.sd.as_ref().unwrap();
+        assert_eq!(
+            sd.location.as_deref(),
+            Some("s3://warehouse/default/archive/items")
+        );
+        let path = sd
+            .serde_info
+            .as_ref()
+            .and_then(|serde| serde.parameters.as_ref())
+            .and_then(|parameters| parameters.get("path").map(|value| value.as_str()));
+        assert_eq!(path, Some("s3://warehouse/default/archive/items"));
     }
 }

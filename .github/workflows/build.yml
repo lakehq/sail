@@ -79,7 +79,7 @@ jobs:
             const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
             core.setOutput('run_catalog_tests', labels.includes('run catalog tests') ? 'true' : 'false');
             core.setOutput('run_spark_tests', labels.includes('run spark tests') ? 'true' : 'false');
-            core.setOutput('run_hms_interop_tests', labels.includes('run hms interop tests') ? 'true' : 'false');
+            core.setOutput('run_hms_interop_tests', labels.includes('hms interop tests') ? 'true' : 'false');
             core.setOutput('run_ibis_tests', labels.includes('run ibis tests') ? 'true' : 'false');
 
   rust-tests:
