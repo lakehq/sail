@@ -142,103 +142,23 @@ Out of scope for the current implementation:
 
 ## Decision Log
 
-Record HMS interoperability decisions here when they affect test shape,
-metadata semantics, or future compatibility work. Keep entries short: context,
-decision, consequence, and follow-up if needed.
+Keep this log focused on non-obvious current contracts, test-harness choices,
+and intentional deferrals. When behavior simply matches Spark and is covered by
+tests, remove it from this section instead of preserving old implementation
+history here.
 
-### 2026-04-28: Spark `spark.sql.*` metadata is internal
+### 2026-04-28: Internal Spark and HMS bookkeeping stays out of user properties
 
 Context: Spark data-source tables store provider, schema, partition, bucket,
-sort, and statistics metadata in HMS table parameters under `spark.sql.*`.
+sort, and statistics metadata in HMS table parameters under `spark.sql.*`, and
+Hive may add `transient_lastDdlTime`.
 
-Decision: Sail consumes supported `spark.sql.*` keys to reconstruct internal
-table status, but those keys must not leak through user-visible table
-properties.
+Decision: Sail consumes supported internal metadata to reconstruct table
+status, but filters those bookkeeping keys from user-visible properties.
 
-Consequence: Tests should validate metadata survival through parsed fields
-such as format, schema, partitioning, bucketing, sorting, and statistics rather
-than asserting that raw `spark.sql.*` keys are visible.
-
-### 2026-04-28: Hide Hive-generated DDL timestamps from user properties
-
-Context: In
-`/Users/santosh/IdeaProjects/spark/sql/hive/src/main/scala/org/apache/spark/sql/hive/HiveExternalCatalog.scala`,
-Spark's `restoreDataSourceTable` strips Hive-generated `DDL_TIME`
-(`transient_lastDdlTime`) from restored table properties before surfacing them
-to users.
-
-Decision: Sail filters `transient_lastDdlTime` from HMS table properties
-alongside internal `spark.sql.*` metadata when building table/view status.
-
-Consequence: User-visible Sail properties stay aligned with Spark's restored
-catalog view and avoid leaking metastore bookkeeping timestamps.
-
-### 2026-04-28: Explicit table locations imply external Spark data-source tables
-
-Context: In
-`/Users/santosh/IdeaProjects/spark/sql/core/src/main/scala/org/apache/spark/sql/catalyst/analysis/ResolveSessionCatalog.scala`,
-Spark resolves `CREATE TABLE ... USING ... LOCATION ...` as
-`CatalogTableType.EXTERNAL`. In
-`/Users/santosh/IdeaProjects/spark/sql/hive/src/main/scala/org/apache/spark/sql/hive/HiveExternalCatalog.scala`,
-Spark's Hive-compatible data-source write path keeps the location both in HMS
-storage descriptor location and storage properties `path`.
-
-Decision: Sail treats `CreateTableOptions.location` as an explicit external
-location for HMS data-source tables, writing both `sd.location` and SerDe
-parameter `path`, and marks the HMS table as `EXTERNAL_TABLE` with raw
-`EXTERNAL=TRUE`.
-
-Consequence: Sail's HMS write path matches Spark's external table semantics
-when users provide a table location, while location-less creates continue to
-use managed-table behavior. Sail filters raw `EXTERNAL` from user-visible table
-properties even though HMS needs it internally.
-
-### 2026-04-28: Spark data-source table reads prefer `path` over `sd.location`
-
-Context: In
-`/Users/santosh/IdeaProjects/spark/sql/hive/src/main/scala/org/apache/spark/sql/hive/HiveExternalCatalog.scala`,
-`restoreDataSourceTable` reconstructs the exposed table location from storage
-properties `path` and intentionally does not trust HMS `sd.location` as the
-public location source for Spark data-source tables.
-
-Decision: When Sail restores an HMS table that carries Spark data-source
-metadata, it prefers SerDe/storage property `path` over `sd.location`, falling
-back to `sd.location` only when `path` is absent.
-
-Consequence: Sail matches Spark's restored location semantics for cases where
-HMS `sd.location` is stale, placeholder, or otherwise diverges from Spark's
-authoritative `path` metadata.
-
-### 2026-04-28: Spark qualifies non-URI table locations before HMS writes
-
-Context: In
-`/Users/santosh/IdeaProjects/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/catalog/SessionCatalog.scala`,
-Spark qualifies table locations before handing them to the external catalog:
-absolute POSIX paths become file URIs, and relative paths are resolved against
-the database location.
-
-Decision: Sail qualifies `CreateTableOptions.location` the same way before
-building HMS table metadata.
-
-Consequence: HMS entries written by Sail match Spark's path normalization for
-absolute local paths and database-relative locations instead of persisting raw
-user input strings.
-
-### 2026-04-28: HMS database LOCATION follows Spark warehouse qualification
-
-Context: In
-`/Users/santosh/IdeaProjects/spark/sql/core/src/main/scala/org/apache/spark/sql/execution/command/ddl.scala`,
-Spark's `CREATE DATABASE ... LOCATION ...` first turns the SQL string into a
-catalog location and then `SessionCatalog.createDatabase` qualifies it against
-the warehouse path. In Sail's SQL flow, relative database locations reached the
-HMS provider as `file:./...`, which Hive rejected as an invalid URI.
-
-Decision: Normalize `file:./...` back to a relative path at the HMS provider
-boundary and qualify relative database locations against the default database
-location before writing HMS metadata.
-
-Consequence: Sail SQL `CREATE DATABASE ... LOCATION 'relative/path'` now
-matches Spark's effective warehouse-relative behavior and succeeds against HMS.
+Consequence: Interop tests should validate parsed fields such as provider,
+schema, partitioning, sorting, and statistics rather than asserting that raw
+Spark or Hive bookkeeping keys remain visible.
 
 ### 2026-04-28: Spark/HMS Python interop starts with local JVM Spark
 
@@ -328,164 +248,31 @@ an explicit shared warehouse location instead of relying on `default`.
 Consequence: Roundtrip failures now represent table/file metadata
 interoperability rather than inherited container warehouse topology.
 
-### 2026-04-28: Normalize Spark-style local file URIs from HMS
+## Current Interop Coverage
 
-Context: Spark records local HMS table locations as `file:/absolute/path`.
-DataFusion's URL path handling needs the canonical hierarchical form
-`file:///absolute/path` to read that directory correctly.
+The current Python HMS roundtrip suite plus focused Rust tests cover:
 
-Decision: HMS table conversion normalizes `file:/...` locations to
-`file:///...` on the read path before Sail builds listing-table scans.
-
-Consequence: Spark-created managed Parquet tables can be read by Sail through
-the HMS catalog, while non-file schemes are preserved unchanged.
-
-### 2026-04-28: Sail-to-Spark direct files work before HMS table scans
-
-Context: The Sail-to-Spark roundtrip currently writes a Sail-created Parquet
-table through HMS, verifies Sail can read two rows, then asks reference Spark to
-read the same table.
-
-Observation: Reference Spark can read the Sail-written Parquet directory
-directly and sees the expected rows, but `SELECT * FROM <hms_table>` returns
-zero rows through HMS. This isolates the failure to Spark's interpretation of
-the HMS table metadata, not the Parquet files.
-
-Observed metadata discrepancies:
-
-- Sail initially wrote an explicit HMS storage descriptor location plus
-  `EXTERNAL=TRUE`; reference Spark restored the table as `EXTERNAL` and omitted
-  `Location`.
-- Removing `EXTERNAL=TRUE` restored the table as `MANAGED`, but reference Spark
-  still had `storage.locationUri = None` and scanned zero rows.
-- `REFRESH TABLE` did not change the result, so this was not negative lookup or
-  file-index staleness.
-- The local Spark source in
-  `/Users/santosh/IdeaProjects/spark/sql/hive/src/main/scala/org/apache/spark/sql/hive/HiveExternalCatalog.scala`
-  shows that data-source table restore reads the location from storage
-  properties key `path`; `HiveClientImpl.scala` maps storage properties to HMS
-  `StorageDescriptor.serdeInfo.parameters`.
-- The local Spark source in
-  `/Users/santosh/IdeaProjects/spark/sql/hive/src/main/scala/org/apache/spark/sql/hive/client/HiveClientImpl.scala`
-  also documents that `EXTERNAL_TABLE` must carry raw table property
-  `EXTERNAL=TRUE`; otherwise Hive metastore can change the table back to
-  `MANAGED_TABLE`.
-- Row-read roundtrips alone were insufficient: explicit Sail `LOCATION` tables
-  initially read successfully in Spark while Spark restored their catalog type
-  as `MANAGED`. The interop tests now assert restored type, provider, and
-  location in addition to row content.
-
-Decision: For Sail-created managed HMS data-source tables, write the
-Spark-compatible location into SerDe parameters as `path` and leave HMS storage
-descriptor location unset. For explicit `LOCATION`, write both `sd.location`
-and SerDe `path`, set HMS table type to `EXTERNAL_TABLE`, and include raw
-`EXTERNAL=TRUE`. On read, restore Sail's internal table location from either
-HMS `sd.location` or SerDe `path`, and preserve HMS table type for Spark-style
-describe/list output.
-
-Consequence: Reference Spark reconstructs `storage.locationUri` and reads the
-Sail-written files through HMS. Sail still filters raw `spark.sql.*` metadata
-and raw `EXTERNAL` metadata from user-visible table properties.
-
-Decision: Alter-table interop should validate Spark's data-source table
-metadata rewrite path by changing non-location table properties and then
-re-reading the table from the other engine.
-
-Rationale: Spark's `HiveExternalCatalog.alterTable` re-adds the internal
-storage property `path`, preserves the old HMS storage location when the
-logical data location has not changed, and carries old `spark.sql.sources.*`
-metadata forward. The externally visible contract for Sail is that provider,
-location, table type, and row readability survive non-location alter-table
-operations.
-
-Decision: `ALTER TABLE ... SET LOCATION` must update both the HMS storage
-descriptor location and Spark's data-source `path` storage property.
-
-Rationale: Spark's HMS restore path treats `path` as the logical scan location
-for data-source tables. Updating only the HMS storage descriptor can leave Spark
-or Sail reconstructing the old path. The interop tests now verify Spark-to-Sail
-and Sail-to-Spark alter-location roundtrips by inserting an old row, changing
-location, inserting a new row, and requiring the other engine to see only the
-new row at the restored location.
-
-Decision: Sail writes to partitioned generic HMS tables should perform a
-post-write partition recovery step for identity partition directories.
-
-Rationale: Spark data-source tables expose dynamic partitions through HMS after
-write. Sail's generic Parquet writer materializes Spark-compatible partition
-directories, but HMS clients also need partition objects with raw logical values
-and partition locations. The post-write recovery scans partition directories
-after the data write completes and registers missing HMS partitions with
-`ignore_if_exists`, preserving idempotent append behavior.
-
-Decision: Partition recovery should discover directories through the configured
-object-store registry for non-file URI table locations, with local filesystem
-scanning reserved for bare local and `file:` paths.
-
-Rationale: HMS table locations are not guaranteed to be local paths. Spark's
-interop contract is the partition metadata visible through HMS, so recovery
-must not silently skip `s3://`, `abfs://`, `gs://`, or another registered object
-store just because it is not representable as a local path. A focused Rust test
-uses an in-memory object store to validate Spark-style escaped partition
-prefixes, raw logical partition values, and escaped partition locations without
-paying for the full HMS/Spark harness.
-
-Decision: HMS schema conversion preserves Spark timestamp LTZ and NTZ metadata
-when Spark's data-source schema JSON is available.
-
-Rationale: Spark stores both Hive column type strings and data-source schema
-JSON. Hive's `timestamp` type alone cannot distinguish LTZ from NTZ, so Sail
-uses Spark's JSON metadata to restore `timestamp` versus `timestamp_ntz`, and
-writes the same distinction for Spark to restore Sail-created tables. The
-interop tests validate schema shape and string-cast values in both directions.
+- managed versus explicit-`LOCATION` table restoration in both directions
+- relative database `LOCATION` and relative table `LOCATION` qualification
+- provider, schema, format, and nullability restoration for supported types
+- `TIMESTAMP` and `TIMESTAMP_NTZ` restoration in both directions
+- partition metadata, escaped partition values, and partition discovery
+- non-location alter-table rewrites and `ALTER TABLE ... SET LOCATION`
 
 ## Interop Validation Backlog
 
-Keep non-location HMS/Spark discrepancies visible here until they are either
-covered by focused tests or intentionally deferred.
+Keep only real gaps or intentionally deferred environment coverage here.
 
-- Table classification: managed tables should remain managed, and explicit
-  `LOCATION` tables should restore as external Spark data-source tables.
-- Storage metadata shape: Spark data-source tables need SerDe/storage
-  property `path`, compatible input/output formats, and compatible SerDe class
-  metadata, not only a readable filesystem directory.
-- User-visible properties: raw `spark.sql.*`, Hive DDL timestamps, and Spark
-  datasource bookkeeping should stay filtered while still reconstructing
-  parsed table fields.
-- Schema and format restoration: Spark-created and Sail-created tables should
-  agree on provider, column names, column types, and nullability for supported
-  types.
-- Timestamp schema restoration: Spark-created and Sail-created `TIMESTAMP` and
-  `TIMESTAMP_NTZ` columns are covered in both directions. The contract is schema
-  restoration and stable string-cast values, not a full time-zone semantics
-  matrix.
-- Partition metadata: partition columns, HMS partition entries, and partition
-  locations are covered for space-containing and slash-containing values in
-  Spark-to-Sail and Sail-to-Spark partitioned Parquet interop.
-- Partition value escaping: Spark writes slash-containing partition values as
-  percent-escaped path segments (for example `region=a%2Fb`) and restores the
-  logical value as `a/b`. Sail-created HMS metadata now registers raw logical
-  partition values with escaped locations so reference Spark restores `a/b`,
-  and Sail decodes Spark/Hive escaped listing partition path segments before
-  exposing row values or evaluating filters.
-- Object-store partition recovery: non-file URI partition discovery is covered
-  by a focused Rust object-store test. The live HMS/Spark Python harness still
-  uses local Docker-visible paths, so S3/ABFS/GCS credential and service
-  compatibility remains a separate environment matrix rather than assumed from
-  this suite.
-- Alter-location behavior: Spark-to-Sail and Sail-to-Spark tests cover
-  `ALTER TABLE ... SET LOCATION` by checking restored location metadata and
-  readability of the new path only.
-- Database semantics: relative database `LOCATION` and relative table
-  `LOCATION` should continue matching Spark's warehouse/database qualification
-  behavior.
+- Live object-store matrix: partition recovery for non-file URIs is covered by
+  a focused Rust object-store test, but the Python HMS/Spark harness still uses
+  local Docker-visible paths. Real S3/ABFS/GCS service and credential coverage
+  remains a separate environment matrix.
+- Reference Spark Connect coverage: the interop harness still uses a classic
+  JVM `SparkSession` as the reference Spark side. Coverage with a second Spark
+  Connect server remains deferred.
 - Cache behavior: `REFRESH TABLE` is not required for the current roundtrips,
   but stale metadata or negative lookup caching should be captured with a
   focused repro if it appears.
-- Benign Spark probes: reference Spark may log missing `_spark_metadata`
-  warnings while creating data-source tables at new explicit locations. Record
-  this only when Sail's observable behavior diverges, not for Spark's expected
-  probe noise.
 
 ## Regenerating GSSAPI Bindings
 

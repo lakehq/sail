@@ -11,6 +11,10 @@ The Hive Metastore catalog provider in Sail allows you to connect to an external
 
 Sail's HMS integration is currently aimed at metadata interoperability with Apache Hive Metastore deployments.
 
+For contributor-oriented implementation notes, test harness details, and the
+current interop coverage/backlog, see
+[`docs/development/recipes/hms.md`](../../development/recipes/hms.md).
+
 The following areas are supported:
 
 - Plain HMS connections over Thrift.
