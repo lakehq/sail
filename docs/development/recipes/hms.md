@@ -150,17 +150,16 @@ The current Python HMS roundtrip suite plus focused Rust tests cover:
 - `TIMESTAMP` and `TIMESTAMP_NTZ` restoration in both directions
 - partition metadata, escaped partition values, and partition discovery
 - non-location alter-table rewrites and `ALTER TABLE ... SET LOCATION`
+- MinIO-backed S3 database locations for managed Parquet table roundtrips
+  between Sail and reference Spark
 
 ## Interop Validation Backlog
 
 Keep only real gaps or intentionally deferred environment coverage here.
 
-- S3-backed default database location: add a MinIO-backed integration lane that
-  creates the test database at an `s3://...` location and validates managed
-  table read/write roundtrips through HMS between Sail and reference Spark.
 - Live object-store matrix: partition recovery for non-file URIs is covered by
-  a focused Rust object-store test, but the Python HMS/Spark harness still uses
-  local Docker-visible paths. Real S3/ABFS/GCS service and credential coverage
+  a focused Rust object-store test, and MinIO-backed S3 is covered by the Python
+  HMS/Spark harness. Real AWS S3/ABFS/GCS service and credential coverage
   remains a separate environment matrix.
 - Reference Spark Connect coverage: the interop harness still uses a classic
   JVM `SparkSession` as the reference Spark side. Coverage with a second Spark

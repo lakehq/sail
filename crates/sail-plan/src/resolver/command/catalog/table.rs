@@ -24,6 +24,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let spec::TableDefinition {
+            external,
             columns,
             comment,
             constraints,
@@ -61,6 +62,7 @@ impl PlanResolver<'_> {
         let command = CatalogCommand::CreateTable {
             table: table.into(),
             options: CreateTableOptions {
+                external,
                 columns,
                 comment,
                 constraints,
@@ -86,6 +88,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         use super::super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
         let spec::TableDefinition {
+            external: _,
             columns,
             comment,
             constraints,

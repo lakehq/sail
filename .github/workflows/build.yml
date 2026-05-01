@@ -64,7 +64,7 @@ jobs:
             const patterns = [
                 { name: 'run_catalog_tests', pattern: "\\[catalog tests?\\]", flags: "i" },
                 { name: 'run_spark_tests', pattern: "\\[(spark )?tests?\\]", flags: "i" },
-                { name: 'run_hms_interop_tests', pattern: "\\[hms interop tests?\\]", flags: "i" },
+                { name: 'run_hms_interop_tests', pattern: "\\[hms interop tests\\]", flags: "i" },
                 { name: 'run_ibis_tests', pattern: "\\[(ibis )?tests?\\]", flags: "i" },
             ];
             for (const p of patterns) {
@@ -80,7 +80,7 @@ jobs:
             const hasAnyLabel = (...names) => names.some(name => labels.includes(name));
             core.setOutput('run_catalog_tests', hasAnyLabel('run catalog tests', 'catalog tests') ? 'true' : 'false');
             core.setOutput('run_spark_tests', hasAnyLabel('run spark tests', 'spark tests') ? 'true' : 'false');
-            core.setOutput('run_hms_interop_tests', hasAnyLabel('run hms interop tests', 'hms interop tests') ? 'true' : 'false');
+            core.setOutput('run_hms_interop_tests', hasAnyLabel('run hms interop tests') ? 'true' : 'false');
             core.setOutput('run_ibis_tests', hasAnyLabel('run ibis tests', 'ibis tests') ? 'true' : 'false');
 
   rust-tests:

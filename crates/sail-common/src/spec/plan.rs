@@ -872,6 +872,7 @@ pub struct HtmlString {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDefinition {
+    pub external: bool,
     pub columns: Vec<TableColumnDefinition>,
     pub comment: Option<String>,
     pub constraints: Vec<TableConstraint>,

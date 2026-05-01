@@ -744,6 +744,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
         let CreateTableOptions {
+            external: _,
             columns,
             comment,
             constraints,

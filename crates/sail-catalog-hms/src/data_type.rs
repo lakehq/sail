@@ -373,7 +373,7 @@ fn spark_json_to_arrow_data_type(value: &Value) -> CatalogResult<DataType> {
 
 fn parse_decimal_type(type_str: &str) -> CatalogResult<DataType> {
     if type_str == "decimal" {
-        return Ok(DataType::Decimal128(38, 18));
+        return Ok(DataType::Decimal128(10, 0));
     }
 
     let inner = type_str

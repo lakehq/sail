@@ -154,6 +154,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
         let CreateTableOptions {
+            external: _,
             columns,
             comment,
             constraints,

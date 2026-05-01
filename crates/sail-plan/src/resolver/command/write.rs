@@ -409,6 +409,7 @@ impl PlanResolver<'_> {
                     let command = CatalogCommand::CreateTable {
                         table: table.clone().into(),
                         options: CreateTableOptions {
+                            external: false,
                             columns,
                             comment: None,
                             constraints: vec![],

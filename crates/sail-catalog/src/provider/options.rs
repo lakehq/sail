@@ -26,6 +26,7 @@ pub struct DropDatabaseOptions {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CreateTableOptions {
+    pub external: bool,
     pub columns: Vec<CreateTableColumnOptions>,
     pub comment: Option<String>,
     pub constraints: Vec<CatalogTableConstraint>,

@@ -146,7 +146,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             create: _,
             or_replace,
             temporary: _, // TODO: handle temporary tables
-            external: _,  // TODO: handle external tables
+            external,
             table: _,
             if_not_exists,
             name,
@@ -162,6 +162,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let definition = TableDefinition {
                 or_replace: or_replace.is_some(),
                 if_not_exists: if_not_exists.is_some(),
+                external: external.is_some(),
                 using: using.map(|(_, x)| x),
                 columns,
                 clauses: clauses.try_into()?,
@@ -192,6 +193,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let definition = TableDefinition {
                 or_replace: true,
                 if_not_exists: false,
+                external: false,
                 using: using.map(|(_, x)| x),
                 columns,
                 clauses: clauses.try_into()?,
@@ -1145,6 +1147,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
 struct TableDefinition {
     or_replace: bool,
     if_not_exists: bool,
+    external: bool,
     using: Option<Ident>,
     columns: Option<ColumnDefinitionList>,
     clauses: CreateTableClauses,
@@ -1157,6 +1160,7 @@ fn from_ast_table_definition(
     let TableDefinition {
         or_replace,
         if_not_exists,
+        external,
         using,
         columns,
         clauses:
@@ -1249,6 +1253,7 @@ fn from_ast_table_definition(
     let properties = properties.map(from_ast_property_list).transpose()?;
     let columns = from_ast_table_columns(columns)?;
     let definition = spec::TableDefinition {
+        external,
         columns,
         comment: comment.map(from_ast_string).transpose()?,
         constraints: vec![],

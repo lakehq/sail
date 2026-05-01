@@ -508,6 +508,7 @@ impl CatalogProvider for UnityCatalogProvider {
     ) -> CatalogResult<TableStatus> {
         // Only external table creation is supported according to the Unity Catalog OpenAPI spec.
         let CreateTableOptions {
+            external: _,
             columns,
             comment,
             constraints,

@@ -57,6 +57,7 @@ async fn test_create_table() {
             &namespace,
             "products",
             CreateTableOptions {
+                external: false,
                 columns,
                 comment: Some("Product catalog table".to_string()),
                 constraints: vec![],
@@ -127,6 +128,7 @@ async fn test_create_table() {
             &namespace,
             "products",
             CreateTableOptions {
+                external: false,
                 columns: vec![col("different", DataType::Int32)],
                 comment: Some("Different comment".to_string()),
                 if_not_exists: true,
@@ -180,6 +182,7 @@ async fn test_get_table() {
             &namespace,
             "test_table",
             CreateTableOptions {
+                external: false,
                 columns,
                 comment: Some("Test table description".to_string()),
                 constraints: vec![],
@@ -292,6 +295,7 @@ async fn test_column_types() {
             &namespace,
             "all_types",
             CreateTableOptions {
+                external: false,
                 columns,
                 comment: Some("Table with all supported column types".to_string()),
                 location: Some("s3://bucket/all_types".to_string()),
@@ -371,6 +375,7 @@ async fn test_unsupported_column_types() {
             &namespace,
             "unsupported_types",
             CreateTableOptions {
+                external: false,
                 columns: unsupported_columns,
                 location: Some("s3://bucket/unsupported".to_string()),
                 ..simple_table_options(vec![])
@@ -408,6 +413,7 @@ async fn test_storage_formats() {
                 &namespace,
                 &table_name,
                 CreateTableOptions {
+                    external: false,
                     columns,
                     comment: Some(format!("Table with {format} format")),
                     constraints: vec![],
@@ -572,6 +578,7 @@ async fn test_partition_transforms() {
             &namespace,
             "events",
             CreateTableOptions {
+                external: false,
                 columns,
                 comment: Some("Events table with partition transforms".to_string()),
                 constraints: vec![],
@@ -644,6 +651,7 @@ async fn test_hive_rejects_transforms() {
             &namespace,
             "hive_with_transforms",
             CreateTableOptions {
+                external: false,
                 columns,
                 comment: None,
                 constraints: vec![],
@@ -690,6 +698,7 @@ async fn test_iceberg_requires_location() {
             &namespace,
             "iceberg_no_location",
             CreateTableOptions {
+                external: false,
                 columns,
                 comment: None,
                 constraints: vec![],

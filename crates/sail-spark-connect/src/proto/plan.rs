@@ -1435,6 +1435,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
+                        external: false,
                         columns,
                         comment: None,
                         constraints: vec![],
@@ -1472,6 +1473,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
+                        external: false,
                         columns,
                         comment: description,
                         constraints: vec![],
