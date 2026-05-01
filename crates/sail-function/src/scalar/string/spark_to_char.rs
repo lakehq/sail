@@ -82,7 +82,7 @@ impl ScalarUDFImpl for SparkToChar {
             DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
                 arg_types[0].clone()
             }
-            DataType::Null => DataType::Utf8,
+            DataType::Null => DataType::Int64,
             _ => {
                 return Err(unsupported_data_types_exec_err(
                     "to_char",
@@ -699,20 +699,20 @@ fn format_binary(input: &ColumnarValue, format: &str) -> Result<ColumnarValue> {
 
 fn format_binary_impl(
     input: &ColumnarValue,
-    convert: fn(&[u8]) -> String,
+    convert: fn(&[u8]) -> Result<String>,
 ) -> Result<ColumnarValue> {
     match input {
         ColumnarValue::Scalar(scalar) => {
             let bytes = scalar_to_bytes(scalar)?;
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
-                bytes.map(|b| convert(&b)),
-            )))
+            let result = bytes.map(|b| convert(&b)).transpose()?;
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
         }
         ColumnarValue::Array(arr) => {
             let casted = datafusion::arrow::compute::cast(arr, &DataType::Binary)?;
             let binary_arr = casted.as_binary::<i32>();
-            let result: StringArray = binary_arr.iter().map(|opt| opt.map(convert)).collect();
-            Ok(ColumnarValue::Array(Arc::new(result)))
+            let result: Result<StringArray> =
+                binary_arr.iter().map(|opt| opt.map(convert).transpose()).collect();
+            Ok(ColumnarValue::Array(Arc::new(result?)))
         }
     }
 }
@@ -729,18 +729,18 @@ fn scalar_to_bytes(scalar: &ScalarValue) -> Result<Option<Vec<u8>>> {
     }
 }
 
-fn binary_to_utf8(bytes: &[u8]) -> String {
-    // Spark raises an error for invalid UTF-8, but we use lossy for robustness.
-    // TODO: consider strict mode with error propagation
-    String::from_utf8_lossy(bytes).into_owned()
+fn binary_to_utf8(bytes: &[u8]) -> Result<String> {
+    String::from_utf8(bytes.to_vec()).map_err(|_| {
+        generic_exec_err("to_char", "binary value contains invalid UTF-8 bytes")
+    })
 }
 
-fn binary_to_base64(bytes: &[u8]) -> String {
+fn binary_to_base64(bytes: &[u8]) -> Result<String> {
     use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(bytes)
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
-fn binary_to_hex(bytes: &[u8]) -> String {
+fn binary_to_hex(bytes: &[u8]) -> Result<String> {
     // Avoid per-byte `format!` + collect (N+1 allocations). Write directly
     // into a pre-sized byte buffer using a hex lookup table, then reuse the
     // buffer as the String body (all chars are ASCII, so the conversion is
@@ -752,8 +752,6 @@ fn binary_to_hex(bytes: &[u8]) -> String {
         out.push(HEX[(b & 0x0F) as usize]);
     }
     // All bytes written are ASCII (`0-9`, `A-F`), so UTF-8 validity is
-    // guaranteed by construction. `from_utf8` performs the check anyway;
-    // `unwrap_or_default` avoids the forbidden `.unwrap()` but the default
-    // branch is unreachable.
-    String::from_utf8(out).unwrap_or_default()
+    // guaranteed by construction.
+    Ok(String::from_utf8(out).unwrap_or_default())
 }
