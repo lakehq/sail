@@ -91,27 +91,26 @@ impl PlanResolver<'_> {
                 // `is_user_defined_function` is always false on the wire, so a registered
                 // Python UDAF arrives here as `UnresolvedFunction`. Look it up in the
                 // catalog before falling back to the built-in window function registry.
-                let registered_udaf = self
+                let catalog_function = self
                     .ctx
                     .extension::<CatalogManager>()?
-                    .get_function(&canonical_function_name)?
-                    .and_then(|udf| {
-                        udf.inner()
-                            .as_any()
-                            .downcast_ref::<PySparkUnresolvedUDF>()
-                            .filter(|f| {
-                                matches!(
-                                    f.eval_type(),
-                                    spec::PySparkUdfType::GroupedAggPandas
-                                        | spec::PySparkUdfType::GroupedAggPandasIter
-                                        | spec::PySparkUdfType::GroupedAggArrow
-                                        | spec::PySparkUdfType::GroupedAggArrowIter
-                                        | spec::PySparkUdfType::WindowAggPandas
-                                        | spec::PySparkUdfType::WindowAggArrow
-                                )
-                            })
-                            .cloned()
-                    });
+                    .get_function(&canonical_function_name)?;
+                let registered_udaf = catalog_function.as_ref().and_then(|udf| {
+                    udf.inner()
+                        .as_any()
+                        .downcast_ref::<PySparkUnresolvedUDF>()
+                        .filter(|f| {
+                            matches!(
+                                f.eval_type(),
+                                spec::PySparkUdfType::GroupedAggPandas
+                                    | spec::PySparkUdfType::GroupedAggPandasIter
+                                    | spec::PySparkUdfType::GroupedAggArrow
+                                    | spec::PySparkUdfType::GroupedAggArrowIter
+                                    | spec::PySparkUdfType::WindowAggPandas
+                                    | spec::PySparkUdfType::WindowAggArrow
+                            )
+                        })
+                });
                 if let Some(udaf) = registered_udaf {
                     let (udaf, arguments, argument_display_names) = self
                         .resolve_registered_pyspark_udaf(
@@ -271,7 +270,7 @@ impl PlanResolver<'_> {
 
     async fn resolve_registered_pyspark_udaf(
         &self,
-        udaf: PySparkUnresolvedUDF,
+        udaf: &PySparkUnresolvedUDF,
         function_name: &str,
         arguments: Vec<spec::Expr>,
         schema: &DFSchemaRef,
