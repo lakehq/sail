@@ -21,6 +21,9 @@ use crate::logical_expr::ExprWithSource;
 /// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
 pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
 
+/// File-local row index metadata column for row-level modifications that write deletion vectors.
+pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
+
 /// Row-level operation type column appended to the expanded MERGE output.
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
@@ -101,6 +104,12 @@ pub trait MergeCapableSource: Send + Sync {
 
     /// Returns a reconfigured source with the file column enabled.
     fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
+
+    /// Returns the file-local row index column name if already configured.
+    fn row_index_column_name(&self) -> Option<&str>;
+
+    /// Returns a reconfigured source with the file-local row index column enabled.
+    fn with_row_index_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -241,6 +250,8 @@ pub struct RowLevelWriteInfo {
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths (MERGE targeted rewrite).
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
+    pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
     pub with_schema_evolution: bool,
     /// Override for commit operation metadata.
     pub operation_override: Option<OperationOverride>,

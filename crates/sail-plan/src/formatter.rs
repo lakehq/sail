@@ -496,7 +496,7 @@ impl PlanFormatter for SparkPlanFormatter {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
-            "any_value" | "first_value" | "last_value" => {
+            "from_csv" | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }

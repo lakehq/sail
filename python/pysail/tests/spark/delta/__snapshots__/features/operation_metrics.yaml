@@ -1,0 +1,120 @@
+# serializer version: 1
+---
+name: "test_append_write_reports_numfiles_numoutputrows_and_numoutputbytes"
+data:
+  operation: WRITE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 766
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 766
+    numOutputFiles: 1
+    numOutputRows: 3
+    writeTimeMs: <time_ms>
+---
+name: "test_datapredicate_delete_reports_numdeletedrows_and_numcopiedrows"
+data:
+  operation: DELETE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 734
+    numAddedFiles: 1
+    numCopiedRows: 3
+    numDeletedRows: 2
+    numFiles: 1
+    numOutputBytes: 734
+    numOutputFiles: 1
+    numOutputRows: 3
+    numRemovedBytes: 751
+    numRemovedFiles: 1
+    numTouchedRows: 5
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_dv_delete_reports_numdeletionvectorsadded_and_zero_numcopiedrows"
+data:
+  operation: DELETE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedFiles: 1
+    numCopiedRows: 0
+    numDeletedRows: 1
+    numDeletionVectorsAdded: 1
+    numDeletionVectorsUpdated: 0
+    numRemovedFiles: 1
+    scanTimeMs: <time_ms>
+---
+name: "test_full_merge_reports_target_file_and_byte_counters"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 2945
+    numAddedFiles: 3
+    numFiles: 3
+    numOutputBytes: 2945
+    numOutputFiles: 3
+    numOutputRows: 3
+    numRemovedBytes: 1017
+    numRemovedFiles: 1
+    numTargetBytesAdded: 2945
+    numTargetBytesRemoved: 1017
+    numTargetFilesAdded: 3
+    numTargetFilesRemoved: 1
+    numTouchedRows: 3
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_insertonly_merge_fastappends_without_removing_files"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 985
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 985
+    numOutputFiles: 1
+    numOutputRows: 1
+    numTargetBytesAdded: 985
+    numTargetFilesAdded: 1
+    rewriteTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_partitiononly_delete_removes_whole_files_without_scanning"
+data:
+  operation: DELETE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 0
+    numAddedFiles: 0
+    numCopiedRows: 0
+    numFiles: 0
+    numOutputBytes: 0
+    numOutputFiles: 0
+    numOutputRows: 0
+    numRemovedBytes: 463
+    numRemovedFiles: 1
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_replacewhere_overwrite_reports_added_and_removed_counters"
+data:
+  operation: WRITE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1488
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 1488
+    numOutputFiles: 2
+    numOutputRows: 3
+    numRemovedBytes: 766
+    numRemovedFiles: 1
+    numTouchedRows: 3
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>

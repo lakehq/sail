@@ -44,7 +44,9 @@ use url::Url;
 
 use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::expressions::simplify_expr;
-use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
+use crate::datasource::pruning::{
+    prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
+};
 use crate::datasource::type_converter::iceberg_schema_to_arrow;
 use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
@@ -252,13 +254,21 @@ impl IcebergTableProvider {
             // Early prune at manifest entry level using DataFusion predicate over metrics.
             if !filters.is_empty() && !manifest_pairs.is_empty() {
                 // Preserve pairing by keying on file_path before/after prune.
-                let (files_only, seq_only): (Vec<DataFile>, Vec<i64>) =
+                let (mut files_only, seq_only): (Vec<DataFile>, Vec<i64>) =
                     manifest_pairs.iter().cloned().unzip();
                 let seq_by_path: HashMap<String, i64> = files_only
                     .iter()
                     .map(|f| f.file_path.clone())
                     .zip(seq_only)
                     .collect();
+                if let Some(spec) = spec_map.get(&partition_spec_id) {
+                    files_only = prune_data_files_by_partition_values(
+                        files_only,
+                        &self.schema,
+                        spec,
+                        filters,
+                    );
+                }
                 let (kept, _mask) = crate::datasource::pruning::prune_files(
                     session,
                     filters,
@@ -889,7 +899,9 @@ impl TableProvider for IcebergTableProvider {
 impl IcebergTableProvider {
     fn classify_pushdown_for_expr(&self, expr: &Expr) -> TableProviderFilterPushDown {
         use TableProviderFilterPushDown as FP;
-        // Identity partition columns get Exact (Eq/IN) or Inexact (ranges)
+        // Identity partition columns can satisfy Eq/IN at partition level. Transformed
+        // partition source columns are useful for pruning but remain inexact because the
+        // original row predicate must still be evaluated.
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (l, r) = (Self::strip_expr(left), Self::strip_expr(right));
@@ -898,22 +910,27 @@ impl IcebergTableProvider {
                         if let (Some(col), true) =
                             (self.expr_as_column_name(l), self.expr_is_literal(r))
                         {
-                            if self.is_identity_partition_col(&col) {
-                                return FP::Exact;
+                            if let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col) {
+                                return pushdown;
                             }
                         }
                         if let (Some(col), true) =
                             (self.expr_as_column_name(r), self.expr_is_literal(l))
                         {
-                            if self.is_identity_partition_col(&col) {
-                                return FP::Exact;
+                            if let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col) {
+                                return pushdown;
                             }
                         }
                         FP::Unsupported
                     }
                     Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq => {
                         if let Some(col) = self.expr_as_column_name(l) {
-                            if self.expr_is_literal(r) && self.is_identity_partition_col(&col) {
+                            if self.expr_is_literal(r) && self.is_partition_source_col(&col) {
+                                return FP::Inexact;
+                            }
+                        }
+                        if let Some(col) = self.expr_as_column_name(r) {
+                            if self.expr_is_literal(l) && self.is_partition_source_col(&col) {
                                 return FP::Inexact;
                             }
                         }
@@ -926,8 +943,9 @@ impl IcebergTableProvider {
                 let e = Self::strip_expr(&in_list.expr);
                 if let Some(col) = self.expr_as_column_name(e) {
                     let all_literals = in_list.list.iter().all(|it| self.expr_is_literal(it));
-                    if all_literals && self.is_identity_partition_col(&col) {
-                        TableProviderFilterPushDown::Exact
+                    if all_literals {
+                        self.eq_in_pushdown_for_partition_col(&col)
+                            .unwrap_or(TableProviderFilterPushDown::Unsupported)
                     } else {
                         TableProviderFilterPushDown::Unsupported
                     }
@@ -945,20 +963,29 @@ impl IcebergTableProvider {
         for f in filters.iter() {
             match self.classify_pushdown_for_expr(f) {
                 TableProviderFilterPushDown::Exact => {
-                    pruning_filters.push(f.clone());
+                    Self::push_filter_once(&mut pruning_filters, f);
                     // Even if partition pruning is "exact", we still must apply the filter at scan
                     // time. Pruning is an optimization and can be conservative when stats are
                     // missing; correctness requires retaining the predicate.
-                    parquet_pushdown_filters.push(f.clone());
+                    Self::push_filter_once(&mut parquet_pushdown_filters, f);
                 }
                 TableProviderFilterPushDown::Inexact => {
-                    pruning_filters.push(f.clone());
-                    parquet_pushdown_filters.push(f.clone());
+                    Self::push_filter_once(&mut pruning_filters, f);
                 }
                 TableProviderFilterPushDown::Unsupported => {}
             }
         }
         (pruning_filters, parquet_pushdown_filters)
+    }
+
+    fn push_filter_once(filters: &mut Vec<Expr>, filter: &Expr) {
+        let filter_key = filter.to_string();
+        if !filters
+            .iter()
+            .any(|existing| existing.to_string() == filter_key)
+        {
+            filters.push(filter.clone());
+        }
     }
 
     fn strip_expr(expr: &Expr) -> &Expr {
@@ -980,19 +1007,40 @@ impl IcebergTableProvider {
         matches!(expr, Expr::Literal(_, _))
     }
 
-    fn is_identity_partition_col(&self, col_name: &str) -> bool {
-        // Map identity partition source_id to schema field names
-        let mut names = std::collections::HashSet::new();
+    fn eq_in_pushdown_for_partition_col(
+        &self,
+        col_name: &str,
+    ) -> Option<TableProviderFilterPushDown> {
+        let only_identity = self.partition_source_col_only_uses_identity(col_name)?;
+        if only_identity {
+            Some(TableProviderFilterPushDown::Exact)
+        } else {
+            Some(TableProviderFilterPushDown::Inexact)
+        }
+    }
+
+    fn is_partition_source_col(&self, col_name: &str) -> bool {
+        self.partition_source_col_only_uses_identity(col_name)
+            .is_some()
+    }
+
+    fn partition_source_col_only_uses_identity(&self, col_name: &str) -> Option<bool> {
+        let mut found = false;
+        let mut only_identity = true;
         for spec in &self.partition_specs {
             for pf in spec.fields().iter() {
-                if matches!(pf.transform, crate::spec::transform::Transform::Identity) {
-                    if let Some(field) = self.schema.field_by_id(pf.source_id) {
-                        names.insert(field.name.clone());
+                if matches!(pf.transform, Transform::Void | Transform::Unknown) {
+                    continue;
+                }
+                if let Some(field) = self.schema.field_by_id(pf.source_id) {
+                    if field.name == col_name {
+                        found = true;
+                        only_identity &= matches!(pf.transform, Transform::Identity);
                     }
                 }
             }
         }
-        names.contains(col_name)
+        found.then_some(only_identity)
     }
 
     fn rebuild_logical_schema_for_filters(
@@ -1079,6 +1127,7 @@ impl IcebergTableProvider {
             );
         }
 
+        // TODO: Apply transform-aware partition pruning here
         let manifest_scan: Arc<dyn ExecutionPlan> = Arc::new(IcebergManifestScanExec::new(
             self.table_uri.clone(),
             self.snapshot.clone(),

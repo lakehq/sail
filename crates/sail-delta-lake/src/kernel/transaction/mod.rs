@@ -27,7 +27,7 @@ use chrono::Utc;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -68,54 +68,102 @@ pub struct Metrics {
     pub num_log_files_cleaned_up: u64,
 }
 
-#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+/// Metrics serialized as `commitInfo.operationMetrics`. `None` fields are omitted.
+#[derive(Default, Debug, PartialEq, Clone)]
 pub struct OperationMetrics {
     pub num_files: Option<u64>,
     pub num_output_rows: Option<u64>,
     pub num_output_bytes: Option<u64>,
     pub execution_time_ms: Option<u64>,
+    pub scan_time_ms: Option<u64>,
+    pub rewrite_time_ms: Option<u64>,
+    pub write_time_ms: Option<u64>,
     pub num_removed_files: Option<u64>,
     pub num_added_files: Option<u64>,
     pub num_output_files: Option<u64>,
     pub num_added_bytes: Option<u64>,
     pub num_removed_bytes: Option<u64>,
-    pub write_time_ms: Option<u64>,
+    pub num_deleted_rows: Option<u64>,
+    pub num_updated_rows: Option<u64>,
+    pub num_copied_rows: Option<u64>,
+    pub num_touched_rows: Option<u64>,
+    pub num_source_rows: Option<u64>,
+    pub num_target_rows_inserted: Option<u64>,
+    pub num_target_rows_updated: Option<u64>,
+    pub num_target_rows_deleted: Option<u64>,
+    pub num_target_rows_copied: Option<u64>,
+    pub num_target_files_added: Option<u64>,
+    pub num_target_files_removed: Option<u64>,
+    pub num_target_bytes_added: Option<u64>,
+    pub num_target_bytes_removed: Option<u64>,
+    pub num_deletion_vectors_added: Option<u64>,
+    pub num_deletion_vectors_updated: Option<u64>,
+    pub num_deletion_vectors_removed: Option<u64>,
     pub extra: HashMap<String, Value>,
+}
+
+impl Serialize for OperationMetrics {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.clone().into_map().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OperationMetrics {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        HashMap::<String, Value>::deserialize(deserializer).map(Self::from)
+    }
 }
 
 impl OperationMetrics {
     pub fn into_map(self) -> HashMap<String, Value> {
         let mut out = self.extra;
-        if let Some(v) = self.num_files {
-            out.insert("numFiles".to_string(), Value::from(v));
+        macro_rules! insert_opt {
+            ($key:literal, $field:expr) => {
+                if let Some(v) = $field {
+                    out.insert($key.to_string(), Value::from(v));
+                }
+            };
         }
-        if let Some(v) = self.num_output_rows {
-            out.insert("numOutputRows".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_output_bytes {
-            out.insert("numOutputBytes".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.execution_time_ms {
-            out.insert("executionTimeMs".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_removed_files {
-            out.insert("numRemovedFiles".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_added_files {
-            out.insert("numAddedFiles".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_output_files {
-            out.insert("numOutputFiles".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_added_bytes {
-            out.insert("numAddedBytes".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_removed_bytes {
-            out.insert("numRemovedBytes".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.write_time_ms {
-            out.insert("writeTimeMs".to_string(), Value::from(v));
-        }
+        insert_opt!("numFiles", self.num_files);
+        insert_opt!("numOutputRows", self.num_output_rows);
+        insert_opt!("numOutputBytes", self.num_output_bytes);
+        insert_opt!("executionTimeMs", self.execution_time_ms);
+        insert_opt!("scanTimeMs", self.scan_time_ms);
+        insert_opt!("rewriteTimeMs", self.rewrite_time_ms);
+        insert_opt!("writeTimeMs", self.write_time_ms);
+        insert_opt!("numRemovedFiles", self.num_removed_files);
+        insert_opt!("numAddedFiles", self.num_added_files);
+        insert_opt!("numOutputFiles", self.num_output_files);
+        insert_opt!("numAddedBytes", self.num_added_bytes);
+        insert_opt!("numRemovedBytes", self.num_removed_bytes);
+        insert_opt!("numDeletedRows", self.num_deleted_rows);
+        insert_opt!("numUpdatedRows", self.num_updated_rows);
+        insert_opt!("numCopiedRows", self.num_copied_rows);
+        insert_opt!("numTouchedRows", self.num_touched_rows);
+        insert_opt!("numSourceRows", self.num_source_rows);
+        insert_opt!("numTargetRowsInserted", self.num_target_rows_inserted);
+        insert_opt!("numTargetRowsUpdated", self.num_target_rows_updated);
+        insert_opt!("numTargetRowsDeleted", self.num_target_rows_deleted);
+        insert_opt!("numTargetRowsCopied", self.num_target_rows_copied);
+        insert_opt!("numTargetFilesAdded", self.num_target_files_added);
+        insert_opt!("numTargetFilesRemoved", self.num_target_files_removed);
+        insert_opt!("numTargetBytesAdded", self.num_target_bytes_added);
+        insert_opt!("numTargetBytesRemoved", self.num_target_bytes_removed);
+        insert_opt!("numDeletionVectorsAdded", self.num_deletion_vectors_added);
+        insert_opt!(
+            "numDeletionVectorsUpdated",
+            self.num_deletion_vectors_updated
+        );
+        insert_opt!(
+            "numDeletionVectorsRemoved",
+            self.num_deletion_vectors_removed
+        );
         out
     }
 
@@ -131,14 +179,127 @@ impl OperationMetrics {
         merge_opt(&mut self.num_output_rows, other.num_output_rows);
         merge_opt(&mut self.num_output_bytes, other.num_output_bytes);
         merge_opt(&mut self.execution_time_ms, other.execution_time_ms);
+        merge_opt(&mut self.scan_time_ms, other.scan_time_ms);
+        merge_opt(&mut self.rewrite_time_ms, other.rewrite_time_ms);
+        merge_opt(&mut self.write_time_ms, other.write_time_ms);
         merge_opt(&mut self.num_removed_files, other.num_removed_files);
         merge_opt(&mut self.num_added_files, other.num_added_files);
         merge_opt(&mut self.num_output_files, other.num_output_files);
         merge_opt(&mut self.num_added_bytes, other.num_added_bytes);
         merge_opt(&mut self.num_removed_bytes, other.num_removed_bytes);
-        merge_opt(&mut self.write_time_ms, other.write_time_ms);
+        merge_opt(&mut self.num_deleted_rows, other.num_deleted_rows);
+        merge_opt(&mut self.num_updated_rows, other.num_updated_rows);
+        merge_opt(&mut self.num_copied_rows, other.num_copied_rows);
+        merge_opt(&mut self.num_touched_rows, other.num_touched_rows);
+        merge_opt(&mut self.num_source_rows, other.num_source_rows);
+        merge_opt(
+            &mut self.num_target_rows_inserted,
+            other.num_target_rows_inserted,
+        );
+        merge_opt(
+            &mut self.num_target_rows_updated,
+            other.num_target_rows_updated,
+        );
+        merge_opt(
+            &mut self.num_target_rows_deleted,
+            other.num_target_rows_deleted,
+        );
+        merge_opt(
+            &mut self.num_target_rows_copied,
+            other.num_target_rows_copied,
+        );
+        merge_opt(
+            &mut self.num_target_files_added,
+            other.num_target_files_added,
+        );
+        merge_opt(
+            &mut self.num_target_files_removed,
+            other.num_target_files_removed,
+        );
+        merge_opt(
+            &mut self.num_target_bytes_added,
+            other.num_target_bytes_added,
+        );
+        merge_opt(
+            &mut self.num_target_bytes_removed,
+            other.num_target_bytes_removed,
+        );
+        merge_opt(
+            &mut self.num_deletion_vectors_added,
+            other.num_deletion_vectors_added,
+        );
+        merge_opt(
+            &mut self.num_deletion_vectors_updated,
+            other.num_deletion_vectors_updated,
+        );
+        merge_opt(
+            &mut self.num_deletion_vectors_removed,
+            other.num_deletion_vectors_removed,
+        );
 
         self.extra.extend(other.extra);
+    }
+
+    /// Derive operation-specific metrics from generic counters. Call once at commit time.
+    pub fn finalize_for(&mut self, operation: &crate::kernel::DeltaOperation) {
+        use crate::kernel::DeltaOperation;
+
+        match operation {
+            DeltaOperation::Delete { .. } => {
+                if self.num_copied_rows.is_none() {
+                    self.num_copied_rows = self.num_output_rows;
+                }
+                if self.num_deleted_rows.is_none() {
+                    if let (Some(touched), Some(copied)) =
+                        (self.num_touched_rows, self.num_copied_rows)
+                    {
+                        self.num_deleted_rows = Some(touched.saturating_sub(copied));
+                    }
+                }
+                if self.rewrite_time_ms.is_none() {
+                    self.rewrite_time_ms = self.write_time_ms;
+                }
+            }
+            DeltaOperation::Merge { .. } => {
+                if self.num_target_files_added.is_none() {
+                    self.num_target_files_added = self.num_added_files;
+                }
+                if self.num_target_files_removed.is_none() {
+                    self.num_target_files_removed = self.num_removed_files;
+                }
+                if self.num_target_bytes_added.is_none() {
+                    self.num_target_bytes_added = self.num_added_bytes;
+                }
+                if self.num_target_bytes_removed.is_none() {
+                    self.num_target_bytes_removed = self.num_removed_bytes;
+                }
+                if self.rewrite_time_ms.is_none() {
+                    self.rewrite_time_ms = self.write_time_ms;
+                }
+            }
+            DeltaOperation::FileSystemCheck { .. } => {
+                self.num_added_files = None;
+                self.num_added_bytes = None;
+                self.num_output_rows = None;
+                self.num_output_bytes = None;
+                self.num_output_files = None;
+            }
+            // TODO: Restore should report numRestoredFiles / numRemovedFiles /
+            // restoredFilesSize / removedFilesSize / numOfFilesAfterRestore /
+            // tableSizeAfterRestore. Requires the restore exec to aggregate these
+            // counts from the snapshot diff it produces.
+            DeltaOperation::Restore { .. }
+            | DeltaOperation::Write { .. }
+            | DeltaOperation::Create { .. }
+            | DeltaOperation::SetTableProperties { .. }
+            | DeltaOperation::UnsetTableProperties { .. } => {} // TODO: When the following operations are implemented, extend this match:
+                                                                //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
+                                                                //     executionTimeMs, scanTimeMs, rewriteTimeMs
+                                                                //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
+                                                                //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
+                                                                //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
+                                                                //     numDeletedFiles, numVacuumedDirectories
+        }
     }
 }
 
@@ -159,24 +320,60 @@ impl From<HashMap<String, Value>> for OperationMetrics {
         let num_output_rows = take_u64(&mut value, "numOutputRows");
         let num_output_bytes = take_u64(&mut value, "numOutputBytes");
         let execution_time_ms = take_u64(&mut value, "executionTimeMs");
+        let scan_time_ms = take_u64(&mut value, "scanTimeMs");
+        let rewrite_time_ms = take_u64(&mut value, "rewriteTimeMs");
+        let write_time_ms = take_u64(&mut value, "writeTimeMs");
         let num_removed_files = take_u64(&mut value, "numRemovedFiles");
         let num_added_files = take_u64(&mut value, "numAddedFiles");
         let num_output_files = take_u64(&mut value, "numOutputFiles");
         let num_added_bytes = take_u64(&mut value, "numAddedBytes");
         let num_removed_bytes = take_u64(&mut value, "numRemovedBytes");
-        let write_time_ms = take_u64(&mut value, "writeTimeMs");
+        let num_deleted_rows = take_u64(&mut value, "numDeletedRows");
+        let num_updated_rows = take_u64(&mut value, "numUpdatedRows");
+        let num_copied_rows = take_u64(&mut value, "numCopiedRows");
+        let num_touched_rows = take_u64(&mut value, "numTouchedRows");
+        let num_source_rows = take_u64(&mut value, "numSourceRows");
+        let num_target_rows_inserted = take_u64(&mut value, "numTargetRowsInserted");
+        let num_target_rows_updated = take_u64(&mut value, "numTargetRowsUpdated");
+        let num_target_rows_deleted = take_u64(&mut value, "numTargetRowsDeleted");
+        let num_target_rows_copied = take_u64(&mut value, "numTargetRowsCopied");
+        let num_target_files_added = take_u64(&mut value, "numTargetFilesAdded");
+        let num_target_files_removed = take_u64(&mut value, "numTargetFilesRemoved");
+        let num_target_bytes_added = take_u64(&mut value, "numTargetBytesAdded");
+        let num_target_bytes_removed = take_u64(&mut value, "numTargetBytesRemoved");
+        let num_deletion_vectors_added = take_u64(&mut value, "numDeletionVectorsAdded");
+        let num_deletion_vectors_updated = take_u64(&mut value, "numDeletionVectorsUpdated");
+        let num_deletion_vectors_removed = take_u64(&mut value, "numDeletionVectorsRemoved");
 
         Self {
             num_files,
             num_output_rows,
             num_output_bytes,
             execution_time_ms,
+            scan_time_ms,
+            rewrite_time_ms,
+            write_time_ms,
             num_removed_files,
             num_added_files,
             num_output_files,
             num_added_bytes,
             num_removed_bytes,
-            write_time_ms,
+            num_deleted_rows,
+            num_updated_rows,
+            num_copied_rows,
+            num_touched_rows,
+            num_source_rows,
+            num_target_rows_inserted,
+            num_target_rows_updated,
+            num_target_rows_deleted,
+            num_target_rows_copied,
+            num_target_files_added,
+            num_target_files_removed,
+            num_target_bytes_added,
+            num_target_bytes_removed,
+            num_deletion_vectors_added,
+            num_deletion_vectors_updated,
+            num_deletion_vectors_removed,
             extra: value,
         }
     }

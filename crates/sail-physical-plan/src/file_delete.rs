@@ -37,6 +37,7 @@ pub async fn create_file_delete_physical_plan(
         condition,
         expanded_input: None,
         touched_file_plan: None,
+        deletion_vector_plan: None,
         with_schema_evolution: false,
         operation_override: None,
         merge_strategy: Default::default(),

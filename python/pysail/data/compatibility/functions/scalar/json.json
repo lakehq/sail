@@ -2,8 +2,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "from_json",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/219"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

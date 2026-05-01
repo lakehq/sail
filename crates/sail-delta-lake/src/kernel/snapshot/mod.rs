@@ -56,7 +56,7 @@ use crate::table::{
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-mod materialize;
+pub(crate) mod materialize;
 mod stats;
 
 pub struct DeltaSnapshot {

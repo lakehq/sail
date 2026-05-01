@@ -76,6 +76,16 @@ pub trait ListingFormat: Debug + Send + Sync + 'static {
         options: Vec<OptionLayer>,
     ) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
 
+    /// Per-read override for the file extension used when listing files.
+    /// Returning `None` keeps the default extension supplied by `ListingOptions`.
+    fn file_extension_override(
+        &self,
+        _ctx: &dyn Session,
+        _options: &[OptionLayer],
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// Get the schema inferrer for this format
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer>;
 }
@@ -132,11 +142,15 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                     _ => None,
                 }
             });
+        let file_extension_override = self.inner.file_extension_override(ctx, &options)?;
 
         let config = ctx.config();
         let mut listing_options = ListingOptions::new(file_format)
             .with_target_partitions(config.target_partitions())
             .with_collect_stat(config.collect_statistics());
+        if let Some(ext) = file_extension_override {
+            listing_options = listing_options.with_file_extension(ext);
+        }
 
         let (schema, partition_by) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
