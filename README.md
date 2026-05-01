@@ -1,22 +1,18 @@
-# Sail
-
 [![Build Status](https://github.com/lakehq/sail/actions/workflows/build.yml/badge.svg?branch=main&event=push)](https://github.com/lakehq/sail/actions)
 [![Codecov](https://codecov.io/gh/lakehq/sail/graph/badge.svg)](https://app.codecov.io/gh/lakehq/sail)
 [![PyPI Release](https://img.shields.io/pypi/v/pysail)](https://pypi.org/project/pysail/)
 [![Static Slack Badge](https://img.shields.io/badge/slack-LakeSail_Community-3762E0?logo=slack)](https://www.launchpass.com/lakesail-community/free)
+
+# Sail
 
 Sail is an open-source **unified and distributed multimodal computation framework** created by [LakeSail](https://lakesail.com/).
 
 Our mission is to **unify batch processing, stream processing, and compute-intensive AI workloads**. Sail is a compute engine that is:
 
 - **Compatible** with the Spark Connect protocol, supporting the Spark SQL and DataFrame API with no code rewrites required.
-- **~4x faster** than Spark in benchmarks (up to 8x in specific workloads).
-- **94% cheaper** on infrastructure costs.
+- **~4× faster** (up to 8× in specific workloads) than Spark and **94% cheaper** on infrastructure costs. See [derived TPC-H benchmarks](#benchmark-results).
 - **100% Rust-native** with no JVM overhead, delivering memory safety, instant startup, and predictable performance.
-
-**🚀 Sail outperforms Spark, popular Spark accelerators, Databricks, and Snowflake on [ClickBench](https://go.lakesail.com/clickbench).**
-
-**💬 [Join our Slack community](https://www.launchpass.com/lakesail-community/free)** to ask questions, share feedback, and connect with other Sail users and contributors.
+- **Proven on [ClickBench](https://go.lakesail.com/clickbench)**, outperforming Spark, popular Spark accelerators, Databricks, and Snowflake.
 
 ## Documentation
 
@@ -30,11 +26,8 @@ Sail is available as a Python package on PyPI. You can install it along with PyS
 
 ```bash
 pip install pysail
-pip install "pyspark[connect]"
+pip install "pyspark-client"
 ```
-
-Alternatively, you can install the lightweight client package `pyspark-client` since Spark 4.0.
-The `pyspark-connect` package, which is equivalent to `pyspark[connect]`, is also available since Spark 4.0.
 
 ### Advanced Use Cases
 
