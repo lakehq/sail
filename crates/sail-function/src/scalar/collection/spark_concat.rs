@@ -242,15 +242,22 @@ fn cast_columnar_values(
         .collect()
 }
 
-/// Arrow formats timestamps as ISO 8601 (e.g. "2024-01-15T12:00:00Z").
-/// Spark uses a space separator and no timezone suffix (e.g. "2024-01-15 12:00:00").
+/// Arrow formats timestamps as ISO 8601 (e.g. "2024-01-15T12:00:00Z" or
+/// "2024-01-15 12:00:00+08:00"). Spark uses a space separator and no timezone
+/// suffix (e.g. "2024-01-15 12:00:00").
 fn spark_format_timestamp_str(s: &str) -> String {
     // Replace ISO 8601 'T' separator with a space
     let s = s.replace('T', " ");
-    // Strip trailing timezone: Z, +HH:MM, -HH:MM, etc.
-    // The last digit of the time (or fractional seconds) marks the end of the value.
-    if let Some(idx) = s.rfind(|c: char| c.is_ascii_digit()) {
-        s[..=idx].to_string()
+    // Strip timezone suffix (Z, +HH:MM, -HH:MM) that starts after the seconds
+    // part. "YYYY-MM-DD HH:MM:SS" is 19 chars, so search from position 19 to
+    // avoid matching the '-' in the date portion.
+    let cutoff = s
+        .char_indices()
+        .skip_while(|(i, _)| *i < 19)
+        .find(|(_, c)| matches!(c, 'Z' | '+' | '-'))
+        .map(|(i, _)| i);
+    if let Some(idx) = cutoff {
+        s[..idx].to_string()
     } else {
         s
     }

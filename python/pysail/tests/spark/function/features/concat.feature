@@ -548,3 +548,39 @@ Feature: concat function
       Then query result
         | result |
         | NULL   |
+
+    Scenario: TIMESTAMP_NTZ coerced to string
+      When query
+        """
+        SELECT concat(TIMESTAMP_NTZ '2024-01-15 12:00:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-01-15 12:00:00 |
+
+    Scenario: TIMESTAMP_NTZ coerced to string with microseconds
+      When query
+        """
+        SELECT concat(TIMESTAMP_NTZ '2024-01-15 12:00:00.123456') AS result
+        """
+      Then query result
+        | result                     |
+        | 2024-01-15 12:00:00.123456 |
+
+    Scenario: TIMESTAMP_NTZ concatenated with string suffix
+      When query
+        """
+        SELECT concat(TIMESTAMP_NTZ '2024-01-15 12:00:00', '_end') AS result
+        """
+      Then query result
+        | result                  |
+        | 2024-01-15 12:00:00_end |
+
+    Scenario: TIMESTAMP_NTZ NULL with string returns NULL
+      When query
+        """
+        SELECT concat(CAST(NULL AS TIMESTAMP_NTZ), 'x') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
