@@ -40,6 +40,9 @@ use crate::delta_log::{
     parse_commit_version_from_location, read_last_checkpoint_version_from_store,
     resolve_commit_timestamp_from_actions,
 };
+use crate::kernel::checkpoint_augment::{
+    normalize_checkpoint_batch_for_decode, AddAugmentationConfig,
+};
 use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
     checkpoint_path, last_checkpoint_path, sidecar_file_path, uuid_checkpoint_path, Action, Add,
@@ -249,6 +252,7 @@ impl ReconciledCheckpointState {
 
         let add_count = i64::try_from(self.adds.len())
             .map_err(|_| DeltaTableError::generic("add action count overflow"))?;
+        let augment = AddAugmentationConfig::from_metadata(&metadata)?;
 
         Ok((
             CheckpointBatchIter {
@@ -283,6 +287,7 @@ impl ReconciledCheckpointState {
                     .into_iter()
                     .collect::<BTreeMap<_, _>>()
                     .into_iter(),
+                augment,
             },
             add_count,
         ))
@@ -364,6 +369,7 @@ struct CheckpointBatchIter {
     domain_metadata: std::collections::btree_map::IntoIter<String, DomainMetadata>,
     removes: std::collections::btree_map::IntoIter<LogicalFileKey, Remove>,
     adds: std::collections::btree_map::IntoIter<LogicalFileKey, Add>,
+    augment: AddAugmentationConfig,
 }
 
 impl CheckpointBatchIter {
@@ -409,7 +415,7 @@ impl CheckpointBatchIter {
         if rows.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(encode_checkpoint_rows(&rows)?))
+            Ok(Some(encode_checkpoint_rows(&rows, &self.augment)?))
         }
     }
 }
@@ -421,6 +427,7 @@ struct SidecarBatchIter {
     batch_size: usize,
     adds: std::collections::hash_map::IntoValues<LogicalFileKey, Add>,
     removes: std::collections::hash_map::IntoValues<LogicalFileKey, Remove>,
+    augment: AddAugmentationConfig,
 }
 
 impl SidecarBatchIter {
@@ -446,7 +453,7 @@ impl SidecarBatchIter {
         if rows.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(encode_checkpoint_rows(&rows)?))
+            Ok(Some(encode_checkpoint_rows(&rows, &self.augment)?))
         }
     }
 }
@@ -463,13 +470,19 @@ pub(crate) struct ReplayedTableState {
     pub commit_timestamps: BTreeMap<i64, i64>,
 }
 
-fn encode_checkpoint_rows(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
+fn encode_checkpoint_rows(
+    rows: &Vec<CheckpointActionRow>,
+    augment: &AddAugmentationConfig,
+) -> DeltaResult<RecordBatch> {
     let fields = checkpoint_fields()?;
-    serde_arrow::to_record_batch(&fields, rows).map_err(DeltaTableError::generic_err)
+    let batch =
+        serde_arrow::to_record_batch(&fields, rows).map_err(DeltaTableError::generic_err)?;
+    augment.augment_add(batch)
 }
 
 pub(crate) fn decode_checkpoint_rows(batch: &RecordBatch) -> DeltaResult<Vec<CheckpointActionRow>> {
-    serde_arrow::from_record_batch(batch).map_err(DeltaTableError::generic_err)
+    let batch = normalize_checkpoint_batch_for_decode(batch)?;
+    serde_arrow::from_record_batch(&batch).map_err(DeltaTableError::generic_err)
 }
 
 fn checkpoint_fields() -> DeltaResult<Vec<FieldRef>> {
@@ -663,6 +676,14 @@ impl<'a> CheckpointManager<'a> {
         let now_millis = Utc::now().timestamp_millis();
         let checkpoint_add_count = i64::try_from(state.adds.len())
             .map_err(|_| DeltaTableError::generic("add action count overflow"))?;
+        let protocol = state.protocol.ok_or_else(|| {
+            DeltaTableError::generic("Cannot create checkpoint without protocol action")
+        })?;
+        let metadata = state.metadata.ok_or_else(|| {
+            DeltaTableError::generic("Cannot create checkpoint without metadata action")
+        })?;
+        let sidecar_augment = AddAugmentationConfig::from_metadata(&metadata)?;
+        let main_augment = AddAugmentationConfig::from_metadata(&metadata)?;
 
         // Step 1: Write add/remove actions into a sidecar file using batched writes.
         const SIDECAR_WRITE_BATCH_SIZE: usize = 16_384;
@@ -674,6 +695,7 @@ impl<'a> CheckpointManager<'a> {
             batch_size: SIDECAR_WRITE_BATCH_SIZE,
             adds: state.adds.into_values(),
             removes: state.removes.into_values(),
+            augment: sidecar_augment,
         };
 
         let sidecar_descriptor = if let Some(first_batch) = sidecar_batches.next_batch()? {
@@ -705,13 +727,6 @@ impl<'a> CheckpointManager<'a> {
         };
 
         // Step 2: Build the main V2 checkpoint with header actions + sidecar refs.
-        let protocol = state.protocol.ok_or_else(|| {
-            DeltaTableError::generic("Cannot create checkpoint without protocol action")
-        })?;
-        let metadata = state.metadata.ok_or_else(|| {
-            DeltaTableError::generic("Cannot create checkpoint without metadata action")
-        })?;
-
         let mut main_rows: Vec<CheckpointActionRow> = Vec::new();
 
         // V2 checkpoint marker
@@ -753,7 +768,7 @@ impl<'a> CheckpointManager<'a> {
             });
         }
 
-        let main_batch = encode_checkpoint_rows(&main_rows)?;
+        let main_batch = encode_checkpoint_rows(&main_rows, &main_augment)?;
         ensure_schema_supported_for_parquet(&main_batch)?;
         let main_row_count = i64::try_from(main_rows.len())
             .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
@@ -1290,7 +1305,9 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::DateTime;
+    use datafusion::arrow::array::StructArray;
     use datafusion::arrow::datatypes::DataType as ArrowDataType;
+    use datafusion::arrow::record_batch::RecordBatch;
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
@@ -1299,12 +1316,26 @@ mod tests {
         checkpoint_fields, decode_checkpoint_rows, encode_checkpoint_rows,
         replay_commit_header_actions, ReconciledCheckpointState, ReconciledHeaderState,
     };
+    use crate::kernel::checkpoint_augment::AddAugmentationConfig;
     use crate::spec::{
         Action, Add, CheckpointActionRow, CheckpointMetadata, CommitInfo, DataType,
         DeletionVectorDescriptor, DeltaError as DeltaTableError, DeltaResult, DomainMetadata,
         Metadata, Protocol, Remove, Sidecar, StorageType, StructField, StructType, TableFeature,
         Transaction,
     };
+
+    fn encode_rows_for_test(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
+        encode_rows_with_properties(rows, std::iter::empty())
+    }
+
+    fn encode_rows_with_properties(
+        rows: &Vec<CheckpointActionRow>,
+        configuration: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> DeltaResult<RecordBatch> {
+        let metadata = test_metadata(configuration)?;
+        let augment = AddAugmentationConfig::from_metadata(&metadata)?;
+        encode_checkpoint_rows(rows, &augment)
+    }
 
     fn test_metadata(
         configuration: impl IntoIterator<Item = (&'static str, &'static str)>,
@@ -1375,7 +1406,7 @@ mod tests {
             }),
             ..Default::default()
         }];
-        let batch = encode_checkpoint_rows(&rows)?;
+        let batch = encode_rows_for_test(&rows)?;
         let decoded = decode_checkpoint_rows(&batch)?;
         assert_eq!(decoded.len(), 1);
         assert_eq!(
@@ -1385,6 +1416,62 @@ mod tests {
                 .map(|add| add.path.as_str()),
             Some("part-000.parquet")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_row_can_omit_stats_json_and_decode_from_stats_parsed() -> DeltaResult<()> {
+        let stats =
+            r#"{"numRecords":3,"minValues":{"id":1},"maxValues":{"id":9},"nullCount":{"id":0}}"#;
+        let rows = vec![CheckpointActionRow {
+            add: Some(Add {
+                path: "part-000.parquet".to_string(),
+                partition_values: HashMap::new(),
+                size: 10,
+                modification_time: 20,
+                data_change: true,
+                stats: Some(stats.to_string()),
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+                clustering_provider: None,
+                commit_version: None,
+                commit_timestamp: None,
+            }),
+            ..Default::default()
+        }];
+        let batch = encode_rows_with_properties(
+            &rows,
+            [
+                ("delta.checkpoint.writeStatsAsStruct", "true"),
+                ("delta.checkpoint.writeStatsAsJson", "false"),
+            ],
+        )?;
+
+        let add = batch
+            .column_by_name("add")
+            .and_then(|column| column.as_any().downcast_ref::<StructArray>())
+            .ok_or_else(|| DeltaTableError::schema("checkpoint add column missing"))?;
+        let add_field_names = add
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert!(add_field_names.contains(&"stats_parsed"));
+        assert!(!add_field_names.contains(&"stats"));
+
+        let decoded = decode_checkpoint_rows(&batch)?;
+        let decoded_stats = decoded
+            .first()
+            .and_then(|row| row.add.as_ref())
+            .and_then(|add| add.stats.as_deref())
+            .ok_or_else(|| DeltaTableError::generic("decoded stats should be reconstructed"))?;
+        let decoded_json: serde_json::Value = serde_json::from_str(decoded_stats)?;
+        assert_eq!(decoded_json["numRecords"], 3);
+        assert_eq!(decoded_json["minValues"]["id"], 1);
+        assert_eq!(decoded_json["maxValues"]["id"], 9);
+        assert_eq!(decoded_json["nullCount"]["id"], 0);
         Ok(())
     }
 
@@ -1444,7 +1531,7 @@ mod tests {
             },
         ];
 
-        let batch = encode_checkpoint_rows(&rows)?;
+        let batch = encode_rows_for_test(&rows)?;
         let decoded = decode_checkpoint_rows(&batch)?;
 
         assert_eq!(decoded.len(), 3);
@@ -1487,7 +1574,7 @@ mod tests {
             ..Default::default()
         }];
 
-        let batch = encode_checkpoint_rows(&rows)?;
+        let batch = encode_rows_for_test(&rows)?;
         let decoded = decode_checkpoint_rows(&batch)?;
 
         assert_eq!(decoded.len(), 1);
@@ -1516,7 +1603,7 @@ mod tests {
             ..Default::default()
         }];
 
-        let batch = encode_checkpoint_rows(&rows)?;
+        let batch = encode_rows_for_test(&rows)?;
         let decoded = decode_checkpoint_rows(&batch)?;
 
         assert_eq!(decoded.len(), 1);
@@ -1548,7 +1635,7 @@ mod tests {
             ..Default::default()
         }];
 
-        let batch = encode_checkpoint_rows(&rows)?;
+        let batch = encode_rows_for_test(&rows)?;
         let decoded = decode_checkpoint_rows(&batch)?;
 
         assert_eq!(

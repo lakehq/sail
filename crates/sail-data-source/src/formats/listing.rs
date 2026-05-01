@@ -4,17 +4,20 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Schema};
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
+use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::dml::InsertOp;
+use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::{
-    get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo, TableFormat,
+    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
+    TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
@@ -105,11 +108,11 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         self.inner.name()
     }
 
-    async fn create_provider(
+    async fn create_source(
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
             schema,
@@ -179,9 +182,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
         let config = crate::listing::rewrite_listing_partitions(config)?;
-        Ok(Arc::new(
+        Ok(provider_as_source(Arc::new(
             ListingTable::try_new(config)?.with_constraints(constraints),
-        ))
+        )))
     }
 
     async fn create_writer(
@@ -189,7 +192,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let path = info.path();
+        let Some(path) = find_path_in_options(&info.options) else {
+            return plan_err!("missing path in listing table options");
+        };
         let SinkInfo {
             input,
             // TODO: sink mode is ignored since the file formats only support append operation
@@ -197,18 +202,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             partition_by,
             bucket_by,
             sort_order,
-            table_properties,
             options,
             logical_schema: _,
         } = info;
-        // Prepend table properties as an OptionLayer so that format-level options
-        // specified via TBLPROPERTIES (e.g. `option.delimiter`) are applied when writing,
-        // matching the behavior of the read path.
-        let options: Vec<OptionLayer> = std::iter::once(OptionLayer::TablePropertyList {
-            items: table_properties.into_iter().collect(),
-        })
-        .chain(options)
-        .collect();
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
         }

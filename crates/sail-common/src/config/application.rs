@@ -492,6 +492,16 @@ pub enum CatalogType {
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
     },
+    #[serde(alias = "hms", alias = "hive-metastore")]
+    HiveMetastore {
+        name: String,
+        uris: Vec<String>,
+        thrift_transport: Option<String>,
+        auth: Option<String>,
+        kerberos_service_principal: Option<String>,
+        min_sasl_qop: Option<String>,
+        connect_timeout_secs: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

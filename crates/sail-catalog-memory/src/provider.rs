@@ -164,7 +164,6 @@ impl CatalogProvider for MemoryCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
-            options,
             properties,
         } = options;
         if !format.eq_ignore_ascii_case("iceberg")
@@ -232,7 +231,6 @@ impl CatalogProvider for MemoryCatalogProvider {
                 partition_by,
                 sort_by,
                 bucket_by,
-                options,
                 properties,
             },
         };

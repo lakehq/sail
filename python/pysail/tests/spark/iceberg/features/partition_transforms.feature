@@ -41,6 +41,38 @@ Feature: Iceberg Partition Transforms
         | 3  | 1003    | purchase |
         | 4  | 1004    | logout   |
 
+    Scenario: Bucket transform equality filter returns correct results
+      Given statement template
+        """
+        CREATE TABLE bucket_test (
+          id INT,
+          user_id BIGINT,
+          payload STRING
+        )
+        USING iceberg
+        PARTITIONED BY (bucket(4, user_id))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO bucket_test VALUES
+          (1, 1001, 'u1001'),
+          (2, 1002, 'u1002'),
+          (3, 1003, 'u1003'),
+          (4, 1004, 'u1004'),
+          (5, 1005, 'u1005'),
+          (6, 1006, 'u1006')
+        """
+      When query
+        """
+        SELECT id, payload FROM bucket_test
+        WHERE user_id = 1003
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | payload |
+        | 3  | u1003   |
+
   Rule: Truncate transform reduces cardinality
     Background:
       Given variable location for temporary directory iceberg_truncate_transform
@@ -81,6 +113,69 @@ Feature: Iceberg Partition Transforms
         | 2  | ABC456 | 20.0  |
         | 3  | DEF789 | 30.0  |
         | 4  | DEF012 | 40.0  |
+
+    Scenario: Truncate transform on string preserves range filter results
+      Given statement template
+        """
+        CREATE TABLE truncate_test (
+          id INT,
+          code STRING,
+          value DOUBLE
+        )
+        USING iceberg
+        PARTITIONED BY (truncate(3, code))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO truncate_test VALUES
+          (1, 'ABC100', 10.0),
+          (2, 'ABC200', 20.0),
+          (3, 'DEF100', 30.0),
+          (4, 'DEF200', 40.0),
+          (5, 'XYZ100', 50.0),
+          (6, 'XYZ200', 60.0)
+        """
+      When query
+        """
+        SELECT id, code FROM truncate_test
+        WHERE code >= 'ABC' AND code < 'ABD'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | code   |
+        | 1  | ABC100 |
+        | 2  | ABC200 |
+
+    Scenario: Truncate transform on integer preserves range filter results
+      Given statement template
+        """
+        CREATE TABLE truncate_test (
+          id INT,
+          amount INT,
+          payload STRING
+        )
+        USING iceberg
+        PARTITIONED BY (truncate(100, amount))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO truncate_test VALUES
+          (1,  50, 'v050'),
+          (2, 150, 'v150'),
+          (3, 250, 'v250'),
+          (4, 350, 'v350')
+        """
+      When query
+        """
+        SELECT id, payload FROM truncate_test
+        WHERE amount >= 100 AND amount < 200
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | payload |
+        | 2  | v150    |
 
   Rule: Date transforms extract temporal components
     Background:
@@ -200,6 +295,74 @@ Feature: Iceberg Partition Transforms
         | 1  | 2024-01-01 | 100    |
         | 2  | 2024-01-01 | 200    |
 
+    Scenario: Year transform on timestamp preserves range filter results
+      Given statement template
+        """
+        CREATE TABLE date_transform_test (
+          id INT,
+          ts TIMESTAMP,
+          payload STRING
+        )
+        USING iceberg
+        PARTITIONED BY (years(ts))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO date_transform_test VALUES
+          (1, TIMESTAMP '2023-03-01 00:00:00', 'y2023-a'),
+          (2, TIMESTAMP '2023-09-01 00:00:00', 'y2023-b'),
+          (3, TIMESTAMP '2024-03-01 00:00:00', 'y2024-a'),
+          (4, TIMESTAMP '2024-09-01 00:00:00', 'y2024-b'),
+          (5, TIMESTAMP '2025-03-01 00:00:00', 'y2025-a'),
+          (6, TIMESTAMP '2025-09-01 00:00:00', 'y2025-b')
+        """
+      When query
+        """
+        SELECT id, payload FROM date_transform_test
+        WHERE ts >= TIMESTAMP '2024-01-01 00:00:00'
+          AND ts < TIMESTAMP '2025-01-01 00:00:00'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | payload |
+        | 3  | y2024-a |
+        | 4  | y2024-b |
+
+    Scenario: Month transform on timestamp preserves range filter results
+      Given statement template
+        """
+        CREATE TABLE date_transform_test (
+          id INT,
+          ts TIMESTAMP,
+          payload STRING
+        )
+        USING iceberg
+        PARTITIONED BY (months(ts))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO date_transform_test VALUES
+          (1, TIMESTAMP '2024-01-10 00:00:00', 'jan-a'),
+          (2, TIMESTAMP '2024-01-25 00:00:00', 'jan-b'),
+          (3, TIMESTAMP '2024-02-10 00:00:00', 'feb-a'),
+          (4, TIMESTAMP '2024-02-25 00:00:00', 'feb-b'),
+          (5, TIMESTAMP '2024-03-10 00:00:00', 'mar-a'),
+          (6, TIMESTAMP '2024-03-25 00:00:00', 'mar-b')
+        """
+      When query
+        """
+        SELECT id, payload FROM date_transform_test
+        WHERE ts >= TIMESTAMP '2024-02-01 00:00:00'
+          AND ts < TIMESTAMP '2024-03-01 00:00:00'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | payload |
+        | 3  | feb-a   |
+        | 4  | feb-b   |
+
   Rule: Timestamp transforms handle time-based partitioning
     Background:
       Given variable location for temporary directory iceberg_timestamp_transform
@@ -240,6 +403,74 @@ Feature: Iceberg Partition Transforms
         | id | event_name |
         | 1  | start      |
         | 2  | progress   |
+
+    Scenario: Day transform on timestamp preserves range filter results
+      Given statement template
+        """
+        CREATE TABLE timestamp_transform_test (
+          id INT,
+          payload_timestamp TIMESTAMP,
+          payload STRING
+        )
+        USING iceberg
+        PARTITIONED BY (days(payload_timestamp))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO timestamp_transform_test VALUES
+          (1, TIMESTAMP '2024-01-01 10:00:00', 'day1-a'),
+          (2, TIMESTAMP '2024-01-01 11:00:00', 'day1-b'),
+          (3, TIMESTAMP '2024-01-02 10:00:00', 'day2-a'),
+          (4, TIMESTAMP '2024-01-02 11:00:00', 'day2-b'),
+          (5, TIMESTAMP '2024-01-03 10:00:00', 'day3-a'),
+          (6, TIMESTAMP '2024-01-03 11:00:00', 'day3-b')
+        """
+      When query
+        """
+        SELECT id, payload FROM timestamp_transform_test
+        WHERE payload_timestamp >= TIMESTAMP '2024-01-02 00:00:00'
+          AND payload_timestamp < TIMESTAMP '2024-01-03 00:00:00'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | payload |
+        | 3  | day2-a  |
+        | 4  | day2-b  |
+
+    Scenario: Hour transform on timestamp preserves range filter results
+      Given statement template
+        """
+        CREATE TABLE timestamp_transform_test (
+          id INT,
+          ts TIMESTAMP,
+          payload STRING
+        )
+        USING iceberg
+        PARTITIONED BY (hours(ts))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO timestamp_transform_test VALUES
+          (1, TIMESTAMP '2024-01-01 10:00:00', 'h10-a'),
+          (2, TIMESTAMP '2024-01-01 10:30:00', 'h10-b'),
+          (3, TIMESTAMP '2024-01-01 11:00:00', 'h11-a'),
+          (4, TIMESTAMP '2024-01-01 11:30:00', 'h11-b'),
+          (5, TIMESTAMP '2024-01-01 12:00:00', 'h12-a'),
+          (6, TIMESTAMP '2024-01-01 12:30:00', 'h12-b')
+        """
+      When query
+        """
+        SELECT id, payload FROM timestamp_transform_test
+        WHERE ts >= TIMESTAMP '2024-01-01 11:00:00'
+          AND ts < TIMESTAMP '2024-01-01 12:00:00'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | payload |
+        | 3  | h11-a   |
+        | 4  | h11-b   |
 
   Rule: Multi-column transform creates nested partitions
     Background:
