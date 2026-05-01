@@ -140,114 +140,6 @@ Out of scope for the current implementation:
 - Hortonworks or other distribution-specific compatibility promises
 - automatic keytab management inside Sail
 
-## Decision Log
-
-Keep this log focused on non-obvious current contracts, test-harness choices,
-and intentional deferrals. When behavior simply matches Spark and is covered by
-tests, remove it from this section instead of preserving old implementation
-history here.
-
-### 2026-04-28: Internal Spark and HMS bookkeeping stays out of user properties
-
-Context: Spark data-source tables store provider, schema, partition, bucket,
-sort, and statistics metadata in HMS table parameters under `spark.sql.*`, and
-Hive may add `transient_lastDdlTime`.
-
-Decision: Sail consumes supported internal metadata to reconstruct table
-status, but filters those bookkeeping keys from user-visible properties.
-
-Consequence: Interop tests should validate parsed fields such as provider,
-schema, partitioning, sorting, and statistics rather than asserting that raw
-Spark or Hive bookkeeping keys remain visible.
-
-### 2026-04-28: Spark/HMS Python interop starts with local JVM Spark
-
-Context: The first Python HMS interop milestone needs a reference writer that
-can create real Spark HMS metadata without adding a second Spark Connect server
-to the harness.
-
-Decision: Use a local classic JVM Spark session with Hive support as the
-reference Spark writer. Keep the Sail side on Spark Connect.
-
-Consequence: The fixture temporarily forces `SPARK_API_MODE=classic` and clears
-Spark Connect environment variables while building the reference session.
-Reference Spark Connect server coverage is deferred.
-
-### 2026-04-28: HMS smoke readiness is query-based
-
-Context: The HMS Thrift socket and Sail Spark Connect server can both accept
-connections before the catalog is fully queryable.
-
-Decision: Treat the HMS/Sail harness as ready only after Sail can run
-`SHOW DATABASES` against the HMS-backed catalog.
-
-Consequence: The smoke fixture polls the actual catalog query instead of relying
-only on TCP port readiness. This avoids transient transport EOF failures during
-startup.
-
-### 2026-04-28: Host Spark and HMS container require a shared warehouse path
-
-Context: The Apache Hive test container defaults the warehouse to
-`/opt/hive/data/warehouse`, which is meaningful inside the container but not
-writable by the host JVM Spark process.
-
-Decision: The Python HMS harness creates a host temp warehouse directory,
-mounts it into the HMS container at the same absolute path, and configures HMS
-and reference Spark to use that shared location.
-
-Consequence: Managed-table writes by host Spark can create data files in the
-same location recorded in HMS and later read by Sail.
-
-### 2026-04-28: Python HMS harness keeps expensive fixtures session-scoped
-
-Context: The HMS Python interop tests pay most of their startup cost when
-starting the Hive Metastore container, the Sail Spark Connect server, and the
-reference JVM Spark session.
-
-Decision: Keep `hms_warehouse_dir`, `hms_container`, `hms_endpoint`,
-`hms_remote`, `hms_spark`, and `reference_spark` session-scoped.
-
-Consequence: HMS tests amortize startup while still exercising the same shared
-catalog/server topology used by the roundtrip scenarios.
-
-### 2026-04-28: Create the remote Spark session before the classic JVM session
-
-Context: PySpark 4.1 does not allow starting a remote Spark Connect session
-after a classic JVM `SparkSession` already exists in-process. Expanding the HMS
-roundtrip suite to run both direction-specific files without the smoke test
-surfaced this order dependency.
-
-Decision: Make the session-scoped `reference_spark` fixture depend on
-`hms_spark` so the remote Sail-backed session is always created first.
-
-Consequence: The HMS Python harness is stable regardless of pytest collection
-order for tests that need both sessions.
-
-### 2026-04-28: Python HMS tests isolate with one database per test
-
-Context: Session-scoped HMS fixtures make startup affordable, but tests must
-not share table names or cleanup state.
-
-Decision: Add a function-scoped `hms_database` fixture that derives a safe
-database name from the pytest node id, creates it under the shared warehouse
-URI, and drops it with `CASCADE` during teardown.
-
-Consequence: Roundtrip tests can use simple table names inside their isolated
-database without paying for a new HMS container or reference Spark session per
-test.
-
-### 2026-04-28: Roundtrip tests use an explicit test database location
-
-Context: The Hive container pre-creates the `default` database with a
-container-local location. Some HMS deployments also do not allow altering core
-database location fields after creation.
-
-Decision: Spark-to-Sail roundtrip tests create a dedicated test database with
-an explicit shared warehouse location instead of relying on `default`.
-
-Consequence: Roundtrip failures now represent table/file metadata
-interoperability rather than inherited container warehouse topology.
-
 ## Current Interop Coverage
 
 The current Python HMS roundtrip suite plus focused Rust tests cover:
@@ -263,6 +155,9 @@ The current Python HMS roundtrip suite plus focused Rust tests cover:
 
 Keep only real gaps or intentionally deferred environment coverage here.
 
+- S3-backed default database location: add a MinIO-backed integration lane that
+  creates the test database at an `s3://...` location and validates managed
+  table read/write roundtrips through HMS between Sail and reference Spark.
 - Live object-store matrix: partition recovery for non-file URIs is covered by
   a focused Rust object-store test, but the Python HMS/Spark harness still uses
   local Docker-visible paths. Real S3/ABFS/GCS service and credential coverage

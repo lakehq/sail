@@ -32,6 +32,12 @@ def spark_doctest(doctest_namespace, hms_spark):
 # ---------------------------------------------------------------------------
 # HMS container
 # ---------------------------------------------------------------------------
+#
+# Future S3 lane:
+#   Add a MinIO-backed variant of this harness where test databases use
+#   ``s3://...`` locations. That lane should validate managed-table roundtrips
+#   through HMS between Sail and reference Spark without relying on shared local
+#   ``file:`` warehouse paths.
 
 _HMS_IMAGE = "apache/hive:3.1.3"
 _HMS_METASTORE_PORT = 9083
@@ -55,7 +61,12 @@ def _wait_for_port(host: str, port: int, timeout: float) -> None:
 
 
 def _wait_for_hms_catalog(remote_url: str, timeout: float) -> None:
-    """Block until Sail can successfully list HMS databases."""
+    """Block until Sail can successfully list HMS databases.
+
+    We intentionally probe with ``SHOW DATABASES`` instead of an HMS-only
+    ping. This verifies the full harness path (Sail Spark Connect server,
+    catalog wiring, and HMS) rather than just metastore socket readiness.
+    """
     from pysail.tests.spark.conftest import (
         configure_spark_session,
         patch_spark_connect_session,
@@ -93,7 +104,11 @@ def _wait_for_hms_catalog(remote_url: str, timeout: float) -> None:
 
 @pytest.fixture(scope="session")
 def hms_warehouse_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Return a host-visible warehouse path shared with HMS and Spark."""
+    """Return a host-visible warehouse path shared with HMS and Spark.
+
+    This local-file harness needs host JVM Spark and the HMS container to see
+    the same absolute ``file:`` path for managed-table directories.
+    """
     return tmp_path_factory.mktemp("hms_warehouse")
 
 
@@ -138,7 +153,11 @@ def hms_endpoint(hms_container: DockerContainer) -> str:
 
 @pytest.fixture(scope="session")
 def hms_remote(hms_endpoint: str) -> Generator[str, None, None]:
-    """Start Sail server configured with HMS as the sole catalog."""
+    """Start Sail server configured with HMS as the sole catalog.
+
+    Kept session-scoped to amortize Spark Connect server startup cost across
+    all HMS interop tests in the run.
+    """
     # Defer imports that pull in pysail._native until fixture execution time,
     # after the root conftest's pytest_configure has set up the environment.
     from pysail.spark import SparkConnectServer
@@ -173,7 +192,10 @@ def hms_remote(hms_endpoint: str) -> Generator[str, None, None]:
 
 @pytest.fixture(scope="session")
 def hms_spark(hms_remote: str) -> Generator[SparkSession, None, None]:
-    """Create a Spark session connected to Sail with HMS catalog."""
+    """Create a Spark session connected to Sail with HMS catalog.
+
+    Kept session-scoped to avoid repeatedly creating remote Spark sessions.
+    """
     from pysail.tests.spark.conftest import (
         configure_spark_session,
         patch_spark_connect_session,
@@ -207,9 +229,10 @@ def reference_spark(
     read back.  It uses ``enableHiveSupport()`` and configures
     ``hive.metastore.uris`` to point at the shared HMS container.
 
-    The ``hms_spark`` dependency is intentional: it forces the Sail Spark
-    Connect session to exist before a classic JVM Spark session is created
-    in-process, avoiding Spark's mixed-session startup conflict.
+    The ``hms_spark`` dependency is intentional for the current mixed harness.
+    It forces the Sail Spark Connect session to exist before a classic JVM
+    Spark session is created in-process, avoiding Spark's mixed-session startup
+    conflict in PySpark 4.x.
 
     PySpark 4.x defaults to Connect mode.  We force classic (JVM) mode by
     setting ``SPARK_API_MODE=classic`` for the duration of this fixture.
@@ -264,7 +287,10 @@ def hms_database(
     hms_spark: SparkSession,
     hms_warehouse_dir: Path,
 ) -> Generator[str, None, None]:
-    """Create a unique HMS database for one test under the shared warehouse."""
+    """Create a unique HMS database for one test under the shared warehouse.
+
+    Function scope keeps table names simple while still isolating test state.
+    """
     safe_name = re.sub(r"[^0-9A-Za-z_]+", "_", request.node.nodeid).strip("_").lower()
     database = f"hms_{safe_name[:96]}"
     location = f"{hms_warehouse_dir.as_uri().rstrip('/')}/{database}"
