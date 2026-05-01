@@ -3517,3 +3517,48 @@ impl RemoteExecutionCodec {
         Ok(message.encode_to_vec())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use sail_function::scalar::explode::ExplodeKind;
+
+    use super::*;
+
+    fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
+        let codec = RemoteExecutionCodec;
+        let name = udf.name().to_string();
+        let mut buf = vec![];
+        codec.try_encode_udf(&udf, &mut buf)?;
+        codec.try_decode_udf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_variant_explode_udf_kinds() -> Result<()> {
+        for expected_kind in [
+            ExplodeKind::VariantExplode,
+            ExplodeKind::VariantExplodeOuter,
+        ] {
+            let decoded = round_trip_udf(ScalarUDF::from(Explode::new(expected_kind.clone())))?;
+            let decoded_inner = decoded
+                .inner()
+                .as_any()
+                .downcast_ref::<Explode>()
+                .expect("expected Explode UDF after round trip");
+
+            assert_eq!(decoded_inner.kind(), &expected_kind);
+            assert_eq!(decoded.name(), Explode::new(expected_kind).name());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_variant_explode_helper_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkVariantExplodeUdf::new()))?;
+
+        assert!(decoded.inner().as_any().is::<SparkVariantExplodeUdf>());
+        assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+}

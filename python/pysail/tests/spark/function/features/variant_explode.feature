@@ -1,13 +1,40 @@
 @variant @spark-4
 Feature: variant_explode and variant_explode_outer
 
+  Rule: variant_explode analysis and schema
+
+    Scenario: variant_explode returns pos key value columns
+      When query
+        """
+        SELECT pos, key, value
+        FROM (SELECT parse_json('[1]') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
+        """
+      Then query schema
+        """
+        root
+         |-- pos: integer (nullable = true)
+         |-- key: string (nullable = true)
+         |-- value: variant (nullable = true)
+        """
+
+    Scenario: variant_explode_outer rejects non-variant input during analysis
+      When query
+        """
+        SELECT pos, key, value
+        FROM (SELECT array(1, 2, 3) AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
+        """
+      Then query error (?s).*variant_explode_outer expects a VARIANT input.*
+
   Rule: variant_explode with array input
 
     Scenario: Explode a variant array of strings
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode(parse_json('["hello", "world"]'))
+        FROM (SELECT parse_json('["hello", "world"]') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result ordered
         | pos | key  | value   |
@@ -18,7 +45,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_get(value, '$', 'int') AS value
-        FROM variant_explode(parse_json('[1, 2, 3]'))
+        FROM (SELECT parse_json('[1, 2, 3]') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result ordered
         | pos | key  | value |
@@ -30,7 +58,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode(parse_json('[true, "abc", 42, null]'))
+        FROM (SELECT parse_json('[true, "abc", 42, null]') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result ordered
         | pos | key  | value |
@@ -43,7 +72,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode(parse_json('[99]'))
+        FROM (SELECT parse_json('[99]') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result ordered
         | pos | key  | value |
@@ -55,7 +85,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode(parse_json('{"a": true, "b": 3.14}'))
+        FROM (SELECT parse_json('{"a": true, "b": 3.14}') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | pos | key | value |
@@ -66,7 +97,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode(parse_json('{"x": "hello"}'))
+        FROM (SELECT parse_json('{"x": "hello"}') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | pos | key | value   |
@@ -76,7 +108,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode(parse_json('{"n": null, "i": 1, "s": "hi", "a": [1,2]}'))
+        FROM (SELECT parse_json('{"n": null, "i": 1, "s": "hi", "a": [1,2]}') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | pos | key | value |
@@ -91,7 +124,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode(parse_json('[]'))
+        FROM (SELECT parse_json('[]') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -101,7 +135,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode(parse_json('{}'))
+        FROM (SELECT parse_json('{}') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -111,7 +146,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode(parse_json('null'))
+        FROM (SELECT parse_json('null') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -121,7 +157,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode(CAST(NULL AS VARIANT))
+        FROM (SELECT CAST(NULL AS VARIANT) AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -131,7 +168,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode(parse_json('42'))
+        FROM (SELECT parse_json('42') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -141,7 +179,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode(parse_json('"hello"'))
+        FROM (SELECT parse_json('"hello"') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -151,7 +190,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode(parse_json('true'))
+        FROM (SELECT parse_json('true') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -163,7 +203,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode(parse_json('[1, [2, 3], {"a": 4}]'))
+        FROM (SELECT parse_json('[1, [2, 3], {"a": 4}]') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result ordered
         | pos | key  | value    |
@@ -175,7 +216,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode(parse_json('{"x": [1,2], "y": {"z": 3}}'))
+        FROM (SELECT parse_json('{"x": [1,2], "y": {"z": 3}}') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | pos | key | value     |
@@ -188,7 +230,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode_outer(parse_json('["hello", "world"]'))
+        FROM (SELECT parse_json('["hello", "world"]') AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result ordered
         | pos  | key  | value   |
@@ -199,7 +242,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT pos, key, variant_to_json(value) AS value
-        FROM variant_explode_outer(parse_json('{"a": true, "b": 3.14}'))
+        FROM (SELECT parse_json('{"a": true, "b": 3.14}') AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | pos | key | value |
@@ -212,7 +256,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode_outer(parse_json('null'))
+        FROM (SELECT parse_json('null') AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -222,7 +267,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode_outer(CAST(NULL AS VARIANT))
+        FROM (SELECT CAST(NULL AS VARIANT) AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -232,7 +278,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode_outer(parse_json('42'))
+        FROM (SELECT parse_json('42') AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -242,7 +289,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode_outer(parse_json('"text"'))
+        FROM (SELECT parse_json('"text"') AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -252,7 +300,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode_outer(parse_json('false'))
+        FROM (SELECT parse_json('false') AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -264,7 +313,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode_outer(parse_json('[]'))
+        FROM (SELECT parse_json('[]') AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -274,7 +324,8 @@ Feature: variant_explode and variant_explode_outer
       When query
         """
         SELECT count(*) AS cnt
-        FROM variant_explode_outer(parse_json('{}'))
+        FROM (SELECT parse_json('{}') AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | cnt |
@@ -290,8 +341,8 @@ Feature: variant_explode and variant_explode_outer
           SELECT 1 AS id, parse_json('[10, 20]') AS v
           UNION ALL
           SELECT 2 AS id, parse_json('{"k": "v"}') AS v
-        ),
-        LATERAL variant_explode(v)
+        ) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | id | pos | key  | value |
@@ -299,7 +350,7 @@ Feature: variant_explode and variant_explode_outer
         | 1  | 1   | NULL | 20    |
         | 2  | 0   | k    | "v"   |
 
-    Scenario: Explode variant column skips non-container rows
+    Scenario: Explode variant column skips null, empty, and non-container rows
       When query
         """
         SELECT id, pos, key, variant_to_json(value) AS value
@@ -309,15 +360,23 @@ Feature: variant_explode and variant_explode_outer
           SELECT 2 AS id, parse_json('42') AS v
           UNION ALL
           SELECT 3 AS id, parse_json('{"a": 1}') AS v
-        ),
-        LATERAL variant_explode(v)
+          UNION ALL
+          SELECT 4 AS id, parse_json('null') AS v
+          UNION ALL
+          SELECT 5 AS id, CAST(NULL AS VARIANT) AS v
+          UNION ALL
+          SELECT 6 AS id, parse_json('[]') AS v
+          UNION ALL
+          SELECT 7 AS id, parse_json('{}') AS v
+        ) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
         """
       Then query result
         | id | pos | key  | value |
         | 1  | 0   | NULL | 1     |
         | 3  | 0   | a    | 1     |
 
-    Scenario: Outer explode variant column skips non-container rows
+    Scenario: Outer explode variant column skips null, empty, and non-container rows
       When query
         """
         SELECT id, pos, key, variant_to_json(value) AS value
@@ -327,19 +386,19 @@ Feature: variant_explode and variant_explode_outer
           SELECT 2 AS id, parse_json('42') AS v
           UNION ALL
           SELECT 3 AS id, parse_json('{"a": 1}') AS v
-        ),
-        LATERAL variant_explode_outer(v)
+          UNION ALL
+          SELECT 4 AS id, parse_json('null') AS v
+          UNION ALL
+          SELECT 5 AS id, CAST(NULL AS VARIANT) AS v
+          UNION ALL
+          SELECT 6 AS id, parse_json('[]') AS v
+          UNION ALL
+          SELECT 7 AS id, parse_json('{}') AS v
+        ) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
       Then query result
         | id | pos | key  | value |
         | 1  | 0   | NULL | 1     |
         | 3  | 0   | a    | 1     |
 
-  Rule: variant_explode rejects non-variant input during planning
-
-    Scenario: EXPLAIN variant_explode on plain array fails analysis
-      When query
-        """
-        EXPLAIN SELECT * FROM variant_explode(array(1, 2, 3))
-        """
-      Then query error (?i).*variant_explode expects a variant input.*

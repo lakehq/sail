@@ -254,42 +254,66 @@ fn build_list_array(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, AsArray};
+    use arrow::array::{Array, AsArray, BinaryArray, Int32Array, StringArray};
     use arrow_schema::Fields;
+    use datafusion::common::exec_datafusion_err;
     use datafusion::logical_expr::ReturnFieldArgs;
     use parquet_variant_compute::VariantArrayBuilder;
     use parquet_variant_json::JsonToVariant;
 
     use super::*;
 
-    fn build_variant_scalar(json: &str) -> ScalarValue {
+    fn build_variant_scalar(json: &str) -> Result<ScalarValue> {
         let mut builder = VariantArrayBuilder::new(1);
-        builder.append_json(json).unwrap();
+        builder.append_json(json)?;
         let variant_array = builder.build();
         let struct_arr: StructArray = variant_array.into();
-        ScalarValue::Struct(Arc::new(struct_arr))
+        Ok(ScalarValue::Struct(Arc::new(struct_arr)))
     }
 
-    fn build_variant_array_from_jsons(jsons: &[Option<&str>]) -> ArrayRef {
+    fn build_variant_array_from_jsons(jsons: &[Option<&str>]) -> Result<ArrayRef> {
         let mut builder = VariantArrayBuilder::new(jsons.len());
         for json in jsons {
             match json {
-                Some(j) => builder.append_json(j).unwrap(),
+                Some(j) => builder.append_json(j)?,
                 None => builder.append_null(),
             }
         }
         let variant_array = builder.build();
         let struct_arr: StructArray = variant_array.into();
-        Arc::new(struct_arr) as ArrayRef
+        Ok(Arc::new(struct_arr) as ArrayRef)
+    }
+
+    fn variant_arg_field() -> Arc<Field> {
+        Arc::new(
+            Field::new("input", DataType::Struct(Fields::empty()), true)
+                .with_extension_type(VariantType),
+        )
+    }
+
+    fn build_args(
+        udf: &SparkVariantExplodeUdf,
+        arg: ColumnarValue,
+        arg_fields: Vec<Arc<Field>>,
+        number_rows: usize,
+    ) -> Result<ScalarFunctionArgs> {
+        let return_field = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[],
+        })?;
+        Ok(ScalarFunctionArgs {
+            args: vec![arg],
+            return_field,
+            arg_fields,
+            number_rows,
+            config_options: Default::default(),
+        })
     }
 
     fn invoke_scalar(json: &str) -> Result<ColumnarValue> {
         let udf = SparkVariantExplodeUdf::new();
-        let scalar = build_variant_scalar(json);
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
+        let scalar = build_variant_scalar(json)?;
+        let arg_field = variant_arg_field();
         let return_field = udf.return_field_from_args(ReturnFieldArgs {
             arg_fields: std::slice::from_ref(&arg_field),
             scalar_arguments: &[],
@@ -306,11 +330,8 @@ mod tests {
 
     fn invoke_array(jsons: &[Option<&str>]) -> Result<ColumnarValue> {
         let udf = SparkVariantExplodeUdf::new();
-        let arr = build_variant_array_from_jsons(jsons);
-        let arg_field = Arc::new(
-            Field::new("input", DataType::Struct(Fields::empty()), true)
-                .with_extension_type(VariantType),
-        );
+        let arr = build_variant_array_from_jsons(jsons)?;
+        let arg_field = variant_arg_field();
         let return_field = udf.return_field_from_args(ReturnFieldArgs {
             arg_fields: std::slice::from_ref(&arg_field),
             scalar_arguments: &[],
@@ -325,132 +346,139 @@ mod tests {
         udf.invoke_with_args(args)
     }
 
-    fn get_list_lengths(result: &ColumnarValue) -> Vec<Option<usize>> {
+    fn get_list_lengths(result: &ColumnarValue) -> Result<Vec<Option<usize>>> {
         match result {
             ColumnarValue::Scalar(s) => {
-                let arr = s.to_array().unwrap();
+                let arr = s.to_array()?;
                 let list = arr.as_list::<i32>();
-                vec![Some(list.value(0).len())]
+                Ok(vec![Some(list.value(0).len())])
             }
             ColumnarValue::Array(arr) => {
                 let list = arr.as_list::<i32>();
-                (0..list.len()).map(|i| Some(list.value(i).len())).collect()
+                Ok((0..list.len()).map(|i| Some(list.value(i).len())).collect())
             }
         }
     }
 
-    fn assert_variant_value_field(field: &Field) {
-        let DataType::List(item) = field.data_type() else {
-            panic!("expected list field");
+    fn extract_scalar_rows(result: &ColumnarValue) -> Result<Vec<(i32, Option<String>, String)>> {
+        let ColumnarValue::Scalar(scalar) = result else {
+            return Err(exec_datafusion_err!("expected scalar result"));
         };
-        let DataType::Struct(fields) = item.data_type() else {
-            panic!("expected list item struct");
+        let arr = scalar.to_array()?;
+        let list = arr.as_list::<i32>();
+        let values = list.value(0);
+        let rows = values
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| exec_datafusion_err!("expected StructArray rows"))?;
+        let pos_arr = rows
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| exec_datafusion_err!("expected Int32Array for pos"))?;
+        let key_arr = rows
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| exec_datafusion_err!("expected StringArray for key"))?;
+        let value_arr = rows
+            .column(2)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| exec_datafusion_err!("expected StructArray for value"))?;
+        let metadata_arr = value_arr
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| exec_datafusion_err!("expected BinaryArray for metadata"))?;
+        let value_arr = value_arr
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| exec_datafusion_err!("expected BinaryArray for value bytes"))?;
+
+        let mut output = Vec::with_capacity(rows.len());
+        for index in 0..rows.len() {
+            let variant = Variant::try_new(metadata_arr.value(index), value_arr.value(index))?;
+            let key = (!key_arr.is_null(index)).then(|| key_arr.value(index).to_string());
+            output.push((
+                pos_arr.value(index),
+                key,
+                parquet_variant_json::VariantToJson::to_json_string(&variant)?,
+            ));
+        }
+        Ok(output)
+    }
+
+    fn assert_variant_value_field(field: &Field) -> Result<()> {
+        let item = match field.data_type() {
+            DataType::List(item) => item,
+            data_type => {
+                return Err(exec_datafusion_err!(
+                    "expected list field, got {data_type:?}"
+                ));
+            }
         };
-        let (_, value_field) = fields.find("value").expect("missing value field");
+        let fields = match item.data_type() {
+            DataType::Struct(fields) => fields,
+            data_type => {
+                return Err(exec_datafusion_err!(
+                    "expected list item struct, got {data_type:?}"
+                ));
+            }
+        };
+        let Some((_, value_field)) = fields.find("value") else {
+            return Err(exec_datafusion_err!("missing value field"));
+        };
         assert_eq!(
             value_field.extension_type_name(),
             variant_explode_value_field().extension_type_name()
         );
+        Ok(())
     }
 
-    // --- Tests for explode_variant helper ---
-
-    #[test]
-    fn test_explode_variant_array() {
+    fn explode_variant_len(json: &str) -> Result<usize> {
         let mut builder = VariantArrayBuilder::new(1);
-        builder.append_json("[1, 2, 3]").unwrap();
+        builder.append_json(json)?;
         let variant_array = builder.build();
-        let variant = variant_array.iter().next().unwrap().unwrap();
+        let variant = variant_array
+            .iter()
+            .next()
+            .flatten()
+            .ok_or_else(|| exec_datafusion_err!("expected a variant value"))?;
 
         let mut pos = Int32Builder::new();
         let mut key = StringBuilder::new();
         let mut val = VariantArrayBuilder::new(0);
-        let len = explode_variant(variant, &mut pos, &mut key, &mut val);
 
-        assert_eq!(len, 3);
+        Ok(explode_variant(variant, &mut pos, &mut key, &mut val))
     }
 
     #[test]
-    fn test_explode_variant_object() {
-        let mut builder = VariantArrayBuilder::new(1);
-        builder.append_json(r#"{"a": 1, "b": 2}"#).unwrap();
-        let variant_array = builder.build();
-        let variant = variant_array.iter().next().unwrap().unwrap();
-
-        let mut pos = Int32Builder::new();
-        let mut key = StringBuilder::new();
-        let mut val = VariantArrayBuilder::new(0);
-        let len = explode_variant(variant, &mut pos, &mut key, &mut val);
-
-        assert_eq!(len, 2);
+    fn test_explode_variant_array() -> Result<()> {
+        assert_eq!(explode_variant_len("[1, 2, 3]")?, 3);
+        Ok(())
     }
 
     #[test]
-    fn test_explode_variant_scalar() {
-        let mut builder = VariantArrayBuilder::new(1);
-        builder.append_json("42").unwrap();
-        let variant_array = builder.build();
-        let variant = variant_array.iter().next().unwrap().unwrap();
-
-        let mut pos = Int32Builder::new();
-        let mut key = StringBuilder::new();
-        let mut val = VariantArrayBuilder::new(0);
-        let len = explode_variant(variant, &mut pos, &mut key, &mut val);
-
-        assert_eq!(len, 0);
+    fn test_explode_variant_object() -> Result<()> {
+        assert_eq!(explode_variant_len(r#"{"a": 1, "b": 2}"#)?, 2);
+        Ok(())
     }
 
     #[test]
-    fn test_explode_variant_null() {
-        let mut builder = VariantArrayBuilder::new(1);
-        builder.append_json("null").unwrap();
-        let variant_array = builder.build();
-        let variant = variant_array.iter().next().unwrap().unwrap();
-
-        let mut pos = Int32Builder::new();
-        let mut key = StringBuilder::new();
-        let mut val = VariantArrayBuilder::new(0);
-        let len = explode_variant(variant, &mut pos, &mut key, &mut val);
-
-        assert_eq!(len, 0);
+    fn test_explode_variant_non_containers() -> Result<()> {
+        assert_eq!(explode_variant_len("42")?, 0);
+        assert_eq!(explode_variant_len("null")?, 0);
+        assert_eq!(explode_variant_len("[]")?, 0);
+        assert_eq!(explode_variant_len("{}")?, 0);
+        Ok(())
     }
-
-    #[test]
-    fn test_explode_variant_empty_array() {
-        let mut builder = VariantArrayBuilder::new(1);
-        builder.append_json("[]").unwrap();
-        let variant_array = builder.build();
-        let variant = variant_array.iter().next().unwrap().unwrap();
-
-        let mut pos = Int32Builder::new();
-        let mut key = StringBuilder::new();
-        let mut val = VariantArrayBuilder::new(0);
-        let len = explode_variant(variant, &mut pos, &mut key, &mut val);
-
-        assert_eq!(len, 0);
-    }
-
-    #[test]
-    fn test_explode_variant_empty_object() {
-        let mut builder = VariantArrayBuilder::new(1);
-        builder.append_json("{}").unwrap();
-        let variant_array = builder.build();
-        let variant = variant_array.iter().next().unwrap().unwrap();
-
-        let mut pos = Int32Builder::new();
-        let mut key = StringBuilder::new();
-        let mut val = VariantArrayBuilder::new(0);
-        let len = explode_variant(variant, &mut pos, &mut key, &mut val);
-
-        assert_eq!(len, 0);
-    }
-
-    // --- Tests for invoke_scalar ---
 
     #[test]
     fn test_scalar_array_input() -> Result<()> {
         let result = invoke_scalar("[1, 2, 3]")?;
-        let lengths = get_list_lengths(&result);
+        let lengths = get_list_lengths(&result)?;
         assert_eq!(lengths, vec![Some(3)]);
         Ok(())
     }
@@ -458,62 +486,46 @@ mod tests {
     #[test]
     fn test_scalar_object_input() -> Result<()> {
         let result = invoke_scalar(r#"{"a": 1, "b": 2}"#)?;
-        let lengths = get_list_lengths(&result);
+        let lengths = get_list_lengths(&result)?;
         assert_eq!(lengths, vec![Some(2)]);
         Ok(())
     }
 
     #[test]
-    fn test_scalar_empty_array() -> Result<()> {
-        let result = invoke_scalar("[]")?;
-        let lengths = get_list_lengths(&result);
-        // Empty container → non-null empty list
-        assert_eq!(lengths, vec![Some(0)]);
+    fn test_scalar_rows_preserve_positions_and_keys() -> Result<()> {
+        let result = invoke_scalar(r#"{"answer": 42}"#)?;
+        let rows = extract_scalar_rows(&result)?;
+        assert_eq!(
+            rows,
+            vec![(0, Some("answer".to_string()), "42".to_string())]
+        );
         Ok(())
     }
 
     #[test]
-    fn test_scalar_empty_object() -> Result<()> {
-        let result = invoke_scalar("{}")?;
-        let lengths = get_list_lengths(&result);
-        // Empty container → non-null empty list
-        assert_eq!(lengths, vec![Some(0)]);
+    fn test_scalar_non_containers_return_empty_lists() -> Result<()> {
+        for json in ["[]", "{}", "null", "42", "\"hello\"", "true"] {
+            let result = invoke_scalar(json)?;
+            let lengths = get_list_lengths(&result)?;
+            assert_eq!(lengths, vec![Some(0)]);
+        }
         Ok(())
     }
 
     #[test]
-    fn test_scalar_variant_null() -> Result<()> {
-        let result = invoke_scalar("null")?;
-        let lengths = get_list_lengths(&result);
+    fn test_scalar_sql_null() -> Result<()> {
+        let udf = SparkVariantExplodeUdf::new();
+        let args = build_args(
+            &udf,
+            ColumnarValue::Scalar(ScalarValue::Null),
+            vec![variant_arg_field()],
+            1,
+        )?;
+        let result = udf.invoke_with_args(args)?;
+        let lengths = get_list_lengths(&result)?;
         assert_eq!(lengths, vec![Some(0)]);
         Ok(())
     }
-
-    #[test]
-    fn test_scalar_number() -> Result<()> {
-        let result = invoke_scalar("42")?;
-        let lengths = get_list_lengths(&result);
-        assert_eq!(lengths, vec![Some(0)]);
-        Ok(())
-    }
-
-    #[test]
-    fn test_scalar_string() -> Result<()> {
-        let result = invoke_scalar(r#""hello""#)?;
-        let lengths = get_list_lengths(&result);
-        assert_eq!(lengths, vec![Some(0)]);
-        Ok(())
-    }
-
-    #[test]
-    fn test_scalar_boolean() -> Result<()> {
-        let result = invoke_scalar("true")?;
-        let lengths = get_list_lengths(&result);
-        assert_eq!(lengths, vec![Some(0)]);
-        Ok(())
-    }
-
-    // --- Tests for invoke_array ---
 
     #[test]
     fn test_array_mixed_inputs() -> Result<()> {
@@ -526,39 +538,21 @@ mod tests {
             Some("{}"),
             Some("null"),
         ])?;
-        let lengths = get_list_lengths(&result);
+        let lengths = get_list_lengths(&result)?;
         assert_eq!(
             lengths,
             vec![
-                Some(2), // [1,2] → 2 elements
-                Some(1), // {"a":1} → 1 field
-                Some(0), // 42 → non-container → empty list
-                Some(0), // SQL NULL → empty list
-                Some(0), // [] → empty container
-                Some(0), // {} → empty container
-                Some(0), // variant null → empty list
+                Some(2),
+                Some(1),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0)
             ]
         );
         Ok(())
     }
-
-    #[test]
-    fn test_array_all_containers() -> Result<()> {
-        let result = invoke_array(&[Some("[1]"), Some(r#"{"k":"v"}"#), Some("[1,2,3]")])?;
-        let lengths = get_list_lengths(&result);
-        assert_eq!(lengths, vec![Some(1), Some(1), Some(3)]);
-        Ok(())
-    }
-
-    #[test]
-    fn test_array_all_non_containers() -> Result<()> {
-        let result = invoke_array(&[Some("42"), Some("true"), None, Some("null")])?;
-        let lengths = get_list_lengths(&result);
-        assert_eq!(lengths, vec![Some(0), Some(0), Some(0), Some(0)]);
-        Ok(())
-    }
-
-    // --- Tests for UDF metadata ---
 
     #[test]
     fn test_udf_name() {
@@ -567,43 +561,67 @@ mod tests {
     }
 
     #[test]
-    fn test_udf_return_type() {
+    fn test_udf_return_type() -> Result<()> {
         let udf = SparkVariantExplodeUdf::new();
-        let result = udf
-            .return_type(&[DataType::Struct(Fields::empty())])
-            .unwrap();
+        let result = udf.return_type(&[DataType::Struct(Fields::empty())])?;
         let field = Field::new("result", result.clone(), true);
-        assert_variant_value_field(&field);
+        assert_variant_value_field(&field)?;
         assert_eq!(result, variant_explode_return_type());
+        Ok(())
     }
 
     #[test]
-    fn test_udf_return_field_metadata() {
+    fn test_udf_return_field_metadata() -> Result<()> {
         let udf = SparkVariantExplodeUdf::new();
-        let field = udf
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &[],
-                scalar_arguments: &[],
-            })
-            .unwrap();
+        let field = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[],
+            scalar_arguments: &[],
+        })?;
         assert_eq!(field.name(), "spark_variant_explode");
-        assert_variant_value_field(field.as_ref());
+        assert_variant_value_field(field.as_ref())?;
+        Ok(())
     }
 
     #[test]
-    fn test_udf_coerce_types_valid() {
+    fn test_udf_coerce_types() -> Result<()> {
         let udf = SparkVariantExplodeUdf::new();
-        let result = udf
-            .coerce_types(&[DataType::Struct(Fields::empty())])
-            .unwrap();
+        let result = udf.coerce_types(&[DataType::Struct(Fields::empty())])?;
         assert_eq!(result, vec![DataType::Struct(Fields::empty())]);
+        assert!(udf
+            .coerce_types(&[DataType::Int32, DataType::Int32])
+            .is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_udf_coerce_types_invalid_count() {
+    fn test_udf_invoke_with_args_requires_arg_field() -> Result<()> {
         let udf = SparkVariantExplodeUdf::new();
-        let result = udf.coerce_types(&[DataType::Int32, DataType::Int32]);
-        assert!(result.is_err());
+        let args = build_args(&udf, ColumnarValue::Scalar(ScalarValue::Null), vec![], 1)?;
+        let error = match udf.invoke_with_args(args) {
+            Ok(_) => return Err(exec_datafusion_err!("expected invoke_with_args to fail")),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("expected 1 argument"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_udf_invoke_with_args_rejects_non_variant_field() -> Result<()> {
+        let udf = SparkVariantExplodeUdf::new();
+        let args = build_args(
+            &udf,
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
+            vec![Arc::new(Field::new("input", DataType::Int32, true))],
+            1,
+        )?;
+        let error = match udf.invoke_with_args(args) {
+            Ok(_) => return Err(exec_datafusion_err!("expected invoke_with_args to fail")),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("field does not have extension type VariantType"));
+        Ok(())
     }
 
     #[test]

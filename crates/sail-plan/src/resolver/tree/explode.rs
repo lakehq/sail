@@ -217,3 +217,88 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         Ok(Transformed::yes(out))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::tree_node::TreeNode;
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::{col, lit, LogicalPlanBuilder};
+    use sail_function::scalar::multi_expr::MultiExpr;
+    use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
+
+    use super::*;
+
+    fn build_variant_plan() -> Result<LogicalPlan> {
+        LogicalPlanBuilder::values(vec![vec![lit(ScalarValue::Utf8(Some("[1]".into())))]])?
+            .project(vec![ScalarUDF::from(SparkJsonToVariantUdf::new())
+                .call(vec![col("column1")])
+                .alias("variant_col")])?
+            .build()
+    }
+
+    #[test]
+    fn test_ensure_variant_expr_rejects_non_variant_input() -> Result<()> {
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(ScalarValue::Int32(Some(1)))]])?
+            .project(vec![col("column1").alias("plain_col")])?
+            .build()?;
+
+        let error = ensure_variant_expr(&col("plain_col"), plan.schema(), "variant_explode_outer")
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("variant_explode_outer expects a VARIANT input"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_explode_rewriter_builds_unnest_and_multi_expr() -> Result<()> {
+        let expr = ScalarUDF::from(Explode::new(ExplodeKind::VariantExplode))
+            .call(vec![col("variant_col")]);
+        let mut state = PlanResolverState::new();
+        let mut rewriter = ExplodeRewriter::new_from_plan(build_variant_plan()?, &mut state);
+        let rewritten = expr.rewrite(&mut rewriter)?;
+
+        let Expr::ScalarFunction(ScalarFunction { func, args }) = rewritten.data else {
+            panic!("expected a scalar function result");
+        };
+        assert!(func.inner().as_any().is::<MultiExpr>());
+        assert_eq!(args.len(), 3);
+        assert_eq!(
+            args.iter()
+                .map(|arg| match arg {
+                    Expr::Alias(alias) => alias.name.clone(),
+                    other => panic!("expected aliased field access, got {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            vec!["pos", "key", "value"]
+        );
+
+        match rewriter.into_plan() {
+            LogicalPlan::Unnest(unnest) => {
+                assert!(matches!(unnest.input.as_ref(), LogicalPlan::Projection(_)));
+            }
+            other => panic!("expected an Unnest plan, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_explode_outer_rewriter_uses_same_inline_path() -> Result<()> {
+        let expr = ScalarUDF::from(Explode::new(ExplodeKind::VariantExplodeOuter))
+            .call(vec![col("variant_col")]);
+        let mut state = PlanResolverState::new();
+        let mut rewriter = ExplodeRewriter::new_from_plan(build_variant_plan()?, &mut state);
+        let rewritten = expr.rewrite(&mut rewriter)?;
+
+        let Expr::ScalarFunction(ScalarFunction { func, args }) = rewritten.data else {
+            panic!("expected a scalar function result");
+        };
+        assert!(func.inner().as_any().is::<MultiExpr>());
+        assert_eq!(args.len(), 3);
+        assert!(matches!(rewriter.into_plan(), LogicalPlan::Unnest(_)));
+
+        Ok(())
+    }
+}
