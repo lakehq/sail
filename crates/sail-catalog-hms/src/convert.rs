@@ -274,6 +274,7 @@ pub(crate) fn build_database(
         if_not_exists: _,
         properties,
     } = options;
+    let location = location.map(|location| normalize_location_uri_for_hms_write(&location));
 
     let parameters = vec_to_map(properties);
 
@@ -1549,13 +1550,14 @@ mod tests {
     use pilota::{AHashMap, FastStr};
     use sail_catalog::hive_format::HiveStorageFormat;
     use sail_catalog::provider::{
-        CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions, PartitionFilter,
-        PartitionPredicate, PartitionPredicateOp, PartitionSpec, PartitionStatus,
+        CreateDatabaseOptions, CreateTableColumnOptions, CreateViewColumnOptions,
+        CreateViewOptions, PartitionFilter, PartitionPredicate, PartitionPredicateOp,
+        PartitionSpec, PartitionStatus,
     };
     use sail_common_datafusion::catalog::{ColumnStatistics, TableStatistics};
 
     use super::{
-        build_generic_table, build_generic_table_with_location_kind, build_view,
+        build_database, build_generic_table, build_generic_table_with_location_kind, build_view,
         database_to_status, inject_spark_metadata, is_view_table, map_to_vec,
         read_large_table_prop, split_large_table_prop, table_statistics_from_properties,
         table_statistics_to_properties, validate_namespace, vec_to_map, GenericTableFormat,
@@ -1582,6 +1584,25 @@ mod tests {
         assert_eq!(status.database, vec!["default".to_string()]);
         assert_eq!(status.comment.as_deref(), Some("test"));
         assert_eq!(status.properties, vec![("k".to_string(), "v".to_string())]);
+    }
+
+    #[test]
+    fn test_build_database_normalizes_file_uri_for_hms_write() {
+        let database = build_database(
+            &sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap(),
+            CreateDatabaseOptions {
+                comment: None,
+                location: Some("file:///tmp/custom-db".to_string()),
+                if_not_exists: false,
+                properties: vec![],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            database.location_uri.as_deref(),
+            Some("file:/tmp/custom-db")
+        );
     }
 
     #[test]

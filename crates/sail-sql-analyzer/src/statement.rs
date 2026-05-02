@@ -1252,6 +1252,7 @@ fn from_ast_table_definition(
     let options = options.map(from_ast_property_list).transpose()?;
     let properties = properties.map(from_ast_property_list).transpose()?;
     let columns = from_ast_table_columns(columns)?;
+    let external = external || location.is_some();
     let definition = spec::TableDefinition {
         external,
         columns,

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import re
 import socket
@@ -73,6 +74,16 @@ _MINIO_PORT = 9000
 _MINIO_USER = "admin"
 _MINIO_PASSWORD = "password"
 _HMS_S3_BUCKET = "hms-warehouse"
+
+
+def _hms_test_database_name(request: pytest.FixtureRequest, prefix: str, max_name_len: int) -> str:
+    module = Path(str(request.node.fspath)).stem
+    test = getattr(request.node, "originalname", None) or request.node.name
+    safe_name = re.sub(r"[^0-9A-Za-z_]+", "_", f"{module}_{test}").strip("_").lower()
+    digest = hashlib.sha1(request.node.nodeid.encode(), usedforsecurity=False).hexdigest()[:12]
+    suffix = f"_{digest}"
+    available = max_name_len - len(prefix) - len(suffix)
+    return f"{prefix}{safe_name[:available]}{suffix}"
 
 
 def _hms_s3_core_site_xml(endpoint: str) -> str:
@@ -599,8 +610,7 @@ def hms_database(
 
     Function scope keeps table names simple while still isolating test state.
     """
-    safe_name = re.sub(r"[^0-9A-Za-z_]+", "_", request.node.nodeid).strip("_").lower()
-    database = f"hms_{safe_name[:96]}"
+    database = _hms_test_database_name(request, prefix="hms_", max_name_len=100)
     location = f"{hms_warehouse_dir.as_uri().rstrip('/')}/{database}"
 
     reference_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
@@ -621,8 +631,7 @@ def hms_s3_database(
     hms_s3_spark: SparkSession,
 ) -> Generator[str, None, None]:
     """Create a unique HMS database whose managed table root is on S3."""
-    safe_name = re.sub(r"[^0-9A-Za-z_]+", "_", request.node.nodeid).strip("_").lower()
-    database = f"hms_s3_{safe_name[:88]}"
+    database = _hms_test_database_name(request, prefix="hms_s3_", max_name_len=100)
     location = f"s3://{_HMS_S3_BUCKET}/{database}"
 
     reference_spark_s3.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")

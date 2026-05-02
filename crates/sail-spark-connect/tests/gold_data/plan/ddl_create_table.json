@@ -10,7 +10,7 @@
                 "mydb",
                 "page_view"
               ],
-              "external": false,
+              "external": true,
               "columns": [],
               "comment": "This is the staging page view table",
               "constraints": [],
@@ -88,7 +88,7 @@
                 "mydb",
                 "page_view"
               ],
-              "external": false,
+              "external": true,
               "columns": [],
               "comment": "This is the staging page view table",
               "constraints": [],
@@ -2538,7 +2538,7 @@
               "table": [
                 "my_tab"
               ],
-              "external": false,
+              "external": true,
               "columns": [
                 {
                   "name": "a",
