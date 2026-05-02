@@ -142,9 +142,7 @@ def test_s3_sail_creates_spark_reads_parquet_with_relative_location(
     table = "sail_relative_location_parquet"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
-        f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION 'relative/sail_location'"
-    )
+    hms_s3_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION 'relative/sail_location'")
     hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (10, 'sail'), (11, 'spark')")
 
     spark_table = _reference_catalog_table(reference_spark_s3, hms_s3_database, table)
