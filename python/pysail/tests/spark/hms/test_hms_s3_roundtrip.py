@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from pyspark.sql import SparkSession
 
-pytestmark = pytest.mark.hms_interop
+pytestmark = pytest.mark.catalog_integration
 
 _S3_WAREHOUSE_PREFIX = "s3://hms-warehouse"
 

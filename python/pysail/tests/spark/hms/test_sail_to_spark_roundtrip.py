@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from pyspark.sql import SparkSession
 
-pytestmark = pytest.mark.hms_interop
+pytestmark = pytest.mark.catalog_integration
 
 
 def _reference_catalog_table(reference_spark: SparkSession, database: str, table: str):

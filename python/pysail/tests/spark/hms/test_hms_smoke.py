@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.hms_interop
+pytestmark = pytest.mark.catalog_integration
 
 
 def test_hms_list_default_database(hms_spark):

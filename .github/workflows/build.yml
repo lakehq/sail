@@ -20,7 +20,6 @@ jobs:
       baseline_run_id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
       run_catalog_tests: ${{ ((github.event_name == 'pull_request' && (steps.message.outputs.run_catalog_tests == 'true' || steps.label.outputs.run_catalog_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
       run_spark_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_spark_tests == 'true' || steps.label.outputs.run_spark_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
-      run_hms_interop_tests: ${{ ((github.event_name == 'pull_request' && (steps.message.outputs.run_hms_interop_tests == 'true' || steps.label.outputs.run_hms_interop_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
       run_ibis_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_ibis_tests == 'true' || steps.label.outputs.run_ibis_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +63,6 @@ jobs:
             const patterns = [
                 { name: 'run_catalog_tests', pattern: "\\[catalog tests?\\]", flags: "i" },
                 { name: 'run_spark_tests', pattern: "\\[(spark )?tests?\\]", flags: "i" },
-                { name: 'run_hms_interop_tests', pattern: "\\[hms interop tests\\]", flags: "i" },
                 { name: 'run_ibis_tests', pattern: "\\[(ibis )?tests?\\]", flags: "i" },
             ];
             for (const p of patterns) {
@@ -80,7 +78,6 @@ jobs:
             const hasAnyLabel = (...names) => names.some(name => labels.includes(name));
             core.setOutput('run_catalog_tests', hasAnyLabel('run catalog tests', 'catalog tests') ? 'true' : 'false');
             core.setOutput('run_spark_tests', hasAnyLabel('run spark tests', 'spark tests') ? 'true' : 'false');
-            core.setOutput('run_hms_interop_tests', hasAnyLabel('run hms interop tests') ? 'true' : 'false');
             core.setOutput('run_ibis_tests', hasAnyLabel('run ibis tests', 'ibis tests') ? 'true' : 'false');
 
   rust-tests:
@@ -152,19 +149,6 @@ jobs:
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  python-hms-interop-tests:
-    name: Python HMS Interop Tests
-    if: ${{ needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_hms_interop_tests == 'true' }}
-    uses: ./.github/workflows/python-tests.yml
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-    with:
-      spark_version: "4.1.1"
-      hms_interop_tests: true
-    needs:
-      - setup
-      - rust-build
-
   codecov-notify:
     name: Codecov Notify
     if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
@@ -172,7 +156,6 @@ jobs:
     needs:
       - rust-tests
       - python-tests
-      - python-hms-interop-tests
       - spark-tests
       - ibis-tests
       - catalog-tests
