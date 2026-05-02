@@ -4,12 +4,13 @@ handle file://-specific behaviours (URI authority form)."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pyspark.sql import SparkSession
 
 pytestmark = pytest.mark.catalog_integration
