@@ -102,9 +102,11 @@ impl ScalarUDFImpl for Explode {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Debug;
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::Field;
+    use datafusion_common::DataFusionError;
 
     use super::*;
 
@@ -124,6 +126,13 @@ mod tests {
             ),
             false,
         ))
+    }
+
+    fn extract_error<T: Debug>(result: Result<T>, context: &str) -> Result<DataFusionError> {
+        match result {
+            Ok(value) => Err(DataFusionError::Plan(format!("{context}, got {value:?}"))),
+            Err(error) => Ok(error),
+        }
     }
 
     #[test]
@@ -147,9 +156,13 @@ mod tests {
     }
 
     #[test]
-    fn test_explode_name_to_kind_rejects_unknown_name() {
-        let error = explode_name_to_kind("explode_variant").unwrap_err();
+    fn test_explode_name_to_kind_rejects_unknown_name() -> Result<()> {
+        let error = extract_error(
+            explode_name_to_kind("explode_variant"),
+            "expected an error for an unsupported explode name",
+        )?;
         assert!(error.to_string().contains("Invalid explode function name"));
+        Ok(())
     }
 
     #[test]
@@ -211,7 +224,10 @@ mod tests {
             ExplodeKind::VariantExplodeOuter,
         ] {
             let explode = Explode::new(kind);
-            assert_eq!(explode.return_type(&[variant_type.clone()])?, variant_type);
+            assert_eq!(
+                explode.return_type(std::slice::from_ref(&variant_type))?,
+                variant_type
+            );
         }
 
         assert_eq!(
@@ -223,29 +239,33 @@ mod tests {
     }
 
     #[test]
-    fn test_return_type_rejects_non_collection_inputs_for_non_variant_kinds() {
-        let error = Explode::new(ExplodeKind::Explode)
-            .return_type(&[DataType::Int32])
-            .unwrap_err();
+    fn test_return_type_rejects_non_collection_inputs_for_non_variant_kinds() -> Result<()> {
+        let error = extract_error(
+            Explode::new(ExplodeKind::Explode).return_type(&[DataType::Int32]),
+            "expected an error for a non-collection input",
+        )?;
         assert!(error
             .to_string()
             .contains("explode should only be called with a list or map"));
+        Ok(())
     }
 
     #[test]
-    fn test_invoke_with_args_reports_rewrite_requirement() {
-        let error = Explode::new(ExplodeKind::VariantExplode)
-            .invoke_with_args(ScalarFunctionArgs {
+    fn test_invoke_with_args_reports_rewrite_requirement() -> Result<()> {
+        let error = extract_error(
+            Explode::new(ExplodeKind::VariantExplode).invoke_with_args(ScalarFunctionArgs {
                 args: vec![],
                 return_field: Arc::new(Field::new("result", DataType::Null, true)),
                 arg_fields: vec![],
                 number_rows: 0,
                 config_options: Default::default(),
-            })
-            .unwrap_err();
+            }),
+            "expected invoke_with_args to require logical plan rewriting",
+        )?;
 
         assert!(error
             .to_string()
             .contains("variant_explode should be rewritten during logical plan analysis"));
+        Ok(())
     }
 }

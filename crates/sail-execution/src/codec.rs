@@ -3539,11 +3539,15 @@ mod tests {
             ExplodeKind::VariantExplodeOuter,
         ] {
             let decoded = round_trip_udf(ScalarUDF::from(Explode::new(expected_kind.clone())))?;
-            let decoded_inner = decoded
-                .inner()
-                .as_any()
-                .downcast_ref::<Explode>()
-                .expect("expected Explode UDF after round trip");
+            let decoded_inner = match decoded.inner().as_any().downcast_ref::<Explode>() {
+                Some(explode) => explode,
+                None => {
+                    return Err(plan_datafusion_err!(
+                        "expected Explode UDF after round trip, got {}",
+                        decoded.name()
+                    ))
+                }
+            };
 
             assert_eq!(decoded_inner.kind(), &expected_kind);
             assert_eq!(decoded.name(), Explode::new(expected_kind).name());

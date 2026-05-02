@@ -220,14 +220,55 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Debug;
+
     use datafusion_common::tree_node::TreeNode;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{col, lit, LogicalPlanBuilder};
     use sail_function::scalar::multi_expr::MultiExpr;
     use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
 
     use super::*;
+
+    fn extract_error<T: Debug>(result: Result<T>, context: &str) -> Result<DataFusionError> {
+        match result {
+            Ok(value) => Err(DataFusionError::Plan(format!("{context}, got {value:?}"))),
+            Err(error) => Ok(error),
+        }
+    }
+
+    fn extract_scalar_function(expr: Expr, context: &str) -> Result<ScalarFunction> {
+        match expr {
+            Expr::ScalarFunction(function) => Ok(function),
+            other => Err(DataFusionError::Plan(format!("{context}, got {other:?}"))),
+        }
+    }
+
+    fn extract_alias_names(args: &[Expr], context: &str) -> Result<Vec<String>> {
+        args.iter()
+            .map(|arg| match arg {
+                Expr::Alias(alias) => Ok(alias.name.clone()),
+                other => Err(DataFusionError::Plan(format!("{context}, got {other:?}"))),
+            })
+            .collect()
+    }
+
+    fn assert_unnest_plan(plan: LogicalPlan, context: &str) -> Result<()> {
+        match plan {
+            LogicalPlan::Unnest(unnest) => {
+                if matches!(unnest.input.as_ref(), LogicalPlan::Projection(_)) {
+                    Ok(())
+                } else {
+                    Err(DataFusionError::Plan(format!(
+                        "{context}, got {:?}",
+                        unnest.input
+                    )))
+                }
+            }
+            other => Err(DataFusionError::Plan(format!("{context}, got {other:?}"))),
+        }
+    }
 
     fn build_variant_plan() -> Result<LogicalPlan> {
         LogicalPlanBuilder::values(vec![vec![lit(ScalarValue::Utf8(Some("[1]".into())))]])?
@@ -243,8 +284,10 @@ mod tests {
             .project(vec![col("column1").alias("plain_col")])?
             .build()?;
 
-        let error = ensure_variant_expr(&col("plain_col"), plan.schema(), "variant_explode_outer")
-            .unwrap_err();
+        let error = extract_error(
+            ensure_variant_expr(&col("plain_col"), plan.schema(), "variant_explode_outer"),
+            "expected a non-variant input to be rejected",
+        )?;
         assert!(error
             .to_string()
             .contains("variant_explode_outer expects a VARIANT input"));
@@ -259,27 +302,16 @@ mod tests {
         let mut rewriter = ExplodeRewriter::new_from_plan(build_variant_plan()?, &mut state);
         let rewritten = expr.rewrite(&mut rewriter)?;
 
-        let Expr::ScalarFunction(ScalarFunction { func, args }) = rewritten.data else {
-            panic!("expected a scalar function result");
-        };
+        let ScalarFunction { func, args } =
+            extract_scalar_function(rewritten.data, "expected a scalar function result")?;
         assert!(func.inner().as_any().is::<MultiExpr>());
         assert_eq!(args.len(), 3);
         assert_eq!(
-            args.iter()
-                .map(|arg| match arg {
-                    Expr::Alias(alias) => alias.name.clone(),
-                    other => panic!("expected aliased field access, got {other:?}"),
-                })
-                .collect::<Vec<_>>(),
+            extract_alias_names(&args, "expected aliased field access")?,
             vec!["pos", "key", "value"]
         );
 
-        match rewriter.into_plan() {
-            LogicalPlan::Unnest(unnest) => {
-                assert!(matches!(unnest.input.as_ref(), LogicalPlan::Projection(_)));
-            }
-            other => panic!("expected an Unnest plan, got {other:?}"),
-        }
+        assert_unnest_plan(rewriter.into_plan(), "expected an Unnest plan")?;
 
         Ok(())
     }
@@ -292,12 +324,11 @@ mod tests {
         let mut rewriter = ExplodeRewriter::new_from_plan(build_variant_plan()?, &mut state);
         let rewritten = expr.rewrite(&mut rewriter)?;
 
-        let Expr::ScalarFunction(ScalarFunction { func, args }) = rewritten.data else {
-            panic!("expected a scalar function result");
-        };
+        let ScalarFunction { func, args } =
+            extract_scalar_function(rewritten.data, "expected a scalar function result")?;
         assert!(func.inner().as_any().is::<MultiExpr>());
         assert_eq!(args.len(), 3);
-        assert!(matches!(rewriter.into_plan(), LogicalPlan::Unnest(_)));
+        assert_unnest_plan(rewriter.into_plan(), "expected an Unnest plan")?;
 
         Ok(())
     }
