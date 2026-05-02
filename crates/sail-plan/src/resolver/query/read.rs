@@ -103,8 +103,12 @@ impl PlanResolver<'_> {
                 let temporal_options = self
                     .resolve_time_travel_options(&format, temporal, state)
                     .await?;
+                let paths = match location {
+                    Some(location) => vec![location],
+                    None => vec![self.resolve_default_table_location(&name).await?],
+                };
                 let info = SourceInfo {
-                    paths: location.map(|x| vec![x]).unwrap_or_default(),
+                    paths,
                     schema: Some(schema),
                     constraints,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),

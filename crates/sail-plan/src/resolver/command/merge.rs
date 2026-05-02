@@ -515,9 +515,10 @@ impl PlanResolver<'_> {
                 properties,
                 ..
             } => {
-                let location = location.ok_or_else(|| {
-                    PlanError::invalid(format!("table does not have a location: {table:?}"))
-                })?;
+                let location = match location {
+                    Some(location) => location,
+                    None => self.resolve_default_table_location(table).await?,
+                };
                 Ok(MergeTargetInfo {
                     table_name: table.clone().into(),
                     format,

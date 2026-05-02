@@ -307,9 +307,10 @@ impl PlanResolver<'_> {
                     file_write_options.sort_by =
                         info.sort_by.iter().cloned().map(|x| x.into()).collect();
                     file_write_options.bucket_by = info.bucket_by.clone().map(|x| x.into());
-                    let location = info.location.clone().ok_or_else(|| {
-                        PlanError::invalid(format!("table does not have a location: {table:?}"))
-                    })?;
+                    let location = match info.location.clone() {
+                        Some(location) => location,
+                        None => self.resolve_default_table_location(&table).await?,
+                    };
                     file_write_options.options.push(OptionLayer::OptionList {
                         items: vec![("path".to_string(), location)],
                     });
