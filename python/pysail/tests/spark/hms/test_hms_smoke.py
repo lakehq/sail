@@ -1,4 +1,4 @@
-# ruff: noqa: RUF002, S608
+# ruff: noqa: RUF002
 """Minimal HMS smoke tests – Sail can connect to HMS and list databases."""
 
 from __future__ import annotations
