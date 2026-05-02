@@ -117,7 +117,7 @@ See the [Storage Guide](https://docs.lakesail.com/sail/latest/guide/storage/) fo
 
 For over 15 years, Spark has been the default engine for distributed data processing, powering ETL, machine learning, and analytics pipelines across nearly every industry.
 
-Sail is built to be a familiar, performant alternative without the JVM tax.
+But the JVM foundation that made Spark possible is now what holds it back. Sail is built to be a familiar, performant alternative without the JVM tax.
 
 ### Sail is Spark-compatible
 
