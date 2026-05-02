@@ -1,4 +1,4 @@
-# ruff: noqa: PLR2004, PT018, S608, TC002, TC003
+# ruff: noqa: PLR2004, PT018, S608, TC002
 """Spark -> Sail roundtrip tests through a shared HMS metastore.
 
 All tests use the MinIO-backed S3 warehouse to avoid Docker bind-mount

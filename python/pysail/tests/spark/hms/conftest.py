@@ -1,4 +1,4 @@
-# ruff: noqa: ARG001, EM102, FLY002, S105, TC003, TRY003, TRY300
+# ruff: noqa: EM102, FLY002, S105, S103, TRY003, TRY300
 """Pytest fixtures for HMS catalog interop tests."""
 
 from __future__ import annotations
