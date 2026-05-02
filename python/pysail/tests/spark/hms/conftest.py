@@ -54,8 +54,7 @@ def spark_doctest(
     request: pytest.FixtureRequest,
     doctest_namespace: dict[str, object],
 ) -> None:
-    spark_fixture = "hms_s3_spark" if request.module.__name__.endswith("test_hms_s3_roundtrip") else "hms_spark"
-    doctest_namespace["spark"] = request.getfixturevalue(spark_fixture)
+    doctest_namespace["spark"] = request.getfixturevalue("hms_s3_spark")
 
 
 # ---------------------------------------------------------------------------
@@ -253,41 +252,9 @@ def hms_warehouse_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     This local-file harness needs host JVM Spark and the HMS container to see
     the same absolute ``file:`` path for managed-table directories.
     """
-    return tmp_path_factory.mktemp("hms_warehouse")
-
-
-@pytest.fixture(scope="session")
-def hms_container(hms_warehouse_dir: Path) -> Generator[DockerContainer, None, None]:
-    """Start a Hive Metastore container (apache/hive:3.1.3, service=metastore)."""
-    container = DockerContainer(_HMS_IMAGE)
-    container.with_exposed_ports(_HMS_METASTORE_PORT)
-    container.with_env("SERVICE_NAME", "metastore")
-    container.with_env("VERBOSE", "true")
-    container.with_env(
-        "SERVICE_OPTS",
-        f"-Dhive.metastore.warehouse.dir={hms_warehouse_dir.as_uri()}",
-    )
-    container.with_volume_mapping(hms_warehouse_dir, str(hms_warehouse_dir), mode="rw")
-    container.start()
-
-    # Wait for the Thrift metastore port to be reachable on IPv4.
-    port = int(container.get_exposed_port(_HMS_METASTORE_PORT))
-    _wait_for_port(_HMS_HOST, port, _HMS_STARTUP_TIMEOUT)
-
-    # Extra grace period: the Thrift service may accept TCP connections
-    # before it is fully initialized.  The Rust tests also retry with
-    # ``list_databases`` polling; here we simply sleep a few extra seconds.
-    time.sleep(10)
-
-    yield container
-    container.stop()
-
-
-@pytest.fixture(scope="session")
-def hms_endpoint(hms_container: DockerContainer) -> str:
-    """Return ``host:port`` for the Hive Metastore Thrift endpoint."""
-    port = hms_container.get_exposed_port(_HMS_METASTORE_PORT)
-    return f"{_HMS_HOST}:{port}"
+    path = tmp_path_factory.mktemp("hms_warehouse")
+    os.chmod(path, 0o1777)  # sticky bit: writable by non-root HMS in container
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -448,47 +415,15 @@ def hms_s3_metastore_endpoint(hms_s3_container: DockerContainer) -> str:
 
 
 @pytest.fixture(scope="session")
-def hms_remote(hms_endpoint: str) -> Generator[str, None, None]:
-    """Start Sail server configured with HMS as the sole catalog.
-
-    Kept session-scoped to amortize Spark Connect server startup cost across
-    all HMS interop tests in the run.
-    """
-    yield from _run_sail_hms_server(hms_endpoint)
-
-
-@pytest.fixture(scope="session")
-def hms_spark(hms_remote: str) -> Generator[SparkSession, None, None]:
-    """Create a Spark session connected to Sail with HMS catalog.
-
-    Kept session-scoped to avoid repeatedly creating remote Spark sessions.
-    """
-    from pysail.tests.spark.conftest import (
-        configure_spark_session,
-        patch_spark_connect_session,
-    )
-
-    spark = SparkSession.builder.remote(hms_remote).appName("hms_smoke_test").create()
-    configure_spark_session(spark)
-    patch_spark_connect_session(spark)
-    yield spark
-    spark.stop()
-
-
-@pytest.fixture(scope="module")
 def hms_s3_remote(
-    hms_remote: str,
-    hms_spark: SparkSession,
     hms_s3_metastore_endpoint: str,
     hms_s3_env: dict[str, str],
 ) -> Generator[str, None, None]:
     """Start a separate Sail server configured for HMS plus MinIO-backed S3."""
-    del hms_remote
-    del hms_spark
     yield from _run_sail_hms_server(hms_s3_metastore_endpoint, hms_s3_env)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def hms_s3_spark(hms_s3_remote: str) -> Generator[SparkSession, None, None]:
     """Create a Spark Connect session connected to Sail's S3 HMS lane."""
     from pysail.tests.spark.conftest import (
@@ -509,61 +444,6 @@ def hms_s3_spark(hms_s3_remote: str) -> Generator[SparkSession, None, None]:
 
 
 @pytest.fixture(scope="session")
-def reference_spark(
-    hms_spark: SparkSession,
-    hms_endpoint: str,
-    hms_warehouse_dir: Path,
-) -> Generator[SparkSession, None, None]:
-    """Start a local JVM Spark session with Hive support, pointed at the same HMS.
-
-    This is the *reference* Spark used to create tables that Sail must later
-    read back.  It uses ``enableHiveSupport()`` and configures
-    ``hive.metastore.uris`` to point at the shared HMS container.
-
-    Right now the HMS harness mixes two Spark modes in one Python process:
-    the Sail side uses a Spark Connect session
-    (``SparkSession.builder.remote(...)``), while the reference side uses a
-    classic JVM Spark session (``enableHiveSupport()``).
-
-    PySpark 4.x has mode/global-state interactions, so creating these in the
-    wrong order can break startup or session behavior. The ``hms_spark``
-    dependency is intentional: it enforces remote-first, then classic.
-
-    "Spark Connect through and through" would mean using Spark Connect for both
-    sides. That removes the mixed-mode conflict, but it also requires standing
-    up a second reference Spark Connect server with HMS wired, and replacing
-    tests that currently inspect JVM internals
-    (``_jsparkSession...externalCatalog()``), since that path is not directly
-    available the same way in pure Connect flows.
-
-    PySpark 4.x defaults to Connect mode.  We force classic (JVM) mode by
-    setting ``SPARK_API_MODE=classic`` for the duration of this fixture.
-    """
-    warehouse_uri = hms_warehouse_dir.as_uri()
-
-    with _classic_spark_mode():
-        spark = (
-            SparkSession.builder.master("local[1]")
-            .appName("hms_reference_spark")
-            .config("spark.sql.catalogImplementation", "hive")
-            .config("spark.hadoop.hive.metastore.uris", f"thrift://{hms_endpoint}")
-            .config("spark.sql.warehouse.dir", warehouse_uri)
-            .config(
-                "spark.hadoop.javax.jdo.option.ConnectionURL",
-                f"jdbc:derby:;databaseName={hms_warehouse_dir}/metastore_db;create=true",
-            )
-            .enableHiveSupport()
-            .getOrCreate()
-        )
-        spark.conf.set("spark.sql.session.timeZone", "UTC")
-        spark.sql(f"ALTER DATABASE default SET LOCATION '{warehouse_uri}'")
-
-    yield spark
-
-    spark.stop()
-
-
-@pytest.fixture(scope="module")
 def reference_spark_s3(
     hms_s3_spark: SparkSession,
     hms_s3_metastore_endpoint: str,
@@ -597,31 +477,6 @@ def reference_spark_s3(
     yield spark
 
     spark.stop()
-
-
-@pytest.fixture
-def hms_database(
-    request: pytest.FixtureRequest,
-    reference_spark: SparkSession,
-    hms_spark: SparkSession,
-    hms_warehouse_dir: Path,
-) -> Generator[str, None, None]:
-    """Create a unique HMS database for one test under the shared warehouse.
-
-    Function scope keeps table names simple while still isolating test state.
-    """
-    database = _hms_test_database_name(request, prefix="hms_", max_name_len=100)
-    location = f"{hms_warehouse_dir.as_uri().rstrip('/')}/{database}"
-
-    reference_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
-    reference_spark.sql(f"CREATE DATABASE {database} LOCATION '{location}'")
-
-    yield database
-
-    try:
-        reference_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
-    except Exception:  # noqa: BLE001
-        hms_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 @pytest.fixture

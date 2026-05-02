@@ -131,3 +131,24 @@ def test_s3_sail_partitioned_managed_table_recovers_hms_partitions(
     assert partitions == {"region=a%2Fb", "region=north"}
     rows = reference_spark_s3.sql(f"SELECT id, region FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.region) for row in rows] == [(1, "north"), (2, "a/b")]
+
+
+def test_s3_sail_creates_spark_reads_parquet_with_relative_location(
+    hms_s3_spark: SparkSession,
+    reference_spark_s3: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Sail resolves a relative LOCATION against the S3 database path."""
+    table = "sail_relative_location_parquet"
+    table_fqn = f"{hms_s3_database}.{table}"
+
+    hms_s3_spark.sql(
+        f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION 'relative/sail_location'"
+    )
+    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (10, 'sail'), (11, 'spark')")
+
+    spark_table = _reference_catalog_table(reference_spark_s3, hms_s3_database, table)
+    assert spark_table.tableType().name() == "EXTERNAL"
+    assert _scala_option_to_string(spark_table.provider()) == "parquet"
+    rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    assert [(row.id, row.name) for row in rows] == [(10, "sail"), (11, "spark")]
