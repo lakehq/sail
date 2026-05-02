@@ -9,7 +9,7 @@ Sail is a **drop-in Apache Spark replacement** written in Rust, unifying batch p
 
 - **Compatible** with the Spark Connect protocol, supporting the Spark SQL and DataFrame API with no code rewrites required.
 - **100% Rust-native** with no JVM overhead, delivering memory safety, instant startup, and predictable performance.
-- **~4× faster** (up to 8× in specific workloads) than Spark and **94% cheaper** on infrastructure costs. See [derived TPC-H benchmarks](#benchmark-results).
+- **~4× faster** (up to 8× in specific workloads) than Spark and **94% cheaper** on infrastructure costs. See **[derived TPC-H benchmarks](#benchmark-results)**.
 - **Proven on [ClickBench](https://go.lakesail.com/clickbench)**, outperforming Spark, popular Spark accelerators, Databricks, and Snowflake.
 
 ## Documentation
