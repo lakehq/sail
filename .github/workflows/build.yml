@@ -148,6 +148,9 @@ jobs:
     uses: ./.github/workflows/catalog-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    needs:
+      - setup
+      - rust-build
 
   codecov-notify:
     name: Codecov Notify
