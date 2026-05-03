@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import pytest
 from pyspark.sql import SparkSession
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 pytestmark = pytest.mark.catalog_integration
 
@@ -438,7 +439,12 @@ def test_sail_creates_external_table_via_catalog_api(
         table_fqn,
         path=location,
         source="parquet",
-        schema="id INT, name STRING",
+        schema=StructType(
+            [
+                StructField("id", IntegerType(), True),
+                StructField("name", StringType(), True),
+            ]
+        ),
     )
 
     _assert_reference_spark_table(
