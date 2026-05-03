@@ -121,10 +121,10 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
-use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;

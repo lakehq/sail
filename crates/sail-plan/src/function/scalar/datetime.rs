@@ -11,8 +11,8 @@ use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
-use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
@@ -75,7 +75,6 @@ fn trunc(date: Expr, part: Expr) -> Expr {
         DataType::Date32,
     )
 }
-
 
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
     let (date, interval) = input.arguments.two()?;

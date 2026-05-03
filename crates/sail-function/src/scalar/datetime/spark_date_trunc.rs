@@ -3,15 +3,13 @@ use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDateTime, Timelike};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
-use datafusion_common::types::{NativeType, logical_string};
-use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_common::types::{logical_string, NativeType};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::preimage::PreimageResult;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    Coercion, ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_expr_common::interval_arithmetic::Interval;
 
@@ -72,67 +70,8 @@ impl ScalarUDFImpl for SparkDateTrunc {
         )))
     }
 
-    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        internal_err!("spark_date_trunc should have been simplified to standard date_trunc")
-    }
-
-    // NOTE: fn simplify runs before fn preimage in DataFusion's optimizer passes.
-    // This means preimage never fires while simplify is present — simplify dissolves
-    // spark_date_trunc into DataFusion's date_trunc first, losing the UDF identity.
-    // The plan snapshot tests in date_trunc.feature document this behavior.
-    // To enable preimage, simplify must be removed (and the kernel moved to invoke_with_args).
-    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        let [fmt_expr, ts_expr] = take_function_args(self.name(), args)?;
-
-        let fmt = match fmt_expr.as_literal() {
-            Some(ScalarValue::Utf8(Some(v)))
-            | Some(ScalarValue::Utf8View(Some(v)))
-            | Some(ScalarValue::LargeUtf8(Some(v))) => v.to_lowercase(),
-            _ => {
-                return plan_err!(
-                    "First argument of `DATE_TRUNC` must be non-null scalar Utf8"
-                );
-            }
-        };
-
-        let fmt = normalize_unit(&fmt);
-        let session_tz = info.config_options().execution.time_zone.clone();
-        let ts_type = ts_expr.get_type(info.schema())?;
-
-        let ts_expr = match (&ts_type, fmt) {
-            (_, "second" | "millisecond" | "microsecond") => ts_expr,
-            (DataType::Timestamp(unit, tz), _) => {
-                let ts_expr = match &session_tz {
-                    Some(session_tz) => ts_expr.cast_to(
-                        &DataType::Timestamp(
-                            TimeUnit::Microsecond,
-                            Some(Arc::from(session_tz.as_str())),
-                        ),
-                        info.schema(),
-                    )?,
-                    None => ts_expr,
-                };
-                Expr::ScalarFunction(ScalarFunction::new_udf(
-                    datafusion_functions::datetime::to_local_time(),
-                    vec![ts_expr],
-                ))
-                .cast_to(&DataType::Timestamp(*unit, tz.clone()), info.schema())?
-            }
-            _ => {
-                return plan_err!(
-                    "Second argument of `DATE_TRUNC` must be Timestamp, got {}",
-                    ts_type
-                );
-            }
-        };
-
-        let fmt_expr = Expr::Literal(ScalarValue::new_utf8(fmt), None);
-        Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-            ScalarFunction::new_udf(
-                datafusion_functions::datetime::date_trunc(),
-                vec![fmt_expr, ts_expr],
-            ),
-        )))
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        datafusion::functions::datetime::date_trunc().invoke_with_args(args)
     }
 
     fn preimage(
@@ -225,7 +164,12 @@ fn bucket_bounds_micros(unit: &str, micros: i64) -> Option<(i64, i64)> {
         "month" => {
             let dt = micros_to_naive_dt(micros)?;
             // must be first of month at midnight
-            if dt.day() != 1 || dt.hour() != 0 || dt.minute() != 0 || dt.second() != 0 || dt.nanosecond() != 0 {
+            if dt.day() != 1
+                || dt.hour() != 0
+                || dt.minute() != 0
+                || dt.second() != 0
+                || dt.nanosecond() != 0
+            {
                 return None;
             }
             let (next_year, next_month) = if dt.month() == 12 {
@@ -233,16 +177,27 @@ fn bucket_bounds_micros(unit: &str, micros: i64) -> Option<(i64, i64)> {
             } else {
                 (dt.year(), dt.month() + 1)
             };
-            let next = naive_dt_to_micros(chrono::NaiveDate::from_ymd_opt(next_year, next_month, 1)?.and_hms_opt(0, 0, 0)?)?;
+            let next = naive_dt_to_micros(
+                chrono::NaiveDate::from_ymd_opt(next_year, next_month, 1)?.and_hms_opt(0, 0, 0)?,
+            )?;
             Some((micros, next))
         }
         "year" => {
             let dt = micros_to_naive_dt(micros)?;
             // must be Jan 1 at midnight
-            if dt.month() != 1 || dt.day() != 1 || dt.hour() != 0 || dt.minute() != 0 || dt.second() != 0 || dt.nanosecond() != 0 {
+            if dt.month() != 1
+                || dt.day() != 1
+                || dt.hour() != 0
+                || dt.minute() != 0
+                || dt.second() != 0
+                || dt.nanosecond() != 0
+            {
                 return None;
             }
-            let next = naive_dt_to_micros(chrono::NaiveDate::from_ymd_opt(dt.year().checked_add(1)?, 1, 1)?.and_hms_opt(0, 0, 0)?)?;
+            let next = naive_dt_to_micros(
+                chrono::NaiveDate::from_ymd_opt(dt.year().checked_add(1)?, 1, 1)?
+                    .and_hms_opt(0, 0, 0)?,
+            )?;
             Some((micros, next))
         }
         _ => None,

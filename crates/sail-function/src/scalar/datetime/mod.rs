@@ -1,8 +1,8 @@
 pub mod convert_tz;
-pub mod spark_date_trunc;
 pub mod negate_duration;
 pub mod spark_date;
 pub mod spark_date_part;
+pub mod spark_date_trunc;
 pub mod spark_interval;
 pub mod spark_last_day;
 pub mod spark_make_time;
