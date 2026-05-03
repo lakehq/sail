@@ -1220,4 +1220,176 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_parse_bare_decimal_json_schema_string() -> Result<()> {
+        let dt = parse_schema_to_data_type(r#""decimal""#, "UTC")?;
+        assert_eq!(dt, DataType::Decimal128(10, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_invalid_decimal_precision_json_schema() {
+        // precision > 38 should fail validation
+        let result = parse_schema_to_data_type(r#""decimal(50,2)""#, "UTC");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_all_simple_json_types() -> Result<()> {
+        assert_eq!(
+            parse_schema_to_data_type(r#""null""#, "UTC")?,
+            DataType::Null
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""boolean""#, "UTC")?,
+            DataType::Boolean
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""byte""#, "UTC")?,
+            DataType::Int8
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""tinyint""#, "UTC")?,
+            DataType::Int8
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""short""#, "UTC")?,
+            DataType::Int16
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""smallint""#, "UTC")?,
+            DataType::Int16
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""int""#, "UTC")?,
+            DataType::Int32
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""long""#, "UTC")?,
+            DataType::Int64
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""bigint""#, "UTC")?,
+            DataType::Int64
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""float""#, "UTC")?,
+            DataType::Float32
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""double""#, "UTC")?,
+            DataType::Float64
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""string""#, "UTC")?,
+            DataType::Utf8
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""binary""#, "UTC")?,
+            DataType::Binary
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""date""#, "UTC")?,
+            DataType::Date32
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""timestamp_ntz""#, "UTC")?,
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_timestamp_json_respects_timezone() -> Result<()> {
+        let dt = parse_schema_to_data_type(r#""timestamp""#, "America/New_York")?;
+        assert_eq!(
+            dt,
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("America/New_York")))
+        );
+
+        let dt2 = parse_schema_to_data_type(r#""timestamp_ltz""#, "Europe/London")?;
+        assert_eq!(
+            dt2,
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("Europe/London")))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_unsupported_json_type_errors() {
+        let result = parse_schema_to_data_type(r#""geometry""#, "UTC");
+        assert!(result.is_err());
+        let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err_msg.contains("Unsupported JSON schema type"),
+            "unexpected error message: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_json_schema_errors() {
+        let result = parse_schema_to_data_type(r#"{"type":"struct""#, "UTC");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_nested_struct_json_schema() -> Result<()> {
+        let schema = r#"{
+            "type":"struct",
+            "fields":[{
+                "name":"outer",
+                "type":{
+                    "type":"struct",
+                    "fields":[
+                        {"name":"inner","type":"integer","nullable":true,"metadata":{}}
+                    ]
+                },
+                "nullable":true,
+                "metadata":{}
+            }]
+        }"#;
+        let dt = parse_schema_to_data_type(schema, "UTC")?;
+        assert_eq!(
+            dt,
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "outer",
+                DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                    "inner",
+                    DataType::Int32,
+                    true,
+                ))])),
+                true,
+            ))]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ddl_schema_fallback() -> Result<()> {
+        // DDL-style schemas should still work
+        let dt = parse_schema_to_data_type("a INT, b DOUBLE", "UTC")?;
+        assert_eq!(
+            dt,
+            DataType::Struct(Fields::from(vec![
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Field::new("b", DataType::Float64, true)),
+            ]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ddl_array_schema() -> Result<()> {
+        let dt = parse_schema_to_data_type("ARRAY<INT>", "UTC")?;
+        assert!(matches!(dt, DataType::List(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ddl_map_schema() -> Result<()> {
+        let dt = parse_schema_to_data_type("MAP<STRING, INT>", "UTC")?;
+        assert!(matches!(dt, DataType::Map(_, _)));
+        Ok(())
+    }
 }
