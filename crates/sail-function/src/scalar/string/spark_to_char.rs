@@ -736,12 +736,37 @@ fn format_binary_impl(
             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
         }
         ColumnarValue::Array(arr) => {
-            let casted = datafusion::arrow::compute::cast(arr, &DataType::Binary)?;
-            let binary_arr = casted.as_binary::<i32>();
-            let result: Result<StringArray> = binary_arr
-                .iter()
-                .map(|opt| opt.map(convert).transpose())
-                .collect();
+            // Handle each binary variant natively to avoid casting LargeBinary
+            // (i64 offsets) to Binary (i32 offsets), which would panic for
+            // arrays whose total byte length exceeds 2 GB.
+            let result: Result<StringArray> = match arr.data_type() {
+                DataType::Binary => arr
+                    .as_binary::<i32>()
+                    .iter()
+                    .map(|opt| opt.map(convert).transpose())
+                    .collect(),
+                DataType::LargeBinary => arr
+                    .as_binary::<i64>()
+                    .iter()
+                    .map(|opt| opt.map(convert).transpose())
+                    .collect(),
+                DataType::FixedSizeBinary(_) => arr
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::FixedSizeBinaryArray>()
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::Internal(
+                            "failed to downcast to FixedSizeBinaryArray".to_string(),
+                        )
+                    })?
+                    .iter()
+                    .map(|opt| opt.map(convert).transpose())
+                    .collect(),
+                other => {
+                    return exec_err!(
+                        "to_char/to_varchar format_binary_impl: unexpected type {other}"
+                    )
+                }
+            };
             Ok(ColumnarValue::Array(Arc::new(result?)))
         }
     }

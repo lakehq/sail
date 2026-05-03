@@ -4,7 +4,7 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, try_cast, when, Expr, ExprSchemable, ScalarUDF};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
@@ -349,6 +349,40 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .map_err(|e| PlanError::invalid(format!("to_char: cannot resolve input type: {e}")))?;
 
     if dt.is_temporal() {
+        // Handle standalone fractional-seconds format (e.g. 'SSS', 'SSSSSS').
+        // Chrono's %.Nf always includes a leading dot (".789"), so for all-S
+        // formats we strip it with substr — same logic as date_format.
+        if let Expr::Literal(ref sv, _) = &format {
+            if let Some(Some(fmt)) = sv.try_as_str() {
+                if !fmt.is_empty() && fmt.chars().all(|c| c == 'S') {
+                    let n = fmt.len();
+                    // DataFusion's to_char only supports %.3f / %.6f / %.9f.
+                    // Use the smallest valid precision that covers n, then
+                    // trim to exactly n chars to avoid returning extra digits.
+                    let chrono_precision = if n <= 3 {
+                        3
+                    } else if n <= 6 {
+                        6
+                    } else {
+                        9
+                    };
+                    let chrono_fmt = format!("%.{chrono_precision}f");
+                    let result = expr_fn::to_char(value, lit(chrono_fmt));
+                    // %.Pf produces ".XYZ..." (leading dot + P digits).
+                    // Skip the dot (start=2) and limit to n chars when n < P.
+                    // %.Pf produces ".XYZ..." (leading dot + P digits).
+                    // Skip the dot with substr(2), then limit to n chars when
+                    // we used a higher precision than needed.
+                    let without_dot = expr_fn::substr(result, lit(2i64));
+                    let stripped = if n == chrono_precision {
+                        without_dot
+                    } else {
+                        expr_fn::left(without_dot, lit(n as i64))
+                    };
+                    return Ok(stripped);
+                }
+            }
+        }
         let chrono_format = ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format]);
         Ok(expr_fn::to_char(value, chrono_format))
     } else if dt.is_numeric()

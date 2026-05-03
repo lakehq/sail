@@ -88,8 +88,13 @@ impl ScalarUDFImpl for SparkToNumber {
         //       the return Decimal256 precision/scale.
         //   (b) format is a known NULL literal → return a stable placeholder
         //       type; `invoke_with_args` will emit all-NULL rows.
-        //   (c) format is non-literal (unknown at planning) → same as (b):
-        //       we can't derive a precise type, fall back to a placeholder.
+        //   (c) format is non-literal (unknown at planning, e.g. a column ref
+        //       or an expression that wasn't folded) → return placeholder.
+        //       NOTE: invoke_with_args uses format_arr.value(0) for all rows,
+        //       so a true per-row format would silently use the first row's
+        //       format. Spark rejects non-foldable formats at analysis time
+        //       (DATATYPE_MISMATCH.NON_FOLDABLE_INPUT); Sail currently does not
+        //       — tracked as a known divergence.
         let format_opt: Option<&str> = match scalar_arguments.get(1) {
             Some(Some(ScalarValue::Utf8(Some(s))))
             | Some(Some(ScalarValue::LargeUtf8(Some(s))))

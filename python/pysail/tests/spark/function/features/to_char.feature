@@ -2142,3 +2142,172 @@ Feature: to_char and to_varchar comprehensive tests
       Then query result
         | result |
         | NULL   |
+
+  Rule: Temporal formatting - standalone fractional-seconds (SSS fix)
+
+    Scenario: SSS standalone returns milliseconds without leading dot
+      When query
+        """
+        SELECT to_char(TIMESTAMP'2024-01-15 12:34:56.789', 'SSS') AS result
+        """
+      Then query result
+        | result |
+        | 789    |
+
+    Scenario: SSSSSS standalone returns microseconds without leading dot
+      When query
+        """
+        SELECT to_char(TIMESTAMP'2024-01-15 12:34:56.789012', 'SSSSSS') AS result
+        """
+      Then query result
+        | result |
+        | 789012 |
+
+    Scenario: S single digit returns tenths without leading dot
+      When query
+        """
+        SELECT to_char(TIMESTAMP'2024-01-15 12:34:56.100', 'S') AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: SSS with NULL timestamp returns NULL
+      When query
+        """
+        SELECT to_char(CAST(NULL AS TIMESTAMP), 'SSS') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: compound format HH:mm:ss.SSS retains dot via chrono
+      When query
+        """
+        SELECT to_char(TIMESTAMP'2024-01-15 12:34:56.789', 'HH:mm:ss.SSS') AS result
+        """
+      Then query result
+        | result       |
+        | 12:34:56.789 |
+
+    Scenario: SSS with TIMESTAMP_NTZ returns milliseconds without dot
+      When query
+        """
+        SELECT to_char(TIMESTAMP_NTZ'2024-01-15 12:34:56.789', 'SSS') AS result
+        """
+      Then query result
+        | result |
+        | 789    |
+
+  Rule: Padding verification with bracket notation
+
+    @sail-bug
+    Scenario: MI prefix negative has leading space before minus
+      When query
+        """
+        SELECT concat('[', to_char(-42, 'MI999'), ']') AS result
+        """
+      Then query result
+        | result |
+        | [ -42] |
+
+    @sail-bug
+    Scenario: MI prefix positive has two leading spaces
+      When query
+        """
+        SELECT concat('[', to_char(42, 'MI999'), ']') AS result
+        """
+      Then query result
+        | result |
+        | [  42] |
+
+    Scenario: MI prefix zero is all spaces
+      When query
+        """
+        SELECT concat('[', to_char(0, 'MI999'), ']') AS result
+        """
+      Then query result
+        | result |
+        | [    ] |
+
+    Scenario: MI suffix negative shows trailing minus
+      When query
+        """
+        SELECT concat('[', to_char(-5, '99MI'), ']') AS result
+        """
+      Then query result
+        | result |
+        | [ 5-]  |
+
+    Scenario: MI suffix positive shows trailing space
+      When query
+        """
+        SELECT concat('[', to_char(5, '99MI'), ']') AS result
+        """
+      Then query result
+        | result |
+        | [ 5 ]  |
+
+    Scenario: MI suffix zero is all spaces
+      When query
+        """
+        SELECT concat('[', to_char(0, '99MI'), ']') AS result
+        """
+      Then query result
+        | result |
+        | [   ]  |
+
+    Scenario: PR negative wraps in angle brackets no extra spaces
+      When query
+        """
+        SELECT concat('[', to_char(-123, '999PR'), ']') AS result
+        """
+      Then query result
+        | result  |
+        | [<123>] |
+
+    @sail-bug
+    Scenario: PR positive has two trailing spaces
+      When query
+        """
+        SELECT concat('[', to_char(123, '999PR'), ']') AS result
+        """
+      Then query result
+        | result   |
+        | [123  ]  |
+
+    Scenario: PR zero is five spaces
+      When query
+        """
+        SELECT concat('[', to_char(0, '999PR'), ']') AS result
+        """
+      Then query result
+        | result    |
+        | [     ]   |
+
+    Scenario: 9-digit format pads small value with leading spaces
+      When query
+        """
+        SELECT concat('[', to_char(5, '9999'), ']') AS result
+        """
+      Then query result
+        | result  |
+        | [   5]  |
+
+    Scenario: 9-digit format pads two-digit value
+      When query
+        """
+        SELECT concat('[', to_char(42, '9999'), ']') AS result
+        """
+      Then query result
+        | result |
+        | [  42] |
+
+    Scenario: 9-digit format negative suppresses sign without sign specifier
+      When query
+        """
+        SELECT concat('[', to_char(-42, '9999'), ']') AS result
+        """
+      Then query result
+        | result |
+        | [  42] |

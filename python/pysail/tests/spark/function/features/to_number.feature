@@ -432,3 +432,12 @@ Feature: to_number (shared format parser with to_char)
         | result |
         | NULL   |
         | NULL   |
+
+  Rule: Format must be a constant literal
+
+    Scenario: non-literal format column reference errors at planning time
+      When query
+        """
+        SELECT to_number('123', fmt) AS result FROM VALUES ('$999') AS t(fmt)
+        """
+      Then query error .*
