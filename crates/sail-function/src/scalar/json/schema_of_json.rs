@@ -60,8 +60,10 @@ impl SparkSchemaOfJson {
     }
 
     fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
+        let is_utf8 = |dt: &DataType| matches!(dt, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8);
+
         match arg_types {
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
+            [is_utf8()] => Ok(()),
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
                 match map_field.data_type() {
                     DataType::Struct(fields) => {

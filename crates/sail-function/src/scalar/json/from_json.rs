@@ -19,17 +19,46 @@ use super::data_type::parse_spark_data_type;
 use super::SailToArrayDataType;
 use crate::functions_nested_utils::downcast_arg;
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkFromJson {
+    signature: Signature,
+}
+
+impl Default for SparkFromJson {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkFromJson {
+    pub const FROM_JSON_NAME: &'static str = "from_json";
+
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+        }
+    }
+
+    pub fn validate_args_len<T>(args: &[T]) -> Result<()> {
+        if args.len() < 2 || args.len() > 3 {
+            return plan_err!(
+                "function `{}` expected 2 or 3 args but got {}",
+                Self::FROM_JSON_NAME,
+                args.len()
+            );
+        };
+        Ok(())
+    }
+}
+
+
 impl ScalarUDFImpl for SparkFromJson {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     fn name(&self) -> &str {
-        "from_json"
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
+        Self::FROM_JSON_NAME
     }
 
     fn signature(&self) -> &Signature {
@@ -329,27 +358,6 @@ impl Default for SparkFromJsonOptions {
         Self {
             mode: Default::default(),
             timestamp_format: SparkFromJsonOptions::convert_format("yyyy-MM-ddTHH:mm:ss"),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkFromJson {
-    signature: Signature,
-    aliases: [String; 1],
-}
-
-impl Default for SparkFromJson {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SparkFromJson {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::user_defined(Volatility::Immutable),
-            aliases: ["from_json".to_string()],
         }
     }
 }
