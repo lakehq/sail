@@ -19,6 +19,7 @@ use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
+use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractAll;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
@@ -297,6 +298,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("overlay", F::var_arg(overlay)),
         ("position", F::custom(position)),
         ("printf", F::udf(FormatStringFunc::new())),
+        ("quote", F::udf(SparkQuote::new())),
         ("randstr", F::udf(Randstr::new())),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::custom(regexp_extract)),

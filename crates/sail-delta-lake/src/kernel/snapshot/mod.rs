@@ -56,7 +56,7 @@ use crate::table::{
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-mod materialize;
+pub(crate) mod materialize;
 mod stats;
 
 pub struct DeltaSnapshot {
@@ -901,7 +901,7 @@ mod tests {
     use url::Url;
 
     use super::DeltaSnapshot;
-    use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+    use crate::datasource::DeltaScanConfig;
     use crate::kernel::DeltaSnapshotConfig;
     use crate::logical::table_source::DeltaTableSource;
     use crate::spec::{
@@ -1253,39 +1253,14 @@ mod tests {
     }
 
     #[test]
-    fn delta_table_provider_rejects_unsupported_reader_features() {
-        let protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::DeletionVectors]),
-            Some(vec![TableFeature::DeletionVectors]),
-        );
-        let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
-
-        let result =
-            DeltaTableProvider::try_new(snapshot, test_log_store(), DeltaScanConfig::default());
-        assert!(
-            result.is_err(),
-            "provider creation should reject unsupported reader features"
-        );
-        let err = match result {
-            Err(err) => err,
-            Ok(_) => return,
-        };
-
-        assert!(matches!(
-            err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
-        ));
-    }
-
-    #[test]
     fn delta_table_source_rejects_unsupported_reader_features() {
+        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
+        // Use it to verify that the source correctly rejects tables with unsupported features.
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::DeletionVectors]),
-            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1302,7 +1277,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("VacuumProtocolCheck")
         ));
     }
 

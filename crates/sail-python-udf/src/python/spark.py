@@ -1011,3 +1011,82 @@ class PySparkArrowTableUdf:
                         yield ()
                 else:
                     yield ()
+
+
+def analyze_udtf(handler, arguments):
+    """
+    Call the Python UDTF's ``analyze`` static method to determine the return type.
+
+    Parameters
+    ----------
+    handler : type
+        The UDTF class (already loaded and unpickled).
+    arguments : list of tuples (arrow_type, is_constant, value_array, kwarg_name, is_table)
+        - arrow_type: a PyArrow data type for this argument
+        - is_constant: bool, whether the argument is a constant expression
+        - value_array: a single-element PyArrow array with the literal value, or None
+        - kwarg_name: str or None, the keyword argument name if applicable
+        - is_table: bool, whether the argument is a TABLE argument
+
+    Returns
+    -------
+    pa.Schema
+        A PyArrow schema representing the UDTF's return type.
+    """
+    import inspect
+    from textwrap import dedent
+
+    from pyspark.sql.pandas.types import from_arrow_type, to_arrow_schema
+    from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
+
+    args = []
+    kwargs = {}
+
+    for arrow_type, is_constant, value_array, kwarg_name, is_table in arguments:
+        spark_type = from_arrow_type(arrow_type)
+        value = value_array.to_pylist()[0] if value_array is not None else None
+        arg = AnalyzeArgument(
+            dataType=spark_type,
+            value=value,
+            isTable=is_table,
+            isConstantExpression=is_constant,
+        )
+        if kwarg_name is not None:
+            kwargs[kwarg_name] = arg
+        else:
+            args.append(arg)
+
+    udtf_name = getattr(handler, "__name__", "")
+    error_prefix = f"Failed to evaluate the user-defined table function '{udtf_name}'"
+
+    def format_error(msg):
+        return dedent(msg).replace("\n", " ")
+
+    # Check that the arguments match the analyze() signature before calling it.
+    try:
+        inspect.signature(handler.analyze).bind(*args, **kwargs)
+    except TypeError as e:
+        raise TypeError(
+            format_error(
+                f"""
+                {error_prefix} because the function arguments did not match the expected
+                signature of the static 'analyze' method ({e}). Please update the query so that
+                this table function call provides arguments matching the expected signature, or
+                else update the table function so that its static 'analyze' method accepts the
+                provided arguments, and then try the query again."""
+            )
+        ) from e
+
+    result = handler.analyze(*args, **kwargs)
+
+    if not isinstance(result, AnalyzeResult):
+        raise TypeError(
+            format_error(
+                f"""
+                {error_prefix} because the static 'analyze' method expects a result of type
+                pyspark.sql.udtf.AnalyzeResult, but instead this method returned a value of
+                type: {type(result)}"""
+            )
+        )
+
+    return to_arrow_schema(result.schema)

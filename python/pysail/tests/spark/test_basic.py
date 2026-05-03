@@ -264,42 +264,50 @@ def test_write_partitioned_parquet(spark, df, tmpdir):
     assert_frame_equal(expected, out.toPandas(), check_dtype=False)
 
 
-def test_write_csv(spark, simple_df, tmpdir):
-    path = str(tmpdir.join("simple_df_0.csv"))
+@pytest.mark.parametrize("infer_schema", [True, False])
+def test_write_csv(spark, simple_df, tmpdir, infer_schema):
+    # `simple_df` is `a INT, b STRING`. Spark's `inferSchema` default is
+    # `False`, so a default round-trip reads `a` back as STRING. The test
+    # is parametrized to pin both behaviors.
+    # `inferSchema=True` preserves types; `False` (the Spark default) reads
+    # every column back as STRING.
+    expected_typed = simple_df.toPandas() if infer_schema else simple_df.toPandas().astype(str)
+
+    path = str(tmpdir.join(f"simple_df_0_{infer_schema}.csv"))
     simple_df.write.csv(path)
-    expected = simple_df.toPandas()
+    expected = expected_typed.copy()
     expected.columns = [f"_c{i}" for i in range(expected.shape[1])]
     assert_frame_equal(
         expected,
-        spark.read.csv(path).sort("_c0").toPandas(),
+        spark.read.option("inferSchema", infer_schema).csv(path).sort("_c0").toPandas(),
         check_dtype=False,
     )
 
-    path = str(tmpdir.join("simple_df_1.csv"))
+    path = str(tmpdir.join(f"simple_df_1_{infer_schema}.csv"))
     simple_df.write.csv(path, header=False)
-    expected = simple_df.toPandas()
+    expected = expected_typed.copy()
     expected.columns = [f"_c{i}" for i in range(expected.shape[1])]
     assert_frame_equal(
         expected,
-        spark.read.csv(path).sort("_c0").toPandas(),
+        spark.read.option("inferSchema", infer_schema).csv(path).sort("_c0").toPandas(),
         check_dtype=False,
     )
 
-    path = str(tmpdir.join("simple_df_2.csv"))
+    path = str(tmpdir.join(f"simple_df_2_{infer_schema}.csv"))
     simple_df.write.csv(path)
-    expected = simple_df.toPandas()
+    expected = expected_typed.copy()
     expected.columns = [f"_c{i}" for i in range(expected.shape[1])]
     assert_frame_equal(
         expected,
-        spark.read.csv(path, header=False).sort("_c0").toPandas(),
+        spark.read.option("inferSchema", infer_schema).csv(path, header=False).sort("_c0").toPandas(),
         check_dtype=False,
     )
 
-    path = str(tmpdir.join("simple_df_3.csv"))
+    path = str(tmpdir.join(f"simple_df_3_{infer_schema}.csv"))
     simple_df.write.csv(path, header=True)
     assert_frame_equal(
-        simple_df.toPandas(),
-        spark.read.csv(path, header=True).sort("a").toPandas(),
+        expected_typed,
+        spark.read.option("inferSchema", infer_schema).csv(path, header=True).sort("a").toPandas(),
         check_dtype=False,
     )
 

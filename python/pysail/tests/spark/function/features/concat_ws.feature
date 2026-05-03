@@ -47,6 +47,33 @@ Feature: concat_ws function
         | result  |
         | NULL    |
 
+    Scenario: concat_ws coerces integer arguments to string
+      When query
+        """
+        SELECT concat_ws('-', 'a', 1, 2) AS result
+        """
+      Then query result
+        | result  |
+        | a-1-2   |
+
+    Scenario: concat_ws coerces double arguments to string
+      When query
+        """
+        SELECT concat_ws('-', 'a', 1.5) AS result
+        """
+      Then query result
+        | result  |
+        | a-1.5   |
+
+    Scenario: concat_ws coerces boolean arguments to string
+      When query
+        """
+        SELECT concat_ws('-', 'a', true, false) AS result
+        """
+      Then query result
+        | result         |
+        | a-true-false   |
+
   Rule: concat_ws with array arguments
 
     Scenario: concat_ws with array argument

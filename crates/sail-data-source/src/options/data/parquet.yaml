@@ -6,6 +6,31 @@
 # TODO: Spark global: https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#configuration
 # TODO: DataFusion `column_specific_options` and `key_value_metadata`
 
+- key: extension
+  description: |
+    (Reading) The file extension used to filter files when listing a
+    directory of Parquet files. Defaults to `.parquet`. Setting this to
+    an empty string disables extension filtering entirely, which allows
+    reading Parquet files written under non-standard suffixes (e.g. `.hive`).
+  default:
+    value: ".parquet"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - extension
+        - fileExtension
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.extension
+        - option.fileExtension
+      parser: crate::options::parsers::parse_string
+
 - key: enable_page_index
   description: |
     (Reading) Whether to enable page index when reading Parquet files.
