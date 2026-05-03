@@ -71,6 +71,13 @@ impl ScalarUDFImpl for SparkDateTrunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let mut args = args;
+        if let Some(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))) = args.args.first() {
+            let normalized = normalize_unit(&s.to_lowercase()).to_string();
+            if normalized != *s {
+                args.args[0] = ColumnarValue::Scalar(ScalarValue::Utf8(Some(normalized)));
+            }
+        }
         datafusion::functions::datetime::date_trunc().invoke_with_args(args)
     }
 
