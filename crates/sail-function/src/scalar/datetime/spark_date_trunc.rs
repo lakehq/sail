@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDateTime, Timelike};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
-use datafusion_common::types::{logical_string, NativeType};
+use datafusion_common::types::{logical_date, logical_string, NativeType};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
@@ -34,7 +34,10 @@ impl SparkDateTrunc {
                     Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                     Coercion::new_implicit(
                         TypeSignatureClass::Timestamp,
-                        vec![TypeSignatureClass::Native(logical_string())],
+                        vec![
+                            TypeSignatureClass::Native(logical_date()),
+                            TypeSignatureClass::Native(logical_string()),
+                        ],
                         NativeType::Timestamp(TimeUnit::Microsecond, None),
                     ),
                 ],

@@ -369,7 +369,6 @@ Feature: DATE_TRUNC preserves timestamp type
 
   Rule: DATE input is coerced to TIMESTAMP
 
-    @sail-bug
     Scenario: date_trunc accepts DATE input and returns TIMESTAMP
       When query
         """
