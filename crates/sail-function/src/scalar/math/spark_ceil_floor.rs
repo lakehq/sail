@@ -9,15 +9,10 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::util::display::FormatOptions;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::expr_fn::cast;
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::preimage::PreimageResult;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use num::integer::{div_ceil, div_floor};
-use num::traits::CheckedAdd;
 
 use crate::error::{
     generic_exec_err, generic_internal_err, invalid_arg_count_exec_err,
@@ -257,19 +252,6 @@ impl ScalarUDFImpl for SparkCeil {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         ceil_floor_coerce_types("ceil", arg_types)
     }
-
-    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        simplify_ceil_floor("spark_ceil", args, info)
-    }
-
-    // NOTE: no `preimage` hook for `ceil`. The preimage of `ceil(x) = N` is
-    // `(N - 1, N]` (right-closed, left-open), but `PreimageResult::Range` is
-    // `[lower, upper)` (left-closed, right-open). There is no [lower, upper)
-    // that exactly represents (N - 1, N]: including N - 1 is wrong
-    // (`ceil(N - 1) = N - 1`, not N), excluding N is wrong (`ceil(N) = N`).
-    // Any rewrite would be unsound. Upstream DF v53 skips this on `CeilFunc`
-    // for the same reason. Filter pushdown for `ceil` would require extending
-    // `PreimageResult` to support right-closed intervals.
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -330,50 +312,6 @@ impl ScalarUDFImpl for SparkFloor {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         ceil_floor_coerce_types("floor", arg_types)
     }
-
-    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        simplify_ceil_floor("spark_floor", args, info)
-    }
-
-    fn preimage(
-        &self,
-        args: &[Expr],
-        lit_expr: &Expr,
-        info: &SimplifyContext,
-    ) -> Result<PreimageResult> {
-        preimage_floor(args, lit_expr, info)
-    }
-}
-
-/// Algebraic simplifications for `ceil` and `floor`:
-/// - `f(f(x)) = f(x)` — idempotent (same-function nesting).
-/// - `f(int_expr) = cast(int_expr AS BIGINT)` (1-arg only) — no rounding on integers.
-fn simplify_ceil_floor(
-    self_name: &str,
-    args: Vec<Expr>,
-    info: &SimplifyContext,
-) -> Result<ExprSimplifyResult> {
-    if args.len() != 1 {
-        return Ok(ExprSimplifyResult::Original(args));
-    }
-    let arg = &args[0];
-    if let Expr::ScalarFunction(inner) = arg {
-        if inner.func.name() == self_name {
-            return Ok(ExprSimplifyResult::Simplified(arg.clone()));
-        }
-    }
-    // Int-identity fold: ceil(int) = int, so rewrite to a cast (to get the
-    // BIGINT return type Spark expects). `coerce_types` runs before simplify
-    // and narrows UInt64 → Int64 (and the other unsigned → signed widenings),
-    // so `is_integer()` here only ever matches {Int8, Int16, Int32, Int64}.
-    // All four widen cleanly to Int64 — no overflow risk.
-    if info.get_data_type(arg)?.is_integer() {
-        return Ok(ExprSimplifyResult::Simplified(cast(
-            arg.clone(),
-            DataType::Int64,
-        )));
-    }
-    Ok(ExprSimplifyResult::Original(args))
 }
 
 /// Safe cast options: overflow becomes NULL instead of erroring. Used in
@@ -744,151 +682,6 @@ fn mask_non_finite_f64(arg: &ColumnarValue) -> ColumnarValue {
     }
 }
 
-/// Preimage for `floor(x) = N`: the set of `x` with `floor(x) = N` is exactly the
-/// half-open interval `[N, N + 1)`, which matches the contract of
-/// `PreimageResult::Range`. Enables the logical simplifier to rewrite
-/// `WHERE floor(col) = N` into `WHERE col >= N AND col < N + 1`, dropping the
-/// UDF call in the filter and unlocking downstream pruning (min/max stats,
-/// `PruningPredicate`).
-///
-/// Only the 1-arg form (`floor(x)`) is handled. The 2-arg form
-/// `floor(x, target_scale)` returns a Decimal128 whose preimage still fits a
-/// half-open interval in principle, but the literal on the RHS would need to
-/// match `(precision, scale)` exactly, and the extra complexity isn't justified
-/// until we see a real workload.
-///
-/// Returns `PreimageResult::None` whenever the rewrite would be unsound:
-/// - non-integer literal (e.g. `floor(x) = 1.5` has no solution),
-/// - NaN / Infinity,
-/// - overflow of `N + 1` at the primitive's MAX,
-/// - unsupported literal type (strings, bools, etc.).
-fn preimage_floor(
-    args: &[Expr],
-    lit_expr: &Expr,
-    info: &SimplifyContext,
-) -> Result<PreimageResult> {
-    if args.len() != 1 {
-        return Ok(PreimageResult::None);
-    }
-    let Expr::Literal(lit_value, _) = lit_expr else {
-        return Ok(PreimageResult::None);
-    };
-    // Spark's `floor(x)` returns an integer, so a non-integer RHS means the
-    // equality has no solution and the rewrite must bail.
-    let Some(rhs) = lit_as_integer(lit_value) else {
-        return Ok(PreimageResult::None);
-    };
-    // The returned interval must match `args[0]`'s data type; the rewrite emits
-    // `args[0] >= lower AND args[0] < upper` and DataFusion's interval graph
-    // rejects mismatched types (e.g. Float64 column vs Int64 literal).
-    let input_type = info.get_data_type(&args[0])?;
-
-    let bounds = match &input_type {
-        DataType::Float64 => float_bounds(rhs).map(|(lo, hi)| {
-            (
-                ScalarValue::Float64(Some(lo)),
-                ScalarValue::Float64(Some(hi)),
-            )
-        }),
-        DataType::Float32 => float_bounds(rhs).and_then(|(lo, hi)| {
-            let lo32 = lo as f32;
-            let hi32 = hi as f32;
-            // f32 can only represent integers exactly up to 2^24. Reject when
-            // the round-trip would collapse the interval.
-            if (lo32 as f64) != lo || (hi32 as f64) != hi || hi32 <= lo32 {
-                None
-            } else {
-                Some((
-                    ScalarValue::Float32(Some(lo32)),
-                    ScalarValue::Float32(Some(hi32)),
-                ))
-            }
-        }),
-        DataType::Int8 => int_bounds::<i8>(rhs)
-            .map(|(lo, hi)| (ScalarValue::Int8(Some(lo)), ScalarValue::Int8(Some(hi)))),
-        DataType::Int16 => int_bounds::<i16>(rhs)
-            .map(|(lo, hi)| (ScalarValue::Int16(Some(lo)), ScalarValue::Int16(Some(hi)))),
-        DataType::Int32 => int_bounds::<i32>(rhs)
-            .map(|(lo, hi)| (ScalarValue::Int32(Some(lo)), ScalarValue::Int32(Some(hi)))),
-        DataType::Int64 => int_bounds::<i64>(rhs)
-            .map(|(lo, hi)| (ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi)))),
-        DataType::Decimal128(precision, scale) => decimal128_bounds(rhs, *precision, *scale),
-        _ => None,
-    };
-
-    let Some((lower, upper)) = bounds else {
-        return Ok(PreimageResult::None);
-    };
-    Ok(PreimageResult::Range {
-        expr: args[0].clone(),
-        interval: Box::new(Interval::try_new(lower, upper)?),
-    })
-}
-
-/// Extract the literal RHS as an integer. `floor` produces integer-valued
-/// results, so a non-integer literal means the equality is unsatisfiable and
-/// the rewrite must return `None`.
-fn lit_as_integer(v: &ScalarValue) -> Option<i128> {
-    match v {
-        ScalarValue::Int8(Some(n)) => Some(*n as i128),
-        ScalarValue::Int16(Some(n)) => Some(*n as i128),
-        ScalarValue::Int32(Some(n)) => Some(*n as i128),
-        ScalarValue::Int64(Some(n)) => Some(*n as i128),
-        ScalarValue::Float32(Some(n)) if n.is_finite() && n.fract() == 0.0 => Some(*n as i128),
-        ScalarValue::Float64(Some(n)) if n.is_finite() && n.fract() == 0.0 => Some(*n as i128),
-        ScalarValue::Decimal128(Some(n), _, 0) => Some(*n),
-        ScalarValue::Decimal128(Some(n), _, scale) if *scale > 0 => {
-            let pow = 10_i128.checked_pow(*scale as u32)?;
-            if n % pow == 0 {
-                Some(n / pow)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-fn float_bounds(n: i128) -> Option<(f64, f64)> {
-    let lo = n as f64;
-    let hi = n.checked_add(1).map(|m| m as f64)?;
-    if !lo.is_finite() || !hi.is_finite() || hi <= lo {
-        return None;
-    }
-    Some((lo, hi))
-}
-
-fn int_bounds<T>(n: i128) -> Option<(T, T)>
-where
-    T: TryFrom<i128> + CheckedAdd + num::One,
-{
-    let lo = T::try_from(n).ok()?;
-    let hi = lo.checked_add(&T::one())?;
-    Some((lo, hi))
-}
-
-fn decimal128_bounds(n: i128, precision: u8, scale: i8) -> Option<(ScalarValue, ScalarValue)> {
-    if scale < 0 {
-        return None;
-    }
-    // Convert the integer `n` to Decimal128 stored form at `scale`:
-    // value_stored = n * 10^scale. Then width-1 unit at `scale` is also `10^scale`.
-    let step = 10_i128.checked_pow(scale as u32)?;
-    let lo = n.checked_mul(step)?;
-    let hi = lo.checked_add(step)?;
-    Some((
-        ScalarValue::Decimal128(Some(lo), precision, scale),
-        ScalarValue::Decimal128(Some(hi), precision, scale),
-    ))
-}
-
-/// Scale a Decimal128 value and apply ceil/floor rounding. Uses
-/// `pow_wrapping` rather than `pow` because the caller is expected to guard
-/// exponents to ≤ 37 (see `return_field_from_args` which rejects
-/// `target_scale < -37`, and `DECIMAL128_MAX_SCALE = 38` which bounds input
-/// scale). 10^37 fits in i128, so the wrap branch is unreachable under those
-/// guards — any actual overflow would indicate a guard bypass (bug).
-#[inline]
 fn ceil_floor_with_target_scale(name: &str, decimal: i128, scale: i8, target_scale: i32) -> i128 {
     // Round to powers of 10 to the left of decimal point when target_scale < 0
     if target_scale < 0 {
