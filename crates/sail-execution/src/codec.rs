@@ -124,6 +124,7 @@ use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
@@ -2215,6 +2216,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
+            "spark_date_trunc" | "date_trunc" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new())))
+            }
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
@@ -2354,6 +2358,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkJsonToVariantUdf>()
             || node_inner.is::<SparkToVariantObjectUdf>()
             || node_inner.is::<SparkSchemaOfVariantUdf>()
+            || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
