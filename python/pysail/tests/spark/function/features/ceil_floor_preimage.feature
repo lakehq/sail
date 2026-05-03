@@ -94,7 +94,7 @@ Feature: ceil() / floor() — preimage hook (filter pushdown)
         | c |
         | 2 |
 
-    Scenario: WHERE floor(col) != N excludes correct rows
+    Scenario: WHERE floor(col) != N keeps rows where floor is not N
       Given statement
         """
         CREATE OR REPLACE TEMP VIEW vals AS SELECT * FROM VALUES
