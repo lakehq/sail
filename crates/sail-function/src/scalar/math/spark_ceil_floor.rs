@@ -7,8 +7,10 @@ use datafusion::arrow::datatypes::{
     Int64Type, Int8Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    expr, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use num::integer::{div_ceil, div_floor};
 
@@ -173,6 +175,37 @@ fn get_return_type_precision_scale(return_type: &DataType) -> Result<(u8, i8)> {
     }
 }
 
+fn ceil_floor_simplify(
+    name: &str,
+    mut args: Vec<Expr>,
+    info: &SimplifyContext,
+) -> Result<ExprSimplifyResult> {
+    // Only simplify the 1-arg form; 2-arg (with scale) is a genuine rounding op.
+    if args.len() != 1 {
+        return Ok(ExprSimplifyResult::Original(args));
+    }
+    let arg = args.remove(0);
+    // Integer identity: ceil/floor of an integer is the integer itself.
+    // The 1-arg return type is always Int64, so narrow types need a cast.
+    match info.get_data_type(&arg)? {
+        DataType::Int64 => return Ok(ExprSimplifyResult::Simplified(arg)),
+        DataType::Int8 | DataType::Int16 | DataType::Int32 => {
+            return Ok(ExprSimplifyResult::Simplified(Expr::Cast(expr::Cast {
+                expr: Box::new(arg),
+                data_type: DataType::Int64,
+            })));
+        }
+        _ => {}
+    }
+    // Idempotence: floor(floor(x)) = floor(x), ceil(ceil(x)) = ceil(x).
+    if let Expr::ScalarFunction(ref func) = arg {
+        if func.func.name() == name && func.args.len() == 1 {
+            return Ok(ExprSimplifyResult::Simplified(arg));
+        }
+    }
+    Ok(ExprSimplifyResult::Original(vec![arg]))
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
@@ -213,6 +246,10 @@ impl ScalarUDFImpl for SparkCeil {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         ceil_floor_return_type_from_args("ceil", args)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        ceil_floor_simplify("spark_ceil", args, info)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -282,6 +319,10 @@ impl ScalarUDFImpl for SparkFloor {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         ceil_floor_return_type_from_args("floor", args)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        ceil_floor_simplify("spark_floor", args, info)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
