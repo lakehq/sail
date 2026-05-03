@@ -1435,7 +1435,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
-                        external: false,
+                        external: true,
                         columns,
                         comment: None,
                         constraints: vec![],
@@ -1473,7 +1473,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
-                        external: false,
+                        external: path.is_some(),
                         columns,
                         comment: description,
                         constraints: vec![],
@@ -2235,6 +2235,113 @@ mod tests {
                 ));
             }
             _ => return Err(SparkError::internal("expected merge into command")),
+        }
+        Ok(())
+    }
+
+    fn int64_schema() -> sc::DataType {
+        use sc::data_type;
+        sc::DataType {
+            kind: Some(data_type::Kind::Struct(data_type::Struct {
+                fields: vec![data_type::StructField {
+                    name: "id".to_string(),
+                    data_type: Some(sc::DataType {
+                        kind: Some(data_type::Kind::Long(data_type::Long {
+                            type_variation_reference: 0,
+                        })),
+                    }),
+                    nullable: true,
+                    metadata: None,
+                }],
+                type_variation_reference: 0,
+            })),
+        }
+    }
+
+    fn catalog_command(cat_type: sc::catalog::CatType) -> sc::Catalog {
+        sc::Catalog {
+            cat_type: Some(cat_type),
+        }
+    }
+
+    #[test]
+    fn test_create_external_table_sets_external_true() -> SparkResult<()> {
+        let catalog = catalog_command(sc::catalog::CatType::CreateExternalTable(
+            sc::CreateExternalTable {
+                table_name: "db.items".to_string(),
+                path: Some("s3://warehouse/items".to_string()),
+                source: Some("parquet".to_string()),
+                schema: Some(int64_schema()),
+                options: Default::default(),
+            },
+        ));
+        let node: spec::CommandNode = catalog.try_into()?;
+        match node {
+            spec::CommandNode::CreateTable { definition, .. } => {
+                assert!(
+                    definition.external,
+                    "CreateExternalTable should set external=true, got false"
+                );
+            }
+            other => {
+                return Err(SparkError::internal(format!(
+                    "expected CreateTable, got {other:?}"
+                )))
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_table_with_path_sets_external_true() -> SparkResult<()> {
+        let catalog = catalog_command(sc::catalog::CatType::CreateTable(sc::CreateTable {
+            table_name: "db.items".to_string(),
+            path: Some("s3://warehouse/items".to_string()),
+            source: Some("parquet".to_string()),
+            description: None,
+            schema: Some(int64_schema()),
+            options: Default::default(),
+        }));
+        let node: spec::CommandNode = catalog.try_into()?;
+        match node {
+            spec::CommandNode::CreateTable { definition, .. } => {
+                assert!(
+                    definition.external,
+                    "CreateTable with path should set external=true, got false"
+                );
+            }
+            other => {
+                return Err(SparkError::internal(format!(
+                    "expected CreateTable, got {other:?}"
+                )))
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_table_without_path_sets_external_false() -> SparkResult<()> {
+        let catalog = catalog_command(sc::catalog::CatType::CreateTable(sc::CreateTable {
+            table_name: "db.items".to_string(),
+            path: None,
+            source: Some("parquet".to_string()),
+            description: None,
+            schema: Some(int64_schema()),
+            options: Default::default(),
+        }));
+        let node: spec::CommandNode = catalog.try_into()?;
+        match node {
+            spec::CommandNode::CreateTable { definition, .. } => {
+                assert!(
+                    !definition.external,
+                    "CreateTable without path should set external=false, got true"
+                );
+            }
+            other => {
+                return Err(SparkError::internal(format!(
+                    "expected CreateTable, got {other:?}"
+                )))
+            }
         }
         Ok(())
     }

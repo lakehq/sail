@@ -422,3 +422,28 @@ def test_sail_alters_datasource_table_location_spark_reads_new_path(
     assert _scala_option_to_string(spark_table.storage().locationUri()) == new_location
     ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in ref_rows] == [(2, "new")]
+
+
+def test_sail_creates_external_table_via_catalog_api(
+    hms_s3_spark: SparkSession,
+    reference_spark_s3: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Sail creates an external table via spark.catalog API; Spark reads it back as EXTERNAL."""
+    table = "roundtrip_catalog_api_external"
+    table_fqn = f"{hms_s3_database}.{table}"
+    location = f"s3://hms-warehouse/{hms_s3_database}/{table}"
+
+    hms_s3_spark.catalog.createTable(
+        table_fqn,
+        path=location,
+        source="parquet",
+        schema="id INT, name STRING",
+    )
+
+    _assert_reference_spark_table(
+        reference_spark_s3,
+        hms_s3_database,
+        table,
+        table_type="EXTERNAL",
+    )
