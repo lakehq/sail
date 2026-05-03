@@ -10,15 +10,6 @@ data:
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, fetch_time=<metric>, repartition_time=<metric>, send_time=<metric>], statistics=[Rows=Inexact(5), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(0.5)) Max=Inexact(Float64(10.5)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]], schema=[v:Float64;N]
             DataSourceExec: file_groups={1 group: [[<tmp>/explain_combined_filter/<id>_0.zst.parquet]]}, projection=[v], file_type=parquet, predicate=CAST(v@0 AS Decimal128(30, 15)) > Some(2000000000000000),30,15 AND spark_ceil(v@0) > 2, pruning_predicate=v_null_count@1 != row_count@2 AND CAST(v_max@0 AS Decimal128(30, 15)) > Some(2000000000000000),30,15, required_guarantees=[], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, files_ranges_pruned_statistics=<metric>, row_groups_pruned_statistics=<metric>, row_groups_pruned_bloom_filter=<metric>, page_index_pages_pruned=<metric>, page_index_rows_pruned=<metric>, limit_pruned_row_groups=<metric>, batches_split=<metric>, bytes_scanned=<metric>, file_open_errors=<metric>, file_scan_errors=<metric>, num_predicate_creation_errors=<metric>, predicate_evaluation_errors=<metric>, pushdown_rows_matched=<metric>, pushdown_rows_pruned=<metric>, predicate_cache_inner_records=<metric>, predicate_cache_records=<metric>, bloom_filter_eval_time=<metric>, metadata_load_time=<metric>, page_index_eval_time=<metric>, row_pushdown_eval_time=<metric>, statistics_eval_time=<metric>, time_elapsed_opening=<metric>, time_elapsed_processing=<metric>, time_elapsed_scanning_total=<metric>, time_elapsed_scanning_until_data=<metric>, scan_efficiency_ratio=<metric>], statistics=[Rows=Inexact(5), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(0.5)) Max=Inexact(Float64(10.5)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]], schema=[v:Float64;N]
 ---
-name: "test_explain_floor__n__disjunction_not_expressible_no_preimage_rewrite"
-data:
-  |-
-    == Physical Plan ==
-    ProjectionExec: expr=[#2@0 as v]
-      ProjectionExec: expr=[column1@0 as #2]
-        FilterExec: column1@0 < 1 OR column1@0 >= 2
-          DataSourceExec: partitions=1, partition_sizes=[1]
----
 name: "test_explain_floor__n__rewrites_to_disjunction_v__n_or_v__n1"
 data:
   |-
@@ -27,16 +18,6 @@ data:
       ProjectionExec: expr=[column1@0 as #2]
         FilterExec: column1@0 < 1 OR column1@0 >= 2
           DataSourceExec: partitions=1, partition_sizes=[1]
----
-name: "test_explain_floor_filter_on_parquet_with__does_not_rewrite"
-data:
-  |-
-    == Physical Plan ==
-    ProjectionExec: expr=[#1@0 as v]
-      ProjectionExec: expr=[v@0 as #1]
-        FilterExec: v@0 < 1 OR v@0 >= 2
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[<tmp>/explain_floor_neq/<id>_0.zst.parquet]]}, projection=[v], file_type=parquet, predicate=v@0 < 1 OR v@0 >= 2, pruning_predicate=v_null_count@1 != row_count@2 AND v_min@0 < 1 OR v_null_count@1 != row_count@2 AND v_max@3 >= 2, required_guarantees=[]
 ---
 name: "test_explain_floor_filter_on_parquet_with__rewrites_to_disjunction"
 data:

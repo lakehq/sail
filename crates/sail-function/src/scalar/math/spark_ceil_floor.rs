@@ -745,8 +745,16 @@ fn lit_as_integer(v: &ScalarValue) -> Option<i128> {
         ScalarValue::Int16(Some(n)) => Some(*n as i128),
         ScalarValue::Int32(Some(n)) => Some(*n as i128),
         ScalarValue::Int64(Some(n)) => Some(*n as i128),
-        ScalarValue::Float32(Some(n)) if n.is_finite() && n.fract() == 0.0 => Some(*n as i128),
-        ScalarValue::Float64(Some(n)) if n.is_finite() && n.fract() == 0.0 => Some(*n as i128),
+        ScalarValue::Float32(Some(n)) if n.is_finite() && n.fract() == 0.0 => {
+            // Round-trip check ensures the cast is lossless (guards against saturation
+            // for floats outside i128 range and precision loss for |n| > 2^24).
+            let i = *n as i128;
+            (i as f32 == *n).then_some(i)
+        }
+        ScalarValue::Float64(Some(n)) if n.is_finite() && n.fract() == 0.0 => {
+            let i = *n as i128;
+            (i as f64 == *n).then_some(i)
+        }
         ScalarValue::Decimal128(Some(n), _, 0) => Some(*n),
         ScalarValue::Decimal128(Some(n), _, scale) if *scale > 0 => {
             let pow = 10_i128.checked_pow(*scale as u32)?;
@@ -763,7 +771,9 @@ fn lit_as_integer(v: &ScalarValue) -> Option<i128> {
 fn float_bounds(n: i128) -> Option<(f64, f64)> {
     let lo = n as f64;
     let hi = n.checked_add(1).map(|m| m as f64)?;
-    if !lo.is_finite() || !hi.is_finite() || hi <= lo {
+    // Verify round-trip: if lo rounds (|n| > 2^53), the interval is unsound because
+    // the float representation of lo differs from the integer n.
+    if lo as i128 != n || !lo.is_finite() || !hi.is_finite() || hi <= lo {
         return None;
     }
     Some((lo, hi))
@@ -785,6 +795,12 @@ fn decimal128_bounds(n: i128, precision: u8, scale: i8) -> Option<(ScalarValue, 
     let step = 10_i128.checked_pow(scale as u32)?;
     let lo = n.checked_mul(step)?;
     let hi = lo.checked_add(step)?;
+    // Validate both bounds fit within the declared precision. Use u128 because
+    // 10^38 (max precision) exceeds i128::MAX but fits in u128.
+    let max_unscaled = 10_u128.checked_pow(u32::from(precision))?;
+    if lo.unsigned_abs() >= max_unscaled || hi.unsigned_abs() >= max_unscaled {
+        return None;
+    }
     Some((
         ScalarValue::Decimal128(Some(lo), precision, scale),
         ScalarValue::Decimal128(Some(hi), precision, scale),
