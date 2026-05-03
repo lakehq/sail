@@ -200,6 +200,64 @@ Feature: DATE_TRUNC preserves timestamp type
         """
       Then query plan matches snapshot
 
+  Rule: Spark unit aliases are normalized correctly
+
+    Scenario: date_trunc yy alias truncates to year
+      When query
+        """
+        SELECT date_trunc('yy', TIMESTAMP_NTZ '2026-05-15 10:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-01-01 00:00:00 |
+
+    Scenario: date_trunc yyyy alias truncates to year
+      When query
+        """
+        SELECT date_trunc('yyyy', TIMESTAMP_NTZ '2026-05-15 10:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-01-01 00:00:00 |
+
+    Scenario: date_trunc mm alias truncates to month
+      When query
+        """
+        SELECT date_trunc('mm', TIMESTAMP_NTZ '2026-05-15 10:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-05-01 00:00:00 |
+
+    Scenario: date_trunc mon alias truncates to month
+      When query
+        """
+        SELECT date_trunc('mon', TIMESTAMP_NTZ '2026-05-15 10:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-05-01 00:00:00 |
+
+    Scenario: date_trunc dd alias truncates to day
+      When query
+        """
+        SELECT date_trunc('dd', TIMESTAMP_NTZ '2026-05-15 10:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-05-15 00:00:00 |
+
+    Scenario: date_trunc aliases are case-insensitive
+      When query
+        """
+        SELECT date_trunc('YY', TIMESTAMP_NTZ '2026-05-15 10:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-01-01 00:00:00 |
+
+  Rule: Plan snapshot — filter pushdown on Parquet (preimage)
+
     @sail-only
     Scenario: EXPLAIN date_trunc with non-boundary literal does NOT rewrite
       Given variable location for temporary directory explain_date_trunc_unsat
