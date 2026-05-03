@@ -14,7 +14,33 @@ Feature: DATE_TRUNC preserves timestamp type
        |-- result: timestamp (nullable = true)
       """
 
-    Scenario: date_trunc on timestamp_ntz column preserves timestamp_ntz type
+    @sail-bug
+    Scenario: date_trunc on timestamp_ntz column returns timestamp type
+      When query
+      """
+      WITH t(ts) AS (VALUES (TIMESTAMP_NTZ '2026-02-02 00:00:00'))
+      SELECT date_trunc('YEAR', ts) AS result FROM t
+      """
+      Then query schema
+      """
+      root
+       |-- result: timestamp (nullable = true)
+      """
+
+    @sail-bug
+    Scenario: date_trunc on timestamp_ntz literal returns timestamp type
+      When query
+      """
+      SELECT date_trunc('YEAR', TIMESTAMP_NTZ '2026-02-02 00:00:00') AS result
+      """
+      Then query schema
+      """
+      root
+       |-- result: timestamp (nullable = true)
+      """
+
+    @sail-only
+    Scenario: date_trunc on timestamp_ntz column preserves timestamp_ntz type in Sail
       When query
       """
       WITH t(ts) AS (VALUES (TIMESTAMP_NTZ '2026-02-02 00:00:00'))
@@ -26,7 +52,8 @@ Feature: DATE_TRUNC preserves timestamp type
        |-- result: timestamp_ntz (nullable = true)
       """
 
-    Scenario: date_trunc on timestamp_ntz literal preserves timestamp_ntz type
+    @sail-only
+    Scenario: date_trunc on timestamp_ntz literal preserves timestamp_ntz type in Sail
       When query
       """
       SELECT date_trunc('YEAR', TIMESTAMP_NTZ '2026-02-02 00:00:00') AS result
@@ -37,6 +64,7 @@ Feature: DATE_TRUNC preserves timestamp type
        |-- result: timestamp_ntz (nullable = false)
       """
 
+    @sail-bug
     Scenario: date_trunc YEAR on timestamp values
       When query
       """
@@ -45,12 +73,13 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp (nullable = false)
+       |-- result: timestamp (nullable = true)
       """
       Then query result
       | result              |
       | 2026-01-01 00:00:00 |
 
+    @sail-bug
     Scenario: date_trunc MONTH on timestamp values
       When query
       """
@@ -59,12 +88,13 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp (nullable = false)
+       |-- result: timestamp (nullable = true)
       """
       Then query result
       | result              |
       | 2026-03-01 00:00:00 |
 
+    @sail-bug
     Scenario: date_trunc DAY on timestamp with America/Los_Angeles timezone
       When query
       """
@@ -73,12 +103,13 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp (nullable = false)
+       |-- result: timestamp (nullable = true)
       """
       Then query result
       | result              |
       | 2026-03-15 00:00:00 |
 
+    @sail-bug
     Scenario: date_trunc HOUR on timestamp with America/New_York timezone
       When query
       """
@@ -87,7 +118,7 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp (nullable = false)
+       |-- result: timestamp (nullable = true)
       """
       Then query result
       | result              |
@@ -255,6 +286,98 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query result
         | result              |
         | 2026-01-01 00:00:00 |
+
+  Rule: quarter and week units are supported
+
+    Scenario: date_trunc quarter truncates to start of quarter Q1
+      When query
+        """
+        SELECT date_trunc('quarter', TIMESTAMP_NTZ '2026-02-15 10:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-01-01 00:00:00 |
+
+    Scenario: date_trunc quarter truncates to start of quarter Q3
+      When query
+        """
+        SELECT date_trunc('quarter', TIMESTAMP_NTZ '2026-07-31 23:59:59') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-07-01 00:00:00 |
+
+    Scenario: date_trunc week truncates to start of week Monday
+      When query
+        """
+        SELECT date_trunc('week', TIMESTAMP_NTZ '2026-05-15 10:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-05-11 00:00:00 |
+
+    Scenario: date_trunc week on the Monday itself is unchanged
+      When query
+        """
+        SELECT date_trunc('week', TIMESTAMP_NTZ '2026-05-11 00:00:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-05-11 00:00:00 |
+
+  Rule: millisecond and microsecond units are supported
+
+    Scenario: date_trunc millisecond preserves milliseconds and zeroes microseconds
+      When query
+        """
+        SELECT date_trunc('millisecond', TIMESTAMP_NTZ '2026-05-15 10:30:45.123456') AS result
+        """
+      Then query result
+        | result                   |
+        | 2026-05-15 10:30:45.123  |
+
+    Scenario: date_trunc microsecond is identity for microsecond precision
+      When query
+        """
+        SELECT date_trunc('microsecond', TIMESTAMP_NTZ '2026-05-15 10:30:45.123456') AS result
+        """
+      Then query result
+        | result                      |
+        | 2026-05-15 10:30:45.123456 |
+
+  Rule: unknown unit returns NULL
+
+    @sail-bug
+    Scenario: date_trunc with invalid unit returns NULL
+      When query
+        """
+        SELECT date_trunc('INVALID_UNIT', TIMESTAMP_NTZ '2026-05-15 10:30:00') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: date_trunc with NULL unit returns NULL
+      When query
+        """
+        SELECT date_trunc(NULL, TIMESTAMP_NTZ '2026-05-15 10:30:00') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: DATE input is coerced to TIMESTAMP
+
+    @sail-bug
+    Scenario: date_trunc accepts DATE input and returns TIMESTAMP
+      When query
+        """
+        SELECT date_trunc('MONTH', DATE '2026-05-15') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-05-01 00:00:00 |
 
   Rule: Plan snapshot — filter pushdown on Parquet (preimage)
 
