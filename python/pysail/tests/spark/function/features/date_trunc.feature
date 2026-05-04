@@ -401,6 +401,36 @@ Feature: DATE_TRUNC preserves timestamp type
          |-- result: timestamp (nullable = true)
         """
 
+  Rule: Preimage — NULL rows in the filtered column are excluded
+
+    Scenario: date_trunc YEAR filter excludes NULL ts rows
+      When query
+        """
+        SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-06-15 10:30:00'),
+          (CAST(NULL AS TIMESTAMP_NTZ)),
+          (TIMESTAMP_NTZ '2023-06-15 10:30:00')
+        AS t(ts)
+        WHERE date_trunc('YEAR', ts) = TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        """
+      Then query result
+        | ts                  |
+        | 2024-06-15 10:30:00 |
+
+    Scenario: date_trunc YEAR != filter excludes NULL ts rows
+      When query
+        """
+        SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-06-15 10:30:00'),
+          (CAST(NULL AS TIMESTAMP_NTZ)),
+          (TIMESTAMP_NTZ '2023-06-15 10:30:00')
+        AS t(ts)
+        WHERE date_trunc('YEAR', ts) != TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        """
+      Then query result
+        | ts                  |
+        | 2023-06-15 10:30:00 |
+
   Rule: Plan snapshot — filter pushdown on Parquet (preimage)
 
     @sail-only
