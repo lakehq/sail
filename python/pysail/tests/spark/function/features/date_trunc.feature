@@ -148,6 +148,17 @@ Feature: DATE_TRUNC preserves timestamp type
         """
       Then query plan matches snapshot
 
+    @sail-only
+    Scenario: EXPLAIN WHERE date_trunc YEAR on zoned timestamp does NOT rewrite
+      When query
+        """
+        EXPLAIN SELECT ts FROM VALUES
+          (TIMESTAMP '2024-06-15 10:30:00 UTC')
+          AS t(ts)
+        WHERE date_trunc('YEAR', ts) = TIMESTAMP '2024-01-01 00:00:00 UTC'
+        """
+      Then query plan matches snapshot
+
   Rule: Plan snapshot — filter pushdown on Parquet (preimage)
 
     @sail-only
@@ -172,7 +183,7 @@ Feature: DATE_TRUNC preserves timestamp type
         """
       When query
         """
-        EXPLAIN ANALYZE SELECT ts FROM explain_date_trunc_baseline_parquet
+        EXPLAIN SELECT ts FROM explain_date_trunc_baseline_parquet
         WHERE ts >= TIMESTAMP_NTZ '2024-01-01 00:00:00' AND ts < TIMESTAMP_NTZ '2025-01-01 00:00:00'
         """
       Then query plan matches snapshot
@@ -369,7 +380,7 @@ Feature: DATE_TRUNC preserves timestamp type
 
   Rule: DATE input is coerced to TIMESTAMP
 
-    Scenario: date_trunc accepts DATE input and returns TIMESTAMP
+    Scenario: date_trunc accepts DATE input and returns correct value
       When query
         """
         SELECT date_trunc('MONTH', DATE '2026-05-15') AS result
@@ -377,6 +388,18 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query result
         | result              |
         | 2026-05-01 00:00:00 |
+
+    @sail-bug
+    Scenario: date_trunc on DATE input returns timestamp schema
+      When query
+        """
+        SELECT date_trunc('MONTH', DATE '2026-05-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
 
   Rule: Plan snapshot — filter pushdown on Parquet (preimage)
 

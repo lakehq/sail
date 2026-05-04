@@ -105,8 +105,12 @@ impl ScalarUDFImpl for SparkDateTrunc {
         let Expr::Literal(ts_lit, _) = lit_expr else {
             return Ok(PreimageResult::None);
         };
-        let (micros, tz) = match ts_lit {
-            ScalarValue::TimestampMicrosecond(Some(v), tz) => (*v, tz.clone()),
+        // Only rewrite for timezone-naive timestamps. For zoned timestamps the
+        // bucket boundaries depend on local-time arithmetic (DST, UTC offset),
+        // which bucket_bounds_micros does not account for — returning a wrong
+        // range would silently drop matching rows.
+        let micros = match ts_lit {
+            ScalarValue::TimestampMicrosecond(Some(v), None) => *v,
             _ => return Ok(PreimageResult::None),
         };
 
@@ -114,8 +118,8 @@ impl ScalarUDFImpl for SparkDateTrunc {
             return Ok(PreimageResult::None);
         };
 
-        let lo_sv = ScalarValue::TimestampMicrosecond(Some(lo), tz.clone());
-        let hi_sv = ScalarValue::TimestampMicrosecond(Some(hi), tz);
+        let lo_sv = ScalarValue::TimestampMicrosecond(Some(lo), None);
+        let hi_sv = ScalarValue::TimestampMicrosecond(Some(hi), None);
         Ok(PreimageResult::Range {
             expr: args[1].clone(),
             interval: Box::new(Interval::try_new(lo_sv, hi_sv)?),
