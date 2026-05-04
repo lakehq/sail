@@ -1,15 +1,15 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_physical_expr::Partitioning;
+use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 pub struct RewriteExplicitRepartition {}
@@ -36,18 +36,20 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
         let result = plan.transform_up(|plan| {
             if let Some(node) = plan.as_any().downcast_ref::<ExplicitRepartitionExec>() {
                 let partitioning = node.properties().output_partitioning().clone();
+                let input = node.input().clone();
+                let input_partition_count = input.output_partitioning().partition_count();
                 match partitioning {
-                    Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
-                        Ok(Transformed::yes(Arc::new(RepartitionExec::try_new(
-                            node.input().clone(),
-                            partitioning,
-                        )?)))
+                    Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => Ok(
+                        Transformed::yes(Arc::new(RepartitionExec::try_new(input, partitioning)?)),
+                    ),
+                    Partitioning::UnknownPartitioning(n) if n >= input_partition_count => {
+                        Ok(Transformed::yes(input))
                     }
                     Partitioning::UnknownPartitioning(1) => Ok(Transformed::yes(Arc::new(
-                        CoalescePartitionsExec::new(node.input().clone()),
+                        CoalescePartitionsExec::new(input),
                     ))),
                     Partitioning::UnknownPartitioning(n) => {
-                        internal_err!("unknown explicit repartitioning with {n} partitions")
+                        Ok(Transformed::yes(Arc::new(CoalesceExec::new(input, n))))
                     }
                 }
             } else {
@@ -69,5 +71,111 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
 impl Debug for RewriteExplicitRepartition {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name())
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::config::ConfigOptions;
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::repartition::RepartitionExec;
+    use datafusion::physical_plan::union::UnionExec;
+    use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+    use datafusion_physical_expr::Partitioning;
+    use sail_physical_plan::coalesce::CoalesceExec;
+    use sail_physical_plan::repartition::ExplicitRepartitionExec;
+
+    use super::RewriteExplicitRepartition;
+
+    fn schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
+    }
+
+    fn multi_partition_plan(schema: &Arc<Schema>) -> Arc<dyn ExecutionPlan> {
+        let left = Arc::new(EmptyExec::new(schema.clone())) as Arc<dyn ExecutionPlan>;
+        let right = Arc::new(EmptyExec::new(schema.clone())) as Arc<dyn ExecutionPlan>;
+        UnionExec::try_new(vec![left, right]).unwrap()
+    }
+
+    fn optimize(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        RewriteExplicitRepartition::new()
+            .optimize(plan, &ConfigOptions::default())
+            .unwrap()
+    }
+
+    #[test]
+    fn test_rewrites_unknown_partitioning_to_coalesce_partitions_exec() {
+        let input = multi_partition_plan(&schema());
+        let plan = Arc::new(ExplicitRepartitionExec::new(
+            input,
+            Partitioning::UnknownPartitioning(1),
+        )) as Arc<dyn ExecutionPlan>;
+
+        let optimized = optimize(plan);
+
+        assert!(optimized
+            .as_any()
+            .downcast_ref::<CoalescePartitionsExec>()
+            .is_some());
+        assert_eq!(optimized.output_partitioning().partition_count(), 1);
+    }
+
+    #[test]
+    fn test_rewrites_unknown_partitioning_reduction_to_coalesce_exec() {
+        let input = Arc::new(
+            UnionExec::try_new(vec![
+                Arc::new(EmptyExec::new(schema())) as Arc<dyn ExecutionPlan>,
+                Arc::new(EmptyExec::new(schema())) as Arc<dyn ExecutionPlan>,
+                Arc::new(EmptyExec::new(schema())) as Arc<dyn ExecutionPlan>,
+            ])
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+        let plan = Arc::new(ExplicitRepartitionExec::new(
+            input,
+            Partitioning::UnknownPartitioning(2),
+        )) as Arc<dyn ExecutionPlan>;
+
+        let optimized = optimize(plan);
+
+        let coalesce = optimized.as_any().downcast_ref::<CoalesceExec>().unwrap();
+        assert_eq!(coalesce.output_partitions(), 2);
+        assert_eq!(optimized.output_partitioning().partition_count(), 2);
+    }
+
+    #[test]
+    fn test_rewrites_unknown_partitioning_increase_to_input() {
+        let input = multi_partition_plan(&schema());
+        let plan = Arc::new(ExplicitRepartitionExec::new(
+            input,
+            Partitioning::UnknownPartitioning(4),
+        )) as Arc<dyn ExecutionPlan>;
+
+        let optimized = optimize(plan);
+
+        assert!(optimized.as_any().downcast_ref::<UnionExec>().is_some());
+        assert!(optimized.as_any().downcast_ref::<CoalesceExec>().is_none());
+        assert_eq!(optimized.output_partitioning().partition_count(), 2);
+    }
+
+    #[test]
+    fn test_rewrites_round_robin_partitioning_to_repartition_exec() {
+        let input = multi_partition_plan(&schema());
+        let plan = Arc::new(ExplicitRepartitionExec::new(
+            input,
+            Partitioning::RoundRobinBatch(4),
+        )) as Arc<dyn ExecutionPlan>;
+
+        let optimized = optimize(plan);
+
+        assert!(optimized
+            .as_any()
+            .downcast_ref::<RepartitionExec>()
+            .is_some());
+        assert_eq!(optimized.output_partitioning().partition_count(), 4);
     }
 }

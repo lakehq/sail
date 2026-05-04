@@ -13,12 +13,17 @@ impl PlanResolver<'_> {
         &self,
         input: spec::QueryPlan,
         num_partitions: usize,
+        shuffle: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let expr = input.schema().columns().into_iter().map(col).collect();
+        let expr = if shuffle {
+            input.schema().columns().into_iter().map(col).collect()
+        } else {
+            vec![]
+        };
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(ExplicitRepartitionNode::new(
                 Arc::new(input),

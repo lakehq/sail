@@ -340,8 +340,12 @@ fn plan_explicit_partitioning(
     expressions: &[Expr],
     session_state: &SessionState,
 ) -> datafusion_common::Result<Partitioning> {
+    let input_partition_count = input.properties().output_partitioning().partition_count();
     match (num_partitions, expressions) {
         (Some(0), _) => internal_err!("number of explicit partitions cannot be zero"),
+        (Some(num_partitions), []) => Ok(Partitioning::UnknownPartitioning(
+            num_partitions.min(input_partition_count),
+        )),
         (Some(1), _) => Ok(Partitioning::UnknownPartitioning(1)),
         (Some(_) | None, expressions) => {
             if expressions.is_empty() {
