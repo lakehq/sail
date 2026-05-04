@@ -1,0 +1,10 @@
+# serializer version: 1
+---
+name: "test_explain_order_by_ceil_on_parquet_column_shows_sortexec"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as c]
+      ProjectionExec: expr=[#1@0 as #1]
+        SortExec: expr=[#0@1 ASC], preserve_partitioning=[false]
+          DataSourceExec: file_groups={1 group: [[<tmp>/ceil_sort_parquet/<id>_0.zst.parquet]]}, projection=[spark_ceil(col@0) as #1, col@0 as #0], file_type=parquet
