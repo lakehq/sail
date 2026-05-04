@@ -104,6 +104,28 @@ pub(crate) fn from_ast_function_arguments(
     let mut named_arguments = vec![];
     for arg in args {
         match arg {
+            FunctionArgument::TableArg {
+                expr, partition, ..
+            } => {
+                if !named_arguments.is_empty() {
+                    return Err(SqlError::analysis(
+                        "[UNEXPECTED_POSITIONAL_ARGUMENT] Positional argument follows a named (keyword) argument.",
+                    ));
+                }
+                let table_expr = spec::Expr::Table {
+                    expr: Box::new(spec::Expr::UnresolvedAttribute {
+                        name: from_ast_object_name(expr)?,
+                        plan_id: None,
+                        is_metadata_column: false,
+                    }),
+                };
+                if partition.is_some() {
+                    return Err(SqlError::todo(
+                        "TABLE argument with PARTITION BY or WITH SINGLE PARTITION",
+                    ));
+                }
+                arguments.push(table_expr);
+            }
             FunctionArgument::Named(name, _, expr) => {
                 let expr = from_ast_expression(expr)?;
                 named_arguments.push((name.value.into(), expr));
@@ -505,6 +527,25 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 escape_char,
                 case_insensitive: false,
             })
+        }
+        Expr::Collate(expr, _, collation) => {
+            let expr = from_ast_expression(*expr)?;
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: spec::ObjectName::bare("collate"),
+                arguments: vec![
+                    expr,
+                    spec::Expr::Literal(spec::Literal::Utf8 {
+                        value: Some(collation.value),
+                    }),
+                ],
+                named_arguments: vec![],
+                is_distinct: false,
+                is_user_defined_function: false,
+                is_internal: None,
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
     }
 }

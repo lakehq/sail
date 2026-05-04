@@ -46,6 +46,8 @@ pub enum SparkError {
     InternalError(String),
     #[error("analysis error: {0}")]
     AnalysisError(String),
+    #[error("parse error: {0}")]
+    ParseError(String),
 }
 
 impl SparkError {
@@ -88,7 +90,7 @@ impl From<SqlError> for SparkError {
             SqlError::InvalidArgument(message) => SparkError::InvalidArgument(message),
             SqlError::NotSupported(message) => SparkError::NotSupported(message),
             SqlError::InternalError(message) => SparkError::InternalError(message),
-            SqlError::SqlParserError(e) => SparkError::InvalidArgument(e.to_string()),
+            SqlError::SqlParserError(e) => SparkError::ParseError(e.to_string()),
             SqlError::NotImplemented(message) => SparkError::NotImplemented(message),
             SqlError::AnalysisError(message) => SparkError::AnalysisError(message),
         }
@@ -369,6 +371,7 @@ impl From<SparkError> for Status {
                 SparkThrowable::UnsupportedOperationException(s).into()
             }
             SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
+            SparkError::ParseError(s) => SparkThrowable::ParseException(s).into(),
             e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
             e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
         }

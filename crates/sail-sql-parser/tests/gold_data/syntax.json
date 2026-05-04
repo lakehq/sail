@@ -1632,6 +1632,19 @@
               }
             },
             {
+              "name": "CreateFunctionUsing",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Using)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(FunctionResource, Operator(Comma))"
+                  }
+                ]
+              }
+            },
+            {
               "name": "CreateTableClause",
               "node": {
                 "choice": [
@@ -3074,6 +3087,19 @@
                         "nonTerminal": "Option(PatternEscape)"
                       }
                     ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Box(Expression)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Collate)"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
+                      }
+                    ]
                   }
                 ]
               }
@@ -3150,6 +3176,25 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Table)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Option(TableArgPartition)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Identifier"
                       },
                       {
@@ -3213,6 +3258,47 @@
                   },
                   {
                     "nonTerminal": "Option(OverClause)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "FunctionResource",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "FunctionResourceKind"
+                  },
+                  {
+                    "nonTerminal": "StringLiteral"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "FunctionResourceKind",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Jar)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(File)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Archive)"
+                      }
+                    ]
                   }
                 ]
               }
@@ -3981,6 +4067,14 @@
               }
             },
             {
+              "name": "Keyword(Archive)",
+              "node": {
+                "terminal": {
+                  "keyword": "ARCHIVE"
+                }
+              }
+            },
+            {
               "name": "Keyword(Array)",
               "node": {
                 "terminal": {
@@ -4193,6 +4287,14 @@
               "node": {
                 "terminal": {
                   "keyword": "CODEGEN"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Collate)",
+              "node": {
+                "terminal": {
+                  "keyword": "COLLATE"
                 }
               }
             },
@@ -4605,6 +4707,14 @@
               }
             },
             {
+              "name": "Keyword(File)",
+              "node": {
+                "terminal": {
+                  "keyword": "FILE"
+                }
+              }
+            },
+            {
               "name": "Keyword(Fileformat)",
               "node": {
                 "terminal": {
@@ -4953,6 +5063,14 @@
               "node": {
                 "terminal": {
                   "keyword": "ITEMS"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Jar)",
+              "node": {
+                "terminal": {
+                  "keyword": "JAR"
                 }
               }
             },
@@ -5633,6 +5751,14 @@
               "node": {
                 "terminal": {
                   "keyword": "SIMILAR"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Single)",
+              "node": {
+                "terminal": {
+                  "keyword": "SINGLE"
                 }
               }
             },
@@ -6982,6 +7108,14 @@
               }
             },
             {
+              "name": "Option(CreateFunctionUsing)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "CreateFunctionUsing"
+                }
+              }
+            },
+            {
               "name": "Option(DeleteTableAlias)",
               "node": {
                 "optional": {
@@ -7294,6 +7428,14 @@
               }
             },
             {
+              "name": "Option(OrderByClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "OrderByClause"
+                }
+              }
+            },
+            {
               "name": "Option(OrderDirection)",
               "node": {
                 "optional": {
@@ -7386,6 +7528,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "StringLiteral"
+                }
+              }
+            },
+            {
+              "name": "Option(TableArgPartition)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "TableArgPartition"
                 }
               }
             },
@@ -8484,6 +8634,28 @@
               }
             },
             {
+              "name": "Sequence(FunctionResource, Operator(Comma))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "FunctionResource"
+                  },
+                  {
+                    "oneOrMore": {
+                      "sequence": [
+                        {
+                          "nonTerminal": "Operator(Comma)"
+                        },
+                        {
+                          "nonTerminal": "FunctionResource"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
               "name": "Sequence(GroupingExpr, Operator(Comma))",
               "node": {
                 "sequence": [
@@ -9462,6 +9634,37 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Create)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Or), Keyword(Replace)))"
+                      },
+                      {
+                        "nonTerminal": "Option(Either(Keyword(Temp), Keyword(Temporary)))"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Function)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Keyword(As)"
+                      },
+                      {
+                        "nonTerminal": "StringLiteral"
+                      },
+                      {
+                        "nonTerminal": "Option(CreateFunctionUsing)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Drop)"
                       },
                       {
@@ -9871,6 +10074,45 @@
                   },
                   {
                     "nonTerminal": "Option(Tuple(Keyword(Comment), StringLiteral))"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "TableArgPartition",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Partition)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(By)"
+                      },
+                      {
+                        "nonTerminal": "Sequence(Expression, Operator(Comma))"
+                      },
+                      {
+                        "nonTerminal": "Option(OrderByClause)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(With)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Single)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Partition)"
+                      },
+                      {
+                        "nonTerminal": "Option(OrderByClause)"
+                      }
+                    ]
                   }
                 ]
               }

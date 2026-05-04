@@ -464,6 +464,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::CreateFunction { .. } => Err(SqlError::todo("CREATE FUNCTION")),
         Statement::ShowFunctions { .. } => Err(SqlError::todo("SHOW FUNCTIONS")),
         Statement::Explain {
             explain: _,

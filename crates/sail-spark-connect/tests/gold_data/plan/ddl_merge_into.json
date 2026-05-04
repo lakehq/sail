@@ -2373,7 +2373,7 @@
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN NOT MATCHED BY SOURCE THEN UPDATE *\n      ",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '*'. SQLSTATE: 42601 (line 5, pos 39)\n\n== SQL ==\n\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN NOT MATCHED BY SOURCE THEN UPDATE *\n---------------------------------------^^^\n      \n",
       "output": {
-        "failure": "invalid argument: found * at 148:149 expected 'SET'"
+        "failure": "parse error: found * at 148:149 expected 'SET'"
       }
     },
     {

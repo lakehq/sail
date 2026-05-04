@@ -439,43 +439,43 @@
     {
       "input": "ALTER TABLE t DEFAULT COLLATION sr",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "parse error: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION sr_ci_ai",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "parse error: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION unicode",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "parse error: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION unicode_ci",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "parse error: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION unicode_ci_rtrim",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "parse error: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION utf8_binary",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "parse error: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION utf8_lcase",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "parse error: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
       }
     },
     {
@@ -516,14 +516,14 @@
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'SET'. SQLSTATE: 42601 (line 1, pos 47)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42\n-----------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found SET at 47:50 expected ';', or end of input"
+        "failure": "parse error: found SET at 47:50 expected ';', or end of input"
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT ",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 46)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT \n----------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected expression"
+        "failure": "parse error: found end of input expected expression"
       }
     },
     {
@@ -750,7 +750,7 @@
     {
       "input": "ALTER TABLE table_name ALTER COLUMN\n a.b.c SET NOT NULL,\n d.e.f COMMENT 'new comment',\n x TYPE INT,\n y FIRST",
       "output": {
-        "failure": "invalid argument: found , at 55:56 expected ';', or end of input"
+        "failure": "parse error: found , at 55:56 expected ';', or end of input"
       }
     },
     {
@@ -791,7 +791,7 @@
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bad_type",
       "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"BAD_TYPE\". SQLSTATE: 0A000\n== SQL (line 1, position 48) ==\n...le_name ALTER COLUMN a.b.c TYPE bad_type\n                                   ^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found bad_type at 47:55 expected data type"
+        "failure": "parse error: found bad_type at 47:55 expected data type"
       }
     },
     {
@@ -815,21 +815,21 @@
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'. SQLSTATE: 42601 (line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found COMMENT at 54:61 expected ';', or end of input"
+        "failure": "parse error: found COMMENT at 54:61 expected ';', or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'. SQLSTATE: 42601 (line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found COMMENT at 54:61 expected ';', or end of input"
+        "failure": "parse error: found COMMENT at 54:61 expected ';', or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'. SQLSTATE: 42601 (line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found COMMENT at 54:61 expected ';', or end of input"
+        "failure": "parse error: found COMMENT at 54:61 expected ';', or end of input"
       }
     },
     {
@@ -886,40 +886,40 @@
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT",
       "output": {
-        "failure": "invalid argument: found c at 43:44 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
+        "failure": "parse error: found c at 43:44 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT AFTER other_col",
       "output": {
-        "failure": "invalid argument: found c at 43:44 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
+        "failure": "parse error: found c at 43:44 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT COMMENT 'new_comment'",
       "output": {
-        "failure": "invalid argument: found c at 43:44 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
+        "failure": "parse error: found c at 43:44 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT",
       "exception": "\nRenaming column is not supported in Hive-style ALTER COLUMN, please run RENAME COLUMN instead.\n== SQL (line 1, position 1) ==\nALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found new_name at 43:51 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
+        "failure": "parse error: found new_name at 43:51 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
       "input": "ALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT",
       "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: ALTER TABLE ... PARTITION ... CHANGE COLUMN is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found CHANGE at 41:47 expected 'RENAME', or 'SET'"
+        "failure": "parse error: found CHANGE at 41:47 expected 'RENAME', or 'SET'"
       }
     },
     {
       "input": "ALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)",
       "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: ALTER TABLE ... PARTITION ... REPLACE COLUMNS is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found REPLACE at 41:48 expected 'RENAME', or 'SET'"
+        "failure": "parse error: found REPLACE at 41:48 expected 'RENAME', or 'SET'"
       }
     },
     {

@@ -73,21 +73,21 @@
       "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input: missing 'COLUMNS'. SQLSTATE: 42601 (line 1, pos 46)\n\n== SQL ==\nANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL\n----------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected 'COLUMNS'"
+        "failure": "parse error: found end of input expected 'COLUMNS'"
       }
     },
     {
       "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL COLUMNS key, value",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'key'. SQLSTATE: 42601 (line 1, pos 55)\n\n== SQL ==\nANALYZE TABLE a.b.c COMPUTE STATISTICS FOR ALL COLUMNS key, value\n-------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found key at 55:58 expected ';', or end of input"
+        "failure": "parse error: found key at 55:58 expected ';', or end of input"
       }
     },
     {
       "input": "ANALYZE TABLE a.b.c COMPUTE STATISTICS FOR COLUMNS",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 50)\n\n== SQL ==\nANALYZE TABLE a.b.c COMPUTE STATISTICS FOR COLUMNS\n--------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected identifier"
+        "failure": "parse error: found end of input expected identifier"
       }
     },
     {
@@ -445,7 +445,7 @@
       "input": "ANALYZE TABLES IN a.b.c COMPUTE STATISTICS xxxx",
       "exception": "\n[INVALID_SQL_SYNTAX.ANALYZE_TABLE_UNEXPECTED_NOSCAN] Invalid SQL syntax: ANALYZE TABLE(S) ... COMPUTE STATISTICS ... XXXX must be either NOSCAN or empty. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nANALYZE TABLES IN a.b.c COMPUTE STATISTICS xxxx\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found xxxx at 43:47 expected 'NOSCAN', ';', or end of input"
+        "failure": "parse error: found xxxx at 43:47 expected 'NOSCAN', ';', or end of input"
       }
     },
     {
@@ -492,7 +492,7 @@
       "input": "analyze table a.b.c compute statistics xxxx",
       "exception": "\n[INVALID_SQL_SYNTAX.ANALYZE_TABLE_UNEXPECTED_NOSCAN] Invalid SQL syntax: ANALYZE TABLE(S) ... COMPUTE STATISTICS ... XXXX must be either NOSCAN or empty. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nanalyze table a.b.c compute statistics xxxx\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found xxxx at 39:43 expected 'NOSCAN', 'FOR', ';', or end of input"
+        "failure": "parse error: found xxxx at 39:43 expected 'NOSCAN', 'FOR', ';', or end of input"
       }
     },
     {
@@ -524,7 +524,7 @@
       "input": "analyze table a.b.c partition (a) compute statistics xxxx",
       "exception": "\n[INVALID_SQL_SYNTAX.ANALYZE_TABLE_UNEXPECTED_NOSCAN] Invalid SQL syntax: ANALYZE TABLE(S) ... COMPUTE STATISTICS ... XXXX must be either NOSCAN or empty. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nanalyze table a.b.c partition (a) compute statistics xxxx\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found xxxx at 53:57 expected 'NOSCAN', 'FOR', ';', or end of input"
+        "failure": "parse error: found xxxx at 53:57 expected 'NOSCAN', 'FOR', ';', or end of input"
       }
     }
   ]
