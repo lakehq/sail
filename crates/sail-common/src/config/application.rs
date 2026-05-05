@@ -30,7 +30,7 @@ pub struct AppConfig {
     pub flight: FlightConfig,
     pub python: PythonConfig,
     pub telemetry: TelemetryConfig,
-    pub glue: GlueConfig,
+
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
     /// can only be used for internal configuration.
@@ -433,7 +433,7 @@ pub struct CatalogConfig {
     pub default_catalog: Option<String>,
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
-    pub list: Vec<CatalogType>,
+    pub providers: Vec<CatalogType>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -473,6 +473,8 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_access_token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     Unity {
         name: String,
@@ -485,6 +487,8 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     #[serde(alias = "onelake")]
     OneLake {
@@ -495,6 +499,8 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     Glue {
         name: String,
@@ -502,6 +508,8 @@ pub enum CatalogType {
         region: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     #[serde(alias = "hms", alias = "hive-metastore")]
     HiveMetastore {
@@ -512,6 +520,8 @@ pub enum CatalogType {
         kerberos_service_principal: Option<String>,
         min_sasl_qop: Option<String>,
         connect_timeout_secs: Option<u64>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
 }
 
@@ -589,26 +599,35 @@ impl ClusterConfigEnv {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct GlueConfig {
-    pub cache: GlueCacheConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GlueCacheConfig {
-    pub db: GlueDatabaseCacheConfig,
-    pub table: GlueTableCacheConfig,
-    pub ttl_secs: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GlueDatabaseCacheConfig {
-    pub enable: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GlueTableCacheConfig {
-    pub enable: bool,
+pub struct CatalogCacheConfig {
+    pub database_cache_enabled: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub database_cache_size: Option<usize>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub database_cache_ttl_secs: Option<u64>,
+    pub table_cache_enabled: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub table_cache_size: Option<usize>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub table_cache_ttl_secs: Option<u64>,
 }

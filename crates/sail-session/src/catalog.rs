@@ -5,7 +5,9 @@ use datafusion::common::{plan_datafusion_err, Result};
 use datafusion_common::plan_err;
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
-use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
+use sail_catalog::provider::{
+    CachedCatalogProvider, CatalogProvider, RuntimeAwareCatalogProvider,
+};
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
@@ -13,7 +15,7 @@ use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_onelake::OneLakeCatalogProvider;
 use sail_catalog_system::{SystemCatalogProvider, SYSTEM_CATALOG_NAME};
 use sail_catalog_unity::UnityCatalogProvider;
-use sail_common::config::{AppConfig, CatalogType};
+use sail_common::config::{AppConfig, CatalogCacheConfig, CatalogType};
 use sail_common::runtime::RuntimeHandle;
 use secrecy::ExposeSecret;
 
@@ -23,10 +25,10 @@ pub fn create_catalog_providers(
 ) -> Result<HashMap<String, Arc<dyn CatalogProvider>>> {
     config
         .catalog
-        .list
+        .providers
         .iter()
-        .map(|x| -> CatalogResult<(String, Arc<dyn CatalogProvider>)> {
-            match x {
+        .map(|provider_config| {
+            let (name, provider): (String, Arc<dyn CatalogProvider>) = match provider_config {
                 CatalogType::Memory {
                     name,
                     initial_database,
@@ -37,7 +39,7 @@ pub fn create_catalog_providers(
                         initial_database.clone().try_into()?,
                         initial_database_comment.clone(),
                     );
-                    Ok((name.clone(), Arc::new(provider)))
+                    (name.to_string(), Arc::new(provider))
                 }
                 CatalogType::IcebergRest {
                     name,
@@ -46,6 +48,7 @@ pub fn create_catalog_providers(
                     prefix,
                     oauth_access_token,
                     bearer_access_token,
+                    cache,
                 } => {
                     let mut properties = HashMap::new();
                     properties.insert("uri".to_string(), uri.to_string());
@@ -57,14 +60,14 @@ pub fn create_catalog_providers(
                     }
                     if let Some(oauth_access_token) = oauth_access_token {
                         properties.insert(
-                            "oauth-access-token".to_string(), // Iceberg uses kebab-case
-                            oauth_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
+                            "oauth-access-token".to_string(),
+                            oauth_access_token.expose_secret().to_string(),
                         );
                     }
                     if let Some(bearer_access_token) = bearer_access_token {
                         properties.insert(
-                            "bearer-access-token".to_string(), // Iceberg uses kebab-case
-                            bearer_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
+                            "bearer-access-token".to_string(),
+                            bearer_access_token.expose_secret().to_string(),
                         );
                     }
 
@@ -77,27 +80,28 @@ pub fn create_catalog_providers(
                         runtime.io().clone(),
                     )?;
 
-                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                    (name.to_string(), wrap_catalog(runtime_aware, cache))
                 }
                 CatalogType::Unity {
                     name,
                     uri,
                     default_catalog,
                     token,
+                    cache,
                 } => {
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || UnityCatalogProvider::new(name.to_string(), default_catalog, uri, token),
                         runtime.io().clone(),
                     )?;
 
-                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                    (name.to_string(), wrap_catalog(runtime_aware, cache))
                 }
                 CatalogType::OneLake {
                     name,
                     url,
                     bearer_token,
+                    cache,
                 } => {
-                    // Parse URL format: workspace/item.type (e.g., "duckrun/data.lakehouse", "duckrun/data.datawarehouse")
                     let (workspace, item) = url.split_once('/').ok_or_else(|| {
                         plan_datafusion_err!(
                             "Invalid OneLake URL format: expected 'workspace/item.type', got '{}'",
@@ -105,7 +109,6 @@ pub fn create_catalog_providers(
                         )
                     })?;
 
-                    // Extract item name and type (e.g., "data.Lakehouse" -> name="data", type="Lakehouse")
                     let (item_name, item_type) = item.split_once('.').ok_or_else(|| {
                         plan_datafusion_err!(
                             "Invalid OneLake item format: expected 'name.type', got '{}'",
@@ -127,25 +130,23 @@ pub fn create_catalog_providers(
                         runtime.io().clone(),
                     )?;
 
-                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                    (name.to_string(), wrap_catalog(runtime_aware, cache))
                 }
                 CatalogType::Glue {
                     name,
                     region,
                     endpoint_url,
+                    cache,
                 } => {
                     let config = GlueCatalogConfig {
                         region: region.clone(),
                         endpoint_url: endpoint_url.clone(),
-                        cache_db_enable: config.glue.cache.db.enable,
-                        cache_table_enable: config.glue.cache.table.enable,
-                        cache_ttl_secs: config.glue.cache.ttl_secs,
                     };
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || Ok(GlueCatalogProvider::new(name.to_string(), config)),
                         runtime.io().clone(),
                     )?;
-                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                    (name.to_string(), wrap_catalog(runtime_aware, cache))
                 }
                 CatalogType::HiveMetastore {
                     name,
@@ -155,6 +156,7 @@ pub fn create_catalog_providers(
                     kerberos_service_principal,
                     min_sasl_qop,
                     connect_timeout_secs,
+                    cache,
                 } => {
                     let config = HmsCatalogConfig {
                         uris: uris.clone(),
@@ -166,12 +168,25 @@ pub fn create_catalog_providers(
                     };
                     let provider =
                         HmsCatalogProvider::try_new(name.to_string(), config, runtime.clone())?;
-                    Ok((name.to_string(), Arc::new(provider)))
+                    (name.to_string(), wrap_catalog(provider, cache))
                 }
-            }
+            };
+            Ok((name, provider))
         })
         .collect::<CatalogResult<HashMap<_, _>>>()
         .map_err(|e| plan_datafusion_err!("failed to create catalog providers: {e}"))
+}
+
+fn wrap_catalog<P: CatalogProvider + 'static>(
+    provider: P,
+    cache_config: &CatalogCacheConfig,
+) -> Arc<dyn CatalogProvider> {
+    let provider: Arc<dyn CatalogProvider> = Arc::new(provider);
+    if cache_config.database_cache_enabled || cache_config.table_cache_enabled {
+        Arc::new(CachedCatalogProvider::new(provider, cache_config))
+    } else {
+        provider
+    }
 }
 
 pub fn create_catalog_manager_with_providers(

@@ -858,18 +858,3 @@
     If a read operation takes longer than this duration, a warning is logged suggesting
     faster I/O or subprocess isolation.
   experimental: true
-
-- key: glue.cache.db.enable
-  type: boolean
-  default: "false"
-  description: Whether to enable caching for Glue database listings.
-
-- key: glue.cache.table.enable
-  type: boolean
-  default: "false"
-  description: Whether to enable caching for Glue table listings.
-
-- key: glue.cache.ttl_secs
-  type: number
-  default: "1800"
-  description: The time-to-live in seconds for the Glue catalog cache.

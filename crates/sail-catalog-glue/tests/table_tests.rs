@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use sail_catalog::provider::{
-    CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
-    DropTableOptions, PartitionTransform,
+    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateTableColumnOptions,
+    CreateTableOptions, DropTableOptions, PartitionTransform,
 };
 use table_view_common::{col, setup_with_database, simple_table_options};
 
@@ -714,4 +714,35 @@ async fn test_iceberg_requires_location() {
         matches!(err, sail_catalog::error::CatalogError::InvalidArgument(_)),
         "Expected InvalidArgument error, got: {err:?}"
     );
+}
+
+/// Tests that `alter_table` is accepted as a no-op.
+///
+/// - Creates a table
+/// - Calls `alter_table` with `SET TBLPROPERTIES` and verifies it succeeds
+#[tokio::test]
+#[ignore]
+async fn test_alter_table_noop() {
+    let (catalog, _container, namespace) = setup_with_database("test_alter_table").await;
+
+    catalog
+        .create_table(
+            &namespace,
+            "alterable",
+            simple_table_options(vec![col("id", DataType::Int32)]),
+        )
+        .await
+        .unwrap();
+
+    // alter_table is a documented no-op for Glue; it should not return an error
+    let result = catalog
+        .alter_table(
+            &namespace,
+            "alterable",
+            AlterTableOptions::SetTableProperties {
+                properties: vec![("key".to_string(), "value".to_string())],
+            },
+        )
+        .await;
+    assert!(result.is_ok(), "alter_table should succeed as a no-op");
 }

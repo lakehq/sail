@@ -267,3 +267,77 @@ async fn test_list_databases() {
     assert!(db_names.contains(&vec!["list_db_two".to_string()]));
     assert!(db_names.contains(&vec!["other_db".to_string()]));
 }
+
+/// Tests listing databases with a prefix filter.
+///
+/// - Creates databases with names starting with "prefix_" and others
+/// - `list_databases` with prefix returns only matching databases
+#[tokio::test]
+#[ignore]
+async fn test_list_databases_with_prefix() {
+    let (catalog, _moto) = setup_glue_catalog("test_list_db_prefix").await;
+
+    let ns1 = Namespace::try_from(vec!["alpha_one".to_string()]).unwrap();
+    let ns2 = Namespace::try_from(vec!["alpha_two".to_string()]).unwrap();
+    let ns3 = Namespace::try_from(vec!["beta_one".to_string()]).unwrap();
+
+    catalog
+        .create_database(&ns1, simple_database_options())
+        .await
+        .unwrap();
+    catalog
+        .create_database(&ns2, simple_database_options())
+        .await
+        .unwrap();
+    catalog
+        .create_database(&ns3, simple_database_options())
+        .await
+        .unwrap();
+
+    // Glue has flat namespaces, so prefix filtering matches exact equality only
+    let prefix = Namespace::try_from(vec!["alpha_one".to_string()]).unwrap();
+    let databases = catalog.list_databases(Some(&prefix)).await.unwrap();
+    assert_eq!(databases.len(), 1);
+    assert_eq!(databases[0].database, vec!["alpha_one".to_string()]);
+
+    // All databases without prefix
+    let all = catalog.list_databases(None).await.unwrap();
+    assert_eq!(all.len(), 3);
+}
+
+/// Tests that multi-level namespaces are rejected by the Glue provider.
+///
+/// - Attempts to create a database with a multi-level namespace (e.g., "a.b")
+/// - Verifies it fails with an `InvalidArgument` error
+#[tokio::test]
+#[ignore]
+async fn test_multi_level_namespace_rejected() {
+    let (catalog, _moto) = setup_glue_catalog("test_multi_ns").await;
+
+    let multi_ns = Namespace::try_from(vec!["level1".to_string(), "level2".to_string()]).unwrap();
+
+    // create_database should reject multi-level namespaces
+    let result = catalog
+        .create_database(&multi_ns, simple_database_options())
+        .await;
+    assert!(
+        result.is_err(),
+        "Expected error for multi-level namespace"
+    );
+    assert!(
+        matches!(
+            result.unwrap_err(),
+            sail_catalog::error::CatalogError::InvalidArgument(_)
+        ),
+        "Expected InvalidArgument error"
+    );
+
+    // get_database should also reject
+    let result = catalog.get_database(&multi_ns).await;
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        sail_catalog::error::CatalogError::InvalidArgument(_)
+    ));
+}
+

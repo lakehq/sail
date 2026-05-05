@@ -12,7 +12,6 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
 use sail_catalog_system::service::SystemTableService;
 use sail_catalog::provider::CatalogProvider;
-use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::config::{AppConfig, ExecutionMode, KubernetesWorkerPodCleanup};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
