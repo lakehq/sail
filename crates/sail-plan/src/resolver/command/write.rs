@@ -412,7 +412,16 @@ impl PlanResolver<'_> {
                         })
                         .collect();
                     let sort_by = if !catalog_sort_by.is_empty() {
-                        catalog_sort_by.clone()
+                        // Ensure the write produces globally sorted output matching the
+                        // declared file sort order, so SortExec elimination is safe.
+                        if file_write_options.sort_by.is_empty() {
+                            file_write_options.sort_by = catalog_sort_by
+                                .iter()
+                                .cloned()
+                                .map(datafusion_expr::expr::Sort::from)
+                                .collect();
+                        }
+                        catalog_sort_by
                     } else {
                         self.resolve_catalog_table_sort(sort_by)?
                     };

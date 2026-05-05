@@ -169,12 +169,17 @@ impl PlanResolver<'_> {
         // using column_names which aligns with the schema's field order.
         let catalog_sort_by: Vec<CatalogTableSort> = if let LogicalPlan::Sort(sort_plan) = &input {
             let schema = sort_plan.input.schema();
-            let result: Vec<_> = sort_plan
+            // Only keep a safe prefix: stop at the first non-plain-column sort key.
+            // e.g. ORDER BY ceil(col), col would only record nothing (ceil is not a column),
+            // preventing the optimizer from incorrectly dropping a required SortExec.
+            sort_plan
                 .expr
                 .iter()
+                .take_while(|sort_expr| {
+                    matches!(sort_expr.expr, Expr::Column(Column { relation: None, .. }))
+                })
                 .filter_map(|sort_expr| {
                     if let Expr::Column(Column { name, .. }) = &sort_expr.expr {
-                        // Find the field's position in the schema and map to the user-visible name
                         let idx = schema.index_of_column_by_name(None, name)?;
                         let user_name = column_names.get(idx)?.clone();
                         Some(CatalogTableSort {
@@ -186,8 +191,7 @@ impl PlanResolver<'_> {
                         None
                     }
                 })
-                .collect();
-            result
+                .collect()
         } else {
             vec![]
         };
@@ -421,6 +425,7 @@ impl PlanResolver<'_> {
                 let nulls_first = match null_ordering {
                     spec::NullOrdering::NullsFirst => true,
                     spec::NullOrdering::NullsLast => false,
+                    // Spark default: ASC → NULLS FIRST, DESC → NULLS LAST
                     spec::NullOrdering::Unspecified => ascending,
                 };
                 Ok(CatalogTableSort {
