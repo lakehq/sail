@@ -245,8 +245,11 @@ impl ScalarUDFImpl for SparkCeil {
         &self,
         input: &[datafusion_expr::sort_properties::ExprProperties],
     ) -> Result<datafusion_expr::sort_properties::SortProperties> {
+        let [arg] = input else {
+            return Ok(datafusion_expr::sort_properties::SortProperties::Unordered);
+        };
         // ceil is monotonically non-decreasing: if x <= y then ceil(x) <= ceil(y)
-        Ok(input[0].sort_properties)
+        Ok(arg.sort_properties)
     }
 }
 

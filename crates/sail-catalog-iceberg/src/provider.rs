@@ -292,10 +292,14 @@ impl IcebergRestCatalogProvider {
                                         crate::models::SortDirection::Asc => true,
                                         crate::models::SortDirection::Desc => false,
                                     };
+                                    let nulls_first = match sort_field.null_order {
+                                        crate::models::NullOrder::NullsFirst => true,
+                                        crate::models::NullOrder::NullsLast => false,
+                                    };
                                     CatalogTableSort {
                                         column: field.name.clone(),
                                         ascending,
-                                        nulls_first: ascending,
+                                        nulls_first,
                                     }
                                 })
                         })
@@ -1300,7 +1304,11 @@ fn build_sort_order(
                 } else {
                     sail_iceberg::spec::sort::SortDirection::Descending
                 },
-                null_order: sail_iceberg::spec::sort::NullOrder::Last, // TODO: Should this be configurable?
+                null_order: if sort.nulls_first {
+                    sail_iceberg::spec::sort::NullOrder::First
+                } else {
+                    sail_iceberg::spec::sort::NullOrder::Last
+                },
             });
         }
     }

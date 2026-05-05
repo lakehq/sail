@@ -61,6 +61,7 @@ impl From<CatalogTableBucketBy> for BucketBy {
 pub struct CatalogTableSort {
     pub column: String,
     pub ascending: bool,
+    #[serde(default)]
     pub nulls_first: bool,
 }
 
