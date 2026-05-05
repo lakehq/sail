@@ -107,7 +107,7 @@ kubectl apply -f k8s/sail.yaml
 By default, the worker pod spec is created programmatically. If the `kubernetes.worker_pod_template` configuration option is provided, it is merged into
 the generated spec, allowing you to customize the worker pods.
 
-## Configuring Worker Pod Cleanup
+### Configuring Worker Pod Cleanup
 
 By default, Sail configures worker pods to be removed after the server pod terminates. This preserves worker pod logs
 while the server is still running. For long-running servers that host multiple concurrent Spark sessions, you can instead
