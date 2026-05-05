@@ -128,9 +128,8 @@ impl ScalarUDFImpl for SparkFromJson {
             match schema {
                 Some(ScalarValue::Utf8(Some(s)))
                 | Some(ScalarValue::LargeUtf8(Some(s)))
-                | Some(ScalarValue::Utf8View(Some(s))) => Some(s.as_str()),
-                None => None,
-                Some(_) => {
+                | Some(ScalarValue::Utf8View(Some(s))) => s.as_str(),
+                None | Some(_) => {
                     return plan_err!(
                         "`{}` function requires the schema argument to be a string literal",
                         Self::FROM_JSON_NAME
@@ -145,14 +144,7 @@ impl ScalarUDFImpl for SparkFromJson {
             );
         };
 
-        let dt = if let Some(schema) = schema_str {
-            parse_schema_to_data_type(schema, &self.session_timezone)?
-        } else {
-            // Schema argument is not a literal (e.g., schema_of_json(...)).
-            // Fall back to an empty struct since we cannot determine
-            // the exact output type at planning time.
-            DataType::Struct(Fields::empty())
-        };
+        let dt = parse_schema_to_data_type(schema_str, &self.session_timezone)?;
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 

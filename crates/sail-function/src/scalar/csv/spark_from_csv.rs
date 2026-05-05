@@ -138,9 +138,8 @@ impl ScalarUDFImpl for SparkFromCSV {
             match schema {
                 Some(ScalarValue::Utf8(Some(s)))
                 | Some(ScalarValue::LargeUtf8(Some(s)))
-                | Some(ScalarValue::Utf8View(Some(s))) => Some(s.as_str()),
-                None => None,
-                Some(_) => {
+                | Some(ScalarValue::Utf8View(Some(s))) => s.as_str(),
+                None | Some(_) => {
                     return plan_err!(
                         "`{}` function requires the schema argument to be a string literal",
                         Self::FROM_CSV_NAME
@@ -155,14 +154,7 @@ impl ScalarUDFImpl for SparkFromCSV {
             );
         };
 
-        let dt = if let Some(schema) = schema_str {
-            DataType::Struct(parse_fields(schema, &self.session_timezone)?)
-        } else {
-            // Schema argument is not a literal (e.g., schema_of_csv(...)).
-            // Fall back to an empty struct since we cannot determine
-            // the exact output type at planning time.
-            DataType::Struct(Fields::empty())
-        };
+        let dt = DataType::Struct(parse_fields(schema_str, &self.session_timezone)?);
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
