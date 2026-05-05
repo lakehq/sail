@@ -153,7 +153,28 @@ Feature: ceil and floor functions
         """
       When query
         """
-        EXPLAIN SELECT ceil(col) AS c FROM ceil_sort_parquet_t ORDER BY col
+        EXPLAIN SELECT ceil(col) AS c FROM ceil_sort_parquet_t ORDER BY ceil(col)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN ORDER BY floor on pre-sorted Parquet column keeps SortExec
+      Given variable location for temporary directory floor_sort_parquet
+      Given final statement
+        """
+        DROP TABLE IF EXISTS floor_sort_parquet_t
+        """
+      Given statement template
+        """
+        CREATE TABLE floor_sort_parquet_t
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES (3), (1), (5), (2), (4) AS t(col)
+        ORDER BY col
+        """
+      When query
+        """
+        EXPLAIN SELECT floor(col) AS c FROM floor_sort_parquet_t ORDER BY floor(col)
         """
       Then query plan matches snapshot
 
