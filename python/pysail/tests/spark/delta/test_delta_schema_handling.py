@@ -333,7 +333,7 @@ class TestDeltaSchemaHandling:
             LOCATION '{delta_path}'
             TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
             AS SELECT * FROM _tw_merge_compat_initial
-            """
+            """  # noqa: S608
         )
 
         initial_table_schema = spark.read.format("delta").load(str(delta_path)).schema
@@ -384,7 +384,7 @@ class TestDeltaSchemaHandling:
             LOCATION '{delta_path}'
             TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
             AS SELECT * FROM _tw_float_promo_initial
-            """
+            """  # noqa: S608
         )
 
         # Append data with Float64
