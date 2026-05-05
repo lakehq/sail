@@ -1320,7 +1320,11 @@ mod tests {
     fn test_parse_unsupported_json_type_errors() {
         let result = parse_schema_to_data_type(r#""geometry""#, "UTC");
         assert!(result.is_err());
-        let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+        let err_msg = result
+            .as_ref()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
         assert!(
             err_msg.contains("Unsupported JSON schema type"),
             "unexpected error message: {err_msg}"
