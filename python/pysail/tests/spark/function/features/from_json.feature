@@ -1068,6 +1068,24 @@ Feature: from_json function parses JSON strings into structured types
         """
       Then query error .*
 
+    Scenario: Parse struct with time field using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"t":"12:00:00"}', '{"type":"struct","fields":[{"name":"t","type":"time","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parse struct with time(0) field using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"t":"12:00:00"}', '{"type":"struct","fields":[{"name":"t","type":"time(0)","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
   Rule: Column display names
     Scenario: from_json column name shows only input column for struct
       When query
@@ -1119,6 +1137,30 @@ Feature: from_json function parses JSON strings into structured types
       Then query result
         | json |
         | {1}  |
+
+  Rule: Constant-fold schema expression at planning time
+    Scenario: from_json with schema_of_json as the schema argument
+      When query
+        """
+        SELECT from_json(value, schema_of_json('{"a":1,"b":"hello"}')) AS result
+        FROM VALUES ('{"a":42,"b":"world"}') AS t(value)
+        """
+      Then query result
+        | result        |
+        | {42, world}   |
+
+    Scenario: from_json with schema_of_json handles multiple rows
+      When query
+        """
+        SELECT from_json(value, schema_of_json('{"x":1}')) AS result
+        FROM VALUES ('{"x":10}'), ('{"x":20}'), ('{"x":30}') AS t(value)
+        ORDER BY result.x
+        """
+      Then query result ordered
+        | result |
+        | {10}   |
+        | {20}   |
+        | {30}   |
 
   Rule: Single value wrapping for array schema
     Scenario: Single JSON object with array schema wraps into singleton array

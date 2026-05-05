@@ -926,8 +926,30 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
             Some(Arc::from(session_timezone)),
         )),
         "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+        "time" => Ok(DataType::Time64(TimeUnit::Microsecond)),
         other => {
-            // Handle parameterized types like "decimal(precision,scale)"
+            // Handle parameterized types like "decimal(precision,scale)" and "time(precision)".
+            if let Some(args) = other
+                .strip_prefix("time(")
+                .and_then(|x| x.strip_suffix(')'))
+            {
+                match args.trim().parse::<i64>() {
+                    Ok(0) => return Ok(DataType::Time32(TimeUnit::Second)),
+                    Ok(3) => return Ok(DataType::Time32(TimeUnit::Millisecond)),
+                    Ok(6) => return Ok(DataType::Time64(TimeUnit::Microsecond)),
+                    Ok(9) => return Ok(DataType::Time64(TimeUnit::Nanosecond)),
+                    Ok(p) => {
+                        return Err(DataFusionError::Plan(format!(
+                            "Invalid TIME precision in '{other}': {p}"
+                        )))
+                    }
+                    Err(_) => {
+                        return Err(DataFusionError::Plan(format!(
+                            "Unsupported JSON schema type: '{other}'"
+                        )))
+                    }
+                }
+            }
             if let Some(args) = other
                 .strip_prefix("decimal(")
                 .and_then(|x| x.strip_suffix(')'))
