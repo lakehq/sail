@@ -129,8 +129,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "spark_partition_id",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/507"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

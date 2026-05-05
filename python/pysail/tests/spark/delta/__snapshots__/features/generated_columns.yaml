@@ -1,0 +1,35 @@
+# serializer version: 1
+---
+name: "test_delta_log_first_commit_snapshot_records_generation_expression_and_writerfeatures"
+data:
+  metaData:
+    configuration: {}
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata: {}
+        name: id
+        nullable: true
+        type: integer
+      - metadata: {}
+        name: event_time
+        nullable: true
+        type: timestamp
+      - metadata:
+          delta.generationExpression: CAST ( event_time AS DATE )
+        name: event_date
+        nullable: true
+        type: date
+      type: struct
+  protocol:
+    minReaderVersion: 1
+    minWriterVersion: 7
+    writerFeatures:
+    - generatedColumns

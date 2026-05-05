@@ -128,7 +128,6 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         bucket_by,
         if_not_exists,
         replace,
-        options: table_options,
         properties,
     } = options;
 
@@ -145,11 +144,6 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
     if !sort_by.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support SORT BY".to_string(),
-        ));
-    }
-    if !table_options.is_empty() {
-        return Err(CatalogError::NotSupported(
-            "AWS Glue catalog does not support OPTIONS".to_string(),
         ));
     }
     if bucket_by.is_some() {

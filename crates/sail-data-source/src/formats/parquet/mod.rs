@@ -52,6 +52,16 @@ impl ListingFormat for ParquetListingFormat {
         ))
     }
 
+    fn file_extension_override(
+        &self,
+        ctx: &dyn Session,
+        options: &[OptionLayer],
+    ) -> Result<Option<String>> {
+        let read_options = resolve_parquet_read_options(ctx, options.to_vec())
+            .map_err(datafusion_common::DataFusionError::from)?;
+        Ok(Some(read_options.extension))
+    }
+
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
         Arc::new(DefaultSchemaInfer)
     }

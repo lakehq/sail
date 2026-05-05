@@ -268,7 +268,10 @@ mod tests {
         assert_eq!(options.null_value, None);
         assert_eq!(options.null_regex, Some("MEOW".to_string()));
         assert_eq!(options.terminator, Some(b'@'));
-        assert_eq!(options.schema_infer_max_rec, Some(100));
+        // `inferSchema` defaults to `false` (Spark parity), which collapses
+        // `schema_infer_max_rec` to `Some(0)` regardless of the user-supplied
+        // `schema_infer_max_records` value above.
+        assert_eq!(options.schema_infer_max_rec, Some(0));
         assert_eq!(options.newlines_in_values, Some(true));
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 

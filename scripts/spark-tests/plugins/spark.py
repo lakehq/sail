@@ -377,6 +377,10 @@ SKIPPED_SPARK_TESTS = [
         reason="Subsequent tests would have setup errors after these tests",
     ),
     TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.listCatalogs"],
+        reason="Sail exposes an additional 'system' catalog that Spark does not have; ported to PySail test suite",
+    ),
+    TestMarker(
         keywords=["test_udf_in_generate"],
         reason="Index-based row access assumes single-partition ordering",
     ),

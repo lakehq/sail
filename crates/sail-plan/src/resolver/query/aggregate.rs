@@ -13,6 +13,7 @@ use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::rand::RandRewriter;
+use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
 
@@ -213,6 +214,8 @@ impl PlanResolver<'_> {
         let (plan, projections) =
             self.rewrite_projection::<MonotonicIdRewriter>(plan, projections, state)?;
         let (plan, projections) =
+            self.rewrite_projection::<SparkPartitionIdRewriter>(plan, projections, state)?;
+        let (plan, projections) =
             self.rewrite_projection::<ExplodeRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<WindowRewriter>(plan, projections, state)?;
@@ -280,8 +283,9 @@ impl PlanResolver<'_> {
         if let Some(udf_name) = pyspark_agg_name {
             if has_regular_agg {
                 return Err(PlanError::AnalysisError(format!(
-                    "The group aggregate UDF `{udf_name}` cannot be invoked \
-                     together with other non-UDF aggregate functions."
+                    // Spark tests expect this error message. Typo is intended.
+                    "The group aggregate pandas UDF `{udf_name}` cannot be invoked \
+                     together with as other, non-pandas aggregate functions."
                 )));
             }
         }

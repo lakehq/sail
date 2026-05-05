@@ -295,6 +295,17 @@ fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
 }
 
+/// Dispatch for `next_day(date, day_of_week)`.
+///
+/// Reads `PlanConfig::ansi_mode` at planning time and bakes it into the UDF
+/// so the runtime path chooses between erroring (ANSI=true) and returning
+/// NULL (ANSI=false) on malformed day-of-week strings.
+fn next_day(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let udf = ScalarUDF::from(SparkNextDay::new(ansi_mode));
+    Ok(udf.call(input.arguments))
+}
+
 fn date_format(expr: Expr, format: Expr) -> Expr {
     // Handle standalone fractional seconds format (e.g., 'SSS' for milliseconds).
     // Chrono's %.Nf always includes a leading dot (e.g., ".000"), so for standalone
@@ -740,7 +751,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::unary(|arg| expr_fn::to_char(arg, lit("%b"))),
         ),
         ("months_between", F::custom(months_between)),
-        ("next_day", F::udf(SparkNextDay::new())),
+        ("next_day", F::custom(next_day)),
         ("now", F::custom(current_timestamp_microseconds)),
         ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
         ("second", F::unary(|arg| integer_part(arg, "SECOND"))),
