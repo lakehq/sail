@@ -5,6 +5,10 @@ next: false
 
 # Changelog
 
+## 0.6.2
+
+_May 5, 2026_
+
 ## 0.6.1
 
 _April 28, 2026_
