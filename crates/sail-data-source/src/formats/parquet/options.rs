@@ -27,6 +27,7 @@ fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> DataSourceRe
 impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
     fn build_partial_options(self) -> DataSourceResult<ParquetReadPartialOptions> {
         Ok(ParquetReadPartialOptions {
+            extension: None,
             enable_page_index: Some(self.global.enable_page_index),
             pruning: Some(self.global.pruning),
             skip_metadata: Some(self.global.skip_metadata),
@@ -46,6 +47,7 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
 impl ParquetReadOptions {
     pub fn into_table_options(self) -> TableParquetOptions {
         let ParquetReadOptions {
+            extension: _,
             enable_page_index,
             pruning,
             skip_metadata,
@@ -345,6 +347,36 @@ mod tests {
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_read_extension() -> datafusion_common::Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+
+        // default: no option layer → ".parquet"
+        let opts = resolve_parquet_read_options(&state, vec![option_list(&[])])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(opts.extension, ".parquet");
+
+        // snake_case override
+        let opts =
+            resolve_parquet_read_options(&state, vec![option_list(&[("extension", ".hive")])])
+                .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(opts.extension, ".hive");
+
+        // camelCase alias
+        let opts =
+            resolve_parquet_read_options(&state, vec![option_list(&[("fileExtension", ".pq")])])
+                .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(opts.extension, ".pq");
+
+        // empty string disables filtering
+        let opts = resolve_parquet_read_options(&state, vec![option_list(&[("extension", "")])])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(opts.extension, "");
 
         Ok(())
     }

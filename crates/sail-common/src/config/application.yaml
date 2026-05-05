@@ -668,6 +668,15 @@
     If non-empty, a JSON string representing a Kubernetes Pod template
     with the schema of `PodTemplateSpec` in the Kubernetes API.
 
+- key: kubernetes.worker_pod_cleanup
+  type: string
+  default: "server_termination"
+  description: |
+    When to delete Kubernetes worker pods.
+    The default value `server_termination` configures worker pods to be deleted
+    after the server pod terminates.
+    The value `session_end` deletes worker pods when the Spark session ends.
+
 - key: catalog.list
   type: array
   default: '[{name="sail", type="memory", initial_database=["default"], initial_database_comment="default database"}]'
@@ -708,6 +717,16 @@
   default: "false"
   description: |
     Whether to enable cost-based join reorder in the query optimizer.
+  experimental: true
+
+- key: optimizer.expand_views_at_output
+  type: boolean
+  default: "true"
+  description: |
+    Whether the optimizer should coerce view types to non-view types at query output.
+    If the value is `true`, `Utf8View` is coerced to `LargeUtf8` and `BinaryView` is coerced
+    to `LargeBinary` before results leave the query boundary. If the value is `false`, view
+    types pass through to the client.
   experimental: true
 
 - key: spark.session_timeout_secs

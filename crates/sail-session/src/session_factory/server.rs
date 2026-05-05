@@ -10,7 +10,7 @@ use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
 use sail_catalog_system::service::SystemTableService;
-use sail_common::config::{AppConfig, ExecutionMode};
+use sail_common::config::{AppConfig, ExecutionMode, KubernetesWorkerPodCleanup};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
@@ -121,6 +121,7 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config);
         self.apply_execution_parquet_config(&mut config);
+        self.apply_optimizer_config(&mut config);
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -175,6 +176,10 @@ impl ServerSessionFactory {
                         .worker_service_account_name
                         .clone(),
                     worker_pod_template: self.config.kubernetes.worker_pod_template.clone(),
+                    delete_worker_pods_on_stop: matches!(
+                        self.config.kubernetes.worker_pod_cleanup,
+                        KubernetesWorkerPodCleanup::SessionEnd
+                    ),
                 };
                 let worker_manager = Arc::new(KubernetesWorkerManager::new(options));
                 let options =
@@ -208,6 +213,11 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+    }
+
+    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
+        let optimizer = &mut config.options_mut().optimizer;
+        optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {

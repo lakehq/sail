@@ -30,7 +30,7 @@ use crate::spark::connect::analyze_plan_response::{
     SemanticHash as SemanticHashResponse, SparkVersion as SparkVersionResponse,
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
-use crate::spark::connect::StorageLevel;
+use crate::spark::connect::{plan, StorageLevel};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
@@ -94,19 +94,22 @@ pub(crate) async fn handle_analyze_tree_string(
 
 pub(crate) async fn handle_analyze_is_local(
     _ctx: &SessionContext,
-    _request: IsLocalRequest,
+    request: IsLocalRequest,
 ) -> SparkResult<IsLocalResponse> {
-    Err(SparkError::todo("handle analyze is local"))
+    let IsLocalRequest { plan } = request;
+    let plan = plan.required("plan")?;
+    let is_local = analyze_is_local(plan)?;
+    Ok(IsLocalResponse { is_local })
 }
 
 pub(crate) async fn handle_analyze_is_streaming(
     _ctx: &SessionContext,
-    _request: IsStreamingRequest,
+    request: IsStreamingRequest,
 ) -> SparkResult<IsStreamingResponse> {
-    // TODO: support streaming
-    Ok(IsStreamingResponse {
-        is_streaming: false,
-    })
+    let IsStreamingRequest { plan } = request;
+    let plan = plan.required("plan")?;
+    let is_streaming = analyze_is_streaming(plan)?;
+    Ok(IsStreamingResponse { is_streaming })
 }
 
 pub(crate) async fn handle_analyze_input_files(
@@ -204,4 +207,130 @@ pub(crate) async fn handle_analyze_json_to_ddl(
     let data_type = parse_spark_json_data_type(&request.json_string)?;
     let ddl_string = to_ddl_string(&data_type)?;
     Ok(JsonToDdlResponse { ddl_string })
+}
+
+fn analyze_is_local(plan: sc::Plan) -> SparkResult<bool> {
+    let sc::Plan { op_type: op } = plan;
+    match op.required("plan op")? {
+        plan::OpType::Command(_) => Ok(true),
+        plan::OpType::Root(relation) => {
+            let plan: spec::Plan = relation.try_into()?;
+            Ok(matches!(
+                plan,
+                spec::Plan::Command(_)
+                    | spec::Plan::Query(spec::QueryPlan {
+                        node: spec::QueryNode::LocalRelation { .. }
+                            | spec::QueryNode::CachedLocalRelation { .. },
+                        ..
+                    })
+            ))
+        }
+        plan::OpType::CompressedOperation(_) => {
+            Err(SparkError::unsupported("compressed operation"))
+        }
+    }
+}
+
+fn analyze_is_streaming(plan: sc::Plan) -> SparkResult<bool> {
+    let sc::Plan { op_type: op } = plan;
+    match op.required("plan op")? {
+        plan::OpType::Command(_) => Ok(false),
+        plan::OpType::Root(relation) => {
+            let plan: spec::Plan = relation.try_into()?;
+            match plan {
+                spec::Plan::Command(_) => Ok(false),
+                spec::Plan::Query(query) => Ok(is_streaming_query_plan(&query)),
+            }
+        }
+        plan::OpType::CompressedOperation(_) => {
+            Err(SparkError::unsupported("compressed operation"))
+        }
+    }
+}
+
+fn is_streaming_query_plan(plan: &spec::QueryPlan) -> bool {
+    is_streaming_query_node(&plan.node)
+}
+
+fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
+    match node {
+        spec::QueryNode::Read { is_streaming, .. } => *is_streaming,
+        // leaf nodes with no query plan inputs
+        spec::QueryNode::LocalRelation { .. }
+        | spec::QueryNode::CachedLocalRelation { .. }
+        | spec::QueryNode::CachedRemoteRelation { .. }
+        | spec::QueryNode::Range(_)
+        | spec::QueryNode::Empty { .. }
+        | spec::QueryNode::Values(_)
+        | spec::QueryNode::CommonInlineUserDefinedTableFunction(_) => false,
+        // single required input
+        spec::QueryNode::Filter { input, .. }
+        | spec::QueryNode::Sort { input, .. }
+        | spec::QueryNode::Limit { input, .. }
+        | spec::QueryNode::SubqueryAlias { input, .. }
+        | spec::QueryNode::Repartition { input, .. }
+        | spec::QueryNode::ToDf { input, .. }
+        | spec::QueryNode::WithColumnsRenamed { input, .. }
+        | spec::QueryNode::Drop { input, .. }
+        | spec::QueryNode::Tail { input, .. }
+        | spec::QueryNode::WithColumns { input, .. }
+        | spec::QueryNode::Hint { input, .. }
+        | spec::QueryNode::ToSchema { input, .. }
+        | spec::QueryNode::RepartitionByExpression { input, .. }
+        | spec::QueryNode::MapPartitions { input, .. }
+        | spec::QueryNode::CollectMetrics { input, .. }
+        | spec::QueryNode::FillNa { input, .. }
+        | spec::QueryNode::DropNa { input, .. }
+        | spec::QueryNode::Replace { input, .. }
+        | spec::QueryNode::StatSummary { input, .. }
+        | spec::QueryNode::StatDescribe { input, .. }
+        | spec::QueryNode::StatCrosstab { input, .. }
+        | spec::QueryNode::StatCov { input, .. }
+        | spec::QueryNode::StatCorr { input, .. }
+        | spec::QueryNode::StatApproxQuantile { input, .. }
+        | spec::QueryNode::StatFreqItems { input, .. }
+        | spec::QueryNode::StatSampleBy { input, .. }
+        | spec::QueryNode::WithParameters { input, .. }
+        | spec::QueryNode::TableAlias { input, .. }
+        | spec::QueryNode::TableSample { input, .. } => is_streaming_query_plan(input),
+        // single optional input - None input means no source, which is not streaming
+        spec::QueryNode::Project { input, .. } | spec::QueryNode::LateralView { input, .. } => {
+            input.as_ref().is_some_and(|i| is_streaming_query_plan(i))
+        }
+        // nested struct with single input
+        spec::QueryNode::Aggregate(agg) => is_streaming_query_plan(&agg.input),
+        spec::QueryNode::Sample(s) => is_streaming_query_plan(&s.input),
+        spec::QueryNode::Deduplicate(d) => is_streaming_query_plan(&d.input),
+        spec::QueryNode::Pivot(p) => is_streaming_query_plan(&p.input),
+        spec::QueryNode::Unpivot(u) => is_streaming_query_plan(&u.input),
+        spec::QueryNode::Parse(p) => is_streaming_query_plan(&p.input),
+        spec::QueryNode::WithWatermark(w) => is_streaming_query_plan(&w.input),
+        spec::QueryNode::ApplyInPandasWithState(a) => is_streaming_query_plan(&a.input),
+        // multiple inputs
+        spec::QueryNode::Join(j) => {
+            is_streaming_query_plan(&j.left) || is_streaming_query_plan(&j.right)
+        }
+        spec::QueryNode::SetOperation(s) => {
+            is_streaming_query_plan(&s.left) || is_streaming_query_plan(&s.right)
+        }
+        spec::QueryNode::CoGroupMap(c) => {
+            is_streaming_query_plan(&c.input) || is_streaming_query_plan(&c.other)
+        }
+        spec::QueryNode::GroupMap(g) => {
+            is_streaming_query_plan(&g.input)
+                || g.initial_input
+                    .as_ref()
+                    .is_some_and(|i| is_streaming_query_plan(i))
+        }
+        spec::QueryNode::WithCtes { input, ctes, .. } => {
+            is_streaming_query_plan(input)
+                || ctes.iter().any(|(_name, p)| is_streaming_query_plan(p))
+        }
+        spec::QueryNode::WithRelations { root, references } => {
+            is_streaming_query_plan(root) || references.iter().any(is_streaming_query_plan)
+        }
+        spec::QueryNode::LateralJoin { left, right, .. } => {
+            is_streaming_query_plan(left) || is_streaming_query_plan(right)
+        }
+    }
 }
