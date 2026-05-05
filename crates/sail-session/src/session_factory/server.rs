@@ -13,6 +13,7 @@ use datafusion_expr::registry::FunctionRegistry;
 use sail_catalog_system::service::SystemTableService;
 use sail_catalog::provider::CatalogProvider;
 use sail_common::config::{AppConfig, ExecutionMode};
+use sail_common::config::{AppConfig, ExecutionMode, KubernetesWorkerPodCleanup};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
@@ -182,6 +183,10 @@ impl ServerSessionFactory {
                         .worker_service_account_name
                         .clone(),
                     worker_pod_template: self.config.kubernetes.worker_pod_template.clone(),
+                    delete_worker_pods_on_stop: matches!(
+                        self.config.kubernetes.worker_pod_cleanup,
+                        KubernetesWorkerPodCleanup::SessionEnd
+                    ),
                 };
                 let worker_manager = Arc::new(KubernetesWorkerManager::new(options));
                 let options =
