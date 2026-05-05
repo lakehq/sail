@@ -295,6 +295,7 @@ impl IcebergRestCatalogProvider {
                                     CatalogTableSort {
                                         column: field.name.clone(),
                                         ascending,
+                                        nulls_first: ascending,
                                     }
                                 })
                         })

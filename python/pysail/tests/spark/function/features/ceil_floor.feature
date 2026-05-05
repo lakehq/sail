@@ -134,10 +134,10 @@ Feature: ceil and floor functions
         | result |
         | -2     |
 
-  Rule: Plan snapshot — ORDER BY ceil on Parquet shows SortExec (sort_order not yet persisted in catalog)
+  Rule: Plan snapshot — ORDER BY on pre-sorted Parquet column eliminates SortExec
 
     @sail-only
-    Scenario: EXPLAIN ORDER BY ceil on Parquet column shows SortExec
+    Scenario: EXPLAIN ORDER BY on pre-sorted Parquet column eliminates SortExec
       Given variable location for temporary directory ceil_sort_parquet
       Given final statement
         """
@@ -148,7 +148,8 @@ Feature: ceil and floor functions
         CREATE TABLE ceil_sort_parquet_t
         USING PARQUET
         LOCATION {{ location.sql }}
-        AS SELECT * FROM VALUES (1), (3), (2), (5), (4) AS t(col)
+        AS SELECT * FROM VALUES (3), (1), (5), (2), (4) AS t(col)
+        ORDER BY col
         """
       When query
         """
