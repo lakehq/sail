@@ -20,6 +20,7 @@ use sail_common::config::{
 use sail_common::runtime::RuntimeHandle;
 use sail_object_store::DynamicObjectStoreRegistry;
 
+#[derive(Clone)]
 pub struct RuntimeEnvFactory {
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,

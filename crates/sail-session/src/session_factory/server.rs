@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -10,6 +11,7 @@ use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
 use sail_catalog_system::service::SystemTableService;
+use sail_catalog::provider::CatalogProvider;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
@@ -23,7 +25,7 @@ use sail_execution::worker_manager::{
 use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
 use sail_server::actor::{ActorHandle, ActorSystem};
 
-use crate::catalog::create_catalog_manager;
+use crate::catalog::{create_catalog_manager_with_providers, create_catalog_providers};
 use crate::formats::create_table_format_registry;
 use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
@@ -38,7 +40,7 @@ pub struct ServerSessionInfo {
     pub session_manager: ActorHandle<SessionManagerActor>,
 }
 
-pub trait ServerSessionMutator: Send {
+pub trait ServerSessionMutator: Send + Sync {
     fn mutate_config(
         &self,
         config: SessionConfig,
@@ -56,29 +58,33 @@ pub trait ServerSessionMutator: Send {
     ) -> Result<RuntimeEnvBuilder>;
 }
 
+#[derive(Clone)]
 pub struct ServerSessionFactory {
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
     system: Arc<Mutex<ActorSystem>>,
-    mutator: Box<dyn ServerSessionMutator>,
+    mutator: Arc<dyn ServerSessionMutator>,
     runtime_env: RuntimeEnvFactory,
+    catalog_providers: HashMap<String, Arc<dyn CatalogProvider>>,
 }
 
 impl ServerSessionFactory {
-    pub fn new(
+    pub fn try_new(
         config: Arc<AppConfig>,
         runtime: RuntimeHandle,
         system: Arc<Mutex<ActorSystem>>,
-        mutator: Box<dyn ServerSessionMutator>,
-    ) -> Self {
+        mutator: Arc<dyn ServerSessionMutator>,
+    ) -> Result<Self> {
         let runtime_env = RuntimeEnvFactory::new(config.clone(), runtime.clone());
-        Self {
+        let catalog_providers = create_catalog_providers(&config, runtime.clone())?;
+        Ok(Self {
             config,
             runtime,
             system,
             mutator,
             runtime_env,
-        }
+            catalog_providers,
+        })
     }
 }
 
@@ -111,9 +117,9 @@ impl ServerSessionFactory {
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
             .with_extension(create_table_format_registry()?)
-            .with_extension(Arc::new(create_catalog_manager(
+            .with_extension(Arc::new(create_catalog_manager_with_providers(
                 &self.config,
-                self.runtime.clone(),
+                self.catalog_providers.clone(),
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))

@@ -13,8 +13,27 @@ AWS Glue catalog can be configured using the following options:
 - `name` (required): The name of the catalog.
 - `region` (optional): The AWS region (e.g., `us-east-1`). If not set, it uses the default region from the AWS credential provider chain.
 - `endpoint_url` (optional): The custom endpoint URL.
+- `cache_db_enable` (optional): Whether to enable caching for database listings. Defaults to `false`.
+- `cache_table_enable` (optional): Whether to enable caching for table listings. Defaults to `false`.
+- `cache_ttl_secs` (optional): The time-to-live in seconds for the cache. Defaults to `1800` (30 minutes).
 
 You can use any AWS credential provider supported by the AWS SDK to authenticate with AWS Glue.
+
+## Caching
+
+To improve performance when listing databases and tables in a large Glue catalog, you can enable the internal cache. 
+
+The cache is shared across all Spark and Flight sessions on the same server instance. When an operation that modifies the catalog (like `CREATE TABLE` or `DROP TABLE`) is performed through Sail, the relevant cache entries are automatically invalidated to ensure consistency.
+
+### Configuration Example
+
+You can enable the cache using environment variables:
+
+```bash
+export SAIL_GLUE__CACHE__DB__ENABLE=true
+export SAIL_GLUE__CACHE__TABLE__ENABLE=true
+export SAIL_GLUE__CACHE__TTL_SECS=3600
+```
 
 ## Examples
 

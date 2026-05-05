@@ -17,11 +17,11 @@ use sail_common::config::{AppConfig, CatalogType};
 use sail_common::runtime::RuntimeHandle;
 use secrecy::ExposeSecret;
 
-pub fn create_catalog_manager(
+pub fn create_catalog_providers(
     config: &AppConfig,
     runtime: RuntimeHandle,
-) -> Result<CatalogManager> {
-    let mut catalogs = config
+) -> Result<HashMap<String, Arc<dyn CatalogProvider>>> {
+    config
         .catalog
         .list
         .iter()
@@ -137,6 +137,9 @@ pub fn create_catalog_manager(
                     let config = GlueCatalogConfig {
                         region: region.clone(),
                         endpoint_url: endpoint_url.clone(),
+                        cache_db_enable: config.glue.cache.db.enable,
+                        cache_table_enable: config.glue.cache.table.enable,
+                        cache_ttl_secs: config.glue.cache.ttl_secs,
                     };
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || Ok(GlueCatalogProvider::new(name.to_string(), config)),
@@ -168,7 +171,13 @@ pub fn create_catalog_manager(
             }
         })
         .collect::<CatalogResult<HashMap<_, _>>>()
-        .map_err(|e| plan_datafusion_err!("failed to create catalog: {e}"))?;
+        .map_err(|e| plan_datafusion_err!("failed to create catalog providers: {e}"))
+}
+
+pub fn create_catalog_manager_with_providers(
+    config: &AppConfig,
+    mut catalogs: HashMap<String, Arc<dyn CatalogProvider>>,
+) -> Result<CatalogManager> {
     let default_catalog = if let Some(name) = config.catalog.default_catalog.as_ref() {
         name.clone()
     } else {
@@ -205,4 +214,12 @@ pub fn create_catalog_manager(
     };
     CatalogManager::try_new(options)
         .map_err(|e| plan_datafusion_err!("failed to create catalog manager: {e}"))
+}
+
+pub fn create_catalog_manager(
+    config: &AppConfig,
+    runtime: RuntimeHandle,
+) -> Result<CatalogManager> {
+    let providers = create_catalog_providers(config, runtime)?;
+    create_catalog_manager_with_providers(config, providers)
 }

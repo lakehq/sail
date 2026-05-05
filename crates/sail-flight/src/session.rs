@@ -57,11 +57,11 @@ fn create_flight_session_factory(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
     system: Arc<Mutex<ActorSystem>>,
-) -> Box<dyn SessionFactory<ServerSessionInfo>> {
-    let mutator = Box::new(FlightSessionMutator {
+) -> Result<ServerSessionFactory> {
+    let mutator = Arc::new(FlightSessionMutator {
         config: config.clone(),
     });
-    Box::new(ServerSessionFactory::new(config, runtime, system, mutator))
+    ServerSessionFactory::try_new(config, runtime, system, mutator)
 }
 
 pub fn create_flight_session_manager(
@@ -69,13 +69,10 @@ pub fn create_flight_session_manager(
     runtime: RuntimeHandle,
 ) -> Result<SessionManager, FlightError> {
     let system = Arc::new(Mutex::new(ActorSystem::new()));
+    let session_factory =
+        create_flight_session_factory(config.clone(), runtime.clone(), system.clone())?;
     let factory = {
-        let config = config.clone();
-        let runtime = runtime.clone();
-        let system = system.clone();
-        Box::new(move || {
-            create_flight_session_factory(config.clone(), runtime.clone(), system.clone())
-        })
+        Box::new(move || Box::new(session_factory.clone()) as Box<dyn SessionFactory<ServerSessionInfo>>)
     };
     let options = SessionManagerOptions::new(runtime.clone(), system, factory)
         .with_session_timeout(std::time::Duration::from_secs(

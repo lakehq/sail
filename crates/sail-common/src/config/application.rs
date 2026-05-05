@@ -30,6 +30,7 @@ pub struct AppConfig {
     pub flight: FlightConfig,
     pub python: PythonConfig,
     pub telemetry: TelemetryConfig,
+    pub glue: GlueConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
     /// can only be used for internal configuration.
@@ -574,4 +575,30 @@ impl ClusterConfigEnv {
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlueConfig {
+    pub cache: GlueCacheConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlueCacheConfig {
+    pub db: GlueDatabaseCacheConfig,
+    pub table: GlueTableCacheConfig,
+    pub ttl_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlueDatabaseCacheConfig {
+    pub enable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlueTableCacheConfig {
+    pub enable: bool,
 }

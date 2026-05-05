@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use aws_config::BehaviorVersion;
 use aws_sdk_glue::config::Region;
@@ -17,6 +18,7 @@ use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
+use moka::future::Cache;
 use tokio::sync::OnceCell;
 
 use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
@@ -29,6 +31,9 @@ pub struct GlueCatalogConfig {
     pub region: Option<String>,
     /// Custom endpoint URL (optional). Useful for VPC endpoints or local development.
     pub endpoint_url: Option<String>,
+    pub cache_db_enable: bool,
+    pub cache_table_enable: bool,
+    pub cache_ttl_secs: u64,
 }
 
 /// An AWS Glue Data Catalog provider.
@@ -36,14 +41,25 @@ pub struct GlueCatalogProvider {
     name: String,
     config: GlueCatalogConfig,
     client: OnceCell<Client>,
+    db_list_cache: Cache<Option<String>, Vec<DatabaseStatus>>,
+    table_list_cache: Cache<String, Vec<TableStatus>>,
 }
 
 impl GlueCatalogProvider {
     pub fn new(name: String, config: GlueCatalogConfig) -> Self {
+        let ttl = Duration::from_secs(config.cache_ttl_secs);
         Self {
             name,
             config,
             client: OnceCell::new(),
+            db_list_cache: Cache::builder()
+                .max_capacity(100)
+                .time_to_live(ttl)
+                .build(),
+            table_list_cache: Cache::builder()
+                .max_capacity(1000)
+                .time_to_live(ttl)
+                .build(),
         }
     }
 
@@ -373,7 +389,7 @@ impl CatalogProvider for GlueCatalogProvider {
             .send()
             .await;
 
-        match result {
+        let res = match result {
             Ok(_) => self.get_database(database).await,
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
@@ -392,7 +408,12 @@ impl CatalogProvider for GlueCatalogProvider {
                     )))
                 }
             }
+        };
+
+        if res.is_ok() {
+            self.db_list_cache.invalidate_all();
         }
+        res
     }
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
@@ -428,6 +449,15 @@ impl CatalogProvider for GlueCatalogProvider {
         &self,
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
+        if self.config.cache_db_enable {
+            let cache_key = prefix.map(|p| p.to_string());
+            if let Some(cached) = self.db_list_cache.get(&cache_key).await {
+                log::info!("Glue database list cache HIT for prefix: {:?}", cache_key);
+                return Ok(cached);
+            }
+            log::info!("Glue database list cache MISS for prefix: {:?}", cache_key);
+        }
+
         let client = self.get_client().await?;
 
         let mut databases = Vec::new();
@@ -452,6 +482,11 @@ impl CatalogProvider for GlueCatalogProvider {
             }
         }
 
+        if self.config.cache_db_enable {
+            let cache_key = prefix.map(|p| p.to_string());
+            self.db_list_cache.insert(cache_key, databases.clone()).await;
+        }
+
         Ok(databases)
     }
 
@@ -470,7 +505,7 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let result = client.delete_database().name(&database_name).send().await;
 
-        match result {
+        let res = match result {
             Ok(_) => Ok(()),
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
@@ -480,7 +515,7 @@ impl CatalogProvider for GlueCatalogProvider {
                     } else {
                         Err(CatalogError::NotFound(
                             CatalogObject::Database,
-                            database_name,
+                            database_name.clone(),
                         ))
                     }
                 } else {
@@ -489,7 +524,13 @@ impl CatalogProvider for GlueCatalogProvider {
                     )))
                 }
             }
+        };
+
+        if res.is_ok() {
+            self.db_list_cache.invalidate_all();
+            self.table_list_cache.invalidate(&database_name).await;
         }
+        res
     }
 
     async fn create_table(
@@ -501,11 +542,17 @@ impl CatalogProvider for GlueCatalogProvider {
         let client = self.get_client().await?;
         let format_lower = options.format.to_lowercase();
 
-        if format_lower == "iceberg" {
+        let database_name = Self::database_name(database)?;
+        let res = if format_lower == "iceberg" {
             iceberg::create_iceberg_table(self, client, database, table, options).await
         } else {
             hive::create_hive_table(self, client, database, table, options).await
+        };
+
+        if res.is_ok() {
+            self.table_list_cache.invalidate(&database_name).await;
         }
+        res
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
@@ -552,8 +599,16 @@ impl CatalogProvider for GlueCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let client = self.get_client().await?;
         let database_name = Self::database_name(database)?;
+        if self.config.cache_table_enable {
+            if let Some(cached) = self.table_list_cache.get(&database_name).await {
+                log::info!("Glue table list cache HIT for database: {}", database_name);
+                return Ok(cached);
+            }
+            log::info!("Glue table list cache MISS for database: {}", database_name);
+        }
+
+        let client = self.get_client().await?;
 
         let mut tables = Vec::new();
         let mut paginator = client
@@ -575,6 +630,12 @@ impl CatalogProvider for GlueCatalogProvider {
                 }
                 tables.push(self.table_to_status(database, tbl)?);
             }
+        }
+
+        if self.config.cache_table_enable {
+            self.table_list_cache
+                .insert(database_name, tables.clone())
+                .await;
         }
 
         Ok(tables)
@@ -604,7 +665,7 @@ impl CatalogProvider for GlueCatalogProvider {
             .send()
             .await;
 
-        match result {
+        let res = match result {
             Ok(_) => Ok(()),
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
@@ -621,7 +682,12 @@ impl CatalogProvider for GlueCatalogProvider {
                     )))
                 }
             }
+        };
+
+        if res.is_ok() {
+            self.table_list_cache.invalidate(&database_name).await;
         }
+        res
     }
 
     async fn alter_table(
@@ -678,7 +744,7 @@ impl CatalogProvider for GlueCatalogProvider {
             .send()
             .await;
 
-        match result {
+        let res = match result {
             Ok(_) => self.get_view(database, view).await,
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
@@ -697,7 +763,12 @@ impl CatalogProvider for GlueCatalogProvider {
                     )))
                 }
             }
+        };
+
+        if res.is_ok() {
+            self.table_list_cache.invalidate(&database_name).await;
         }
+        res
     }
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
@@ -788,7 +859,7 @@ impl CatalogProvider for GlueCatalogProvider {
             .send()
             .await;
 
-        match result {
+        let res = match result {
             Ok(_) => Ok(()),
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
@@ -805,6 +876,11 @@ impl CatalogProvider for GlueCatalogProvider {
                     )))
                 }
             }
+        };
+
+        if res.is_ok() {
+            self.table_list_cache.invalidate(&database_name).await;
         }
+        res
     }
 }

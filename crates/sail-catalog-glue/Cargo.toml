@@ -16,6 +16,8 @@ aws-config = { workspace = true }
 aws-sdk-glue = { workspace = true }
 aws-smithy-types = { workspace = true }
 tokio = { workspace = true }
+log = { workspace = true }
+moka = { workspace = true, features = ["future"] }
 
 [dev-dependencies]
 arrow = { workspace = true }

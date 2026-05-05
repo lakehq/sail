@@ -6986,6 +6986,8 @@ dependencies = [
  "aws-config",
  "aws-sdk-glue",
  "aws-smithy-types",
+ "log",
+ "moka",
  "sail-catalog",
  "sail-common-datafusion",
  "testcontainers",
