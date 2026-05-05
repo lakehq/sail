@@ -124,6 +124,136 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | 2  | v1    |
 
   @sail-only
+  Rule: ALTER TABLE SET TBLPROPERTIES can enable type widening on an existing Delta table
+
+    Scenario: Delta log protocol is upgraded when ALTER TABLE enables type widening
+      Given variable location for temporary directory delta_alter_table_enable_type_widening
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_alter_table_enable_type_widening_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_alter_table_enable_type_widening_test (
+          id INT
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_alter_table_enable_type_widening_test VALUES (1)
+        """
+      Given statement
+        """
+        ALTER TABLE delta_alter_table_enable_type_widening_test
+        SET TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                                                | value  |
+        | protocol.minReaderVersion                           | 3      |
+        | protocol.minWriterVersion                           | 7      |
+        | protocol.readerFeatures                             | ["typeWidening"] |
+        | protocol.writerFeatures                             | ["typeWidening"] |
+        | metaData.configuration['delta.enableTypeWidening']  | "true" |
+
+    Scenario: ALTER COLUMN TYPE applies Delta type widening and records metadata
+      Given variable location for temporary directory delta_alter_column_type_widening
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_alter_column_type_widening_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_alter_column_type_widening_test (
+          id INT
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_alter_column_type_widening_test VALUES (1)
+        """
+      Given statement
+        """
+        ALTER TABLE delta_alter_column_type_widening_test
+        ALTER COLUMN id TYPE BIGINT
+        """
+      Given statement
+        """
+        INSERT INTO delta_alter_column_type_widening_test VALUES (2147483648)
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                                                            | value     |
+        | metaData.schemaString.fields[0].type                            | "long"    |
+        | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].fromType | "integer" |
+        | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].toType   | "long"    |
+      When query
+        """
+        SELECT id FROM delta_alter_column_type_widening_test ORDER BY id
+        """
+      Then query result ordered
+        | id         |
+        | 1          |
+        | 2147483648 |
+
+    Scenario: CHANGE COLUMN TYPE uses the same Delta type widening path
+      Given variable location for temporary directory delta_change_column_type_widening
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_change_column_type_widening_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_change_column_type_widening_test (
+          id INT
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_change_column_type_widening_test VALUES (1)
+        """
+      Given statement
+        """
+        ALTER TABLE delta_change_column_type_widening_test
+        CHANGE COLUMN id TYPE BIGINT
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                                                            | value     |
+        | metaData.schemaString.fields[0].type                            | "long"    |
+        | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].fromType | "integer" |
+        | metaData.schemaString.fields[0].metadata['delta.typeChanges'][0].toType   | "long"    |
+
+    Scenario: ALTER COLUMN TYPE rejects widening when the table property is disabled
+      Given variable location for temporary directory delta_alter_column_type_widening_disabled
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_alter_column_type_widening_disabled_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_alter_column_type_widening_disabled_test (
+          id INT
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_alter_column_type_widening_disabled_test VALUES (1)
+        """
+      Given statement with error delta.enableTypeWidening=true
+        """
+        ALTER TABLE delta_alter_column_type_widening_disabled_test
+        ALTER COLUMN id TYPE BIGINT
+        """
+
+  @sail-only
   Rule: ALTER TABLE UNSET TBLPROPERTIES records a dedicated Delta log operation
 
     Scenario: Delta log commit info records UNSET TBLPROPERTIES operation on ALTER TABLE UNSET

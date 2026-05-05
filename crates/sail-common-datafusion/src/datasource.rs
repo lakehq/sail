@@ -323,6 +323,21 @@ pub trait TableFormat: Send + Sync {
             self.name()
         )
     }
+
+    /// Alters the type of a table column.
+    async fn alter_table_column_type(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        data_type: datafusion::arrow::datatypes::DataType,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, column_path, data_type);
+        not_impl_err!(
+            "Column type alteration not supported for {} format",
+            self.name()
+        )
+    }
 }
 
 /// Thread-safe registry of available `TableFormat` implementations.

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
@@ -26,9 +27,14 @@ use crate::physical_plan::planner::{
     plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
     DeltaPlannerConfig, PlannerContext,
 };
+use crate::schema::{
+    add_type_widening_metadata, alter_column_type as alter_delta_column_type, collect_type_changes,
+    evolve_schema, is_supported_type_change_for_write, protocol_can_write_type_widening,
+    schema_contains_type_widening_metadata,
+};
 use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
-    DeltaOperation,
+    DataType as DeltaDataType, DeltaOperation, StructType,
 };
 use crate::table::{open_table_with_object_store, open_table_with_object_store_and_table_config};
 use crate::{create_delta_source, DeltaTableError};
@@ -438,6 +444,110 @@ impl TableFormat for DeltaTableFormat {
 
         Ok(())
     }
+
+    async fn alter_table_column_type(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        data_type: ArrowDataType,
+    ) -> Result<()> {
+        use crate::kernel::transaction::CommitBuilder;
+
+        let url = parse_location_to_url(path)?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let table = open_table_with_object_store_and_table_config(
+            url,
+            object_store,
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .clone();
+        let current_metadata = snapshot.metadata();
+        let current_kernel = StructType::try_from(snapshot.schema())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let target_type = DeltaDataType::try_from(&data_type)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let candidate_kernel = alter_delta_column_type(&current_kernel, &column_path, target_type)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let type_changes = collect_type_changes(&current_kernel, &candidate_kernel)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        if type_changes.is_empty() {
+            return Ok(());
+        }
+        if !snapshot.table_properties().enable_type_widening() {
+            return plan_err!(
+                "Delta ALTER COLUMN TYPE requires table property delta.enableTypeWidening=true"
+            );
+        }
+        if !protocol_can_write_type_widening(snapshot.protocol()) {
+            return plan_err!(
+                "Delta ALTER COLUMN TYPE requires the typeWidening reader and writer table features"
+            );
+        }
+        for (field_path, change) in &type_changes {
+            if !is_supported_type_change_for_write(
+                snapshot.protocol(),
+                &change.from_type,
+                &change.to_type,
+            ) {
+                return plan_err!(
+                    "Delta ALTER COLUMN TYPE change at {} is not supported by Iceberg-compatible Delta tables: {} -> {}",
+                    format_schema_change_path(field_path, &change.field_path),
+                    change.from_type,
+                    change.to_type
+                );
+            }
+        }
+
+        let candidate_kernel = if !type_changes.is_empty()
+            || schema_contains_type_widening_metadata(&current_kernel)
+        {
+            add_type_widening_metadata(&current_kernel, &candidate_kernel)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+        } else {
+            candidate_kernel
+        };
+
+        let kmode = snapshot.effective_column_mapping_mode();
+        let (_final_kernel, updated_metadata) =
+            evolve_schema(&current_kernel, &candidate_kernel, current_metadata, kmode)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let actions = vec![CommitAction::Metadata(updated_metadata)];
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(snapshot),
+                table.log_store(),
+                DeltaOperation::AlterColumn {
+                    column: column_path.join("."),
+                    data_type: data_type.to_string(),
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+fn format_schema_change_path(struct_path: &[String], field_path: &[String]) -> String {
+    let mut path = struct_path.to_vec();
+    path.extend(field_path.iter().cloned());
+    path.join(".")
 }
 
 /// Merge an existing protocol with a desired one. The result preserves every feature and

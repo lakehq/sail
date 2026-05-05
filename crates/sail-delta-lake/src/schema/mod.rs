@@ -15,6 +15,7 @@ pub mod converter;
 pub mod manager;
 pub mod mapping;
 pub mod normalize;
+pub mod type_widening;
 
 pub use converter::{
     arrow_field_physical_name, arrow_schema_from_struct_type, arrow_schema_reorder_partitions,
@@ -29,3 +30,9 @@ pub use mapping::{
     annotate_schema_for_column_mapping as annotate_for_column_mapping, compute_max_column_id,
 };
 pub use normalize::normalize_delta_schema;
+pub use type_widening::{
+    add_type_widening_metadata, alter_column_type, collect_type_changes,
+    is_supported_type_change_for_write, protocol_can_write_type_widening,
+    protocol_supports_type_widening, schema_contains_type_widening_metadata,
+    validate_type_widening_metadata,
+};

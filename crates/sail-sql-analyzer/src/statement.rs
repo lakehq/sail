@@ -8,16 +8,17 @@ use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral
 use sail_sql_parser::ast::operator::{Minus, Plus};
 use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
-    AlterTableOperation, AlterViewOperation, AnalyzeTableModifier, AsQueryClause, Assignment,
-    AssignmentList, ColumnAlteration, ColumnAlterationList, ColumnAlterationOption,
-    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
-    ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
-    DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
-    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
-    MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
-    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyList, PropertyKeyValue,
-    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
-    SortColumnList, Statement, UpdateTableAlias, ViewColumn,
+    AlterColumnOperation, AlterTableOperation, AlterViewOperation, AnalyzeTableModifier,
+    AsQueryClause, Assignment, AssignmentList, ColumnAlteration, ColumnAlterationList,
+    ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
+    ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
+    CreateViewClause, DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat,
+    InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
+    MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
+    PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
+    PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
+    RowFormatDelimitedClause, SetClause, SortColumn, SortColumnList, Statement, UpdateTableAlias,
+    ViewColumn,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -1920,16 +1921,24 @@ fn from_ast_alter_table_operation(
                 if_exists: if_exists.is_some(),
             })
         }
+        AlterTableOperation::AlterColumn {
+            name,
+            operation: AlterColumnOperation::Type(_, data_type),
+            ..
+        } => Ok(spec::AlterTableOperation::AlterColumnType {
+            name: from_ast_object_name(name)?,
+            data_type: from_ast_data_type(data_type)?,
+        }),
         AlterTableOperation::RenameTable { .. }
         | AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::DropColumns { .. }
         | AlterTableOperation::RenameColumn { .. }
-        | AlterTableOperation::AlterColumn { .. }
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
         | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
+        AlterTableOperation::AlterColumn { .. } => Ok(spec::AlterTableOperation::Unknown),
         AlterTableOperation::AddColumns { items, .. }
         | AlterTableOperation::ReplaceColumns { items, .. } => {
             // Validate column descriptors (e.g. detect duplicate COMMENT/DEFAULT/NOT NULL/POSITION

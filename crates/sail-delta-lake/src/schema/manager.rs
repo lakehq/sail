@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{
     ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata,
-    Protocol, StructType, TableFeature,
+    Protocol, StructType, TableFeature, TableProperties,
 };
 
 /// Check if a Delta StructType schema contains any columns with generation expressions.
@@ -145,6 +145,16 @@ pub fn protocol_for_create(
         }
         if !writer_features.contains(&TableFeature::DeletionVectors) {
             writer_features.push(TableFeature::DeletionVectors);
+        }
+    }
+
+    // `delta.enableTypeWidening = "true"` enables the stable TypeWidening feature.
+    if TableProperties::from(configuration.iter()).enable_type_widening() {
+        if !reader_features.contains(&TableFeature::TypeWidening) {
+            reader_features.push(TableFeature::TypeWidening);
+        }
+        if !writer_features.contains(&TableFeature::TypeWidening) {
+            writer_features.push(TableFeature::TypeWidening);
         }
     }
 
@@ -304,6 +314,18 @@ mod tests {
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::DeletionVectors));
         assert!(protocol.has_writer_feature(&TableFeature::DeletionVectors));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_activates_type_widening_from_enable_property() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert("delta.enableTypeWidening".to_string(), "true".to_string());
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::TypeWidening));
+        assert!(protocol.has_writer_feature(&TableFeature::TypeWidening));
         Ok(())
     }
 

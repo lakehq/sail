@@ -2,6 +2,7 @@
 Test Delta Lake schema handling (mergeSchema, overwriteSchema, evolution) in Sail.
 """
 
+import json
 import platform
 from datetime import datetime, timedelta, timezone
 
@@ -27,6 +28,27 @@ def _as_utc(dt: datetime) -> datetime:
         # Treat naive datetimes as local timestamps and normalize to UTC.
         return datetime.fromtimestamp(dt.timestamp(), tz=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _latest_delta_schema(delta_path):
+    schema = None
+    for log_file in sorted((delta_path / "_delta_log").glob("*.json")):
+        with log_file.open(encoding="utf-8") as f:
+            for line in f:
+                action = json.loads(line)
+                metadata = action.get("metaData")
+                if metadata is not None:
+                    schema = json.loads(metadata["schemaString"])
+    assert schema is not None
+    return schema
+
+
+def _delta_field(schema, name):
+    for field in schema["fields"]:
+        if field["name"] == name:
+            return field
+    msg = f"field {name!r} not found in Delta schema"
+    raise AssertionError(msg)
 
 
 class TestDeltaSchemaHandling:
@@ -302,7 +324,17 @@ class TestDeltaSchemaHandling:
         initial_schema = StructType([StructField("id", LongType(), True), StructField("value", IntegerType(), True)])
         initial_data = [Row(id=1, value=100)]
         df1 = spark.createDataFrame(initial_data, schema=initial_schema)
-        df1.write.format("delta").mode("overwrite").save(str(delta_path))
+        df1.createOrReplaceTempView("_tw_merge_compat_initial")
+        spark.sql("DROP TABLE IF EXISTS delta_merge_with_compatible_types_tbl")
+        spark.sql(
+            f"""
+            CREATE TABLE delta_merge_with_compatible_types_tbl
+            USING DELTA
+            LOCATION '{delta_path}'
+            TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+            AS SELECT * FROM _tw_merge_compat_initial
+            """
+        )
 
         initial_table_schema = spark.read.format("delta").load(str(delta_path)).schema
         assert initial_table_schema["value"].dataType == IntegerType()
@@ -329,15 +361,31 @@ class TestDeltaSchemaHandling:
             result_pandas.sort_values("id").reset_index(drop=True), expected_data, check_dtype=True
         )
 
+        value_field = _delta_field(_latest_delta_schema(delta_path), "value")
+        type_changes = value_field["metadata"]["delta.typeChanges"]
+        assert type_changes[-1]["fromType"] == "integer"
+        assert type_changes[-1]["toType"] == "long"
+        assert "fieldPath" not in type_changes[-1]
+
     def test_delta_schema_merge_float_promotion(self, spark, tmp_path):
         """Test mergeSchema with Float32 to Float64 promotion."""
         delta_path = tmp_path / "delta_float_promotion"
 
-        # Create table with Float32
+        # Create table with Float32 and type widening enabled
         initial_schema = StructType([StructField("id", IntegerType(), True), StructField("value", FloatType(), True)])
         initial_data = [Row(id=1, value=1.5)]
         df1 = spark.createDataFrame(initial_data, schema=initial_schema)
-        df1.write.format("delta").mode("overwrite").save(str(delta_path))
+        df1.createOrReplaceTempView("_tw_float_promo_initial")
+        spark.sql("DROP TABLE IF EXISTS delta_merge_float_promotion_tbl")
+        spark.sql(
+            f"""
+            CREATE TABLE delta_merge_float_promotion_tbl
+            USING DELTA
+            LOCATION '{delta_path}'
+            TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+            AS SELECT * FROM _tw_float_promo_initial
+            """
+        )
 
         # Append data with Float64
         new_schema = StructType([StructField("id", IntegerType(), True), StructField("value", DoubleType(), True)])
@@ -357,3 +405,22 @@ class TestDeltaSchemaHandling:
         pd.testing.assert_frame_equal(
             result_pandas.sort_values("id").reset_index(drop=True), expected_data, check_dtype=True
         )
+
+        value_field = _delta_field(_latest_delta_schema(delta_path), "value")
+        type_changes = value_field["metadata"]["delta.typeChanges"]
+        assert type_changes[-1]["fromType"] == "float"
+        assert type_changes[-1]["toType"] == "double"
+
+    def test_delta_schema_merge_type_widening_requires_table_property(self, spark, tmp_path):
+        """mergeSchema rejects widening existing columns unless type widening is enabled."""
+        delta_path = tmp_path / "delta_type_widening_disabled"
+
+        initial_schema = StructType([StructField("id", IntegerType(), True)])
+        spark.createDataFrame([Row(id=1)], schema=initial_schema).write.format("delta").mode("overwrite").save(
+            str(delta_path)
+        )
+
+        widened_schema = StructType([StructField("id", LongType(), True)])
+        widened_df = spark.createDataFrame([Row(id=2)], schema=widened_schema)
+        with pytest.raises(Exception, match=r"(?i)(type widening|enableTypeWidening|schema)"):
+            widened_df.write.format("delta").mode("append").option("mergeSchema", "true").save(str(delta_path))
