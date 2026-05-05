@@ -321,7 +321,7 @@ mod tests {
     fn protocol_for_create_activates_type_widening_from_enable_property() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.enableTypeWidening".to_string(), "true".to_string());
-        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::TypeWidening));
