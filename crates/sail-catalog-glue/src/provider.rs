@@ -450,7 +450,7 @@ impl CatalogProvider for GlueCatalogProvider {
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
         if self.config.cache_db_enable {
-            let cache_key = prefix.map(|p| p.to_string());
+            let cache_key = prefix.map(|p| quote_namespace_if_needed(p));
             if let Some(cached) = self.db_list_cache.get(&cache_key).await {
                 log::info!("Glue database list cache HIT for prefix: {:?}", cache_key);
                 return Ok(cached);
@@ -483,7 +483,7 @@ impl CatalogProvider for GlueCatalogProvider {
         }
 
         if self.config.cache_db_enable {
-            let cache_key = prefix.map(|p| p.to_string());
+            let cache_key = prefix.map(|p| quote_namespace_if_needed(p));
             self.db_list_cache.insert(cache_key, databases.clone()).await;
         }
 

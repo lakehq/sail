@@ -81,13 +81,3 @@ impl Namespace {
             && self.tail.iter().zip(other.tail.iter()).all(|(a, b)| a == b)
     }
 }
-
-impl std::fmt::Display for Namespace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.head)?;
-        for segment in &self.tail {
-            write!(f, ".{}", segment)?;
-        }
-        Ok(())
-    }
-}
