@@ -14,7 +14,7 @@ use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 pub struct RewriteExplicitRepartition {}
 
-/// Rewrites the explicit repartition node as [`RepartitionExec`].
+/// Rewrites explicit repartition nodes to executable physical operators.
 impl RewriteExplicitRepartition {
     pub fn new() -> Self {
         Self {}
@@ -39,9 +39,10 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
                 let input = node.input().clone();
                 let input_partition_count = input.output_partitioning().partition_count();
                 match partitioning {
-                    Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => Ok(
-                        Transformed::yes(Arc::new(RepartitionExec::try_new(input, partitioning)?)),
-                    ),
+                    Partitioning::RoundRobinBatch(_) => Ok(Transformed::no(plan)),
+                    Partitioning::Hash(_, _) => Ok(Transformed::yes(Arc::new(
+                        RepartitionExec::try_new(input, partitioning)?,
+                    ))),
                     Partitioning::UnknownPartitioning(n) if n >= input_partition_count => {
                         Ok(Transformed::yes(input))
                     }
@@ -83,7 +84,6 @@ mod tests {
     use datafusion::config::ConfigOptions;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
     use datafusion_physical_expr::Partitioning;
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrites_round_robin_partitioning_to_repartition_exec() {
+    fn test_keeps_round_robin_partitioning_on_explicit_exec() {
         let input = multi_partition_plan(&schema());
         let plan = Arc::new(ExplicitRepartitionExec::new(
             input,
@@ -174,7 +174,7 @@ mod tests {
 
         assert!(optimized
             .as_any()
-            .downcast_ref::<RepartitionExec>()
+            .downcast_ref::<ExplicitRepartitionExec>()
             .is_some());
         assert_eq!(optimized.output_partitioning().partition_count(), 4);
     }

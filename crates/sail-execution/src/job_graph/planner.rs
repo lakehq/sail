@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -205,6 +206,7 @@ fn build_job_graph(
             build_job_graph(right.clone(), usage, graph)?,
         ]
     } else if plan.as_any().is::<RepartitionExec>()
+        || plan.as_any().is::<ExplicitRepartitionExec>()
         || plan.as_any().is::<CoalescePartitionsExec>()
         || plan.as_any().is::<SortPreservingMergeExec>()
     {
@@ -248,6 +250,19 @@ fn build_job_graph(
             }
             Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
                 create_shuffle(child, graph, properties, consumption)?
+            }
+        }
+    } else if let Some(repartition) = plan.as_any().downcast_ref::<ExplicitRepartitionExec>() {
+        let properties = repartition.properties().clone();
+        let child = plan.children().one()?;
+        match &properties.partitioning {
+            Partitioning::RoundRobinBatch(_) => {
+                create_shuffle(child, graph, properties, consumption)?
+            }
+            other => {
+                return Err(ExecutionError::DataFusionError(plan_datafusion_err!(
+                    "unexpected explicit repartition partitioning in distributed planning: {other:?}"
+                )));
             }
         }
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
