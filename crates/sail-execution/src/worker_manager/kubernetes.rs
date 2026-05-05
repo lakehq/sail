@@ -105,7 +105,7 @@ impl KubernetesWorkerManager {
                 format!("{}-{}", self.name, id),
             ),
             (
-                "sail.lakehq.io/worker-manager".to_string(),
+                "sail.lakesail.com/worker-manager".to_string(),
                 self.name.clone(),
             ),
         ])
@@ -288,7 +288,7 @@ impl WorkerManager for KubernetesWorkerManager {
                 .delete_collection(
                     &DeleteParams::default(),
                     &ListParams::default()
-                        .labels(&format!("sail.lakehq.io/worker-manager={}", self.name)),
+                        .labels(&format!("sail.lakesail.com/worker-manager={}", self.name)),
                 )
                 .await?;
         }
@@ -345,7 +345,7 @@ mod tests {
                 "test-instance".to_string(),
             ),
             (
-                "sail.lakehq.io/worker-manager".to_string(),
+                "sail.lakesail.com/worker-manager".to_string(),
                 "test-manager".to_string(),
             ),
         ]);
@@ -377,7 +377,7 @@ mod tests {
             Some(&"test-instance".to_string())
         );
         assert_eq!(
-            labels.get("sail.lakehq.io/worker-manager"),
+            labels.get("sail.lakesail.com/worker-manager"),
             Some(&"test-manager".to_string())
         );
     }
