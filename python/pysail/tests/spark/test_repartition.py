@@ -3,6 +3,8 @@ import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
 
+from pysail.testing.spark.steps.plan import normalize_plan_text
+
 
 def partition_count(df):
     def counter(_iterator):
@@ -22,12 +24,42 @@ def input_partition_groups(df):
     return [set() if row["input_pids"] == "" else {int(pid) for pid in row["input_pids"].split(",")} for row in rows]
 
 
+def normalized_plan(df):
+    return normalize_plan_text(df._explain_string())  # noqa: SLF001
+
+
 def test_explicit_repartition(spark):
     assert partition_count(spark.range(0, 10, 1, 2)) == 2  # noqa: PLR2004
     assert partition_count(spark.range(0, 10, 1, 3).select("id", F.lit("foo").alias("a")).repartition("a")) == 3  # noqa: PLR2004
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(5)) == 5  # noqa: PLR2004
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(6, "b", "a")) == 6  # noqa: PLR2004
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition("a")) == 1
+
+
+def test_explicit_repartition_spreads_identical_rows(spark):
+    partition_ids = {
+        row["pid"]
+        for row in spark.range(0, 64, 1, 1)
+        .select(F.lit("same").alias("value"))
+        .repartition(4)
+        .selectExpr("spark_partition_id() AS pid")
+        .distinct()
+        .collect()
+    }
+
+    assert partition_ids == set(range(4))
+
+
+def test_explicit_repartition_plan_shape_matches_pyspark(spark):
+    round_robin_plan = normalized_plan(spark.sql("SELECT 1 AS a, 'foo' AS b").repartition(5))
+    repartition_one_plan = normalized_plan(spark.range(0, 8, 1, 2).repartition(1))
+    hash_plan = normalized_plan(
+        spark.range(0, 8, 1, 2).select("id", (F.col("id") % 2).alias("group")).repartition(1, "group")
+    )
+
+    assert "RepartitionExec: partitioning=RoundRobinBatch(5)" in round_robin_plan
+    assert "RepartitionExec: partitioning=RoundRobinBatch(1)" in repartition_one_plan
+    assert "RepartitionExec: partitioning=Hash([" in hash_plan
 
 
 def test_explicit_coalesce(spark):
