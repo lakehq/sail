@@ -1,6 +1,5 @@
 Feature: CTAS ORDER BY produces globally sorted output
 
-  @ctas_order_by
   Scenario: CTAS ORDER BY ASC writes globally sorted data
     Given variable location for temporary directory ctas_order_asc
     Given final statement
@@ -24,7 +23,6 @@ Feature: CTAS ORDER BY produces globally sorted output
       | 4   |
       | 5   |
 
-  @ctas_order_by
   Scenario: CTAS ORDER BY DESC writes globally sorted data
     Given variable location for temporary directory ctas_order_desc
     Given final statement
@@ -48,7 +46,6 @@ Feature: CTAS ORDER BY produces globally sorted output
       | 2   |
       | 1   |
 
-  @ctas_order_by
   Scenario: CTAS ORDER BY ASC with NULLs — NULLs first (Spark default)
     Given variable location for temporary directory ctas_order_nulls_asc
     Given final statement
@@ -72,7 +69,6 @@ Feature: CTAS ORDER BY produces globally sorted output
       | 2    |
       | 3    |
 
-  @ctas_order_by
   Scenario: CTAS ORDER BY DESC with NULLs — NULLs last (Spark default)
     Given variable location for temporary directory ctas_order_nulls_desc
     Given final statement
@@ -95,3 +91,104 @@ Feature: CTAS ORDER BY produces globally sorted output
       | 1    |
       | NULL |
       | NULL |
+
+  Scenario: CTAS ORDER BY multi-column ASC then DESC
+    Given variable location for temporary directory ctas_order_multi
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_order_multi_t
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_order_multi_t USING PARQUET LOCATION {{ location.sql }}
+      AS SELECT col1, col2 FROM VALUES (1, 'b'), (2, 'a'), (1, 'a'), (2, 'b') AS t(col1, col2)
+      ORDER BY col1 ASC, col2 DESC
+      """
+    When query
+      """
+      SELECT col1, col2 FROM ctas_order_multi_t
+      """
+    Then query result ordered
+      | col1 | col2 |
+      | 1    | b    |
+      | 1    | a    |
+      | 2    | b    |
+      | 2    | a    |
+
+  Scenario: CTAS ORDER BY DOUBLE ASC — NaN sorts after Infinity
+    Given variable location for temporary directory ctas_order_nan_asc
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_order_nan_asc_t
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_order_nan_asc_t USING PARQUET LOCATION {{ location.sql }}
+      AS SELECT v FROM VALUES
+        (CAST('NaN' AS DOUBLE)), (2.0), (CAST('Infinity' AS DOUBLE)),
+        (1.0), (CAST('-Infinity' AS DOUBLE))
+      AS t(v) ORDER BY v ASC
+      """
+    When query
+      """
+      SELECT v FROM ctas_order_nan_asc_t
+      """
+    Then query result ordered
+      | v         |
+      | -Infinity |
+      | 1.0       |
+      | 2.0       |
+      | Infinity  |
+      | NaN       |
+
+  Scenario: CTAS ORDER BY DOUBLE DESC — NaN sorts first
+    Given variable location for temporary directory ctas_order_nan_desc
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_order_nan_desc_t
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_order_nan_desc_t USING PARQUET LOCATION {{ location.sql }}
+      AS SELECT v FROM VALUES
+        (CAST('NaN' AS DOUBLE)), (2.0), (CAST('Infinity' AS DOUBLE)),
+        (1.0), (CAST('-Infinity' AS DOUBLE))
+      AS t(v) ORDER BY v DESC
+      """
+    When query
+      """
+      SELECT v FROM ctas_order_nan_desc_t
+      """
+    Then query result ordered
+      | v         |
+      | NaN       |
+      | Infinity  |
+      | 2.0       |
+      | 1.0       |
+      | -Infinity |
+
+  Scenario: CTAS ORDER BY DOUBLE ASC with NULLs — NULLs first, NaN last
+    Given variable location for temporary directory ctas_order_nan_null_asc
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_order_nan_null_asc_t
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_order_nan_null_asc_t USING PARQUET LOCATION {{ location.sql }}
+      AS SELECT v FROM VALUES
+        (CAST('NaN' AS DOUBLE)), (CAST(NULL AS DOUBLE)), (2.0),
+        (CAST('Infinity' AS DOUBLE)), (1.0)
+      AS t(v) ORDER BY v ASC
+      """
+    When query
+      """
+      SELECT v FROM ctas_order_nan_null_asc_t
+      """
+    Then query result ordered
+      | v        |
+      | NULL     |
+      | 1.0      |
+      | 2.0      |
+      | Infinity |
+      | NaN      |
