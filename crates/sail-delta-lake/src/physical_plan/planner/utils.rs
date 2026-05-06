@@ -139,6 +139,7 @@ pub fn build_standard_write_layers(
     let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
 
     let writer_schema = plan.schema();
+    let write_context = ctx.prepare_write_context(&writer_schema, sink_mode, None)?;
     let writer = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
@@ -150,6 +151,7 @@ pub fn build_standard_write_layers(
         ctx.table_exists(),
         writer_schema,
         None,
+        write_context.clone(),
     )?);
 
     // DeltaCommitExec is single-partition; gather writer partitions first.
@@ -163,6 +165,7 @@ pub fn build_standard_write_layers(
         original_schema,
         sink_mode.clone(),
         ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 

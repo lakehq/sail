@@ -151,6 +151,15 @@ impl TableFormat for DeltaTableFormat {
             Err(err) => return Err(DataFusionError::External(Box::new(err))),
         };
         let table_exists = table.is_some();
+        let table_snapshot = table
+            .as_ref()
+            .map(|table| {
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))
+                    .cloned()
+            })
+            .transpose()?;
         let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -173,18 +182,9 @@ impl TableFormat for DeltaTableFormat {
         let table_schema_for_cond = None;
 
         // Get existing partition columns from table metadata if available
-        let existing_partition_columns = if let Some(table) = &table {
-            Some(
-                table
-                    .snapshot()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .metadata()
-                    .partition_columns()
-                    .clone(),
-            )
-        } else {
-            None
-        };
+        let existing_partition_columns = table_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.metadata().partition_columns().clone());
 
         // Validate partition column mismatch for append/overwrite operations
         if let Some(existing_partitions) = &existing_partition_columns {
@@ -229,7 +229,8 @@ impl TableFormat for DeltaTableFormat {
             table_schema_for_cond,
             table_exists,
         )
-        .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()));
+        .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
+        .with_table_snapshot(table_snapshot);
         let planner_ctx = PlannerContext::new(ctx, table_config);
         let planner = DeltaPhysicalPlanner::new(planner_ctx);
         let sink_exec = planner.create_plan(input, unified_mode, sort_order).await?;

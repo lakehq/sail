@@ -90,9 +90,10 @@ use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
-    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCastColumnExpr, DeltaCommitExec,
-    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
-    DeltaScanByAddsExec, DeltaWriterExec, RelaxedTzCastExec,
+    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCastColumnExpr,
+    DeltaCommitContext, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
+    DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriteContext,
+    DeltaWriterExec, RelaxedTzCastExec,
 };
 use sail_delta_lake::spec::DeltaOperation;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
@@ -610,6 +611,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode,
                 operation_override_json,
                 metadata_configuration,
+                write_context,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -625,6 +627,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let options =
                     serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
                 let metadata_configuration = serde_json::from_str(&metadata_configuration)
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
+                let write_context = serde_json::from_str::<DeltaWriteContext>(&write_context)
                     .map_err(|e| plan_datafusion_err!("{e}"))?;
 
                 let operation_override = if let Some(s) = operation_override_json.as_ref() {
@@ -645,6 +649,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_exists,
                     Arc::new(sink_schema),
                     operation_override,
+                    write_context,
                 )?))
             }
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
@@ -655,6 +660,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_schema,
                 sink_mode,
                 user_metadata,
+                commit_context,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -666,6 +672,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     return plan_err!("Missing sink_mode for DeltaCommitExec");
                 };
+                let commit_context = serde_json::from_str::<DeltaCommitContext>(&commit_context)
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
 
                 Ok(Arc::new(DeltaCommitExec::new(
                     input,
@@ -675,6 +683,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(sink_schema),
                     sink_mode,
                     user_metadata,
+                    commit_context,
                 )))
             }
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
@@ -1539,6 +1548,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     delta_writer_exec.metadata_configuration(),
                 )
                 .map_err(|e| plan_datafusion_err!("{e}"))?,
+                write_context: serde_json::to_string(delta_writer_exec.write_context())
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
@@ -1551,6 +1562,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
                 sink_mode: Some(sink_mode),
                 user_metadata: delta_commit_exec.user_metadata().map(str::to_owned),
+                commit_context: serde_json::to_string(delta_commit_exec.commit_context())
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(delta_scan_by_adds_exec) =
             node.as_any().downcast_ref::<DeltaScanByAddsExec>()

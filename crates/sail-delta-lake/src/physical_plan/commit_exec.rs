@@ -20,7 +20,6 @@ use chrono::Utc;
 use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -38,7 +37,7 @@ use url::Url;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, OperationMetrics};
 use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
 use crate::physical_plan::action_schema::ExecCommitMeta;
-use crate::physical_plan::{decode_actions_and_meta_from_batch, COL_ACTION};
+use crate::physical_plan::{decode_actions_and_meta_from_batch, DeltaCommitContext, COL_ACTION};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
@@ -46,6 +45,7 @@ use crate::spec::{CommitAction, StructType};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{
     create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
+    open_table_with_object_store_and_table_config_at_version,
 };
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
@@ -64,6 +64,7 @@ pub struct DeltaCommitExec {
     sink_mode: PhysicalSinkMode,
     /// Per-commit user-defined metadata to record in `commitInfo.userMetadata`.
     user_metadata: Option<String>,
+    commit_context: DeltaCommitContext,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -77,6 +78,7 @@ impl DeltaCommitExec {
         sink_schema: SchemaRef,
         sink_mode: PhysicalSinkMode,
         user_metadata: Option<String>,
+        commit_context: DeltaCommitContext,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
@@ -92,6 +94,7 @@ impl DeltaCommitExec {
             sink_schema,
             sink_mode,
             user_metadata,
+            commit_context,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
@@ -132,6 +135,10 @@ impl DeltaCommitExec {
 
     pub fn user_metadata(&self) -> Option<&str> {
         self.user_metadata.as_deref()
+    }
+
+    pub fn commit_context(&self) -> &DeltaCommitContext {
+        &self.commit_context
     }
 }
 
@@ -181,6 +188,7 @@ impl ExecutionPlan for DeltaCommitExec {
             self.sink_schema.clone(),
             self.sink_mode.clone(),
             self.user_metadata.clone(),
+            self.commit_context.clone(),
         )))
     }
 
@@ -212,30 +220,12 @@ impl ExecutionPlan for DeltaCommitExec {
         let table_exists = self.table_exists;
         let sink_schema = self.sink_schema.clone();
         let user_metadata = self.user_metadata.clone();
+        let commit_context = self.commit_context.clone();
         let schema = self.schema();
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
-
-            // For existing tables, open concurrently with a full snapshot while
-            // input data (Parquet writes from workers) is being drained.
-            let table_join = if table_exists {
-                let open_url = table_url.clone();
-                let open_store = Arc::clone(&object_store);
-                let open_storage = storage_config.clone();
-                Some(SpawnedTask::spawn(async move {
-                    open_table_with_object_store_and_table_config(
-                        open_url,
-                        open_store,
-                        open_storage,
-                        DeltaSnapshotConfig::default(),
-                    )
-                    .await
-                }))
-            } else {
-                None
-            };
 
             let mut total_rows = 0u64;
             let mut has_data = false;
@@ -398,33 +388,103 @@ impl ExecutionPlan for DeltaCommitExec {
                 )
             };
 
-            // Await the concurrently-opened table, or create one for new tables.
-            // For existing tables the open() ran in the background while workers were
-            // writing Parquet; it should be complete (or nearly so) by now.
-            let table = if let Some(join) = table_join {
-                join.await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-            } else {
-                create_delta_table_with_object_store(
-                    table_url.clone(),
-                    object_store.clone(),
-                    storage_config.clone(),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-            };
+            let needs_full_snapshot = final_actions
+                .iter()
+                .any(|action| matches!(action, CommitAction::Remove(_)))
+                || operation.read_whole_table();
 
-            let snapshot = if table_exists {
-                Some(
-                    table
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                )
+            let table = create_delta_table_with_object_store(
+                table_url.clone(),
+                object_store.clone(),
+                storage_config.clone(),
+            )
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let log_store = table.log_store();
+
+            let reference = if table_exists {
+                if !needs_full_snapshot {
+                    if let Some(snapshot_context) = commit_context.base_snapshot.as_ref() {
+                        Some(Arc::new(
+                            snapshot_context
+                                .to_snapshot(
+                                    log_store.as_ref(),
+                                    DeltaSnapshotConfig {
+                                        require_files: false,
+                                        ..Default::default()
+                                    },
+                                )
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                        ))
+                    } else {
+                        let table = match commit_context.base_version() {
+                            Some(version) => {
+                                open_table_with_object_store_and_table_config_at_version(
+                                    table_url.clone(),
+                                    object_store.clone(),
+                                    storage_config.clone(),
+                                    DeltaSnapshotConfig {
+                                        require_files: false,
+                                        ..Default::default()
+                                    },
+                                    version,
+                                )
+                                .await
+                            }
+                            None => {
+                                open_table_with_object_store_and_table_config(
+                                    table_url.clone(),
+                                    object_store.clone(),
+                                    storage_config.clone(),
+                                    DeltaSnapshotConfig {
+                                        require_files: false,
+                                        ..Default::default()
+                                    },
+                                )
+                                .await
+                            }
+                        }
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        Some(
+                            table
+                                .snapshot()
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                                .clone(),
+                        )
+                    }
+                } else {
+                    let table = match commit_context.base_version() {
+                        Some(version) => {
+                            open_table_with_object_store_and_table_config_at_version(
+                                table_url.clone(),
+                                object_store.clone(),
+                                storage_config.clone(),
+                                DeltaSnapshotConfig::default(),
+                                version,
+                            )
+                            .await
+                        }
+                        None => {
+                            open_table_with_object_store_and_table_config(
+                                table_url.clone(),
+                                object_store.clone(),
+                                storage_config.clone(),
+                                DeltaSnapshotConfig::default(),
+                            )
+                            .await
+                        }
+                    }
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    Some(
+                        table
+                            .snapshot()
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?
+                            .clone(),
+                    )
+                }
             } else {
                 None
             };
-            let reference = snapshot.cloned();
 
             operation_metrics.finalize_for(&operation);
 
@@ -434,7 +494,7 @@ impl ExecutionPlan for DeltaCommitExec {
                     .with_user_metadata(user_metadata),
             )
             .with_actions(final_actions)
-            .build(reference, table.log_store(), operation)
+            .build(reference, log_store, operation)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
