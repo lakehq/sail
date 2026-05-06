@@ -182,10 +182,6 @@ impl ServerSessionFactory {
                         .worker_service_account_name
                         .clone(),
                     worker_pod_template: self.config.kubernetes.worker_pod_template.clone(),
-                    delete_worker_pods_on_stop: matches!(
-                        self.config.kubernetes.worker_pod_cleanup,
-                        KubernetesWorkerPodCleanup::SessionEnd
-                    ),
                 };
                 let worker_manager = Arc::new(KubernetesWorkerManager::new(options));
                 let options =
