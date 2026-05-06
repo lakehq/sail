@@ -72,5 +72,22 @@ export SAIL_CATALOG__LIST='[{type="glue", name="sail", region="us-east-1", endpo
 ### With Caching Enabled
 
 ```bash
-export SAIL_CATALOG__LIST='[{type="glue", name="sail", region="us-east-1", database_cache_enabled=true, table_cache_enabled=true, database_cache_ttl_secs=3600, table_cache_ttl_secs=1800}]'
+export SAIL_CATALOG__LIST='[{
+  "type": "glue",
+  "name": "sail",
+  "region": "us-east-1",
+  "database_cache_enabled": true,
+  "database_cache_size": 100,
+  "database_cache_ttl_secs": 3600,
+  "table_cache_enabled": true,
+  "table_cache_size": 1000,
+  "table_cache_ttl_secs": 1800
+}]'
 ```
+
+*   `database_cache_enabled`: Whether to enable caching for database metadata.
+*   `database_cache_size`: The maximum number of database metadata entries to cache. When the limit is reached, older entries are evicted.
+*   `database_cache_ttl_secs`: The time-to-live (TTL) for cached database metadata in seconds.
+*   `table_cache_enabled`: Whether to enable caching for table metadata.
+*   `table_cache_size`: The maximum number of table metadata entries to cache. When the limit is reached, older entries are evicted.
+*   `table_cache_ttl_secs`: The time-to-live (TTL) for cached table metadata in seconds.

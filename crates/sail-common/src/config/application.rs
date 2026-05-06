@@ -417,13 +417,14 @@ pub enum CacheType {
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
     #[serde(
+        skip_serializing_if = "Option::is_none",
         serialize_with = "serialize_non_empty_string",
         deserialize_with = "deserialize_non_empty_string"
     )]
     pub default_catalog: Option<String>,
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
-    pub providers: Vec<CatalogType>,
+    pub list: Vec<CatalogType>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,7 +464,7 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_access_token: Option<SecretString>,
-        #[serde(flatten)]
+        #[serde(flatten, default)]
         cache: CatalogCacheConfig,
     },
     Unity {
@@ -477,7 +478,7 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         token: Option<SecretString>,
-        #[serde(flatten)]
+        #[serde(flatten, default)]
         cache: CatalogCacheConfig,
     },
     #[serde(alias = "onelake")]
@@ -489,7 +490,7 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_token: Option<SecretString>,
-        #[serde(flatten)]
+        #[serde(flatten, default)]
         cache: CatalogCacheConfig,
     },
     Glue {
@@ -498,7 +499,7 @@ pub enum CatalogType {
         region: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
-        #[serde(flatten)]
+        #[serde(flatten, default)]
         cache: CatalogCacheConfig,
     },
     #[serde(alias = "hms", alias = "hive-metastore")]
@@ -510,7 +511,7 @@ pub enum CatalogType {
         kerberos_service_principal: Option<String>,
         min_sasl_qop: Option<String>,
         connect_timeout_secs: Option<u64>,
-        #[serde(flatten)]
+        #[serde(flatten, default)]
         cache: CatalogCacheConfig,
     },
 }
@@ -587,9 +588,10 @@ impl ClusterConfigEnv {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogCacheConfig {
+    #[serde(default)]
     pub database_cache_enabled: bool,
     #[serde(
         default,
@@ -605,6 +607,7 @@ pub struct CatalogCacheConfig {
         deserialize_with = "deserialize_non_zero"
     )]
     pub database_cache_ttl_secs: Option<u64>,
+    #[serde(default)]
     pub table_cache_enabled: bool,
     #[serde(
         default,

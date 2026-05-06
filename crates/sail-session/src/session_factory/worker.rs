@@ -15,9 +15,9 @@ pub struct WorkerSessionFactory {
 }
 
 impl WorkerSessionFactory {
-    pub fn new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Self {
-        let runtime_env = RuntimeEnvFactory::new(config, runtime.clone());
-        Self { runtime_env }
+    pub fn try_new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Result<Self> {
+        let runtime_env = RuntimeEnvFactory::new(config, runtime.clone())?;
+        Ok(Self { runtime_env })
     }
 }
 

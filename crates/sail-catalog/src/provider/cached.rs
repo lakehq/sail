@@ -225,3 +225,165 @@ impl CatalogProvider for CachedCatalogProvider {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use crate::provider::{DatabaseStatus, TableStatus, Namespace};
+    use async_trait::async_trait;
+    use sail_common_datafusion::catalog::TableKind;
+
+    struct MockCatalogProvider {
+        call_count: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl CatalogProvider for MockCatalogProvider {
+        fn get_name(&self) -> &str { "mock" }
+        async fn create_database(&self, _ns: &Namespace, _opt: CreateDatabaseOptions) -> CatalogResult<DatabaseStatus> {
+            Ok(DatabaseStatus { 
+                catalog: "mock".to_string(), 
+                database: vec![], 
+                comment: None, 
+                location: None, 
+                properties: vec![] 
+            })
+        }
+        async fn get_database(&self, _ns: &Namespace) -> CatalogResult<DatabaseStatus> {
+            Ok(DatabaseStatus { 
+                catalog: "mock".to_string(), 
+                database: vec![], 
+                comment: None, 
+                location: None, 
+                properties: vec![] 
+            })
+        }
+        async fn list_databases(&self, _prefix: Option<&Namespace>) -> CatalogResult<Vec<DatabaseStatus>> {
+            let mut count = self.call_count.lock().unwrap();
+            *count += 1;
+            Ok(vec![])
+        }
+        async fn drop_database(&self, _ns: &Namespace, _opt: DropDatabaseOptions) -> CatalogResult<()> { Ok(()) }
+        async fn create_table(&self, _ns: &Namespace, _t: &str, _opt: CreateTableOptions) -> CatalogResult<TableStatus> {
+            Ok(TableStatus { 
+                catalog: Some("mock".to_string()), 
+                database: vec![], 
+                name: "t".to_string(), 
+                kind: TableKind::Table {
+                    columns: vec![],
+                    comment: None,
+                    constraints: vec![],
+                    location: None,
+                    format: "".to_string(),
+                    partition_by: vec![],
+                    sort_by: vec![],
+                    bucket_by: None,
+                    properties: vec![],
+                }, 
+            })
+        }
+        async fn get_table(&self, _ns: &Namespace, _t: &str) -> CatalogResult<TableStatus> {
+            Ok(TableStatus { 
+                catalog: Some("mock".to_string()), 
+                database: vec![], 
+                name: "t".to_string(), 
+                kind: TableKind::Table {
+                    columns: vec![],
+                    comment: None,
+                    constraints: vec![],
+                    location: None,
+                    format: "".to_string(),
+                    partition_by: vec![],
+                    sort_by: vec![],
+                    bucket_by: None,
+                    properties: vec![],
+                }, 
+            })
+        }
+        async fn list_tables(&self, _ns: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+            let mut count = self.call_count.lock().unwrap();
+            *count += 1;
+            Ok(vec![])
+        }
+        async fn drop_table(&self, _ns: &Namespace, _t: &str, _opt: DropTableOptions) -> CatalogResult<()> { Ok(()) }
+        async fn alter_table(&self, _ns: &Namespace, _t: &str, _opt: AlterTableOptions) -> CatalogResult<()> { Ok(()) }
+        async fn create_view(&self, _ns: &Namespace, _v: &str, _opt: CreateViewOptions) -> CatalogResult<TableStatus> {
+            Ok(TableStatus { 
+                catalog: Some("mock".to_string()), 
+                database: vec![], 
+                name: "v".to_string(), 
+                kind: TableKind::View {
+                    definition: "".to_string(),
+                    columns: vec![],
+                    comment: None,
+                    properties: vec![],
+                }, 
+            })
+        }
+        async fn get_view(&self, _ns: &Namespace, _v: &str) -> CatalogResult<TableStatus> {
+            Ok(TableStatus { 
+                catalog: Some("mock".to_string()), 
+                database: vec![], 
+                name: "v".to_string(), 
+                kind: TableKind::View {
+                    definition: "".to_string(),
+                    columns: vec![],
+                    comment: None,
+                    properties: vec![],
+                }, 
+            })
+        }
+        async fn list_views(&self, _ns: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+            let mut count = self.call_count.lock().unwrap();
+            *count += 1;
+            Ok(vec![])
+        }
+        async fn drop_view(&self, _ns: &Namespace, _v: &str, _opt: DropViewOptions) -> CatalogResult<()> { Ok(()) }
+    }
+
+    #[tokio::test]
+    async fn test_cache_hits_and_misses() {
+        let call_count = Arc::new(Mutex::new(0));
+        let inner = Arc::new(MockCatalogProvider { call_count: call_count.clone() });
+        let config = CatalogCacheConfig {
+            database_cache_enabled: true,
+            table_cache_enabled: true,
+            ..Default::default()
+        };
+        let cached = CachedCatalogProvider::new(inner, &config);
+        let ns = Namespace {
+            head: "db1".to_string().into(),
+            tail: vec![],
+        };
+
+        // Database list cache
+        cached.list_databases(None).await.unwrap();
+        assert_eq!(*call_count.lock().unwrap(), 1);
+        cached.list_databases(None).await.unwrap();
+        assert_eq!(*call_count.lock().unwrap(), 1); // Hit
+
+        // Table list cache
+        cached.list_tables(&ns).await.unwrap();
+        assert_eq!(*call_count.lock().unwrap(), 2);
+        cached.list_tables(&ns).await.unwrap();
+        assert_eq!(*call_count.lock().unwrap(), 2); // Hit
+
+        // Invalidation via create_table
+        cached.create_table(&ns, "t1", CreateTableOptions {
+            columns: vec![],
+            comment: None,
+            constraints: vec![],
+            location: None,
+            format: "parquet".to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            if_not_exists: false,
+            replace: false,
+            properties: vec![],
+        }).await.unwrap();
+        cached.list_tables(&ns).await.unwrap();
+        assert_eq!(*call_count.lock().unwrap(), 3); // Miss after invalidation
+    }
+}

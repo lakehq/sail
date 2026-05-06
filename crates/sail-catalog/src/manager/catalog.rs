@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
+use crate::provider::CatalogProvider;
 use crate::utils::match_pattern;
 
 impl CatalogManager {
@@ -32,5 +34,14 @@ impl CatalogManager {
             .filter(|name| match_pattern(name.as_ref(), pattern))
             .cloned()
             .collect::<Vec<_>>())
+    }
+
+    pub fn catalogs(&self) -> CatalogResult<HashMap<String, Arc<dyn CatalogProvider>>> {
+        Ok(self
+            .state()?
+            .catalogs
+            .iter()
+            .map(|(name, provider)| (name.to_string(), provider.clone()))
+            .collect())
     }
 }
