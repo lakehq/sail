@@ -178,8 +178,7 @@ fn get_return_type_precision_scale(return_type: &DataType) -> Result<(u8, i8)> {
     }
 }
 
-fn ceil_floor_simplify(
-    name: &str,
+fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
     mut args: Vec<Expr>,
     info: &SimplifyContext,
 ) -> Result<ExprSimplifyResult> {
@@ -202,7 +201,7 @@ fn ceil_floor_simplify(
     }
     // Idempotence: floor(floor(x)) = floor(x), ceil(ceil(x)) = ceil(x).
     if let Expr::ScalarFunction(ref func) = arg {
-        if func.func.name() == name && func.args.len() == 1 {
+        if func.func.inner().as_any().is::<T>() && func.args.len() == 1 {
             return Ok(ExprSimplifyResult::Simplified(arg));
         }
     }
@@ -252,7 +251,7 @@ impl ScalarUDFImpl for SparkCeil {
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        ceil_floor_simplify("spark_ceil", args, info)
+        ceil_floor_simplify::<Self>(args, info)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -325,7 +324,7 @@ impl ScalarUDFImpl for SparkFloor {
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        ceil_floor_simplify("spark_floor", args, info)
+        ceil_floor_simplify::<Self>(args, info)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
