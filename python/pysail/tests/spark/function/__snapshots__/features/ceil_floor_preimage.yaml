@@ -1,5 +1,14 @@
 # serializer version: 1
 ---
+name: "test_ceilceilx_collapses_to_ceilx_then_preimage_applies"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as v]
+      ProjectionExec: expr=[column1@0 as #2]
+        FilterExec: spark_ceil(column1@0) <= 2
+          DataSourceExec: partitions=1, partition_sizes=[1]
+---
 name: "test_explain_combined_literal__udf_filter__df_predicate_splitting_visible"
 data:
   |-
@@ -113,4 +122,13 @@ data:
     ProjectionExec: expr=[#2@0 as v]
       ProjectionExec: expr=[column1@0 as #2]
         FilterExec: column1@0 >= 1 AND column1@0 < 2
+          DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_floorfloorx_collapses_to_floorx_then_preimage_applies"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as v]
+      ProjectionExec: expr=[column1@0 as #2]
+        FilterExec: column1@0 < 2
           DataSourceExec: partitions=1, partition_sizes=[1]

@@ -383,3 +383,29 @@ Feature: ceil() / floor() — preimage hook (filter pushdown)
         EXPLAIN ANALYZE SELECT v FROM explain_combined_filter_parquet WHERE v > 2.0 AND ceil(v) > 2
         """
       Then query plan matches snapshot
+
+  Rule: Simplify + preimage interaction — ceil(ceil(x)) chains correctly
+
+    Scenario: ceil(ceil(x)) collapses to ceil(x) then preimage applies
+      When query
+        """
+        EXPLAIN SELECT v FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE))
+        AS t(v) WHERE ceil(ceil(v)) <= 2
+        """
+      Then query plan matches snapshot
+
+    Scenario: floor(floor(x)) collapses to floor(x) then preimage applies
+      When query
+        """
+        EXPLAIN SELECT v FROM VALUES
+          (CAST(0.5 AS DOUBLE)),
+          (CAST(1.5 AS DOUBLE)),
+          (CAST(2.5 AS DOUBLE)),
+          (CAST(5.5 AS DOUBLE))
+        AS t(v) WHERE floor(floor(v)) <= 1
+        """
+      Then query plan matches snapshot
