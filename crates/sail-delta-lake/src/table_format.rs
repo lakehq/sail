@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
@@ -30,7 +31,10 @@ use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
     DeltaOperation,
 };
-use crate::table::{open_table_with_object_store, open_table_with_object_store_and_table_config};
+use crate::table::{
+    infer_delta_logical_schema, open_table_with_object_store,
+    open_table_with_object_store_and_table_config,
+};
 use crate::{create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
@@ -68,6 +72,22 @@ impl TableFormat for DeltaTableFormat {
         let options = resolve_delta_read_options(options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         create_delta_source(ctx, table_url, schema, options).await
+    }
+
+    async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
+        let SourceInfo {
+            paths,
+            schema,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
+            options,
+        } = info;
+        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let options = resolve_delta_read_options(options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        infer_delta_logical_schema(ctx, table_url, schema, options).await
     }
 
     async fn create_writer(

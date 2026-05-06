@@ -553,16 +553,15 @@ impl PlanResolver<'_> {
                             items: properties.to_vec(),
                         }],
                     };
-                    let source = table_format
-                        .create_source(&self.ctx.state(), info)
+                    let schema = table_format
+                        .infer_schema(&self.ctx.state(), info)
                         .await
                         .map_err(|e| {
                             PlanError::invalid(format!(
                                 "failed to infer schema for table `{table:?}` from format `{format}`: {e}",
                             ))
                         })?;
-                    columns = source
-                        .schema()
+                    columns = schema
                         .fields()
                         .iter()
                         .map(|f| {
@@ -631,12 +630,10 @@ impl PlanResolver<'_> {
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
-            options: vec![OptionLayer::OptionList {
-                items: vec![("metadata_as_data_read".to_string(), "true".to_string())],
-            }],
+            options: vec![],
         };
-        let source = match table_format.create_source(&self.ctx.state(), info).await {
-            Ok(source) => source,
+        let schema = match table_format.infer_schema(&self.ctx.state(), info).await {
+            Ok(schema) => schema,
             Err(e) => {
                 log::debug!(
                     "skipping generated column rewrite for Delta path `{path}` because existing table schema could not be loaded: {e}"
@@ -645,8 +642,7 @@ impl PlanResolver<'_> {
             }
         };
 
-        let columns = source
-            .schema()
+        let columns = schema
             .fields()
             .iter()
             .map(|field| TableColumnStatus {
