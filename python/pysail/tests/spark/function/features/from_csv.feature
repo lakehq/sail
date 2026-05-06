@@ -48,6 +48,16 @@ Feature: from_csv column display name matches Spark
       | {2, b}  |
       | {3, c}  |
 
+  Scenario: from_csv with schema_of_csv options as the schema argument
+    When query
+      """
+      SELECT from_csv(value, schema_of_csv('1|abc', map('sep', '|')), map('sep', '|')) AS result
+      FROM VALUES ('42|hello') AS t(value)
+      """
+    Then query result
+      | result       |
+      | {42, hello}  |
+
   Scenario: any_value drops the ignoreNulls argument from its display name
     When query
       """

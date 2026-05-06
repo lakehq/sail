@@ -1086,6 +1086,51 @@ Feature: from_json function parses JSON strings into structured types
         | result  |
         | {NULL}  |
 
+    Scenario: Parse struct with char and varchar fields using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"c":"abc","v":"hello"}', '{"type":"struct","fields":[{"name":"c","type":"char(3)","nullable":true,"metadata":{}},{"name":"v","type":"varchar(5)","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result       |
+        | {abc, hello} |
+
+    Scenario: Parse nested char and varchar fields using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"items":["a","b"],"m":{"k":"value"}}', '{"type":"struct","fields":[{"name":"items","type":{"type":"array","elementType":"char(1)","containsNull":true},"nullable":true,"metadata":{}},{"name":"m","type":{"type":"map","keyType":"string","valueType":"varchar(5)","valueContainsNull":true},"nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result                      |
+        | {[a, b], {k -> value}}      |
+
+    Scenario: Parse struct with interval fields using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"cal":null,"ym":null,"dt":null}', '{"type":"struct","fields":[{"name":"cal","type":"interval","nullable":true,"metadata":{}},{"name":"ym","type":"interval year to month","nullable":true,"metadata":{}},{"name":"dt","type":"interval day to second","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result              |
+        | {NULL, NULL, NULL}  |
+
+    Scenario: Parse struct with variant and geospatial fields using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"v":null,"g":null,"p":null}', '{"type":"struct","fields":[{"name":"v","type":"variant","nullable":true,"metadata":{}},{"name":"g","type":"geometry(ANY)","nullable":true,"metadata":{}},{"name":"p","type":"geography(ANY, spherical)","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result              |
+        | {NULL, NULL, NULL}  |
+
+    Scenario: Parse UDT field using its Spark JSON sqlType
+      When query
+        """
+        SELECT from_json('{"point":{"x":1.5,"y":2.5}}', '{"type":"struct","fields":[{"name":"point","type":{"type":"udt","pyClass":"example.PointUDT","serializedClass":"abc","sqlType":{"type":"struct","fields":[{"name":"x","type":"double","nullable":false,"metadata":{}},{"name":"y","type":"double","nullable":false,"metadata":{}}]}},"nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result       |
+        | {{1.5, 2.5}} |
+
   Rule: Column display names
     Scenario: from_json column name shows only input column for struct
       When query
@@ -1161,6 +1206,16 @@ Feature: from_json function parses JSON strings into structured types
         | {10}   |
         | {20}   |
         | {30}   |
+
+    Scenario: from_json with schema_of_json options as the schema argument
+      When query
+        """
+        SELECT from_json(value, schema_of_json('{"a":1}', map('mode', 'PERMISSIVE'))) AS result
+        FROM VALUES ('{"a":42}') AS t(value)
+        """
+      Then query result
+        | result |
+        | {42}   |
 
   Rule: Single value wrapping for array schema
     Scenario: Single JSON object with array schema wraps into singleton array
