@@ -9,20 +9,18 @@ next: false
 
 _May 5, 2026_
 
-- Fixed issues with propagating table properties for existing Delta Lake tables when using Delta Lake `MERGE` and `DELETE` operations ([#1795](https://github.com/lakehq/sail/pull/1795)).
-- Support deletion vectors in merge operations for Delta Lake ([#1809](https://github.com/lakehq/sail/pull/1809).
-- Improve partition pruning for Iceberg ([#1794](https://github.com/lakehq/sail/pull/1794).
-- Improve checkpointing for Delta Lake ([#1796](https://github.com/lakehq/sail/pull/1796).
-- Improve operation metrics reporting for Delta Lake ([#1761](https://github.com/lakehq/sail/pull/1761).
-- Support custom file extensions for Parquet listings ([#1786](https://github.com/lakehq/sail/pull/1786).
-- Match Spark’s behavior of ignoring file extensions when reading files ([#1825](https://github.com/lakehq/sail/pull/1825).
-- Support registered Python UDAFs as window functions ([#1832](https://github.com/lakehq/sail/pull/1832).
-- Add Kubernetes worker pod cleanup configuration ([#1850](https://github.com/lakehq/sail/pull/1850).
-- Added support for the following SQL functions ([#1818](https://github.com/lakehq/sail/pull/1818), ([#1804](https://github.com/lakehq/sail/pull/1804), and ([#1074](https://github.com/lakehq/sail/pull/1074):
+- Improved handling for `OPTIONS` and `TBLPROPERTIES` clauses in SQL statements ([#1795](https://github.com/lakehq/sail/pull/1795)).
+- Added support for deletion vectors in merge operations for Delta Lake ([#1809](https://github.com/lakehq/sail/pull/1809)).
+- Improved partition pruning for Iceberg ([#1794](https://github.com/lakehq/sail/pull/1794)).
+- Improved checkpointing for Delta Lake ([#1796](https://github.com/lakehq/sail/pull/1796)).
+- Improved operation metrics reporting for Delta Lake ([#1761](https://github.com/lakehq/sail/pull/1761)).
+- Added support for non-standard file extensions when reading files ([#1786](https://github.com/lakehq/sail/pull/1786) and [#1825](https://github.com/lakehq/sail/pull/1825)).
+- Added support for registering Python UDAFs as window functions ([#1832](https://github.com/lakehq/sail/pull/1832)).
+- Added support for the following SQL functions ([#1818](https://github.com/lakehq/sail/pull/1818), [#1804](https://github.com/lakehq/sail/pull/1804), and [#1074](https://github.com/lakehq/sail/pull/1074)):
   - `from_json`
   - `bitmap_and_agg`
   - `uniform`
-- Improved the following SQL functions ([#1797](https://github.com/lakehq/sail/pull/1797) and ([#1821](https://github.com/lakehq/sail/pull/1821):
+- Improved the following SQL functions ([#1797](https://github.com/lakehq/sail/pull/1797) and [#1821](https://github.com/lakehq/sail/pull/1821)):
   - `last_day`
   - `from_csv`
 
