@@ -55,9 +55,6 @@ pub async fn setup_glue_catalog(
     let config = GlueCatalogConfig {
         region: Some("us-east-1".to_string()),
         endpoint_url: Some(endpoint),
-        cache_db_enable: false,
-        cache_table_enable: false,
-        cache_ttl_secs: 1800,
     };
 
     let provider = GlueCatalogProvider::new(test_name.to_string(), config);
