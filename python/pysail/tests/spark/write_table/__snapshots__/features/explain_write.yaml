@@ -10,6 +10,18 @@ data:
         ProjectionExec: expr=[column1@0 as id, column2@1 as name]
           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
+name: "test_explain_ctas_order_by_with_multipartition_source_shows_sortpreservingmergeexec"
+data:
+  |-
+    == Physical Plan ==
+    BarrierExec
+      CatalogCommandExec: CreateTable
+      DataSinkExec: sink=ParquetSink(file_groups=[])
+        ProjectionExec: expr=[#1@0 as col]
+          SortPreservingMergeExec: [#1@0 ASC]
+            SortExec: expr=[#1@0 ASC], preserve_partitioning=[true]
+              DataSourceExec: file_groups={2 groups: [[<tmp>/explain_ctas_order_src/<id>_0.zst.parquet], [<tmp>/explain_ctas_order_src/<id>_0.zst.parquet]]}, projection=[col@0 as #1], file_type=parquet
+---
 name: "test_explain_insert_into_shows_physical_plan_with_catalog_command"
 data:
   |-
