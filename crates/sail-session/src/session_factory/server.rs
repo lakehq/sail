@@ -66,6 +66,17 @@ pub struct ServerSessionFactory {
 }
 
 impl ServerSessionFactory {
+    #[expect(clippy::expect_used)]
+    pub fn new(
+        config: Arc<AppConfig>,
+        runtime: RuntimeHandle,
+        system: Arc<Mutex<ActorSystem>>,
+        mutator: Box<dyn ServerSessionMutator>,
+    ) -> Self {
+        Self::try_new(config, runtime, system, Arc::from(mutator))
+            .expect("failed to create server session factory")
+    }
+
     pub fn try_new(
         config: Arc<AppConfig>,
         runtime: RuntimeHandle,
