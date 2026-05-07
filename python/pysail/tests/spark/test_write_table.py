@@ -137,6 +137,40 @@ def test_save_as_table(spark, tmp_path):
         assert_frame_equal(actual, expected(1))
 
 
+@pytest.mark.catalog_integration
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail defaults persistent tables to EXTERNAL")
+def test_save_as_table_without_path_surfaces_external(spark):
+    table_name = "t_external_default"
+    df = spark.createDataFrame([(1, "Alice")], schema="id LONG, name STRING")
+    try:
+        df.write.saveAsTable(table_name)
+        table = spark.catalog.getTable(table_name)
+        assert table.tableType == "EXTERNAL"
+
+        show_rows = spark.sql(f"SHOW TABLE EXTENDED LIKE '{table_name}'").collect()
+        show_row = next(row for row in show_rows if row.tableName == table_name)
+        assert "Type: EXTERNAL" in show_row.information
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.catalog_integration
+def test_save_as_table_with_path_surfaces_external(spark, tmp_path):
+    table_name = "t_external_path"
+    location = str(tmp_path / table_name)
+    df = spark.createDataFrame([(1, "Alice")], schema="id LONG, name STRING")
+    try:
+        df.write.saveAsTable(table_name, path=location)
+        table = spark.catalog.getTable(table_name)
+        assert table.tableType == "EXTERNAL"
+
+        show_rows = spark.sql(f"SHOW TABLE EXTENDED LIKE '{table_name}'").collect()
+        show_row = next(row for row in show_rows if row.tableName == table_name)
+        assert "Type: EXTERNAL" in show_row.information
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
 def test_create_or_replace_table_as_select(spark, tmp_path):
     location = str(tmp_path / "t7")
     table_name = "t7"
