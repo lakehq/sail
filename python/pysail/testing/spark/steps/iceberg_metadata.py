@@ -9,6 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pyiceberg.avro.file import AvroFile
+from pyiceberg.io.pyarrow import PyArrowFileIO
+from pyiceberg.manifest import MANIFEST_LIST_FILE_SCHEMAS, ManifestContent, PartitionFieldSummary
 from pyspark.sql import Row
 from pytest_bdd import given, parsers, then
 
@@ -23,6 +26,8 @@ _PYTEST_TMP_PREFIX = re.compile(
     r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
     re.IGNORECASE,
 )
+
+_MANIFEST_LIST_FIRST_ROW_ID_POSITION = 15
 
 
 def _normalize_pytest_tmp_path(value: str) -> str:
@@ -61,6 +66,14 @@ def _latest_metadata_path(table_location: Path) -> Path:
     return metadata_files[-1]
 
 
+def _version_hint(table_location: Path) -> str:
+    hint_path = table_location / "metadata" / "version-hint.text"
+    if not hint_path.exists():
+        msg = f"version hint not found: {hint_path}"
+        raise AssertionError(msg)
+    return hint_path.read_text(encoding="utf-8").strip()
+
+
 def _get_by_path(obj: object, path: str) -> object:
     value = obj
     for part in path.split("."):
@@ -86,6 +99,61 @@ def _parse_expected_value(raw: str) -> object:
         return json.loads(s)
     except json.JSONDecodeError:
         return s
+
+
+def _current_snapshot(metadata: dict) -> dict:
+    current_snapshot_id = metadata.get("current-snapshot-id")
+    assert current_snapshot_id is not None, "no current-snapshot-id in metadata"
+    for snapshot in metadata.get("snapshots", []):
+        if snapshot.get("snapshot-id") == current_snapshot_id:
+            return snapshot
+    msg = f"current snapshot {current_snapshot_id} not found in snapshots list"
+    raise AssertionError(msg)
+
+
+def _current_manifest_list(metadata: dict) -> dict:
+    snapshot = _current_snapshot(metadata)
+    manifest_list = snapshot.get("manifest-list")
+    assert isinstance(manifest_list, str), f"current snapshot has no manifest-list: {snapshot!r}"
+    format_version = metadata.get("format-version", 2)
+    assert format_version in MANIFEST_LIST_FILE_SCHEMAS, f"unsupported manifest list version: {format_version!r}"
+
+    io = PyArrowFileIO()
+    with AvroFile(
+        io.new_input(manifest_list),
+        MANIFEST_LIST_FILE_SCHEMAS[format_version],
+        read_types={508: PartitionFieldSummary},
+        read_enums={517: ManifestContent},
+    ) as reader:
+        manifests = [_manifest_record_to_dict(record) for record in reader]
+    return {"manifests": manifests}
+
+
+def _manifest_record_to_dict(record) -> dict:
+    data = record._data  # noqa: SLF001 - pyiceberg exposes manifest-list V3 fields only via Record data.
+    content = data[3]
+    if isinstance(content, ManifestContent):
+        content = content.name.lower()
+    manifest = {
+        "manifest-path": data[0],
+        "manifest-length": data[1],
+        "partition-spec-id": data[2],
+        "content": content,
+        "sequence-number": data[4],
+        "min-sequence-number": data[5],
+        "added-snapshot-id": data[6],
+        "added-files-count": data[7],
+        "existing-files-count": data[8],
+        "deleted-files-count": data[9],
+        "added-rows-count": data[10],
+        "existing-rows-count": data[11],
+        "deleted-rows-count": data[12],
+        "partitions": data[13],
+        "key-metadata": data[14],
+    }
+    if len(data) > _MANIFEST_LIST_FIRST_ROW_ID_POSITION:
+        manifest["first-row-id"] = data[_MANIFEST_LIST_FIRST_ROW_ID_POSITION]
+    return manifest
 
 
 def _ordered_snapshots(metadata: dict) -> list[dict]:
@@ -445,6 +513,65 @@ def check_iceberg_metadata_contains(variables, datatable) -> None:
         path, raw = row[0], row[1] if len(row) > 1 else ""
         expected = _parse_expected_value(raw)
         actual = _get_by_path(metadata, path)
+        assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
+
+
+@then("iceberg metadata matches")
+def check_iceberg_metadata_matches_patterns(variables, datatable) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg metadata inspection"
+
+    table_path = Path(location.path)
+    metadata = _find_latest_metadata(table_path)
+
+    assert datatable is not None, "expected a datatable: | path | pattern |"
+    header, *rows = datatable
+    assert header[:2] == ["path", "pattern"], "expected datatable header: path | pattern"
+    for row in rows:
+        if not row or not row[0].strip():
+            continue
+        path, pattern = row[0], row[1] if len(row) > 1 else ""
+        actual = _get_by_path(metadata, path)
+        assert isinstance(actual, str), f"path {path!r} expected string for regex match, got {actual!r}"
+        assert re.fullmatch(pattern.strip(), actual), f"path {path!r} expected to match {pattern!r}, got {actual!r}"
+
+
+@then(parsers.parse("iceberg latest metadata file is {filename}"))
+def check_iceberg_latest_metadata_file(filename: str, variables) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg metadata inspection"
+
+    actual = _latest_metadata_path(Path(location.path)).name
+    assert actual == filename, f"expected latest metadata file {filename!r}, got {actual!r}"
+
+
+@then(parsers.parse("iceberg version hint is {value}"))
+def check_iceberg_version_hint(value: str, variables) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg metadata inspection"
+
+    actual = _version_hint(Path(location.path))
+    assert actual == value, f"expected version hint {value!r}, got {actual!r}"
+
+
+@then("iceberg current manifest list contains")
+def check_iceberg_current_manifest_list_contains(variables, datatable) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg manifest list inspection"
+
+    table_path = Path(location.path)
+    metadata = _find_latest_metadata(table_path)
+    manifest_list = _current_manifest_list(metadata)
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert header[:2] == ["path", "value"], "expected datatable header: path | value"
+    for row in rows:
+        if not row or not row[0].strip():
+            continue
+        path, raw = row[0], row[1] if len(row) > 1 else ""
+        expected = _parse_expected_value(raw)
+        actual = _get_by_path(manifest_list, path)
         assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
 
 

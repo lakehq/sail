@@ -16,7 +16,7 @@ use object_store::ObjectStoreExt;
 use super::{ActionCommit, Transaction};
 use crate::io::StoreContext;
 use crate::spec::manifest::ManifestWriterBuilder;
-use crate::spec::manifest_list::{ManifestListWriter, UNASSIGNED_SEQUENCE_NUMBER};
+use crate::spec::manifest_list::ManifestListWriter;
 use crate::spec::{
     DataFile, FormatVersion, ManifestContentType, Operation, PartitionSpec, Schema,
     SnapshotBuilder, SnapshotReference, SnapshotRetention, TableRequirement, TableUpdate,
@@ -215,8 +215,8 @@ impl<'a> SnapshotProducer<'a> {
             .with_manifest_length(manifest_len)
             .with_partition_spec_id(metadata.partition_spec.spec_id())
             .with_content(ManifestContentType::Data)
-            .with_sequence_number(UNASSIGNED_SEQUENCE_NUMBER)
-            .with_min_sequence_number(UNASSIGNED_SEQUENCE_NUMBER)
+            .with_sequence_number(new_sequence_number)
+            .with_min_sequence_number(new_sequence_number)
             .with_added_snapshot_id(new_snapshot_id)
             .with_file_counts(added_data_files.len() as i32, 0, 0)
             .with_row_counts(new_added_rows, 0, 0);
