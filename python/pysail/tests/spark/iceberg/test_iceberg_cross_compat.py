@@ -1,4 +1,6 @@
 import platform
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import pandas as pd
 import pyarrow as pa
@@ -9,6 +11,19 @@ from pyiceberg.table import StaticTable
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
 from pysail.tests.spark.iceberg.utils import create_sql_catalog, pyiceberg_to_pandas
+
+
+def static_table_from_location(location: str) -> StaticTable:
+    parsed = urlparse(location)
+    table_path = Path(unquote(parsed.path)) if parsed.scheme == "file" else Path(location)
+    hint = (table_path / "metadata" / "version-hint.text").read_text().strip()
+    if hint.endswith(".metadata.json"):
+        metadata_file = hint
+    elif hint.isnumeric():
+        metadata_file = f"v{hint}.metadata.json"
+    else:
+        metadata_file = f"{hint}.metadata.json"
+    return StaticTable.from_metadata(str(table_path / "metadata" / metadata_file))
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
@@ -97,7 +112,7 @@ def test_static_table_read_after_sail_overwrite(spark, tmp_path):
         )
         df.write.format("iceberg").mode("overwrite").save(table.location())
 
-        static_table = StaticTable.from_metadata(table.location())
+        static_table = static_table_from_location(table.location())
 
         expected = (
             pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]})
@@ -130,7 +145,7 @@ def test_static_table_read_after_sail_append(spark, tmp_path):
         df2 = spark.createDataFrame([(3, "c"), (4, "d")], schema="id LONG, event STRING")
         df2.write.format("iceberg").mode("append").save(table.location())
 
-        static_table = StaticTable.from_metadata(table.location())
+        static_table = static_table_from_location(table.location())
         actual_static = pyiceberg_to_pandas(static_table, sort_by="id")
 
         expected = (
@@ -172,7 +187,7 @@ def test_static_table_read_multiple_sail_writes(spark, tmp_path):
 
             current_rows = list(rows) if mode == "overwrite" else current_rows + list(rows)
 
-            static_table = StaticTable.from_metadata(table.location())
+            static_table = static_table_from_location(table.location())
             actual = pyiceberg_to_pandas(static_table, sort_by="id")
 
             expected = (

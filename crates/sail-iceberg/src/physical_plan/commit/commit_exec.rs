@@ -573,12 +573,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 }
                 log::trace!("Metadata written successfully");
 
-                let metadata_filename = if let Some(fname) = new_meta_rel.rsplit('/').next() {
-                    fname.to_string()
-                } else {
-                    new_meta_rel.clone()
-                };
-                let hint_bytes = Bytes::from(metadata_filename.into_bytes());
+                let hint_bytes = Bytes::from(next_version.to_string().into_bytes());
                 let hint_path = object_store::path::Path::from("metadata/version-hint.text");
                 store_ctx
                     .prefixed

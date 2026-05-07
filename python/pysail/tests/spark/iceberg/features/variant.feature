@@ -65,5 +65,5 @@ Feature: Iceberg Variant support
       """
     Then iceberg metadata matches snapshot
     Then iceberg latest metadata file is v2.metadata.json
-    Then iceberg version hint is v2.metadata.json
+    Then iceberg version hint is 2
     Then iceberg current manifest list matches snapshot

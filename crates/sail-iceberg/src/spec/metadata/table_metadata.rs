@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::spec::encrypted_key::EncryptedKey;
 use crate::spec::metadata::format::FormatVersion;
 use crate::spec::metadata::statistic_file::{PartitionStatisticsFile, StatisticsFile};
 use crate::spec::partition::PartitionSpec;
@@ -67,6 +68,9 @@ pub struct TableMetadata {
     /// A long higher than all assigned row IDs; the next snapshot's first-row-id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_row_id: Option<i64>,
+    /// Iceberg v3 encrypted table keys. Sail preserves this metadata but does not decrypt data yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub encryption_keys: Vec<EncryptedKey>,
     /// A list of valid snapshots
     #[serde(default)]
     pub snapshots: Vec<Snapshot>,

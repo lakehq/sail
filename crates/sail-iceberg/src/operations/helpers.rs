@@ -18,7 +18,7 @@ pub(crate) fn format_version_for_schema(schema: &Schema) -> FormatVersion {
     if schema
         .fields()
         .iter()
-        .any(|field| field.field_type.contains_variant())
+        .any(|field| field.field_type.requires_format_v3())
     {
         FormatVersion::V3
     } else {

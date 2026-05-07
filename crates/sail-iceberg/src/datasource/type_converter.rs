@@ -280,6 +280,7 @@ pub fn arrow_type_to_iceberg(arrow_type: &ArrowDataType) -> Result<Type> {
 /// Convert Iceberg primitive type to Arrow data type
 pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowDataType> {
     let arrow_type = match primitive {
+        PrimitiveType::Unknown => ArrowDataType::Null,
         PrimitiveType::Boolean => ArrowDataType::Boolean,
         PrimitiveType::Int => ArrowDataType::Int32,
         PrimitiveType::Long => ArrowDataType::Int64,
@@ -316,6 +317,10 @@ pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowData
             .map(ArrowDataType::FixedSizeBinary)
             .unwrap_or(ArrowDataType::LargeBinary),
         PrimitiveType::Binary => ArrowDataType::LargeBinary,
+        // TODO(V3): Preserve geometry/geography logical annotations in Arrow metadata.
+        PrimitiveType::Geometry { .. } | PrimitiveType::Geography { .. } => {
+            ArrowDataType::LargeBinary
+        }
         PrimitiveType::Variant => ArrowDataType::Struct(
             vec![
                 ArrowField::new("metadata", ArrowDataType::Binary, false),
@@ -381,9 +386,9 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
         ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView => {
             PrimitiveType::Binary
         }
+        ArrowDataType::Null => PrimitiveType::Unknown,
         // Manually list types so we can keep track of them
-        ArrowDataType::Null
-        | ArrowDataType::UInt64
+        ArrowDataType::UInt64
         | ArrowDataType::Float16
         | ArrowDataType::Date64
         | ArrowDataType::Time32(TimeUnit::Second)

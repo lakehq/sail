@@ -180,14 +180,7 @@ impl<'a> SnapshotProducer<'a> {
         }
 
         let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
-        let mut added_data_files = self.added_data_files.clone();
-        let mut next_data_file_row_id = new_manifest_first_row_id;
-        for df in &mut added_data_files {
-            if let Some(row_id) = next_data_file_row_id {
-                df.first_row_id = Some(row_id);
-                next_data_file_row_id = Some(row_id + df.record_count as i64);
-            }
-        }
+        let added_data_files = self.added_data_files.clone();
         for df in &added_data_files {
             writer.add(df.clone());
         }

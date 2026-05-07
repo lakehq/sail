@@ -1157,6 +1157,7 @@ mod tests {
             properties: HashMap::new(),
             current_snapshot_id: None,
             next_row_id: None,
+            encryption_keys: vec![],
             snapshots: vec![],
             snapshot_log: vec![],
             metadata_log: vec![],

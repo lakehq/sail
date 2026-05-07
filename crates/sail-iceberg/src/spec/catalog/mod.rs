@@ -274,6 +274,8 @@ pub(super) mod _serde {
         first_row_id: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         added_rows: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key_id: Option<String>,
     }
     impl TryFrom<CatalogSnapshot> for Snapshot {
         type Error = String;
@@ -295,6 +297,9 @@ pub(super) mod _serde {
             }
             if let Some(added_rows) = snapshot.added_rows {
                 builder = builder.with_added_rows(added_rows);
+            }
+            if let Some(key_id) = snapshot.key_id {
+                builder = builder.with_key_id(key_id);
             }
             builder.build()
         }

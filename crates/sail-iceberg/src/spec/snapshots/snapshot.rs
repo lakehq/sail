@@ -94,6 +94,9 @@ pub struct Snapshot {
     /// Number of rows added in this snapshot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added_rows: Option<i64>,
+    /// ID of the encrypted key used for this snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -239,6 +242,7 @@ pub struct SnapshotBuilder {
     schema_id: Option<SchemaId>,
     first_row_id: Option<i64>,
     added_rows: Option<i64>,
+    key_id: Option<String>,
 }
 
 impl SnapshotBuilder {
@@ -254,6 +258,7 @@ impl SnapshotBuilder {
             schema_id: None,
             first_row_id: None,
             added_rows: None,
+            key_id: None,
         }
     }
 
@@ -311,6 +316,12 @@ impl SnapshotBuilder {
         self
     }
 
+    /// Set the encrypted key id used by this snapshot.
+    pub fn with_key_id(mut self, key_id: impl ToString) -> Self {
+        self.key_id = Some(key_id.to_string());
+        self
+    }
+
     /// Build the snapshot.
     pub fn build(self) -> Result<Snapshot, String> {
         // For V1 compatibility allow manifest_list to be missing when manifests provided
@@ -330,6 +341,7 @@ impl SnapshotBuilder {
             schema_id: self.schema_id,
             first_row_id: self.first_row_id,
             added_rows: self.added_rows,
+            key_id: self.key_id,
         })
     }
 }

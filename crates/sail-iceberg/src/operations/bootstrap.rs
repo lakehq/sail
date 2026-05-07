@@ -141,6 +141,7 @@ pub async fn bootstrap_new_table(
         next_row_id: snapshot.added_rows.and_then(|added_rows| {
             row_lineage_start_row_id.map(|start_row_id| start_row_id + added_rows)
         }),
+        encryption_keys: vec![],
         snapshots: vec![snapshot.clone()],
         snapshot_log: vec![SnapshotLog {
             timestamp_ms: commit_timestamp_ms,
