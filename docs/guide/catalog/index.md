@@ -60,14 +60,14 @@ All remote catalog providers share a common caching layer that accelerates `list
 
 The following cache options can be set alongside any catalog provider options:
 
-| Option                      | Type    | Default | Description                                                               |
-| --------------------------- | ------- | ------- | ------------------------------------------------------------------------- |
-| `database_cache_enabled`    | boolean | `false` | Whether to enable caching for database listings.                          |
-| `database_cache_size`       | number  | -       | Maximum number of entries in the database list cache. `0` = unbounded.    |
-| `database_cache_ttl_secs`   | number  | -       | Time-to-live in seconds for cached database listings. `0` = no expiry.    |
-| `table_cache_enabled`       | boolean | `false` | Whether to enable caching for table and view listings.                    |
-| `table_cache_size`          | number  | -       | Maximum number of entries in the table/view list cache. `0` = unbounded.  |
-| `table_cache_ttl_secs`      | number  | -       | Time-to-live in seconds for cached table/view listings. `0` = no expiry.  |
+| Option                    | Type    | Default | Description                                                              |
+| ------------------------- | ------- | ------- | ------------------------------------------------------------------------ |
+| `database_cache_enabled`  | boolean | `false` | Whether to enable caching for database listings.                         |
+| `database_cache_size`     | number  | -       | Maximum number of entries in the database list cache. `0` = unbounded.   |
+| `database_cache_ttl_secs` | number  | -       | Time-to-live in seconds for cached database listings. `0` = no expiry.   |
+| `table_cache_enabled`     | boolean | `false` | Whether to enable caching for table and view listings.                   |
+| `table_cache_size`        | number  | -       | Maximum number of entries in the table/view list cache. `0` = unbounded. |
+| `table_cache_ttl_secs`    | number  | -       | Time-to-live in seconds for cached table/view listings. `0` = no expiry. |
 
 Example:
 
@@ -79,16 +79,15 @@ export SAIL_CATALOG__LIST='[{type="glue", name="sail", region="us-east-1", datab
 
 When a mutation is performed through Sail, the relevant cache entries are automatically invalidated:
 
-| Mutation             | Invalidated caches                        |
-| -------------------- | ----------------------------------------- |
-| `create_database`    | database list cache                       |
-| `drop_database`      | database list cache + table + view caches |
-| `create_table`       | table list cache for the database         |
-| `drop_table`         | table list cache for the database         |
-| `alter_table`        | table list cache for the database         |
-| `create_view`        | view list cache for the database          |
-| `drop_view`          | view list cache for the database          |
+| Mutation          | Invalidated caches                        |
+| ----------------- | ----------------------------------------- |
+| `create_database` | database list cache                       |
+| `drop_database`   | database list cache + table + view caches |
+| `create_table`    | table list cache for the database         |
+| `drop_table`      | table list cache for the database         |
+| `alter_table`     | table list cache for the database         |
+| `create_view`     | view list cache for the database          |
+| `drop_view`       | view list cache for the database          |
 
 Read-only operations (`get_database`, `get_table`, `get_view`) are **not** cached and always hit the remote catalog directly.
 This is a deliberate design choice because individual lookups are fast and caching them would complicate invalidation logic.
-
