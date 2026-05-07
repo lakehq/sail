@@ -647,7 +647,9 @@ fn current_time_secs() -> CatalogResult<i32> {
 mod tests {
     #![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field, Fields};
+    use hive_metastore::{FieldSchema, StorageDescriptor, Table};
+    use pilota::{AHashMap, FastStr};
     use sail_catalog::hive_format::HiveStorageFormat;
     use sail_catalog::provider::{
         CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions,
@@ -1050,6 +1052,169 @@ mod tests {
             }
             other => panic!("expected table, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_table_to_status_reads_split_spark_schema_metadata() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let fields = vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(
+                "payload",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "tags",
+                    DataType::List(std::sync::Arc::new(Field::new_list_field(
+                        DataType::Utf8,
+                        true,
+                    ))),
+                    true,
+                )])),
+                true,
+            ),
+            Field::new("day", DataType::Utf8, false),
+        ];
+        let schema = serde_json::to_string(
+            &crate::data_type::spark_struct_json_from_fields(&fields).unwrap(),
+        )
+        .unwrap();
+        let split_at = schema.len() / 2;
+        let mut parameters = AHashMap::new();
+        parameters.insert(
+            FastStr::from_static_str("spark.sql.sources.schema.numParts"),
+            FastStr::from_static_str("2"),
+        );
+        parameters.insert(
+            FastStr::from_static_str("spark.sql.sources.schema.part.0"),
+            FastStr::from_string(schema[..split_at].to_string()),
+        );
+        parameters.insert(
+            FastStr::from_static_str("spark.sql.sources.schema.part.1"),
+            FastStr::from_string(schema[split_at..].to_string()),
+        );
+        parameters.insert(
+            FastStr::from_static_str("spark.sql.sources.provider"),
+            FastStr::from_static_str("deltalake"),
+        );
+        parameters.insert(
+            FastStr::from_static_str("spark.sql.sources.schema.numPartCols"),
+            FastStr::from_static_str("1"),
+        );
+        parameters.insert(
+            FastStr::from_static_str("spark.sql.sources.schema.partCol.0"),
+            FastStr::from_static_str("day"),
+        );
+        parameters.insert(
+            FastStr::from_static_str(super::EXTERNAL_KEY),
+            FastStr::from_static_str(super::EXTERNAL_TRUE),
+        );
+        parameters.insert(
+            FastStr::from_static_str("owner"),
+            FastStr::from_static_str("alice"),
+        );
+        let table = Table {
+            table_name: Some("items".into()),
+            table_type: Some(super::EXTERNAL_TABLE_TYPE.into()),
+            sd: Some(StorageDescriptor {
+                location: Some("s3://warehouse/items".into()),
+                cols: Some(vec![
+                    FieldSchema {
+                        name: Some("id".into()),
+                        r#type: Some("bigint".into()),
+                        ..Default::default()
+                    },
+                    FieldSchema {
+                        name: Some("payload".into()),
+                        r#type: Some("string".into()),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }),
+            partition_keys: Some(vec![FieldSchema {
+                name: Some("day".into()),
+                r#type: Some("string".into()),
+                ..Default::default()
+            }]),
+            parameters: Some(parameters),
+            ..Default::default()
+        };
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table {
+                format,
+                columns,
+                properties,
+                partition_by,
+                ..
+            } => {
+                assert_eq!(format, "delta");
+                assert_eq!(
+                    columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+                    ["id", "payload", "day"]
+                );
+                assert!(matches!(columns[1].data_type, DataType::Struct(_)));
+                assert!(columns[2].is_partition);
+                assert_eq!(partition_by[0].column, "day");
+                assert_eq!(properties, vec![("owner".to_string(), "alice".to_string())]);
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_table_to_status_rejects_spark_schema_missing_partition_column() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let schema = serde_json::to_string(
+            &crate::data_type::spark_struct_json_from_fields(&[Field::new(
+                "id",
+                DataType::Int64,
+                false,
+            )])
+            .unwrap(),
+        )
+        .unwrap();
+        let table = Table {
+            table_name: Some("items".into()),
+            sd: Some(StorageDescriptor::default()),
+            partition_keys: Some(vec![FieldSchema {
+                name: Some("day".into()),
+                r#type: Some("string".into()),
+                ..Default::default()
+            }]),
+            parameters: Some(AHashMap::from_iter([(
+                FastStr::from_static_str(SPARK_SCHEMA_KEY),
+                FastStr::from_string(schema),
+            )])),
+            ..Default::default()
+        };
+
+        let error = super::table_to_status("hms", &namespace, &table).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Partition columns missing in Spark schema metadata: day"));
+    }
+
+    #[test]
+    fn test_table_to_status_rejects_incomplete_split_spark_schema_metadata() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let table = Table {
+            table_name: Some("items".into()),
+            sd: Some(StorageDescriptor::default()),
+            parameters: Some(AHashMap::from_iter([(
+                FastStr::from_static_str("spark.sql.sources.schema.numParts"),
+                FastStr::from_static_str("2"),
+            )])),
+            ..Default::default()
+        };
+
+        let error = super::table_to_status("hms", &namespace, &table).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Missing split property part spark.sql.sources.schema.part.0"));
     }
 
     #[test]

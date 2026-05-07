@@ -5,7 +5,7 @@ mod common;
 use arrow::datatypes::DataType;
 use sail_catalog::error::{CatalogError, CatalogObject};
 use sail_catalog::provider::{CatalogProvider, CreateViewColumnOptions, CreateViewOptions};
-use sail_common_datafusion::catalog::{CatalogTableType, TableKind};
+use sail_common_datafusion::catalog::TableKind;
 
 use crate::common::{
     col, setup_with_database, simple_table_options, simple_table_options_with_format,
@@ -175,63 +175,4 @@ async fn test_list_tables_excludes_views() {
     let tables = catalog.list_tables(namespace).await.unwrap();
     assert!(tables.iter().any(|table| table.name == "items"));
     assert!(tables.iter().all(|table| table.name != "v_items"));
-}
-
-#[tokio::test]
-#[ignore]
-async fn test_external_table_type_is_external() {
-    let test_name = "test_external_table_type_is_external";
-    let context = setup_with_database(test_name).await;
-    let catalog = &context.catalog;
-    let namespace = &context.namespace;
-
-    catalog
-        .create_table(
-            namespace,
-            "ext_items",
-            simple_table_options(test_name, vec![col("id", DataType::Int64)]),
-        )
-        .await
-        .unwrap();
-
-    let fetched = catalog.get_table(namespace, "ext_items").await.unwrap();
-    match &fetched.kind {
-        TableKind::Table { table_type, .. } => {
-            assert_eq!(*table_type, Some(CatalogTableType::External));
-        }
-        other => panic!("expected table kind, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-#[ignore]
-async fn test_drop_external_table_succeeds() {
-    let test_name = "test_drop_external_table_succeeds";
-    let context = setup_with_database(test_name).await;
-    let catalog = &context.catalog;
-    let namespace = &context.namespace;
-
-    catalog
-        .create_table(
-            namespace,
-            "ext_items",
-            simple_table_options(test_name, vec![col("id", DataType::Int64)]),
-        )
-        .await
-        .unwrap();
-
-    catalog
-        .drop_table(
-            namespace,
-            "ext_items",
-            sail_catalog::provider::DropTableOptions {
-                if_exists: false,
-                purge: false,
-            },
-        )
-        .await
-        .unwrap();
-
-    let tables = catalog.list_tables(namespace).await.unwrap();
-    assert!(tables.iter().all(|table| table.name != "ext_items"));
 }

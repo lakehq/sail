@@ -86,6 +86,46 @@ fn build_drop_table_request(purge: bool) -> DropTableRequest {
     }
 }
 
+fn apply_alter_table_options(
+    hms_table: &mut Table,
+    db_name: &str,
+    table_name: &str,
+    options: AlterTableOptions,
+) -> CatalogResult<()> {
+    match options {
+        AlterTableOptions::SetLocation { location } => {
+            let Some(storage) = hms_table.sd.as_mut() else {
+                return Err(CatalogError::External(format!(
+                    "HMS table '{db_name}.{table_name}' is missing storage descriptor"
+                )));
+            };
+            let serde_info = storage.serde_info.get_or_insert_with(Default::default);
+            let parameters = serde_info.parameters.get_or_insert_with(AHashMap::new);
+            parameters.insert("path".into(), location.clone().into());
+            storage.location = Some(location.into());
+        }
+        AlterTableOptions::SetTableProperties { properties } => {
+            let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
+            for (key, value) in properties {
+                parameters.insert(key.into(), value.into());
+            }
+        }
+        AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+            let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
+            for key in keys {
+                if if_exists || parameters.contains_key(key.as_str()) {
+                    parameters.remove(key.as_str());
+                } else {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "Table property '{key}' does not exist on '{db_name}.{table_name}'"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn split_hms_uri_list(uris: &[String]) -> CatalogResult<Vec<String>> {
     if uris.is_empty() {
         return Err(CatalogError::InvalidArgument(
@@ -1014,38 +1054,7 @@ impl CatalogProvider for HmsCatalogProvider {
                     }
                 };
 
-                match options {
-                    AlterTableOptions::SetLocation { location } => {
-                        let Some(storage) = hms_table.sd.as_mut() else {
-                            return Err(CatalogError::External(format!(
-                                "HMS table '{db_name}.{table_name}' is missing storage descriptor"
-                            )));
-                        };
-                        let serde_info = storage.serde_info.get_or_insert_with(Default::default);
-                        let parameters = serde_info.parameters.get_or_insert_with(AHashMap::new);
-                        parameters.insert("path".into(), location.clone().into());
-                        storage.location = Some(location.into());
-                    }
-                    AlterTableOptions::SetTableProperties { properties } => {
-                        let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
-                        for (key, value) in properties {
-                            parameters.insert(key.into(), value.into());
-                        }
-                    }
-                    AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-                        let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
-                        for key in keys {
-                            if if_exists || parameters.contains_key(key.as_str()) {
-                                parameters.remove(key.as_str());
-                            } else {
-                                return Err(CatalogError::InvalidArgument(format!(
-                                    "Table property '{key}' does not exist on \
-                                     '{db_name}.{table_name}'"
-                                )));
-                            }
-                        }
-                    }
-                }
+                apply_alter_table_options(&mut hms_table, &db_name, &table_name, options)?;
 
                 match client
                     .alter_table(db_name.clone().into(), table_name.clone().into(), hms_table)
@@ -1171,14 +1180,55 @@ mod tests {
     use std::time::Duration;
 
     use arrow::datatypes::DataType;
-    use pilota::FastStr;
+    use hive_metastore::{SerDeInfo, StorageDescriptor, Table};
+    use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{
-        CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
+        AlterTableOptions, CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
     };
     use sail_common::runtime::RuntimeHandle;
 
     use super::{HmsCatalogConfig, HmsCatalogProvider};
+
+    #[test]
+    fn alter_table_set_location_updates_storage_and_spark_path_metadata() {
+        let mut table = Table {
+            sd: Some(StorageDescriptor {
+                location: Some("s3://warehouse/items_old".into()),
+                serde_info: Some(SerDeInfo {
+                    parameters: Some(AHashMap::from_iter([(
+                        FastStr::from_static_str("path"),
+                        FastStr::from_static_str("s3://warehouse/items_old"),
+                    )])),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        super::apply_alter_table_options(
+            &mut table,
+            "default",
+            "items",
+            AlterTableOptions::SetLocation {
+                location: "s3://warehouse/items_new".to_string(),
+            },
+        )
+        .unwrap();
+
+        let storage = table.sd.unwrap();
+        assert_eq!(
+            storage.location.as_deref(),
+            Some("s3://warehouse/items_new")
+        );
+        let serde = storage.serde_info.unwrap();
+        let parameters = serde.parameters.unwrap();
+        assert_eq!(
+            parameters.get("path").map(ToString::to_string).as_deref(),
+            Some("s3://warehouse/items_new")
+        );
+    }
 
     #[tokio::test]
     async fn test_create_table_rejects_iceberg_format() {
