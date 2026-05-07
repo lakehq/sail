@@ -6,7 +6,7 @@
 ... def square(v: pa.Array) -> pa.Array:
 ...     return pc.multiply(v, v)
 ...
->>> spark.range(3).select(square("id")).orderBy("square(id)").show()
+>>> spark.range(3).select(square("id")).show()
 +----------+
 |square(id)|
 +----------+

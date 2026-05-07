@@ -226,14 +226,7 @@ def patch_pyspark_connect_test_class():
             second = normalize_row_collection(second)
         return super(ReusedConnectTestCase, self).assertEqual(first, second, msg)  # noqa: PT009
 
-    def assertListEqual(self, first, second, msg=None):  # noqa: N802
-        if is_row_collection(first) and is_row_collection(second):
-            first = normalize_row_collection(first)
-            second = normalize_row_collection(second)
-        return super(ReusedConnectTestCase, self).assertListEqual(first, second, msg)  # noqa: PT009
-
     ReusedConnectTestCase.assertEqual = assertEqual
-    ReusedConnectTestCase.assertListEqual = assertListEqual
 
 
 @dataclass
