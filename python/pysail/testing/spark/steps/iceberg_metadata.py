@@ -85,7 +85,7 @@ def _parse_expected_value(raw: str) -> object:
     try:
         return json.loads(s)
     except json.JSONDecodeError:
-        return raw
+        return s
 
 
 def _ordered_snapshots(metadata: dict) -> list[dict]:
@@ -220,6 +220,21 @@ def append_json_row_to_iceberg_table_with_merge_schema(
     assert location is not None, f"Variable {location_var!r} not found"
     row = json.loads(row_json)
     spark.createDataFrame([Row(**row)]).write.format("iceberg").mode("append").option(
+        "mergeSchema",
+        "true",
+    ).save(location.path.absolute().as_uri())
+
+
+@given(parsers.parse("append query to iceberg table in {location_var} with mergeSchema"))
+def append_query_to_iceberg_table_with_merge_schema(
+    docstring: str,
+    location_var: str,
+    variables: dict,
+    spark,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    spark.sql(docstring).write.format("iceberg").mode("append").option(
         "mergeSchema",
         "true",
     ).save(location.path.absolute().as_uri())

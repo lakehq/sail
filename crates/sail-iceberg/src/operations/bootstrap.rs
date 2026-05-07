@@ -23,9 +23,9 @@ use object_store::ObjectStoreExt;
 use url::Url;
 
 use crate::io::StoreContext;
+use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotProduceOperation, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
-use crate::spec::metadata::format::FormatVersion;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
@@ -48,18 +48,6 @@ struct BootstrapOperation;
 impl SnapshotProduceOperation for BootstrapOperation {
     fn operation(&self) -> &'static str {
         "append"
-    }
-}
-
-fn format_version_for_schema(schema: &IcebergSchema) -> FormatVersion {
-    if schema
-        .fields()
-        .iter()
-        .any(|field| field.field_type.contains_variant())
-    {
-        FormatVersion::V3
-    } else {
-        FormatVersion::V2
     }
 }
 

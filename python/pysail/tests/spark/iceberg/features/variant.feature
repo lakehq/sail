@@ -38,3 +38,34 @@ Feature: Iceberg Variant support
     Then query result ordered
       | id | a | b       | payload_json          |
       | 1  | 2 | iceberg | {"a":2,"b":"iceberg"} |
+
+  Scenario: Append a Variant column with mergeSchema upgrades the table format version
+    Given variable location for temporary directory iceberg_variant_schema_evolution
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_variant_schema_evolution_table
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_variant_schema_evolution_table (
+        id INT
+      )
+      USING iceberg
+      LOCATION {{ location.uri }}
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_variant_schema_evolution_table
+      SELECT CAST(1 AS INT)
+      """
+    Then iceberg metadata contains
+      | path           | value |
+      | format-version | 2     |
+    Given append query to iceberg table in location with mergeSchema
+      """
+      SELECT CAST(2 AS INT) AS id, parse_json('{"a":3,"b":"merge"}') AS payload
+      """
+    Then iceberg metadata contains
+      | path                      | value     |
+      | format-version            | 3         |
+      | schemas[1].fields[1].type | "variant" |

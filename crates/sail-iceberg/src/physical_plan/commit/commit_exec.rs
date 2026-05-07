@@ -36,6 +36,7 @@ use crate::io::StoreContext;
 use crate::operations::bootstrap::{
     bootstrap_first_snapshot, bootstrap_new_table, PersistStrategy,
 };
+use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
 use crate::physical_plan::action_schema::decode_actions_and_meta_from_batch;
 use crate::physical_plan::commit::IcebergCommitInfo;
@@ -99,6 +100,9 @@ impl IcebergCommitExec {
 
         table_meta.current_schema_id = schema_id;
         table_meta.last_column_id = table_meta.last_column_id.max(highest_field_id);
+        table_meta.format_version = table_meta
+            .format_version
+            .max(format_version_for_schema(&new_schema));
     }
 
     fn apply_partition_spec_update(table_meta: &mut TableMetadata, new_spec: PartitionSpec) {
@@ -363,6 +367,9 @@ impl ExecutionPlan for IcebergCommitExec {
                 let schema_iceberg = table_meta.current_schema().cloned().ok_or_else(|| {
                     DataFusionError::Plan("No current schema in table metadata".to_string())
                 })?;
+                table_meta.format_version = table_meta
+                    .format_version
+                    .max(format_version_for_schema(&schema_iceberg));
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
                 // bootstrap the first snapshot into the existing metadata using InPlace strategy
@@ -410,8 +417,11 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 // Build transaction and action based on operation
                 let tx = Transaction::new(table_url.to_string(), snapshot);
-                let manifest_meta =
-                    tx.default_manifest_metadata(&schema_iceberg, &partition_spec_for_commit);
+                let manifest_meta = tx.default_manifest_metadata(
+                    &schema_iceberg,
+                    &partition_spec_for_commit,
+                    table_meta.format_version,
+                );
                 let action_commit = match commit_info.operation {
                     crate::spec::Operation::Append => {
                         let mut action = tx
