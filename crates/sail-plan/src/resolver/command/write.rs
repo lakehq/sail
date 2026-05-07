@@ -239,8 +239,8 @@ impl PlanResolver<'_> {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
                 let should_rewrite_existing_delta_generated_columns =
-                    !matches!(&mode, WriteMode::ErrorIfExists | WriteMode::IgnoreIfExists)
-                        && !(matches!(&mode, WriteMode::Replace { .. })
+                    !(matches!(&mode, WriteMode::ErrorIfExists | WriteMode::IgnoreIfExists)
+                        || matches!(&mode, WriteMode::Replace { .. })
                             && Self::has_truthy_option(
                                 &file_write_options.options,
                                 &["overwriteSchema", "overwrite_schema"],
