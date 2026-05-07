@@ -591,7 +591,14 @@ impl CatalogCommand {
                 if let Some(ref loc) = location {
                     let local_path = loc
                         .strip_prefix("file://")
-                        .or_else(|| loc.strip_prefix("file:"));
+                        .or_else(|| loc.strip_prefix("file:"))
+                        .or_else(|| {
+                            if loc.starts_with('/') {
+                                Some(loc.as_str())
+                            } else {
+                                None
+                            }
+                        });
                     match local_path {
                         Some(path) => {
                             let dir = std::path::Path::new(path);
@@ -610,7 +617,11 @@ impl CatalogCommand {
                                 let path = path.to_string();
                                 tokio::task::spawn_blocking(move || -> CatalogResult<()> {
                                     let has_delta = dir.join("_delta_log").exists();
-                                    let has_iceberg_meta = dir.join("metadata").exists();
+                                    // Iceberg tables have a `metadata/version-hint.text` file
+                                    // (or `.iceberg` marker). A plain `metadata/` subdirectory
+                                    // is not sufficient — it could be user data.
+                                    let has_iceberg_meta =
+                                        dir.join("metadata").join("version-hint.text").exists();
                                     let has_iceberg_dot = dir.join(".iceberg").exists();
                                     if has_delta || has_iceberg_meta || has_iceberg_dot {
                                         return Err(CatalogError::NotSupported(
@@ -620,45 +631,16 @@ impl CatalogCommand {
                                                 .to_string(),
                                         ));
                                     }
-                                    for entry in std::fs::read_dir(&dir).map_err(|e| {
+                                    std::fs::remove_dir_all(&dir).map_err(|e| {
                                         CatalogError::External(format!(
-                                            "failed to read table directory at {path}: {e}"
+                                            "failed to remove table directory at {path}: {e}"
                                         ))
-                                    })? {
-                                        let entry = entry.map_err(|e| {
-                                            CatalogError::External(format!(
-                                                "failed to read directory entry at {path}: {e}"
-                                            ))
-                                        })?;
-                                        let name = entry.file_name();
-                                        let name = name.to_string_lossy();
-                                        if name.starts_with('_') || name.starts_with('.') {
-                                            continue;
-                                        }
-                                        let meta = std::fs::symlink_metadata(entry.path())
-                                            .map_err(|e| {
-                                                CatalogError::External(format!(
-                                                    "failed to read metadata for {}: {e}",
-                                                    entry.path().display()
-                                                ))
-                                            })?;
-                                        let entry_path = entry.path();
-                                        if meta.is_symlink() || meta.is_file() {
-                                            std::fs::remove_file(&entry_path).map_err(|e| {
-                                                CatalogError::External(format!(
-                                                    "failed to remove {}: {e}",
-                                                    entry_path.display()
-                                                ))
-                                            })?;
-                                        } else if meta.is_dir() {
-                                            std::fs::remove_dir_all(&entry_path).map_err(|e| {
-                                                CatalogError::External(format!(
-                                                    "failed to remove {}: {e}",
-                                                    entry_path.display()
-                                                ))
-                                            })?;
-                                        }
-                                    }
+                                    })?;
+                                    std::fs::create_dir_all(&dir).map_err(|e| {
+                                        CatalogError::External(format!(
+                                            "failed to recreate table directory at {path}: {e}"
+                                        ))
+                                    })?;
                                     Ok(())
                                 })
                                 .await
