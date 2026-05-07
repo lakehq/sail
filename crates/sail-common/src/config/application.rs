@@ -318,16 +318,6 @@ pub struct KubernetesConfig {
     pub worker_pod_name_prefix: String,
     pub worker_service_account_name: String,
     pub worker_pod_template: String,
-    pub worker_pod_cleanup: KubernetesWorkerPodCleanup,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum KubernetesWorkerPodCleanup {
-    #[serde(alias = "server-termination")]
-    ServerTermination,
-    #[serde(alias = "session-end")]
-    SessionEnd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
