@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
 import time
@@ -35,6 +36,47 @@ def _normalize_pytest_tmp_path(value: str) -> str:
     return _PYTEST_TMP_PREFIX.sub("<tmp>/", value)
 
 
+def _metadata_file_stem(name: str) -> tuple[str, bool] | None:
+    if name.endswith(".metadata.json.gz"):
+        return name[: -len(".metadata.json.gz")], True
+    if not name.endswith(".metadata.json"):
+        return None
+
+    stem = name[: -len(".metadata.json")]
+    if stem.endswith(".gz"):
+        return stem[: -len(".gz")], True
+    return stem, False
+
+
+def _metadata_file_version(path: Path) -> int | None:
+    stem_and_codec = _metadata_file_stem(path.name)
+    if stem_and_codec is None:
+        return None
+
+    stem, _ = stem_and_codec
+    if stem.startswith("v") and stem[1:].isdigit():
+        return int(stem[1:])
+
+    version, separator, _ = stem.partition("-")
+    if separator and version.isdigit():
+        return int(version)
+    return None
+
+
+def _metadata_files(metadata_dir: Path) -> list[Path]:
+    files = [path for path in metadata_dir.iterdir() if path.is_file() and _metadata_file_version(path) is not None]
+    return sorted(files, key=lambda path: (_metadata_file_version(path), path.name))
+
+
+def _load_metadata_file(path: Path) -> dict:
+    stem_and_codec = _metadata_file_stem(path.name)
+    assert stem_and_codec is not None, f"invalid metadata file name: {path.name!r}"
+    _, compressed = stem_and_codec
+    opener = gzip.open if compressed else Path.open
+    with opener(path, "rt", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def _find_latest_metadata(table_location: Path) -> dict:
     """Find and parse the latest metadata.json file in an Iceberg table."""
     metadata_dir = table_location / "metadata"
@@ -42,15 +84,12 @@ def _find_latest_metadata(table_location: Path) -> dict:
         msg = f"metadata directory not found: {metadata_dir}"
         raise AssertionError(msg)
 
-    # Find all metadata files (*.metadata.json)
-    metadata_files = sorted(metadata_dir.glob("*.metadata.json"))
+    metadata_files = _metadata_files(metadata_dir)
     if not metadata_files:
         msg = f"no metadata files found in {metadata_dir}"
         raise AssertionError(msg)
 
-    latest = metadata_files[-1]
-    with latest.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    return _load_metadata_file(metadata_files[-1])
 
 
 def _latest_metadata_path(table_location: Path) -> Path:
@@ -59,7 +98,7 @@ def _latest_metadata_path(table_location: Path) -> Path:
         msg = f"metadata directory not found: {metadata_dir}"
         raise AssertionError(msg)
 
-    metadata_files = sorted(metadata_dir.glob("*.metadata.json"))
+    metadata_files = _metadata_files(metadata_dir)
     if not metadata_files:
         msg = f"no metadata files found in {metadata_dir}"
         raise AssertionError(msg)
@@ -72,33 +111,6 @@ def _version_hint(table_location: Path) -> str:
         msg = f"version hint not found: {hint_path}"
         raise AssertionError(msg)
     return hint_path.read_text(encoding="utf-8").strip()
-
-
-def _get_by_path(obj: object, path: str) -> object:
-    value = obj
-    for part in path.split("."):
-        match = re.fullmatch(r"([^\[\]]+)((?:\[\d+\])*)", part)
-        assert match is not None, f"invalid metadata path: {path!r}"
-        key = match.group(1)
-        assert isinstance(value, dict), f"path {path!r} expected object before key {key!r}, got {value!r}"
-        assert key in value, f"path {path!r} missing key {key!r}"
-        value = value[key]
-        for raw_index in re.findall(r"\[(\d+)\]", match.group(2)):
-            index = int(raw_index)
-            assert isinstance(value, list), f"path {path!r} expected list before index {index}, got {value!r}"
-            assert 0 <= index < len(value), f"path {path!r} index {index} out of range"
-            value = value[index]
-    return value
-
-
-def _parse_expected_value(raw: str) -> object:
-    s = raw.strip()
-    if not s:
-        return ""
-    try:
-        return json.loads(s)
-    except json.JSONDecodeError:
-        return s
 
 
 def _current_snapshot(metadata: dict) -> dict:
@@ -154,6 +166,30 @@ def _manifest_record_to_dict(record) -> dict:
     if len(data) > _MANIFEST_LIST_FIRST_ROW_ID_POSITION:
         manifest["first-row-id"] = data[_MANIFEST_LIST_FIRST_ROW_ID_POSITION]
     return manifest
+
+
+def _sanitize_manifest_file_path(path: str) -> str:
+    path = re.sub(
+        r"manifest-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.avro",
+        "manifest-<uuid>.avro",
+        path,
+    )
+    path = re.sub(r"file://.*/metadata/", "file://<root>/metadata/", path)
+    return _normalize_pytest_tmp_path(path)
+
+
+def _sanitize_manifest_list(manifest_list: dict) -> dict:
+    manifests = []
+    for manifest in manifest_list.get("manifests", []):
+        sanitized = dict(manifest)
+        if isinstance(sanitized.get("manifest-path"), str):
+            sanitized["manifest-path"] = _sanitize_manifest_file_path(sanitized["manifest-path"])
+        if "manifest-length" in sanitized:
+            sanitized["manifest-length"] = "<bytes>"
+        if "added-snapshot-id" in sanitized:
+            sanitized["added-snapshot-id"] = "<snapshot-id>"
+        manifests.append(sanitized)
+    return {"manifests": manifests}
 
 
 def _ordered_snapshots(metadata: dict) -> list[dict]:
@@ -496,46 +532,6 @@ def check_iceberg_metadata_has_snapshot(variables):
     assert metadata["current-snapshot-id"] is not None, "current-snapshot-id is null"
 
 
-@then("iceberg metadata contains")
-def check_iceberg_metadata_contains(variables, datatable) -> None:
-    location = variables.get("location")
-    assert location is not None, "expected variable `location` to be defined for iceberg metadata inspection"
-
-    table_path = Path(location.path)
-    metadata = _find_latest_metadata(table_path)
-
-    assert datatable is not None, "expected a datatable: | path | value |"
-    header, *rows = datatable
-    assert header[:2] == ["path", "value"], "expected datatable header: path | value"
-    for row in rows:
-        if not row or not row[0].strip():
-            continue
-        path, raw = row[0], row[1] if len(row) > 1 else ""
-        expected = _parse_expected_value(raw)
-        actual = _get_by_path(metadata, path)
-        assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
-
-
-@then("iceberg metadata matches")
-def check_iceberg_metadata_matches_patterns(variables, datatable) -> None:
-    location = variables.get("location")
-    assert location is not None, "expected variable `location` to be defined for iceberg metadata inspection"
-
-    table_path = Path(location.path)
-    metadata = _find_latest_metadata(table_path)
-
-    assert datatable is not None, "expected a datatable: | path | pattern |"
-    header, *rows = datatable
-    assert header[:2] == ["path", "pattern"], "expected datatable header: path | pattern"
-    for row in rows:
-        if not row or not row[0].strip():
-            continue
-        path, pattern = row[0], row[1] if len(row) > 1 else ""
-        actual = _get_by_path(metadata, path)
-        assert isinstance(actual, str), f"path {path!r} expected string for regex match, got {actual!r}"
-        assert re.fullmatch(pattern.strip(), actual), f"path {path!r} expected to match {pattern!r}, got {actual!r}"
-
-
 @then(parsers.parse("iceberg latest metadata file is {filename}"))
 def check_iceberg_latest_metadata_file(filename: str, variables) -> None:
     location = variables.get("location")
@@ -554,27 +550,6 @@ def check_iceberg_version_hint(value: str, variables) -> None:
     assert actual == value, f"expected version hint {value!r}, got {actual!r}"
 
 
-@then("iceberg current manifest list contains")
-def check_iceberg_current_manifest_list_contains(variables, datatable) -> None:
-    location = variables.get("location")
-    assert location is not None, "expected variable `location` to be defined for iceberg manifest list inspection"
-
-    table_path = Path(location.path)
-    metadata = _find_latest_metadata(table_path)
-    manifest_list = _current_manifest_list(metadata)
-
-    assert datatable is not None, "expected a datatable: | path | value |"
-    header, *rows = datatable
-    assert header[:2] == ["path", "value"], "expected datatable header: path | value"
-    for row in rows:
-        if not row or not row[0].strip():
-            continue
-        path, raw = row[0], row[1] if len(row) > 1 else ""
-        expected = _parse_expected_value(raw)
-        actual = _get_by_path(manifest_list, path)
-        assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
-
-
 @then("iceberg metadata matches snapshot")
 def check_iceberg_metadata_matches_snapshot(variables, snapshot: SnapshotAssertion):
     """Check that the Iceberg metadata matches the saved snapshot."""
@@ -584,6 +559,19 @@ def check_iceberg_metadata_matches_snapshot(variables, snapshot: SnapshotAsserti
     table_path = Path(location.path)
     metadata = _find_latest_metadata(table_path)
     sanitized = _sanitize_iceberg_metadata(metadata)
+
+    assert snapshot == sanitized
+
+
+@then("iceberg current manifest list matches snapshot")
+def check_iceberg_current_manifest_list_matches_snapshot(variables, snapshot: SnapshotAssertion):
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg manifest list inspection"
+
+    table_path = Path(location.path)
+    metadata = _find_latest_metadata(table_path)
+    manifest_list = _current_manifest_list(metadata)
+    sanitized = _sanitize_manifest_list(manifest_list)
 
     assert snapshot == sanitized
 

@@ -21,27 +21,10 @@ Feature: Iceberg Variant support
       INSERT INTO iceberg_variant_table
       SELECT 1, parse_json('{"a":2,"b":"iceberg"}')
       """
-    Then iceberg metadata contains
-      | path                      | value                         |
-      | format-version            | 3                             |
-      | schemas[0].fields[1].type | "variant"                     |
-      | sort-orders               | [{"order-id":0,"fields":[]}] |
-      | default-sort-order-id     | 0                             |
-      | next-row-id               | 1                             |
-      | snapshots[0].first-row-id | 0                             |
-      | snapshots[0].added-rows   | 1                             |
-    Then iceberg metadata matches
-      | path       | pattern                                                       |
-      | table-uuid | [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} |
+    Then iceberg metadata matches snapshot
     Then iceberg latest metadata file is v1.metadata.json
     Then iceberg version hint is 1
-    Then iceberg current manifest list contains
-      | path                          | value |
-      | manifests[0].content          | data  |
-      | manifests[0].sequence-number  | 1     |
-      | manifests[0].min-sequence-number | 1  |
-      | manifests[0].first-row-id     | 0     |
-      | manifests[0].added-rows-count | 1     |
+    Then iceberg current manifest list matches snapshot
     When query
       """
       SELECT
@@ -75,33 +58,12 @@ Feature: Iceberg Variant support
       INSERT INTO iceberg_variant_schema_evolution_table
       SELECT CAST(1 AS INT)
       """
-    Then iceberg metadata contains
-      | path           | value |
-      | format-version | 2     |
+    Then iceberg metadata matches snapshot
     Given append query to iceberg table in location with mergeSchema
       """
       SELECT CAST(2 AS INT) AS id, parse_json('{"a":3,"b":"merge"}') AS payload
       """
-    Then iceberg metadata contains
-      | path                      | value                         |
-      | format-version            | 3                             |
-      | schemas[1].fields[1].type | "variant"                     |
-      | sort-orders               | [{"order-id":0,"fields":[]}] |
-      | default-sort-order-id     | 0                             |
-      | next-row-id               | 2                             |
-      | snapshots[1].first-row-id | 0                             |
-      | snapshots[1].added-rows   | 2                             |
+    Then iceberg metadata matches snapshot
     Then iceberg latest metadata file is v2.metadata.json
     Then iceberg version hint is v2.metadata.json
-    Then iceberg current manifest list contains
-      | path                          | value |
-      | manifests[0].content          | data  |
-      | manifests[0].sequence-number  | 1     |
-      | manifests[0].min-sequence-number | 1  |
-      | manifests[0].first-row-id     | 0     |
-      | manifests[0].added-rows-count | 1     |
-      | manifests[1].content          | data  |
-      | manifests[1].sequence-number  | 2     |
-      | manifests[1].min-sequence-number | 2  |
-      | manifests[1].first-row-id     | 1     |
-      | manifests[1].added-rows-count | 1     |
+    Then iceberg current manifest list matches snapshot

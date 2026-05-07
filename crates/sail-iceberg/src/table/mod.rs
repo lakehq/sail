@@ -55,6 +55,9 @@ impl Table {
             .bytes()
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata_data =
+            metadata_loader::decode_metadata_file(&metadata_location, &metadata_data)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let metadata = TableMetadata::from_json(&metadata_data).map_err(|e| {
             log::trace!("Failed to parse table metadata: {:?}", e);
             DataFusionError::External(Box::new(e))

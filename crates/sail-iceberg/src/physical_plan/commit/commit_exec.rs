@@ -44,6 +44,7 @@ use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
+use crate::table::metadata_loader::metadata_file_version_from_path;
 use crate::utils::get_object_store_from_context;
 const MAX_COMMIT_RETRIES: usize = 5;
 
@@ -398,7 +399,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     DataFusionError::Plan("No current snapshot in table metadata".to_string())
                 })?;
 
-                let current_version = parse_version_from_path(&latest_meta).unwrap_or(0);
+                let current_version = metadata_file_version_from_path(&latest_meta).unwrap_or(0);
                 let next_version = current_version + 1;
 
                 let existing_for_next =
@@ -613,28 +614,13 @@ impl DisplayAs for IcebergCommitExec {
     }
 }
 
-fn parse_version_from_path(p: &str) -> Option<i32> {
-    if let Some(fname) = p.rsplit('/').next() {
-        if let Some(num) = fname
-            .strip_prefix('v')
-            .and_then(|s| s.strip_suffix(".metadata.json"))
-        {
-            return num.parse::<i32>().ok();
-        }
-        if let Some((num, _)) = fname.split_once('-') {
-            return num.parse::<i32>().ok();
-        }
-    }
-    None
-}
-
 async fn metadata_files_for_version(store_ctx: &StoreContext, version: i32) -> Result<Vec<String>> {
     let prefix = object_store::path::Path::from("metadata/");
     let mut stream = store_ctx.prefixed.list(Some(&prefix));
     let mut matches = Vec::new();
     while let Some(meta) = stream.next().await {
         let meta = meta.map_err(|e| DataFusionError::External(Box::new(e)))?;
-        if parse_version_from_path(meta.location.as_ref()) == Some(version) {
+        if metadata_file_version_from_path(meta.location.as_ref()) == Some(version) {
             matches.push(meta.location.to_string());
         }
     }
