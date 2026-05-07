@@ -192,3 +192,47 @@ Feature: CTAS ORDER BY produces globally sorted output
       | 2.0      |
       | Infinity |
       | NaN      |
+
+  @sail-only
+  Scenario: CTAS ORDER BY with multi-partition source writes physically sorted file
+    Given variable location_src for temporary directory ctas_physical_src
+    Given variable location_dst for temporary directory ctas_physical_dst
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_physical_src_t
+      """
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_physical_dst_t
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_physical_src_t USING PARQUET LOCATION {{ location_src.sql }}
+      AS SELECT * FROM VALUES (5), (3), (1), (4), (2) AS t(col)
+      """
+    Given statement template
+      """
+      INSERT INTO ctas_physical_src_t
+      SELECT * FROM VALUES (9), (7), (6), (8), (10) AS t(col)
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_physical_dst_t USING PARQUET LOCATION {{ location_dst.sql }}
+      AS SELECT col FROM ctas_physical_src_t ORDER BY col ASC
+      """
+    When query
+      """
+      SELECT col FROM ctas_physical_dst_t
+      """
+    Then query result
+      | col |
+      | 1   |
+      | 2   |
+      | 3   |
+      | 4   |
+      | 5   |
+      | 6   |
+      | 7   |
+      | 8   |
+      | 9   |
+      | 10  |
