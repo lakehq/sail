@@ -1299,6 +1299,7 @@ pub enum ExplainMode {
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
     Unknown,
+    SetLocation { location: String },
     SetTableProperties { properties: Vec<(String, String)> },
     UnsetTableProperties { keys: Vec<String>, if_exists: bool },
     // TODO: add all the alter table operations

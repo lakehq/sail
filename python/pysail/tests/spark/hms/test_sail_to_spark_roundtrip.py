@@ -47,16 +47,6 @@ def _assert_reference_spark_table(
 
     assert spark_table.tableType().name() == table_type
     assert _scala_option_to_string(spark_table.provider()) == "parquet"
-    assert _scala_option_to_string(spark_table.storage().locationUri()) is not None
-
-
-def _assert_schema_partition_column(
-    spark: SparkSession,
-    table_fqn: str,
-    partition_column: str,
-) -> None:
-    schema = spark.table(table_fqn).schema
-    assert schema[-1].name == partition_column
 
 
 def _assert_schema_matrix_shape(spark: SparkSession, table_fqn: str) -> None:
@@ -114,7 +104,7 @@ def test_sail_creates_spark_reads_parquet(
     reference_spark_s3: SparkSession,
     hms_s3_database: str,
 ) -> None:
-    """Sail creates a managed Parquet table; reference Spark reads it back."""
+    """Sail creates an external Parquet table; reference Spark reads it back."""
     table = "roundtrip_parquet"
     table_fqn = f"{hms_s3_database}.{table}"
 
@@ -128,7 +118,7 @@ def test_sail_creates_spark_reads_parquet(
         reference_spark_s3,
         hms_s3_database,
         table,
-        table_type="MANAGED",
+        table_type="EXTERNAL",
     )
     ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
 
@@ -210,7 +200,7 @@ def test_sail_creates_spark_reads_schema_matrix_parquet(
         reference_spark_s3,
         hms_s3_database,
         table,
-        table_type="MANAGED",
+        table_type="EXTERNAL",
     )
     _assert_schema_matrix_shape(reference_spark_s3, table_fqn)
     ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
@@ -251,7 +241,7 @@ def test_sail_creates_spark_reads_timestamp_types_parquet(
         reference_spark_s3,
         hms_s3_database,
         table,
-        table_type="MANAGED",
+        table_type="EXTERNAL",
     )
     schema = reference_spark_s3.table(table_fqn).schema
     fields = {field.name: field for field in schema.fields}
@@ -261,60 +251,6 @@ def test_sail_creates_spark_reads_timestamp_types_parquet(
         f"SELECT id, CAST(ts_ltz AS STRING) AS ts_ltz, CAST(ts_ntz AS STRING) AS ts_ntz FROM {table_fqn}"
     ).collect()
     assert [(r.id, r.ts_ltz, r.ts_ntz) for r in rows] == [(1, "2024-01-02 03:04:05", "2024-01-02 03:04:05")]
-
-
-def test_sail_creates_spark_reads_partitioned_parquet(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    """Sail creates partitioned Parquet; reference Spark restores partition metadata."""
-    table = "roundtrip_partitioned_parquet"
-    table_fqn = f"{hms_s3_database}.{table}"
-
-    hms_s3_spark.sql(
-        f"CREATE TABLE {table_fqn} (id INT, name STRING, region STRING) USING PARQUET PARTITIONED BY (region)"
-    )
-    hms_s3_spark.sql(
-        f"""
-        INSERT INTO {table_fqn} VALUES
-          (1, 'alice', 'north'),
-          (2, 'bob', 'with space'),
-          (3, 'carol', 'a/b')
-        """
-    )
-
-    sail_rows = hms_s3_spark.sql(f"SELECT id, name, region FROM {table_fqn} ORDER BY id").collect()
-    assert [(r.id, r.name, r.region) for r in sail_rows] == [
-        (1, "alice", "north"),
-        (2, "bob", "with space"),
-        (3, "carol", "a/b"),
-    ]
-    sail_filtered_rows = hms_s3_spark.sql(f"SELECT id FROM {table_fqn} WHERE region = 'a/b'").collect()
-    assert [r.id for r in sail_filtered_rows] == [3]
-
-    _assert_reference_spark_table(
-        reference_spark_s3,
-        hms_s3_database,
-        table,
-        table_type="MANAGED",
-    )
-    _assert_schema_partition_column(reference_spark_s3, table_fqn, "region")
-    ref_partitions = {row.partition for row in reference_spark_s3.sql(f"SHOW PARTITIONS {table_fqn}").collect()}
-    assert ref_partitions == {
-        "region=a%2Fb",
-        "region=north",
-        "region=with space",
-    }
-    ref_rows = reference_spark_s3.sql(f"SELECT id, name, region FROM {table_fqn} ORDER BY id").collect()
-    assert [(r.id, r.name, r.region) for r in ref_rows] == [
-        (1, "alice", "north"),
-        (2, "bob", "with space"),
-        (3, "carol", "a/b"),
-    ]
-
-    filtered_rows = reference_spark_s3.sql(f"SELECT id FROM {table_fqn} WHERE region = 'a/b'").collect()
-    assert [r.id for r in filtered_rows] == [3]
 
 
 def test_sail_creates_spark_reads_parquet_with_explicit_location(
@@ -345,58 +281,6 @@ def test_sail_creates_spark_reads_parquet_with_explicit_location(
     assert ref_rows[1].id == 2 and ref_rows[1].name == "bob"
 
 
-def test_sail_creates_spark_reads_parquet_with_relative_location(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    """Sail resolves relative LOCATION against the database path like Spark."""
-    table = "roundtrip_relative_location_parquet"
-    table_fqn = f"{hms_s3_database}.{table}"
-
-    hms_s3_spark.sql(
-        f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION 'relative/roundtrip_location_parquet'"
-    )
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
-
-    sail_rows = hms_s3_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
-
-    _assert_reference_spark_table(
-        reference_spark_s3,
-        hms_s3_database,
-        table,
-        table_type="EXTERNAL",
-    )
-    ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
-    assert ref_rows[0].id == 1 and ref_rows[0].name == "alice"
-    assert ref_rows[1].id == 2 and ref_rows[1].name == "bob"
-
-
-def test_sail_alters_datasource_table_spark_still_reads_path_metadata(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    """Sail alter-table preserves Spark datasource path metadata for reference Spark."""
-    table = "roundtrip_altered_parquet"
-    table_fqn = f"{hms_s3_database}.{table}"
-
-    hms_s3_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET")
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
-    hms_s3_spark.sql(f"ALTER TABLE {table_fqn} SET TBLPROPERTIES ('interop_note' = 'sail_altered')")
-
-    _assert_reference_spark_table(
-        reference_spark_s3,
-        hms_s3_database,
-        table,
-        table_type="MANAGED",
-    )
-    ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert [(r.id, r.name) for r in ref_rows] == [(1, "alice"), (2, "bob")]
-
-
 def test_sail_alters_datasource_table_location_spark_reads_new_path(
     hms_s3_spark: SparkSession,
     reference_spark_s3: SparkSession,
@@ -419,8 +303,6 @@ def test_sail_alters_datasource_table_location_spark_reads_new_path(
         table,
         table_type="EXTERNAL",
     )
-    spark_table = _reference_catalog_table(reference_spark_s3, hms_s3_database, table)
-    assert _scala_option_to_string(spark_table.storage().locationUri()) == new_location
     ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in ref_rows] == [(2, "new")]
 

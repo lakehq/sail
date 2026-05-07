@@ -10,6 +10,7 @@ from pysail.testing.spark.utils.sql import escape_sql_string_literal
 @pytest.fixture(autouse=True)
 def tables(spark, tmp_path):
     location = str(tmp_path / "t1")
+    (tmp_path / "t1").mkdir(parents=True, exist_ok=True)
     spark.sql(f"CREATE TABLE t1 (id LONG, name STRING, age LONG) LOCATION '{escape_sql_string_literal(location)}'")
     yield
     spark.sql("DROP TABLE t1")
@@ -158,6 +159,7 @@ def test_save_as_table_without_path_surfaces_external(spark):
 def test_save_as_table_with_path_surfaces_external(spark, tmp_path):
     table_name = "t_external_path"
     location = str(tmp_path / table_name)
+    (tmp_path / table_name).mkdir(parents=True, exist_ok=True)
     df = spark.createDataFrame([(1, "Alice")], schema="id LONG, name STRING")
     try:
         df.write.saveAsTable(table_name, path=location)

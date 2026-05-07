@@ -414,7 +414,7 @@ def hms_s3_metastore_endpoint(hms_s3_container: DockerContainer) -> str:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def hms_s3_remote(
     hms_s3_metastore_endpoint: str,
     hms_s3_env: dict[str, str],
@@ -423,7 +423,7 @@ def hms_s3_remote(
     yield from _run_sail_hms_server(hms_s3_metastore_endpoint, hms_s3_env)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def hms_s3_spark(hms_s3_remote: str) -> Generator[SparkSession, None, None]:
     """Create a Spark Connect session connected to Sail's S3 HMS lane."""
     from pysail.tests.spark.conftest import (
@@ -443,7 +443,7 @@ def hms_s3_spark(hms_s3_remote: str) -> Generator[SparkSession, None, None]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def reference_spark_s3(
     hms_s3_spark: SparkSession,
     hms_s3_metastore_endpoint: str,

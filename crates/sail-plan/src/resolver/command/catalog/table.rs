@@ -418,6 +418,9 @@ impl PlanResolver<'_> {
         _state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let options = match operation {
+            spec::AlterTableOperation::SetLocation { location } => {
+                AlterTableOptions::SetLocation { location }
+            }
             spec::AlterTableOperation::SetTableProperties { properties } => {
                 AlterTableOptions::SetTableProperties { properties }
             }

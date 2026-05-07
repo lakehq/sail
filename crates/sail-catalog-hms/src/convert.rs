@@ -217,15 +217,18 @@ pub(crate) fn build_generic_table(
         );
     }
 
-    let table_type = if location.is_some() {
-        parameters.get_or_insert_with(AHashMap::new).insert(
-            FastStr::from_static_str(EXTERNAL_KEY),
-            FastStr::from_static_str(EXTERNAL_TRUE),
+    parameters.get_or_insert_with(AHashMap::new).insert(
+        FastStr::from_static_str(EXTERNAL_KEY),
+        FastStr::from_static_str(EXTERNAL_TRUE),
+    );
+    let serde_parameters = location.as_ref().map(|location| {
+        let mut parameters = AHashMap::new();
+        parameters.insert(
+            FastStr::from_static_str("path"),
+            FastStr::from_string(location.clone()),
         );
-        EXTERNAL_TABLE_TYPE
-    } else {
-        MANAGED_TABLE_TYPE
-    };
+        parameters
+    });
 
     Ok(Table {
         db_name: Some(database_name.to_string().into()),
@@ -233,7 +236,7 @@ pub(crate) fn build_generic_table(
         owner: Some(DEFAULT_OWNER.into()),
         create_time: Some(current_time_secs()?),
         last_access_time: Some(current_time_secs()?),
-        table_type: Some(table_type.into()),
+        table_type: Some(EXTERNAL_TABLE_TYPE.into()),
         sd: Some(StorageDescriptor {
             cols: Some(regular_columns),
             location: location.map(Into::into),
@@ -241,6 +244,7 @@ pub(crate) fn build_generic_table(
             output_format: Some(format.storage.output_format.into()),
             serde_info: Some(SerDeInfo {
                 serialization_lib: Some(format.storage.serde_library.into()),
+                parameters: serde_parameters,
                 ..Default::default()
             }),
             ..Default::default()
@@ -301,13 +305,6 @@ pub(crate) fn inject_spark_metadata(
         FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
         FastStr::from_string(format.to_string()),
     );
-
-    if !partition_columns.is_empty() {
-        parameters.insert(
-            FastStr::from_static_str("spark.sql.partitionProvider"),
-            FastStr::from_static_str("catalog"),
-        );
-    }
 
     parameters.insert(
         FastStr::from_static_str("spark.sql.create.version"),
@@ -973,9 +970,6 @@ mod tests {
             .iter()
             .any(|(k, v)| k == "spark.sql.sources.provider" && v == "parquet"));
         assert!(props.iter().any(|(k, _)| k == "spark.sql.create.version"));
-        assert!(props
-            .iter()
-            .any(|(k, v)| k == "spark.sql.partitionProvider" && v == "catalog"));
     }
 
     #[test]

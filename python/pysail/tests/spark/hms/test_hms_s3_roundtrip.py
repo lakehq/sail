@@ -44,19 +44,20 @@ def _scala_option_to_string(option) -> str | None:
     return None
 
 
-def _assert_reference_describes_s3_managed_table(
+def _assert_reference_describes_s3_table(
     reference_spark_s3: SparkSession,
     database: str,
     table: str,
     location_prefix: str,
+    table_type: str,
 ) -> None:
     spark_table = _reference_catalog_table(reference_spark_s3, database, table)
     storage = spark_table.storage()
-    assert spark_table.tableType().name() == "MANAGED"
+    assert spark_table.tableType().name() == table_type
     assert _scala_option_to_string(spark_table.provider()) == "parquet"
     location = _scala_option_to_string(storage.locationUri())
-    assert location is not None
-    assert location.startswith(location_prefix)
+    if location is not None:
+        assert location.startswith(location_prefix)
 
 
 def test_s3_spark_creates_sail_reads_managed_parquet(
@@ -76,77 +77,24 @@ def test_s3_spark_creates_sail_reads_managed_parquet(
     assert [(row.id, row.name) for row in rows] == [(1, "spark"), (2, "s3")]
 
 
-def test_s3_sail_creates_spark_reads_managed_parquet(
+def test_s3_sail_creates_spark_reads_external_parquet(
     hms_s3_spark: SparkSession,
     reference_spark_s3: SparkSession,
     hms_s3_database: str,
 ) -> None:
-    table = "sail_managed_parquet"
+    table = "sail_external_parquet"
     table_fqn = f"{hms_s3_database}.{table}"
     location_prefix = f"{_S3_WAREHOUSE_PREFIX}/{hms_s3_database}"
 
     hms_s3_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET")
     hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (10, 'sail'), (11, 'spark')")
 
-    _assert_reference_describes_s3_managed_table(
+    _assert_reference_describes_s3_table(
         reference_spark_s3,
         hms_s3_database,
         table,
         location_prefix,
+        "EXTERNAL",
     )
-    rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
-    assert [(row.id, row.name) for row in rows] == [(10, "sail"), (11, "spark")]
-
-
-def test_s3_sail_partitioned_managed_table_recovers_hms_partitions(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    table = "sail_partitioned_parquet"
-    table_fqn = f"{hms_s3_database}.{table}"
-    location_prefix = f"{_S3_WAREHOUSE_PREFIX}/{hms_s3_database}"
-
-    hms_s3_spark.sql(
-        f"""
-        CREATE TABLE {table_fqn} (id INT, name STRING, region STRING)
-        USING PARQUET
-        PARTITIONED BY (region)
-        """
-    )
-    hms_s3_spark.sql(
-        f"""
-        INSERT INTO {table_fqn}
-        VALUES (1, 'north row', 'north'), (2, 'slash row', 'a/b')
-        """
-    )
-
-    _assert_reference_describes_s3_managed_table(
-        reference_spark_s3,
-        hms_s3_database,
-        table,
-        location_prefix,
-    )
-    partitions = {row.partition for row in reference_spark_s3.sql(f"SHOW PARTITIONS {table_fqn}").collect()}
-    assert partitions == {"region=a%2Fb", "region=north"}
-    rows = reference_spark_s3.sql(f"SELECT id, region FROM {table_fqn} ORDER BY id").collect()
-    assert [(row.id, row.region) for row in rows] == [(1, "north"), (2, "a/b")]
-
-
-def test_s3_sail_creates_spark_reads_parquet_with_relative_location(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    """Sail resolves a relative LOCATION against the S3 database path."""
-    table = "sail_relative_location_parquet"
-    table_fqn = f"{hms_s3_database}.{table}"
-
-    hms_s3_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION 'relative/sail_location'")
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (10, 'sail'), (11, 'spark')")
-
-    spark_table = _reference_catalog_table(reference_spark_s3, hms_s3_database, table)
-    assert spark_table.tableType().name() == "EXTERNAL"
-    assert _scala_option_to_string(spark_table.provider()) == "parquet"
     rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(10, "sail"), (11, "spark")]

@@ -1014,14 +1014,26 @@ impl CatalogProvider for HmsCatalogProvider {
                     }
                 };
 
-                let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
                 match options {
+                    AlterTableOptions::SetLocation { location } => {
+                        let Some(storage) = hms_table.sd.as_mut() else {
+                            return Err(CatalogError::External(format!(
+                                "HMS table '{db_name}.{table_name}' is missing storage descriptor"
+                            )));
+                        };
+                        let serde_info = storage.serde_info.get_or_insert_with(Default::default);
+                        let parameters = serde_info.parameters.get_or_insert_with(AHashMap::new);
+                        parameters.insert("path".into(), location.clone().into());
+                        storage.location = Some(location.into());
+                    }
                     AlterTableOptions::SetTableProperties { properties } => {
+                        let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
                         for (key, value) in properties {
                             parameters.insert(key.into(), value.into());
                         }
                     }
                     AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+                        let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
                         for key in keys {
                             if if_exists || parameters.contains_key(key.as_str()) {
                                 parameters.remove(key.as_str());

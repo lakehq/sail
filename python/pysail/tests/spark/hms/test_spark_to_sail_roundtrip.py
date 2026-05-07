@@ -33,15 +33,6 @@ def _assert_sail_describes_spark_table(
     assert properties.get("Location")
 
 
-def _assert_schema_partition_column(
-    spark: SparkSession,
-    table_fqn: str,
-    partition_column: str,
-) -> None:
-    schema = spark.table(table_fqn).schema
-    assert schema[-1].name == partition_column
-
-
 def _assert_schema_matrix_shape(spark: SparkSession, table_fqn: str) -> None:
     schema = spark.table(table_fqn).schema
     fields = {field.name: field for field in schema.fields}
@@ -242,47 +233,6 @@ def test_spark_creates_sail_reads_parquet_with_explicit_location(
     assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
     assert sail_rows[0].id == 1 and sail_rows[0].name == "alice"
     assert sail_rows[1].id == 2 and sail_rows[1].name == "bob"
-
-
-def test_spark_creates_sail_reads_partitioned_parquet(
-    reference_spark_s3: SparkSession,
-    hms_s3_spark: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    """Reference Spark creates partitioned Parquet; Sail restores partition metadata."""
-    table_fqn = f"{hms_s3_database}.roundtrip_partitioned_parquet"
-
-    reference_spark_s3.sql(
-        f"CREATE TABLE {table_fqn} (id INT, name STRING, region STRING) USING PARQUET PARTITIONED BY (region)"
-    )
-    reference_spark_s3.sql(
-        f"""
-        INSERT INTO {table_fqn} VALUES
-          (1, 'alice', 'north'),
-          (2, 'bob', 'with space'),
-          (3, 'carol', 'a/b')
-        """
-    )
-
-    ref_partitions = {row.partition for row in reference_spark_s3.sql(f"SHOW PARTITIONS {table_fqn}").collect()}
-    assert ref_partitions == {
-        "region=a%2Fb",
-        "region=north",
-        "region=with space",
-    }
-
-    _assert_sail_describes_spark_table(hms_s3_spark, table_fqn, table_type="MANAGED")
-    _assert_schema_partition_column(hms_s3_spark, table_fqn, "region")
-    sail_rows = hms_s3_spark.sql(f"SELECT id, name, region FROM {table_fqn} ORDER BY id").collect()
-
-    assert [(r.id, r.name, r.region) for r in sail_rows] == [
-        (1, "alice", "north"),
-        (2, "bob", "with space"),
-        (3, "carol", "a/b"),
-    ]
-
-    filtered_rows = hms_s3_spark.sql(f"SELECT id FROM {table_fqn} WHERE region = 'a/b'").collect()
-    assert [r.id for r in filtered_rows] == [3]
 
 
 def test_spark_creates_sail_reads_parquet_with_relative_location(

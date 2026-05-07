@@ -4,6 +4,8 @@ PySpark maps tableName from the server to name in the client Table namedtuple.
 The camelCase fields (tableType, isTemporary) are passed through directly.
 """
 
+from pathlib import Path
+
 import pytest
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -102,10 +104,10 @@ class TestListTables:
         """Persistent table created with LOCATION surfaces EXTERNAL type."""
         table_name = "test_external_with_location"
         location = str(tmp_path / table_name)
+        Path(location).mkdir(parents=True, exist_ok=True)
         try:
             spark.sql(
-                f"CREATE TABLE {table_name} (id INT) USING PARQUET "
-                f"LOCATION '{escape_sql_string_literal(location)}'"
+                f"CREATE TABLE {table_name} (id INT) USING PARQUET LOCATION '{escape_sql_string_literal(location)}'"
             )
 
             table = spark.catalog.getTable(table_name)
