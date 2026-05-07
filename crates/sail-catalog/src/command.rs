@@ -395,6 +395,10 @@ impl CatalogCommand {
                 // update the catalog metadata, so we never end up with the two layers
                 // out of sync.
                 if let (Some(location), Some(format)) = (location, format) {
+                    if !storage_table_properties_are_authoritative(&format) {
+                        manager.alter_table(&table, options).await?;
+                        return Ok(display.bools().to_record_batch(vec![true])?);
+                    }
                     let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
                         CatalogError::External(format!(
                             "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
@@ -613,6 +617,10 @@ impl CatalogCommand {
         };
         Ok(batch)
     }
+}
+
+fn storage_table_properties_are_authoritative(format: &str) -> bool {
+    matches!(format, "delta" | "iceberg")
 }
 
 #[derive(Serialize, Deserialize)]

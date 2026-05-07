@@ -35,6 +35,16 @@ def _scala_option_to_string(option) -> str | None:
     return None
 
 
+def _describe_extended_properties(spark: SparkSession, table_fqn: str) -> dict[str, str]:
+    rows = spark.sql(f"DESCRIBE EXTENDED {table_fqn}").collect()
+    return {row.col_name: row.data_type for row in rows if row.col_name}
+
+
+def _describe_column_comments(spark: SparkSession, table_fqn: str) -> dict[str, str | None]:
+    rows = spark.sql(f"DESCRIBE TABLE {table_fqn}").collect()
+    return {row.col_name: row.comment for row in rows if row.col_name and not row.col_name.startswith("#")}
+
+
 def _assert_reference_spark_table(
     reference_spark: SparkSession,
     database: str,
@@ -108,7 +118,16 @@ def test_sail_creates_spark_reads_parquet(
     table = "roundtrip_parquet"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET")
+    hms_s3_spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT COMMENT 'identifier',
+          name STRING
+        )
+        USING PARQUET
+        TBLPROPERTIES ('interop.owner' = 'sail')
+        """
+    )
     hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
 
     sail_rows = hms_s3_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
@@ -125,6 +144,12 @@ def test_sail_creates_spark_reads_parquet(
     assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
     assert ref_rows[0].id == 1 and ref_rows[0].name == "alice"
     assert ref_rows[1].id == 2 and ref_rows[1].name == "bob"
+    ref_properties = _describe_extended_properties(reference_spark_s3, table_fqn)
+    assert ref_properties.get("Type") == "EXTERNAL"
+    assert ref_properties.get("Provider", "").lower() == "parquet"
+    assert "interop.owner=sail" in ref_properties.get("Table Properties", "")
+    assert "spark.sql." not in ref_properties.get("Table Properties", "")
+    assert _describe_column_comments(reference_spark_s3, table_fqn)["id"] == "identifier"
 
 
 def test_sail_creates_spark_reads_schema_matrix_parquet(
@@ -307,6 +332,31 @@ def test_sail_alters_datasource_table_location_spark_reads_new_path(
     assert [(r.id, r.name) for r in ref_rows] == [(2, "new")]
 
 
+def test_sail_unsets_table_properties_spark_observes_metadata_change(
+    hms_s3_spark: SparkSession,
+    reference_spark_s3: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Sail ALTER TABLE UNSET TBLPROPERTIES updates HMS metadata for Spark."""
+    table = "roundtrip_unset_properties"
+    table_fqn = f"{hms_s3_database}.{table}"
+
+    hms_s3_spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (id INT, name STRING)
+        USING PARQUET
+        TBLPROPERTIES ('interop.keep' = 'yes', 'interop.drop' = 'remove')
+        """
+    )
+    hms_s3_spark.sql(f"ALTER TABLE {table_fqn} UNSET TBLPROPERTIES ('interop.drop')")
+
+    ref_properties = _describe_extended_properties(reference_spark_s3, table_fqn)
+    table_properties = ref_properties.get("Table Properties", "")
+    assert "interop.keep=yes" in table_properties
+    assert "interop.drop" not in table_properties
+    assert "spark.sql." not in table_properties
+
+
 def test_sail_creates_external_table_via_catalog_api(
     hms_s3_spark: SparkSession,
     reference_spark_s3: SparkSession,
@@ -335,3 +385,28 @@ def test_sail_creates_external_table_via_catalog_api(
         table,
         table_type="EXTERNAL",
     )
+
+
+def test_sail_dataframe_writer_creates_spark_readable_external_table(
+    hms_s3_spark: SparkSession,
+    reference_spark_s3: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Sail DataFrame writer creates HMS metadata that Spark can read."""
+    table = "roundtrip_dataframe_writer"
+    table_fqn = f"{hms_s3_database}.{table}"
+    location = f"s3://hms-warehouse/{hms_s3_database}/{table}"
+
+    hms_s3_spark.createDataFrame([(1, "alice"), (2, "bob")], schema="id INT, name STRING").write.saveAsTable(
+        table_fqn,
+        path=location,
+    )
+
+    _assert_reference_spark_table(
+        reference_spark_s3,
+        hms_s3_database,
+        table,
+        table_type="EXTERNAL",
+    )
+    rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    assert [(row.id, row.name) for row in rows] == [(1, "alice"), (2, "bob")]

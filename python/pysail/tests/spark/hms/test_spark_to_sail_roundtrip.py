@@ -20,6 +20,11 @@ def _describe_extended_properties(spark: SparkSession, table_fqn: str) -> dict[s
     return {row.col_name: row.data_type for row in rows if row.col_name}
 
 
+def _describe_column_comments(spark: SparkSession, table_fqn: str) -> dict[str, str | None]:
+    rows = spark.sql(f"DESCRIBE TABLE {table_fqn}").collect()
+    return {row.col_name: row.comment for row in rows if row.col_name and not row.col_name.startswith("#")}
+
+
 def _assert_sail_describes_spark_table(
     hms_s3_spark: SparkSession,
     table_fqn: str,
@@ -86,7 +91,16 @@ def test_spark_creates_sail_reads_parquet(
     """Reference Spark creates a managed Parquet table; Sail reads it back."""
     table_fqn = f"{hms_s3_database}.roundtrip_parquet"
 
-    reference_spark_s3.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET")
+    reference_spark_s3.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT COMMENT 'identifier',
+          name STRING
+        )
+        USING PARQUET
+        TBLPROPERTIES ('interop.owner' = 'spark')
+        """
+    )
     reference_spark_s3.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
 
     ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
@@ -98,6 +112,10 @@ def test_spark_creates_sail_reads_parquet(
     assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
     assert sail_rows[0].id == 1 and sail_rows[0].name == "alice"
     assert sail_rows[1].id == 2 and sail_rows[1].name == "bob"
+    sail_properties = _describe_extended_properties(hms_s3_spark, table_fqn)
+    assert "interop.owner=spark" in sail_properties.get("Table Properties", "")
+    assert "spark.sql." not in sail_properties.get("Table Properties", "")
+    assert _describe_column_comments(hms_s3_spark, table_fqn)["id"] == "identifier"
 
 
 def test_spark_creates_sail_reads_schema_matrix_parquet(
@@ -271,6 +289,9 @@ def test_spark_alters_datasource_table_sail_still_reads_path_metadata(
     reference_spark_s3.sql(f"ALTER TABLE {table_fqn} SET TBLPROPERTIES ('interop_note' = 'spark_altered')")
 
     _assert_sail_describes_spark_table(hms_s3_spark, table_fqn, table_type="MANAGED")
+    properties = _describe_extended_properties(hms_s3_spark, table_fqn)
+    assert "interop_note=spark_altered" in properties.get("Table Properties", "")
+    assert "spark.sql." not in properties.get("Table Properties", "")
     sail_rows = hms_s3_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in sail_rows] == [(1, "alice"), (2, "bob")]
 
