@@ -25,11 +25,6 @@ use crate::error::{
 };
 use crate::scalar::math::utils::decimal::round_decimal_base;
 
-/// Extract the first argument and optional `target_scale`.
-///
-/// Arity is typically enforced by `coerce_types` (1 or 2 args), but this helper still
-/// validates defensively to avoid a panic on `args[0]` if the UDF is invoked through a
-/// code path that bypasses `coerce_types` (e.g. API misuse, error paths).
 fn extract_call_args<'a>(
     name: &str,
     args: &'a [ColumnarValue],
@@ -68,7 +63,6 @@ fn ceil_floor_coerce_types(name: &str, arg_types: &[DataType]) -> Result<Vec<Dat
 }
 
 fn ceil_floor_return_type_from_args(name: &str, args: ReturnFieldArgs) -> Result<FieldRef> {
-    // Arity is enforced by `coerce_types` (1 or 2 args).
     let arg_fields = args.arg_fields;
     let scalar_arguments = args.scalar_arguments;
     let return_type = if arg_fields.len() == 1 {
@@ -226,13 +220,11 @@ fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
     Ok(ExprSimplifyResult::Original(vec![arg]))
 }
 
+/// Spark-compatible `ceil` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#ceil>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
-    /// Bound at planning time from `PlanConfig::ansi_mode` (which maps
-    /// `spark.sql.ansi.enabled`). Controls overflow handling in the
-    /// Float→Decimal cast path: `true` errors on overflow, `false`
-    /// returns NULL. Serialized in `codec.rs` for distributed execution.
     ansi_mode: bool,
 }
 
@@ -293,10 +285,11 @@ impl ScalarUDFImpl for SparkCeil {
     }
 }
 
+/// Spark-compatible `floor` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#floor>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFloor {
     signature: Signature,
-    /// See [`SparkCeil::ansi_mode`].
     ansi_mode: bool,
 }
 

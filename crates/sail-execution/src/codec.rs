@@ -2269,9 +2269,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
-            // SparkCeil/SparkFloor have state (ansi_mode) — handled by UdfKind::SparkCeil/Floor
-            // variants above. This Standard fallback only fires if the encoder emitted `Standard`
-            // for them, which is a bug; default to ansi_mode=false (DataFusion default).
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new(false)))),
             "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new(false)))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
@@ -2356,8 +2353,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkElt>()
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
-            || node_inner.is::<SparkFloor>()
-            || node_inner.is::<SparkFromCSV>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
