@@ -165,7 +165,7 @@ fn stats_from_metadata(
                     if is_binary {
                         warn!(
                             "Skipping column {} because it's a binary field.",
-                            &column_descr.name().to_string()
+                            column_descr.name()
                         );
                         None
                     } else {

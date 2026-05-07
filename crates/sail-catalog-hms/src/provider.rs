@@ -24,8 +24,8 @@ use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
 use crate::convert::{
-    build_database, build_generic_table, build_view, database_to_status, is_view_table,
-    table_to_status, validate_namespace, view_to_status, GenericTableFormat,
+    build_database, build_generic_table, build_view, database_to_status, inject_spark_metadata,
+    is_view_table, table_to_status, validate_namespace, view_to_status, GenericTableFormat,
 };
 use crate::security::{KerberosMakeTransport, SaslQop};
 
@@ -899,11 +899,13 @@ impl CatalogProvider for HmsCatalogProvider {
             .iter()
             .map(|field| field.column.clone())
             .collect();
-        let hms_table = build_generic_table(
+        let columns_for_metadata = options.columns.clone();
+        let format_for_metadata = format.logical_format.to_string();
+        let mut hms_table = build_generic_table(
             &db_name,
             table,
             options.columns,
-            partition_columns,
+            partition_columns.clone(),
             options.location,
             GenericTableFormat {
                 logical_format: format.logical_format,
@@ -911,6 +913,12 @@ impl CatalogProvider for HmsCatalogProvider {
             },
             options.comment,
             options.properties,
+        )?;
+        inject_spark_metadata(
+            &mut hms_table,
+            &columns_for_metadata,
+            &partition_columns,
+            &format_for_metadata,
         )?;
 
         self.create_hms_table(database, table, hms_table, options.if_not_exists)

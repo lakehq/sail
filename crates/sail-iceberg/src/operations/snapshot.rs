@@ -134,7 +134,7 @@ impl<'a> SnapshotProducer<'a> {
 
             log::trace!(
                 "snapshot producer: loading parent manifest list: {}",
-                &manifest_list_path
+                manifest_list_path
             );
             let manifest_list_data = store_ref
                 .get(&manifest_list_path)

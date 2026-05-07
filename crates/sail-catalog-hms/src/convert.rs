@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use arrow::datatypes::Field;
 use chrono::Utc;
 use hive_metastore::{Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table};
 use pilota::{AHashMap, FastStr};
@@ -15,12 +16,16 @@ use sail_common_datafusion::catalog::{
     TableStatus,
 };
 
-use crate::data_type::{arrow_to_hive_type, hive_type_to_arrow};
+use crate::data_type::{
+    arrow_to_hive_type, hive_type_to_arrow, spark_struct_json_from_fields,
+    spark_struct_json_to_fields,
+};
 
 pub(crate) const COMMENT_KEY: &str = "comment";
 pub(crate) const EXTERNAL_KEY: &str = "EXTERNAL";
 pub(crate) const EXTERNAL_TRUE: &str = "TRUE";
 pub(crate) const SPARK_DATASOURCE_PROVIDER_KEY: &str = "spark.sql.sources.provider";
+pub(crate) const SPARK_SCHEMA_KEY: &str = "spark.sql.sources.schema";
 pub(crate) const MANAGED_TABLE_TYPE: &str = "MANAGED_TABLE";
 pub(crate) const EXTERNAL_TABLE_TYPE: &str = "EXTERNAL_TABLE";
 pub(crate) const VIRTUAL_VIEW_TYPE: &str = "VIRTUAL_VIEW";
@@ -71,10 +76,18 @@ pub(crate) fn table_to_status(
         .as_ref()
         .ok_or_else(|| CatalogError::External("Table is missing a name".to_string()))?
         .to_string();
-    let properties = map_to_vec(table.parameters.as_ref());
+    let properties = filter_spark_properties(map_to_vec(table.parameters.as_ref()));
     let comment = extract_property(table.parameters.as_ref(), COMMENT_KEY);
     let storage = table.sd.as_ref();
-    let columns = columns_from_hms(storage, table.partition_keys.as_ref())?;
+    let partition_columns = table
+        .partition_keys
+        .as_ref()
+        .map(|keys| field_names(keys))
+        .unwrap_or_default();
+    let columns = match columns_from_spark_properties(table.parameters.as_ref())? {
+        Some(spark_columns) => reorder_spark_columns(spark_columns, &partition_columns)?,
+        None => columns_from_hms(storage, table.partition_keys.as_ref())?,
+    };
     let location = storage
         .and_then(|sd| sd.location.as_ref())
         .map(ToString::to_string);
@@ -95,7 +108,7 @@ pub(crate) fn table_to_status(
     let table_type = match table.table_type.as_deref() {
         Some(EXTERNAL_TABLE_TYPE) => Some(CatalogTableType::External),
         Some(MANAGED_TABLE_TYPE) => Some(CatalogTableType::Managed),
-        _ => None,
+        _ => Some(CatalogTableType::External),
     };
 
     Ok(TableStatus {
@@ -242,6 +255,68 @@ pub(crate) fn build_generic_table(
     })
 }
 
+/// Injects Spark-compatible metadata properties into an HMS table definition.
+/// Spark writes datasource tables using `spark.sql.sources.*` properties and
+/// expects them on read to recover provider and full schema information.
+pub(crate) fn inject_spark_metadata(
+    table: &mut Table,
+    columns: &[CreateTableColumnOptions],
+    partition_columns: &[String],
+    format: &str,
+) -> CatalogResult<()> {
+    let parameters = table.parameters.get_or_insert_with(AHashMap::new);
+
+    let fields: Vec<_> = columns
+        .iter()
+        .map(|col| {
+            let mut metadata = std::collections::HashMap::new();
+            if let Some(comment) = &col.comment {
+                metadata.insert("comment".to_string(), comment.clone());
+            }
+            Field::new(&col.name, col.data_type.clone(), col.nullable).with_metadata(metadata)
+        })
+        .collect();
+    let schema_value = spark_struct_json_from_fields(&fields)?;
+    let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
+        CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
+    })?;
+    for (key, value) in split_large_table_prop(SPARK_SCHEMA_KEY, &schema_json, 4000) {
+        parameters.insert(FastStr::from_string(key), FastStr::from_string(value));
+    }
+
+    if !partition_columns.is_empty() {
+        parameters.insert(
+            FastStr::from_static_str("spark.sql.sources.schema.numPartCols"),
+            FastStr::from_string(partition_columns.len().to_string()),
+        );
+        for (i, col) in partition_columns.iter().enumerate() {
+            parameters.insert(
+                FastStr::from_string(format!("spark.sql.sources.schema.partCol.{i}")),
+                FastStr::from_string(col.clone()),
+            );
+        }
+    }
+
+    parameters.insert(
+        FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
+        FastStr::from_string(format.to_string()),
+    );
+
+    if !partition_columns.is_empty() {
+        parameters.insert(
+            FastStr::from_static_str("spark.sql.partitionProvider"),
+            FastStr::from_static_str("catalog"),
+        );
+    }
+
+    parameters.insert(
+        FastStr::from_static_str("spark.sql.create.version"),
+        FastStr::from_string(format!("sail-{}", env!("CARGO_PKG_VERSION"))),
+    );
+
+    Ok(())
+}
+
 pub(crate) fn build_view(
     database_name: &str,
     view_name: &str,
@@ -311,10 +386,128 @@ pub(crate) fn extract_property(
 
 fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Option<String> {
     let provider = extract_property(parameters, SPARK_DATASOURCE_PROVIDER_KEY)?;
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "delta" | "deltalake" => Some("delta".to_string()),
-        _ => None,
+    let provider = provider.trim().to_ascii_lowercase();
+    Some(match provider.as_str() {
+        "deltalake" => "delta".to_string(),
+        _ => provider,
+    })
+}
+
+fn filter_spark_properties(values: Vec<(String, String)>) -> Vec<(String, String)> {
+    values
+        .into_iter()
+        .filter(|(key, _)| !key.starts_with("spark.sql."))
+        .filter(|(key, _)| key != EXTERNAL_KEY)
+        .collect()
+}
+
+fn split_large_table_prop(key: &str, value: &str, threshold: usize) -> Vec<(String, String)> {
+    if value.chars().count() <= threshold {
+        return vec![(key.to_string(), value.to_string())];
     }
+    let parts: Vec<String> = value
+        .chars()
+        .collect::<Vec<_>>()
+        .chunks(threshold)
+        .map(|chunk| chunk.iter().collect())
+        .collect();
+    let mut output = Vec::with_capacity(parts.len() + 1);
+    output.push((format!("{key}.numParts"), parts.len().to_string()));
+    output.extend(
+        parts
+            .into_iter()
+            .enumerate()
+            .map(|(index, part)| (format!("{key}.part.{index}"), part)),
+    );
+    output
+}
+
+fn read_large_table_prop(
+    parameters: Option<&AHashMap<FastStr, FastStr>>,
+    key: &str,
+) -> CatalogResult<Option<String>> {
+    let Some(parameters) = parameters else {
+        return Ok(None);
+    };
+    if let Some(value) = parameters.get(key) {
+        return Ok(Some(value.to_string()));
+    }
+    let num_parts_key = format!("{key}.numParts");
+    let Some(num_parts) = parameters.get(num_parts_key.as_str()) else {
+        return Ok(None);
+    };
+    let num_parts: usize = num_parts.parse().map_err(|_| {
+        CatalogError::External(format!(
+            "Invalid split property part count for {key}: {num_parts}"
+        ))
+    })?;
+
+    let mut output = String::new();
+    for index in 0..num_parts {
+        let part_key = format!("{key}.part.{index}");
+        let part = parameters.get(part_key.as_str()).ok_or_else(|| {
+            CatalogError::External(format!("Missing split property part {part_key}"))
+        })?;
+        output.push_str(part);
+    }
+    Ok(Some(output))
+}
+
+fn columns_from_spark_properties(
+    parameters: Option<&AHashMap<FastStr, FastStr>>,
+) -> CatalogResult<Option<Vec<TableColumnStatus>>> {
+    let Some(schema) = read_large_table_prop(parameters, SPARK_SCHEMA_KEY)? else {
+        return Ok(None);
+    };
+    let columns = spark_struct_json_to_fields(&schema)?
+        .into_iter()
+        .map(|field| TableColumnStatus {
+            name: field.name().to_string(),
+            data_type: field.data_type().clone(),
+            nullable: field.is_nullable(),
+            comment: field.metadata().get(COMMENT_KEY).cloned(),
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+        .collect();
+    Ok(Some(columns))
+}
+
+fn reorder_spark_columns(
+    columns: Vec<TableColumnStatus>,
+    partition_columns: &[String],
+) -> CatalogResult<Vec<TableColumnStatus>> {
+    if partition_columns.is_empty() {
+        return Ok(columns);
+    }
+
+    let mut partition_lookup: HashMap<String, String> = partition_columns
+        .iter()
+        .map(|name| (name.to_ascii_lowercase(), name.clone()))
+        .collect();
+    let mut regular = Vec::new();
+    let mut partition = Vec::new();
+    for mut col in columns {
+        let key = col.name.to_ascii_lowercase();
+        if partition_lookup.remove(&key).is_some() {
+            col.is_partition = true;
+            partition.push(col);
+        } else {
+            regular.push(col);
+        }
+    }
+    if !partition_lookup.is_empty() {
+        let mut missing: Vec<_> = partition_lookup.into_values().collect();
+        missing.sort();
+        return Err(CatalogError::External(format!(
+            "Partition columns missing in Spark schema metadata: {}",
+            missing.join(", ")
+        )));
+    }
+    Ok(regular.into_iter().chain(partition).collect())
 }
 
 fn detect_hms_logical_format(
@@ -464,9 +657,9 @@ mod tests {
     };
 
     use super::{
-        build_generic_table, build_view, database_to_status, is_view_table, map_to_vec,
-        validate_namespace, GenericTableFormat, COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY,
-        VIRTUAL_VIEW_TYPE,
+        build_generic_table, build_view, database_to_status, inject_spark_metadata, is_view_table,
+        map_to_vec, validate_namespace, GenericTableFormat, COMMENT_KEY,
+        SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
     };
 
     #[test]
@@ -624,6 +817,44 @@ mod tests {
     }
 
     #[test]
+    fn test_table_to_status_defaults_missing_table_type_to_external() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+            }],
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        table.table_type = None;
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { table_type, .. } => {
+                assert_eq!(
+                    table_type,
+                    Some(sail_common_datafusion::catalog::CatalogTableType::External)
+                );
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_table_to_status_converts_partition_columns_to_identity_fields() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let table = build_generic_table(
@@ -668,6 +899,160 @@ mod tests {
                         transform: None,
                     }]
                 );
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_inject_spark_metadata_writes_schema_and_partition_properties() {
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            vec![
+                CreateTableColumnOptions {
+                    name: "id".to_string(),
+                    data_type: DataType::Int64,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                },
+                CreateTableColumnOptions {
+                    name: "day".to_string(),
+                    data_type: DataType::Utf8,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                },
+            ],
+            vec!["day".to_string()],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![("owner".to_string(), "alice".to_string())],
+        )
+        .unwrap();
+
+        inject_spark_metadata(
+            &mut table,
+            &[
+                CreateTableColumnOptions {
+                    name: "id".to_string(),
+                    data_type: DataType::Int64,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                },
+                CreateTableColumnOptions {
+                    name: "day".to_string(),
+                    data_type: DataType::Utf8,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                },
+            ],
+            &["day".to_string()],
+            "parquet",
+        )
+        .unwrap();
+
+        let props = map_to_vec(table.parameters.as_ref());
+        assert!(props.iter().any(|(k, v)| k == "owner" && v == "alice"));
+        assert!(props.iter().any(|(k, _)| k == SPARK_SCHEMA_KEY));
+        assert!(props
+            .iter()
+            .any(|(k, v)| k == "spark.sql.sources.schema.partCol.0" && v == "day"));
+        assert!(props
+            .iter()
+            .any(|(k, v)| k == "spark.sql.sources.provider" && v == "parquet"));
+        assert!(props.iter().any(|(k, _)| k == "spark.sql.create.version"));
+        assert!(props
+            .iter()
+            .any(|(k, v)| k == "spark.sql.partitionProvider" && v == "catalog"));
+    }
+
+    #[test]
+    fn test_table_to_status_uses_spark_schema_and_hides_internal_properties() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            vec![
+                CreateTableColumnOptions {
+                    name: "id".to_string(),
+                    data_type: DataType::Int64,
+                    nullable: false,
+                    comment: Some("pk".to_string()),
+                    default: None,
+                    generated_always_as: None,
+                },
+                CreateTableColumnOptions {
+                    name: "day".to_string(),
+                    data_type: DataType::Utf8,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                },
+            ],
+            vec!["day".to_string()],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            Some("hello".to_string()),
+            vec![("owner".to_string(), "alice".to_string())],
+        )
+        .unwrap();
+
+        inject_spark_metadata(
+            &mut table,
+            &[
+                CreateTableColumnOptions {
+                    name: "id".to_string(),
+                    data_type: DataType::Int64,
+                    nullable: false,
+                    comment: Some("pk".to_string()),
+                    default: None,
+                    generated_always_as: None,
+                },
+                CreateTableColumnOptions {
+                    name: "day".to_string(),
+                    data_type: DataType::Utf8,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                },
+            ],
+            &["day".to_string()],
+            "parquet",
+        )
+        .unwrap();
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table {
+                format,
+                columns,
+                properties,
+                ..
+            } => {
+                assert_eq!(format, "parquet");
+                assert_eq!(columns.len(), 2);
+                assert_eq!(columns[0].name, "id");
+                assert_eq!(columns[1].name, "day");
+                assert!(columns[1].is_partition);
+                assert!(properties.iter().any(|(k, v)| k == "owner" && v == "alice"));
+                assert!(!properties.iter().any(|(k, _)| k.starts_with("spark.sql.")));
             }
             other => panic!("expected table, got {other:?}"),
         }
