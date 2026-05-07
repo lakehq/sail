@@ -27,6 +27,7 @@ fn test_deserialize_hive_metastore_catalog_type() {
             kerberos_service_principal,
             min_sasl_qop,
             connect_timeout_secs,
+            ..
         } => {
             assert_eq!(name, "hms");
             assert_eq!(uris, vec!["127.0.0.1:9083"]);
@@ -100,8 +101,7 @@ fn test_deserialize_hms_catalog_rejects_legacy_uri_field() {
     )
     .unwrap_err();
 
-    assert!(error.to_string().contains("unknown field"));
-    assert!(error.to_string().contains("uri"));
+    assert!(error.to_string().contains("missing field `uris`"));
 }
 
 #[test]

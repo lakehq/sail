@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -11,8 +10,7 @@ use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
 use sail_catalog_system::service::SystemTableService;
-use sail_catalog::provider::CatalogProvider;
-use sail_common::config::{AppConfig, ExecutionMode, KubernetesWorkerPodCleanup};
+use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
@@ -25,7 +23,7 @@ use sail_execution::worker_manager::{
 use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
 use sail_server::actor::{ActorHandle, ActorSystem};
 
-use crate::catalog::{create_catalog_manager_with_providers, create_catalog_providers};
+use crate::catalog::create_catalog_manager_with_providers;
 use crate::formats::create_table_format_registry;
 use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
@@ -65,7 +63,6 @@ pub struct ServerSessionFactory {
     system: Arc<Mutex<ActorSystem>>,
     mutator: Arc<dyn ServerSessionMutator>,
     runtime_env: RuntimeEnvFactory,
-    catalog_providers: HashMap<String, Arc<dyn CatalogProvider>>,
 }
 
 impl ServerSessionFactory {
@@ -75,15 +72,13 @@ impl ServerSessionFactory {
         system: Arc<Mutex<ActorSystem>>,
         mutator: Arc<dyn ServerSessionMutator>,
     ) -> Result<Self> {
-        let runtime_env = RuntimeEnvFactory::new(config.clone(), runtime.clone());
-        let catalog_providers = create_catalog_providers(&config, runtime.clone())?;
+        let runtime_env = RuntimeEnvFactory::new(config.clone(), runtime.clone())?;
         Ok(Self {
             config,
             runtime,
             system,
             mutator,
             runtime_env,
-            catalog_providers,
         })
     }
 }
@@ -119,7 +114,7 @@ impl ServerSessionFactory {
             .with_extension(create_table_format_registry()?)
             .with_extension(Arc::new(create_catalog_manager_with_providers(
                 &self.config,
-                self.catalog_providers.clone(),
+                self.runtime_env.catalog_providers().clone(),
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
@@ -158,7 +153,7 @@ impl ServerSessionFactory {
             ExecutionMode::LocalCluster => {
                 let worker_manager = Arc::new(LocalWorkerManager::new(
                     self.runtime.clone(),
-                    WorkerSessionFactory::new(self.config.clone(), self.runtime.clone())
+                    WorkerSessionFactory::try_new(self.config.clone(), self.runtime.clone())?
                         .create(())?,
                 ));
                 let options =
@@ -264,3 +259,4 @@ impl ServerSessionFactory {
             .maximum_buffered_record_batches_per_stream;
     }
 }
+

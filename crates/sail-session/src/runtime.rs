@@ -1,4 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::catalog::create_catalog_providers;
+use sail_catalog::provider::CatalogProvider;
 
 use datafusion::execution::cache::cache_manager::{
     CacheManagerConfig, FileMetadataCache, FileStatisticsCache, ListFilesCache,
@@ -27,17 +31,24 @@ pub struct RuntimeEnvFactory {
     global_file_listing_cache: Option<Arc<dyn ListFilesCache>>,
     global_file_statistics_cache: Option<Arc<dyn FileStatisticsCache>>,
     global_file_metadata_cache: Option<Arc<MokaFileMetadataCache>>,
+    catalog_providers: HashMap<String, Arc<dyn CatalogProvider>>,
 }
 
 impl RuntimeEnvFactory {
-    pub fn new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Self {
-        Self {
+    pub fn new(config: Arc<AppConfig>, runtime: RuntimeHandle) -> Result<Self> {
+        let catalog_providers = create_catalog_providers(&config, runtime.clone())?;
+        Ok(Self {
             config,
             runtime,
             global_file_listing_cache: None,
             global_file_statistics_cache: None,
             global_file_metadata_cache: None,
-        }
+            catalog_providers,
+        })
+    }
+
+    pub fn catalog_providers(&self) -> &HashMap<String, Arc<dyn CatalogProvider>> {
+        &self.catalog_providers
     }
 
     pub fn create<M>(&mut self, mutator: M) -> Result<Arc<RuntimeEnv>>

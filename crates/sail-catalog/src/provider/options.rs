@@ -87,7 +87,7 @@ pub struct CreateTemporaryViewColumnOptions {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize, Default)]
 pub struct DropViewOptions {
     pub if_exists: bool,
 }

@@ -14,7 +14,7 @@ pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
         init_telemetry(&config.telemetry, resource)
     })?;
 
-    let session = WorkerSessionFactory::new(config.clone(), runtime.handle()).create(())?;
+    let session = WorkerSessionFactory::try_new(config.clone(), runtime.handle())?.create(())?;
     runtime
         .handle()
         .primary()

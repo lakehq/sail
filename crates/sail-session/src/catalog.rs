@@ -19,13 +19,13 @@ use sail_common::config::{AppConfig, CatalogCacheConfig, CatalogType};
 use sail_common::runtime::RuntimeHandle;
 use secrecy::ExposeSecret;
 
-pub fn create_catalog_providers(
+pub(crate) fn create_catalog_providers(
     config: &AppConfig,
     runtime: RuntimeHandle,
 ) -> Result<HashMap<String, Arc<dyn CatalogProvider>>> {
     config
         .catalog
-        .providers
+        .list
         .iter()
         .map(|provider_config| {
             let (name, provider): (String, Arc<dyn CatalogProvider>) = match provider_config {
@@ -189,6 +189,14 @@ fn wrap_catalog<P: CatalogProvider + 'static>(
     }
 }
 
+pub fn create_catalog_manager(
+    config: &AppConfig,
+    runtime: RuntimeHandle,
+) -> Result<CatalogManager> {
+    let catalogs = create_catalog_providers(config, runtime)?;
+    create_catalog_manager_with_providers(config, catalogs)
+}
+
 pub fn create_catalog_manager_with_providers(
     config: &AppConfig,
     mut catalogs: HashMap<String, Arc<dyn CatalogProvider>>,
@@ -231,10 +239,3 @@ pub fn create_catalog_manager_with_providers(
         .map_err(|e| plan_datafusion_err!("failed to create catalog manager: {e}"))
 }
 
-pub fn create_catalog_manager(
-    config: &AppConfig,
-    runtime: RuntimeHandle,
-) -> Result<CatalogManager> {
-    let providers = create_catalog_providers(config, runtime)?;
-    create_catalog_manager_with_providers(config, providers)
-}

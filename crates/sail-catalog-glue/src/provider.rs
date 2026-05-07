@@ -843,3 +843,41 @@ where
         GlueError::Glue(err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_glue_provider() {
+        let config = GlueCatalogConfig {
+            region: Some("us-east-1".to_string()),
+            endpoint_url: Some("http://localhost:4566".to_string()),
+        };
+        let provider = GlueCatalogProvider::new("glue".to_string(), config);
+        assert_eq!(provider.name, "glue");
+    }
+
+    #[test]
+    fn test_database_name_validation() {
+        let ns = Namespace {
+            head: "db1".to_string().into(),
+            tail: vec![],
+        };
+        assert_eq!(GlueCatalogProvider::database_name(&ns).unwrap(), "db1");
+
+        let ns_multi = Namespace {
+            head: "db1".to_string().into(),
+            tail: vec!["ns2".to_string().into()],
+        };
+
+        let result = GlueCatalogProvider::database_name(&ns_multi);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("does not support multi-level database names"));
+    }
+}
+
+
