@@ -66,15 +66,19 @@ impl ServerSessionMutator for SparkSessionMutator {
     }
 }
 
+#[expect(clippy::expect_used)]
 fn create_spark_session_factory(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
     system: Arc<Mutex<ActorSystem>>,
-) -> Result<ServerSessionFactory> {
+) -> Box<dyn SessionFactory<ServerSessionInfo>> {
     let mutator = Arc::new(SparkSessionMutator {
         config: config.clone(),
     });
-    ServerSessionFactory::try_new(config, runtime, system, mutator)
+    Box::new(
+        ServerSessionFactory::try_new(config, runtime, system, mutator)
+            .expect("failed to create spark session factory"),
+    )
 }
 
 pub fn create_spark_session_manager(
@@ -82,11 +86,12 @@ pub fn create_spark_session_manager(
     runtime: RuntimeHandle,
 ) -> SparkResult<SessionManager> {
     let system = Arc::new(Mutex::new(ActorSystem::new()));
-    let session_factory =
-        create_spark_session_factory(config.clone(), runtime.clone(), system.clone())?;
     let factory = {
+        let config = config.clone();
+        let runtime = runtime.clone();
+        let system = system.clone();
         Box::new(move || {
-            Box::new(session_factory.clone()) as Box<dyn SessionFactory<ServerSessionInfo>>
+            create_spark_session_factory(config.clone(), runtime.clone(), system.clone())
         })
     };
     let options = SessionManagerOptions::new(runtime.clone(), system, factory)
