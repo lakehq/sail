@@ -18,11 +18,13 @@ use sail_common::runtime::RuntimeHandle;
 use secrecy::ExposeSecret;
 
 pub(crate) fn create_catalog_providers(
+pub(crate) fn create_catalog_providers(
     config: &AppConfig,
     runtime: RuntimeHandle,
 ) -> Result<HashMap<String, Arc<dyn CatalogProvider>>> {
     config
         .catalog
+        .list
         .list
         .iter()
         .map(|provider_config| {
@@ -185,6 +187,14 @@ fn wrap_catalog<P: CatalogProvider + 'static>(
     } else {
         provider
     }
+}
+
+pub fn create_catalog_manager(
+    config: &AppConfig,
+    runtime: RuntimeHandle,
+) -> Result<CatalogManager> {
+    let catalogs = create_catalog_providers(config, runtime)?;
+    create_catalog_manager_with_providers(config, catalogs)
 }
 
 pub fn create_catalog_manager(

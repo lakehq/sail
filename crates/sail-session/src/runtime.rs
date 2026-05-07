@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::catalog::create_catalog_providers;
+use sail_catalog::provider::CatalogProvider;
+
 use datafusion::execution::cache::cache_manager::{
     CacheManagerConfig, FileMetadataCache, FileStatisticsCache, ListFilesCache,
 };
