@@ -25,6 +25,7 @@ use super::{
     DataFile, Manifest, ManifestEntry, ManifestEntryRef, ManifestMetadata, ManifestStatus,
 };
 use crate::spec::manifest_list::{ManifestContentType, ManifestFile};
+use crate::spec::FormatVersion;
 
 #[derive(Debug, Clone)]
 pub struct ManifestWriterBuilder {
@@ -161,7 +162,7 @@ impl ManifestWriter {
                 (self.metadata.format_version as u8).to_string(),
             )
             .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
-        if self.metadata.format_version as u8 >= 2 {
+        if self.metadata.format_version >= FormatVersion::V2 {
             let content_str = match self.metadata.content {
                 ManifestContentType::Data => "data",
                 ManifestContentType::Deletes => "deletes",
