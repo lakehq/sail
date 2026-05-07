@@ -88,7 +88,8 @@ async fn build_full_overwrite_plan(
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
-        DeltaWriterExecOptions::from(ctx.options().clone()),
+        DeltaWriterExecOptions::from(ctx.options().clone())
+            .with_generation_expressions(ctx.generation_expressions().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::Overwrite,
@@ -136,6 +137,7 @@ async fn build_full_overwrite_plan(
         ctx.table_exists(),
         input_schema,
         PhysicalSinkMode::Overwrite,
+        ctx.options().user_metadata.clone(),
     )))
 }
 
@@ -198,7 +200,8 @@ async fn build_overwrite_if_plan(
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&union_plan),
         ctx.table_url().clone(),
-        DeltaWriterExecOptions::from(ctx.options().clone()),
+        DeltaWriterExecOptions::from(ctx.options().clone())
+            .with_generation_expressions(ctx.generation_expressions().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::OverwriteIf {
@@ -247,6 +250,7 @@ async fn build_overwrite_if_plan(
             condition: None,
             source: predicate_source,
         },
+        ctx.options().user_metadata.clone(),
     )))
 }
 

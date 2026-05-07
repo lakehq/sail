@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_schema::DataType;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
@@ -22,8 +23,8 @@ use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
 use crate::physical_plan::planner::utils::LogReplayOptions;
-use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
-use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
+use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
+use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::storage::LogStoreRef;
@@ -53,6 +54,7 @@ pub(crate) async fn plan_delta_scan(
     let full_logical_schema = df_logical_schema(
         snapshot,
         &config.file_column_name,
+        &config.row_index_column_name,
         &config.commit_version_column_name,
         &config.commit_timestamp_column_name,
         Some(schema.clone()),
@@ -210,6 +212,23 @@ pub(crate) async fn plan_delta_scan(
         None
     };
 
+    // When the table protocol declares the deletionVectors feature, always use the
+    // metadata-as-data path (DeltaScanByAddsExec) which loads a fresh snapshot and
+    // applies per-file DV filtering. The pre-populated files may come from a stale
+    // catalog entry.
+    let has_dvs = snapshot
+        .protocol()
+        .has_reader_feature(&crate::spec::TableFeature::DeletionVectors);
+    let row_index_projected = config
+        .row_index_column_name
+        .as_ref()
+        .is_some_and(|name| logical_schema.field_with_name(name).is_ok());
+    let files = if has_dvs || row_index_projected {
+        None
+    } else {
+        files
+    };
+
     if let Some(files) = files {
         let file_scan_config = build_file_scan_config(
             snapshot,
@@ -237,6 +256,32 @@ pub(crate) async fn plan_delta_scan(
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
         let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
+        let output_schema = if let Some(used_columns) = projection {
+            let fields = used_columns
+                .iter()
+                .map(|idx| full_logical_schema.field(*idx).to_owned())
+                .collect::<Vec<_>>();
+            Arc::new(ArrowSchema::new(fields))
+        } else {
+            Arc::clone(&full_logical_schema)
+        };
+
+        let renamed_schema = renamed.schema();
+
+        let needs_wrapping = output_schema.fields().iter().any(|field| {
+            let Ok(input_field) = renamed_schema.field_with_name(field.name()) else {
+                return false;
+            };
+            matches!(
+                (input_field.data_type(), field.data_type()),
+                (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+            ) && input_field.data_type() != field.data_type()
+        });
+        if needs_wrapping {
+            return Ok(
+                Arc::new(RelaxedTzCastExec::new(renamed, output_schema)) as Arc<dyn ExecutionPlan>
+            );
+        }
         return Ok(renamed);
     }
 
@@ -260,7 +305,7 @@ pub(crate) async fn plan_delta_scan(
 
     let planner_ctx = PlannerContext::new(
         session,
-        PlannerTableConfig::new(
+        DeltaPlannerConfig::new(
             table_url.clone(),
             planner_options,
             HashMap::new(),

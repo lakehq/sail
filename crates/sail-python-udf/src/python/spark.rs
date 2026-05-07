@@ -1,7 +1,7 @@
 use std::ffi::CString;
 
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
-use pyo3::prelude::PyModule;
+use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::sync::PyOnceLock;
 use pyo3::{intern, Bound, Py, PyAny, PyResult, Python};
 
@@ -213,6 +213,7 @@ impl PySpark {
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
         input_names: &[String],
+        input_types: &[DataType],
         passthrough_columns: usize,
         output_schema: &SchemaRef,
         config: &PySparkUdfConfig,
@@ -223,10 +224,21 @@ impl PySpark {
             (
                 udf,
                 input_names.to_vec(),
+                input_types.try_to_py(py)?,
                 passthrough_columns,
                 output_schema.try_to_py(py)?,
                 config.clone(),
             ),
         )
+    }
+
+    pub fn analyze_udtf<'py>(
+        py: Python<'py>,
+        handler: Bound<'py, PyAny>,
+        arguments: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Self::module(py)?
+            .getattr(intern!(py, "analyze_udtf"))?
+            .call1((handler, arguments))
     }
 }

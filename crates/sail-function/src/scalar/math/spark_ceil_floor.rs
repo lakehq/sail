@@ -7,10 +7,15 @@ use datafusion::arrow::datatypes::{
     Int64Type, Int8Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::preimage::PreimageResult;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    expr, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use num::integer::{div_ceil, div_floor};
+use num::traits::CheckedAdd;
 
 use crate::error::{
     generic_exec_err, generic_internal_err, invalid_arg_count_exec_err,
@@ -173,6 +178,36 @@ fn get_return_type_precision_scale(return_type: &DataType) -> Result<(u8, i8)> {
     }
 }
 
+fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
+    mut args: Vec<Expr>,
+    info: &SimplifyContext,
+) -> Result<ExprSimplifyResult> {
+    // Only simplify the 1-arg form; 2-arg (with scale) is a genuine rounding op.
+    if args.len() != 1 {
+        return Ok(ExprSimplifyResult::Original(args));
+    }
+    let arg = args.remove(0);
+    // Integer identity: ceil/floor of an integer is the integer itself.
+    // The 1-arg return type is always Int64, so narrow types need a cast.
+    match info.get_data_type(&arg)? {
+        DataType::Int64 => return Ok(ExprSimplifyResult::Simplified(arg)),
+        DataType::Int8 | DataType::Int16 | DataType::Int32 => {
+            return Ok(ExprSimplifyResult::Simplified(Expr::Cast(expr::Cast {
+                expr: Box::new(arg),
+                data_type: DataType::Int64,
+            })));
+        }
+        _ => {}
+    }
+    // Idempotence: floor(floor(x)) = floor(x), ceil(ceil(x)) = ceil(x).
+    if let Expr::ScalarFunction(ref func) = arg {
+        if func.func.inner().as_any().is::<T>() && func.args.len() == 1 {
+            return Ok(ExprSimplifyResult::Simplified(arg));
+        }
+    }
+    Ok(ExprSimplifyResult::Original(vec![arg]))
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
@@ -213,6 +248,10 @@ impl ScalarUDFImpl for SparkCeil {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         ceil_floor_return_type_from_args("ceil", args)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        ceil_floor_simplify::<Self>(args, info)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -284,6 +323,10 @@ impl ScalarUDFImpl for SparkFloor {
         ceil_floor_return_type_from_args("floor", args)
     }
 
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        ceil_floor_simplify::<Self>(args, info)
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let arg_len = args.args.len();
         let target_scale = if arg_len == 1 {
@@ -308,6 +351,15 @@ impl ScalarUDFImpl for SparkFloor {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         ceil_floor_coerce_types("floor", arg_types)
+    }
+
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        preimage_floor(args, lit_expr, info)
     }
 }
 
@@ -653,4 +705,143 @@ fn ceil_floor_with_target_scale(name: &str, decimal: i128, scale: i8, target_sca
             }
         }
     }
+}
+
+/// Preimage for `floor(x) = N`: the set of `x` with `floor(x) = N` is exactly
+/// the half-open interval `[N, N + 1)`, which matches `PreimageResult::Range`.
+/// Enables the logical simplifier to rewrite `WHERE floor(col) = N` into
+/// `WHERE col >= N AND col < N + 1`, dropping the UDF call and unlocking
+/// downstream pruning (min/max stats, `PruningPredicate`).
+///
+/// Only the 1-arg form is handled. Returns `PreimageResult::None` when the
+/// rewrite would be unsound: non-integer literal, NaN/Infinity, overflow of
+/// `N + 1`, or unsupported literal type.
+fn preimage_floor(
+    args: &[Expr],
+    lit_expr: &Expr,
+    info: &SimplifyContext,
+) -> Result<PreimageResult> {
+    if args.len() != 1 {
+        return Ok(PreimageResult::None);
+    }
+    let Expr::Literal(lit_value, _) = lit_expr else {
+        return Ok(PreimageResult::None);
+    };
+    // `floor` returns integer-valued results, so a non-integer RHS means the
+    // equality is unsatisfiable.
+    let Some(rhs) = lit_as_integer(lit_value) else {
+        return Ok(PreimageResult::None);
+    };
+    let input_type = info.get_data_type(&args[0])?;
+
+    let bounds = match &input_type {
+        DataType::Float64 => float_bounds(rhs).map(|(lo, hi)| {
+            (
+                ScalarValue::Float64(Some(lo)),
+                ScalarValue::Float64(Some(hi)),
+            )
+        }),
+        DataType::Float32 => float_bounds(rhs).and_then(|(lo, hi)| {
+            let lo32 = lo as f32;
+            let hi32 = hi as f32;
+            // f32 can only represent integers exactly up to 2^24; reject when
+            // the round-trip would collapse the interval.
+            if (lo32 as f64) != lo || (hi32 as f64) != hi || hi32 <= lo32 {
+                None
+            } else {
+                Some((
+                    ScalarValue::Float32(Some(lo32)),
+                    ScalarValue::Float32(Some(hi32)),
+                ))
+            }
+        }),
+        DataType::Int8 => int_bounds::<i8>(rhs)
+            .map(|(lo, hi)| (ScalarValue::Int8(Some(lo)), ScalarValue::Int8(Some(hi)))),
+        DataType::Int16 => int_bounds::<i16>(rhs)
+            .map(|(lo, hi)| (ScalarValue::Int16(Some(lo)), ScalarValue::Int16(Some(hi)))),
+        DataType::Int32 => int_bounds::<i32>(rhs)
+            .map(|(lo, hi)| (ScalarValue::Int32(Some(lo)), ScalarValue::Int32(Some(hi)))),
+        DataType::Int64 => int_bounds::<i64>(rhs)
+            .map(|(lo, hi)| (ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi)))),
+        DataType::Decimal128(precision, scale) => decimal128_bounds(rhs, *precision, *scale),
+        _ => None,
+    };
+
+    let Some((lower, upper)) = bounds else {
+        return Ok(PreimageResult::None);
+    };
+    Ok(PreimageResult::Range {
+        expr: args[0].clone(),
+        interval: Box::new(Interval::try_new(lower, upper)?),
+    })
+}
+
+/// Extract a literal RHS as an integer. Returns `None` for non-integer values
+/// (fractional floats, NULL, strings, etc.).
+fn lit_as_integer(v: &ScalarValue) -> Option<i128> {
+    match v {
+        ScalarValue::Int8(Some(n)) => Some(*n as i128),
+        ScalarValue::Int16(Some(n)) => Some(*n as i128),
+        ScalarValue::Int32(Some(n)) => Some(*n as i128),
+        ScalarValue::Int64(Some(n)) => Some(*n as i128),
+        ScalarValue::Float32(Some(n)) if n.is_finite() && n.fract() == 0.0 => {
+            // Round-trip check ensures the cast is lossless (guards against saturation
+            // for floats outside i128 range and precision loss for |n| > 2^24).
+            let i = *n as i128;
+            (i as f32 == *n).then_some(i)
+        }
+        ScalarValue::Float64(Some(n)) if n.is_finite() && n.fract() == 0.0 => {
+            let i = *n as i128;
+            (i as f64 == *n).then_some(i)
+        }
+        ScalarValue::Decimal128(Some(n), _, 0) => Some(*n),
+        ScalarValue::Decimal128(Some(n), _, scale) if *scale > 0 => {
+            let pow = 10_i128.checked_pow(*scale as u32)?;
+            if n % pow == 0 {
+                Some(n / pow)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn float_bounds(n: i128) -> Option<(f64, f64)> {
+    let lo = n as f64;
+    let hi = n.checked_add(1).map(|m| m as f64)?;
+    // Verify round-trip: if lo rounds (|n| > 2^53), the interval is unsound because
+    // the float representation of lo differs from the integer n.
+    if lo as i128 != n || !lo.is_finite() || !hi.is_finite() || hi <= lo {
+        return None;
+    }
+    Some((lo, hi))
+}
+
+fn int_bounds<T>(n: i128) -> Option<(T, T)>
+where
+    T: TryFrom<i128> + CheckedAdd + num::One,
+{
+    let lo = T::try_from(n).ok()?;
+    let hi = lo.checked_add(&T::one())?;
+    Some((lo, hi))
+}
+
+fn decimal128_bounds(n: i128, precision: u8, scale: i8) -> Option<(ScalarValue, ScalarValue)> {
+    if scale < 0 {
+        return None;
+    }
+    let step = 10_i128.checked_pow(scale as u32)?;
+    let lo = n.checked_mul(step)?;
+    let hi = lo.checked_add(step)?;
+    // Validate both bounds fit within the declared precision. Use u128 because
+    // 10^38 (max precision) exceeds i128::MAX but fits in u128.
+    let max_unscaled = 10_u128.checked_pow(u32::from(precision))?;
+    if lo.unsigned_abs() >= max_unscaled || hi.unsigned_abs() >= max_unscaled {
+        return None;
+    }
+    Some((
+        ScalarValue::Decimal128(Some(lo), precision, scale),
+        ScalarValue::Decimal128(Some(hi), precision, scale),
+    ))
 }

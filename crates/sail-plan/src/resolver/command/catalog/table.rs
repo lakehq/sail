@@ -1,7 +1,9 @@
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
+use sail_catalog::provider::{
+    AlterTableOptions, CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions,
+};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
@@ -56,6 +58,10 @@ impl PlanResolver<'_> {
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
+        let properties = properties
+            .into_iter()
+            .chain(options.into_iter().map(|(k, v)| (format!("option.{k}"), v)))
+            .collect();
 
         let command = CatalogCommand::CreateTable {
             table: table.into(),
@@ -70,7 +76,6 @@ impl PlanResolver<'_> {
                 bucket_by,
                 if_not_exists,
                 replace,
-                options,
                 properties,
             },
         };
@@ -403,5 +408,30 @@ impl PlanResolver<'_> {
                 num_buckets,
             }
         }))
+    }
+
+    pub(in super::super) async fn resolve_catalog_alter_table(
+        &self,
+        table: spec::ObjectName,
+        if_exists: bool,
+        operation: spec::AlterTableOperation,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let options = match operation {
+            spec::AlterTableOperation::SetTableProperties { properties } => {
+                AlterTableOptions::SetTableProperties { properties }
+            }
+            spec::AlterTableOperation::UnsetTableProperties { keys, if_exists } => {
+                AlterTableOptions::UnsetTableProperties { keys, if_exists }
+            }
+            spec::AlterTableOperation::Unknown => {
+                return Err(PlanError::todo("unsupported ALTER TABLE operation"));
+            }
+        };
+        self.resolve_catalog_command(CatalogCommand::AlterTable {
+            table: table.into(),
+            if_exists,
+            options,
+        })
     }
 }

@@ -23,6 +23,7 @@ use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 
 use crate::error::{PlanError, PlanResult};
@@ -75,11 +76,19 @@ fn trunc(date: Expr, part: Expr) -> Expr {
     )
 }
 
-fn date_trunc(part: Expr, timestamp: Expr) -> Expr {
-    cast(
-        expr_fn::date_trunc(trunc_part_conversion(part), timestamp),
-        DataType::Timestamp(TimeUnit::Microsecond, None),
-    )
+fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let (part, timestamp) = input.arguments.two()?;
+    let truncated = expr_fn::date_trunc(trunc_part_conversion(part), timestamp);
+    match truncated.get_type(input.function_context.schema)? {
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(truncated),
+        DataType::Timestamp(_, tz) => Ok(cast(
+            truncated,
+            DataType::Timestamp(TimeUnit::Microsecond, tz),
+        )),
+        other => Err(PlanError::InternalError(format!(
+            "date_trunc expected a timestamp result, got {other:?}"
+        ))),
+    }
 }
 
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
@@ -285,6 +294,17 @@ fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } else {
         unix_timestamp(input)
     }
+}
+
+/// Dispatch for `next_day(date, day_of_week)`.
+///
+/// Reads `PlanConfig::ansi_mode` at planning time and bakes it into the UDF
+/// so the runtime path chooses between erroring (ANSI=true) and returning
+/// NULL (ANSI=false) on malformed day-of-week strings.
+fn next_day(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let udf = ScalarUDF::from(SparkNextDay::new(ansi_mode));
+    Ok(udf.call(input.arguments))
 }
 
 fn date_format(expr: Expr, format: Expr) -> Expr {
@@ -617,7 +637,8 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     };
 
     let seconds_in_day = |dt: Expr, tu: TimeUnit| {
-        (cast(dt.clone(), DataType::Int64) - cast(date_trunc(lit("DAY"), dt), DataType::Int64))
+        (cast(dt.clone(), DataType::Int64)
+            - cast(expr_fn::date_trunc(lit("DAY"), dt), DataType::Int64))
             / lit(time_unit_to_multiplier(&tu))
     };
 
@@ -692,7 +713,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
         ),
-        ("date_trunc", F::binary(date_trunc)),
+        ("date_trunc", F::custom(date_trunc)),
         (
             "dateadd",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
@@ -731,7 +752,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::unary(|arg| expr_fn::to_char(arg, lit("%b"))),
         ),
         ("months_between", F::custom(months_between)),
-        ("next_day", F::udf(SparkNextDay::new())),
+        ("next_day", F::custom(next_day)),
         ("now", F::custom(current_timestamp_microseconds)),
         ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
         ("second", F::unary(|arg| integer_part(arg, "SECOND"))),
@@ -804,7 +825,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
-        ("year", F::unary(|arg| integer_part(arg, "YEAR"))),
+        ("year", F::udf(SparkYear::new())),
         ("years", F::unary(years)),
     ]
 }

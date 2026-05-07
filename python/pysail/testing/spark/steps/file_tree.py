@@ -29,6 +29,14 @@ _ICEBERG_SNAP_FILE_RE = re.compile(r"^snap-\d+\.avro$")
 
 _UUID_SUFFIX_RE = re.compile(r"^(.+)-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
+# Delta deletion vector patterns
+_DELTA_DV_BIN_RE = re.compile(
+    r"^deletion_vector_"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"\.bin$"
+)
+_HEX_PREFIX_DIR_RE = re.compile(r"^[0-9a-fA-F]{2}$")
+
 # Delta V2 checkpoint patterns
 _DELTA_UUID_CHECKPOINT_RE = re.compile(
     r"^(\d{20}\.checkpoint\.)"
@@ -92,6 +100,16 @@ def _normalize_name(name: str) -> str | None:
     # e.g., `3a0d65cd-4056-49b8-937b-95f9e3ee90e5.parquet` → `<uuid>.parquet`
     if _DELTA_SIDECAR_FILE_RE.match(name):
         return "<uuid>.parquet"
+
+    # Normalize Delta deletion vector bin files
+    # e.g., `deletion_vector_51536315-3367-4db3-a751-3ef52b1ab880.bin` → `deletion_vector_<uuid>.bin`
+    if _DELTA_DV_BIN_RE.match(name):
+        return "deletion_vector_<uuid>.bin"
+
+    # Normalize 2-character hex-prefix directories used by deletion vectors
+    # e.g., `51` → `<hex-prefix>`
+    if _HEX_PREFIX_DIR_RE.match(name):
+        return "<hex-prefix>"
 
     # Normalize Spark data file names.
     m = _SPARK_PART_FILE_RE.match(name)

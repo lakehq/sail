@@ -1,0 +1,17 @@
+>>> catalogs = {c.name: c for c in spark.catalog.listCatalogs()}
+>>> len(catalogs) == 2
+True
+>>> "system" in catalogs and catalogs["system"].description is None
+True
+>>> user_catalogs = catalogs.keys() - {"system"}
+>>> len(user_catalogs) == 1 and next(iter(user_catalogs)) in {"sail", "sail_catalog", "spark_catalog"}
+True
+>>> all(catalogs[name].description is None for name in user_catalogs)
+True
+
+>>> matched = spark.catalog.listCatalogs("spark*") + spark.catalog.listCatalogs("sail*")
+>>> len(matched) == 1 and matched[0].name in {"sail", "sail_catalog", "spark_catalog"} and matched[0].description is None
+True
+
+>>> spark.catalog.listCatalogs("hive*")
+[]

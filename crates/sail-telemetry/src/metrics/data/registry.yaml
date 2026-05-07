@@ -404,50 +404,33 @@
     - execution.operator.name
   debug: true
 
-- name: flight.query.count
-  description: The total number of Flight SQL queries executed.
+- name: flight.statement.total_count
+  description: The total number of Flight SQL statements.
   type: Counter
   value_type: u64
   attributes:
-    - flight.query.type
-    - flight.query.status
+    - flight.statement.type
 
-- name: flight.query.duration
-  description: The duration of Flight SQL query execution.
+- name: flight.statement.active_count
+  description: The number of currently active Flight SQL statements.
+  type: UpDownCounter
+  value_type: i64
+  attributes:
+    - flight.statement.type
+
+- name: flight.statement.duration
+  description: The duration of Flight SQL statement execution.
   unit: s
   type: Histogram
   value_type: f64
   attributes:
-    - flight.query.type
-    - flight.query.status
+    - flight.statement.type
+    - flight.statement.status
 
-- name: flight.query.rows
-  description: The number of rows returned by Flight SQL queries.
+- name: flight.statement.row_count
+  description: The number of rows returned by Flight SQL statements.
   type: Histogram
   value_type: u64
   attributes:
-    - flight.query.type
-
-- name: flight.query.active
-  description: The number of currently active Flight SQL queries.
-  type: UpDownCounter
-  value_type: i64
-  attributes: []
-
-- name: flight.cache.hits
-  description: The number of Flight prepared statement cache hits.
-  type: Counter
-  value_type: u64
-  attributes: []
-
-- name: flight.cache.misses
-  description: The number of Flight prepared statement cache misses.
-  type: Counter
-  value_type: u64
-  attributes: []
-
-- name: flight.connections
-  description: The total number of Flight SQL client connections.
-  type: Counter
-  value_type: u64
-  attributes: []
+    - flight.statement.type
+    - flight.statement.status
