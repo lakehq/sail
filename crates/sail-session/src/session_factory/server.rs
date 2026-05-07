@@ -23,7 +23,7 @@ use sail_execution::worker_manager::{
 use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
 use sail_server::actor::{ActorHandle, ActorSystem};
 
-use crate::catalog::create_catalog_manager_with_providers;
+use crate::catalog::create_catalog_manager;
 use crate::formats::create_table_format_registry;
 use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
@@ -112,9 +112,9 @@ impl ServerSessionFactory {
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
             .with_extension(create_table_format_registry()?)
-            .with_extension(Arc::new(create_catalog_manager_with_providers(
+            .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
-                self.runtime_env.catalog_providers().clone(),
+                self.runtime.clone(),
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))

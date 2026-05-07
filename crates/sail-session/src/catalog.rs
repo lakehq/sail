@@ -191,14 +191,7 @@ pub fn create_catalog_manager(
     config: &AppConfig,
     runtime: RuntimeHandle,
 ) -> Result<CatalogManager> {
-    let catalogs = create_catalog_providers(config, runtime)?;
-    create_catalog_manager_with_providers(config, catalogs)
-}
-
-pub fn create_catalog_manager_with_providers(
-    config: &AppConfig,
-    mut catalogs: HashMap<String, Arc<dyn CatalogProvider>>,
-) -> Result<CatalogManager> {
+    let mut catalogs = create_catalog_providers(config, runtime)?;
     let default_catalog = if let Some(name) = config.catalog.default_catalog.as_ref() {
         name.clone()
     } else {
