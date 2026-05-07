@@ -138,6 +138,7 @@ use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::explode::{explode_name_to_kind, Explode};
@@ -2229,6 +2230,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
+            "spark_year" | "year" => Ok(Arc::new(ScalarUDF::from(SparkYear::new()))),
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
@@ -2368,6 +2370,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkToVariantObjectUdf>()
             || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkLastDay>()
+            || node_inner.is::<SparkYear>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
             || node_inner.is::<SparkMakeInterval>()
