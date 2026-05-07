@@ -1,6 +1,7 @@
 use core::any::type_name;
 use std::sync::Arc;
 
+use arrow::buffer::NullBuffer;
 use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
@@ -209,31 +210,24 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
 
     let schema_data_type = parse_schema_to_data_type(schema_str, session_timezone)?;
 
-    parse_rows(rows, schema_data_type, options)
-    //match &target_type {
-    //    DataType::Struct(fields) => parse_json_to_struct(rows, fields, &options, session_timezone),
-    //    DataType::List(field) => parse_json_to_list(rows, field, &options, session_timezone),
-    //    DataType::Map(field, keys_sorted) => {
-    //        parse_json_to_map(rows, field, *keys_sorted, &options, session_timezone)
-    //    }
-    //    other => exec_err!("Unsupported target schema type for from_json: {other:?}"),
-    //}
+    parse_rows(rows, schema_data_type, options, session_timezone)
 }
 
 fn parse_rows(
     rows: &StringArray,
     schema: DataType,
     options: SparkFromJsonOptions,
+    session_timezone: &str,
 ) -> Result<ArrayRef> {
     let mut builder = create_builder(schema, rows.len())?;
     for i in 0..rows.len() {
         if rows.is_null(i) {
-            append_to_builder(&mut builder, &Value::Null, &options)?;
+            append_to_builder(&mut builder, &Value::Null, &options, session_timezone)?;
         } else {
             let json_str = rows.value(i);
             let value = serde_json::from_str::<serde_json::Value>(json_str)
                 .map_err(|e| DataFusionError::Execution(format!("Unable to parse json: {e}")))?;
-            append_to_builder(&mut builder, &value, &options)?;
+            append_to_builder(&mut builder, &value, &options, session_timezone)?;
         }
     }
     finish_builder(builder)
@@ -245,6 +239,7 @@ enum FieldBuilder {
     Date32(Date32Builder),
     Decimal128 {
         builder: Decimal128Builder,
+        precision: u8,
         scale: i8,
     },
     Float32(Float32Builder),
@@ -273,10 +268,23 @@ enum FieldBuilder {
         nested_builders: Vec<FieldBuilder>,
         nulls: Vec<bool>,
     },
-    TimestampMicrosecondBuilder(TimestampMicrosecondBuilder),
-    TimestampMillisecondBuilder(TimestampMillisecondBuilder),
-    TimestampNanosecondBuilder(TimestampNanosecondBuilder),
-    TimestampSecondBuilder(TimestampSecondBuilder),
+    // TODO: claude is there a better pattern to reduce writing `tz` 4 times?
+    TimestampMicrosecondBuilder {
+        builder: TimestampMicrosecondBuilder,
+        tz: Option<Arc<str>>
+    },
+    TimestampMillisecondBuilder {
+        builder: TimestampMillisecondBuilder,
+        tz: Option<Arc<str>>
+    },
+    TimestampNanosecondBuilder {
+        builder: TimestampNanosecondBuilder,
+        tz: Option<Arc<str>>
+    },
+    TimestampSecondBuilder {
+        builder: TimestampSecondBuilder,
+        tz: Option<Arc<str>>
+    },
 }
 
 fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> {
@@ -288,7 +296,7 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
         DataType::Decimal128(precision, scale) => {
             let builder = Decimal128Builder::with_capacity(capacity)
                 .with_precision_and_scale(precision, scale)?;
-            Ok(FieldBuilder::Decimal128 { builder, scale })
+            Ok(FieldBuilder::Decimal128 { builder, precision, scale })
         },
         DataType::Float32 => Ok(FieldBuilder::Float32(Float32Builder::with_capacity(
             capacity,
@@ -342,27 +350,31 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
             capacity,
             capacity*16,
         ))),
-        DataType::Timestamp(time_unit, _) => {
+        DataType::Timestamp(time_unit, tz) => {
             match time_unit {
                 TimeUnit::Microsecond => {
-                    Ok(FieldBuilder::TimestampMicrosecondBuilder(
-                        TimestampMicrosecondBuilder::with_capacity(capacity),
-                    ))
+                    Ok(FieldBuilder::TimestampMicrosecondBuilder {
+                        builder: TimestampMicrosecondBuilder::with_capacity(capacity),
+                        tz
+                    })
                 },
                 TimeUnit::Millisecond => {
-                    Ok(FieldBuilder::TimestampMillisecondBuilder(
-                        TimestampMillisecondBuilder::with_capacity(capacity),
-                    ))
+                    Ok(FieldBuilder::TimestampMillisecondBuilder {
+                        builder: TimestampMillisecondBuilder::with_capacity(capacity),
+                        tz
+                    })
                 },
                 TimeUnit::Nanosecond => {
-                    Ok(FieldBuilder::TimestampNanosecondBuilder(
-                        TimestampNanosecondBuilder::with_capacity(capacity),
-                    ))
+                    Ok(FieldBuilder::TimestampNanosecondBuilder {
+                        builder: TimestampNanosecondBuilder::with_capacity(capacity),
+                        tz
+                    })
                 },
                 TimeUnit::Second => {
-                    Ok(FieldBuilder::TimestampSecondBuilder(
-                        TimestampSecondBuilder::with_capacity(capacity),
-                    ))
+                    Ok(FieldBuilder::TimestampSecondBuilder {
+                        builder: TimestampSecondBuilder::with_capacity(capacity),
+                        tz
+                    })
                 },
             }
         },
@@ -378,18 +390,26 @@ fn append_to_builder(
     builder: &mut FieldBuilder,
     value: &Value,
     options: &SparkFromJsonOptions,
+    session_timezone: &str,
 ) -> Result<()> {
     // null value
     if let Value::Null = value {
         match builder {
-            FieldBuilder::Int32(b) => b.append_null(),
-            FieldBuilder::Int64(b) => b.append_null(),
+            FieldBuilder::Boolean(b) => b.append_null(),
+            FieldBuilder::Decimal128 { builder, .. } => builder.append_null(),
+            FieldBuilder::Date32(b) => b.append_null(),
             FieldBuilder::Float32(b) => b.append_null(),
             FieldBuilder::Float64(b) => b.append_null(),
-            FieldBuilder::Decimal128 { builder, .. } => builder.append_null(),
+            FieldBuilder::LargeString(b) => b.append_null(),
+            FieldBuilder::Int8(b) => b.append_null(),
+            FieldBuilder::Int16(b) => b.append_null(),
+            FieldBuilder::Int32(b) => b.append_null(),
+            FieldBuilder::Int64(b) => b.append_null(),
             FieldBuilder::String(b) => b.append_null(),
-            FieldBuilder::Boolean(b) => b.append_null(),
-            FieldBuilder::TimestampMicrosecondBuilder(b) => b.append_null(),
+            FieldBuilder::TimestampMicrosecondBuilder{ builder, .. } => builder.append_null(),
+            FieldBuilder::TimestampMillisecondBuilder{ builder, .. } => builder.append_null(),
+            FieldBuilder::TimestampNanosecondBuilder{ builder, .. } => builder.append_null(),
+            FieldBuilder::TimestampSecondBuilder{ builder, .. } => builder.append_null(),
             FieldBuilder::Struct {
                 nested_builders,
                 nulls,
@@ -397,7 +417,7 @@ fn append_to_builder(
             } => {
                 nulls.push(false);
                 for nested_builder in nested_builders.iter_mut() {
-                    append_to_builder(nested_builder, value, options)?;
+                    append_to_builder(nested_builder, value, options, session_timezone)?;
                 }
             }
             FieldBuilder::Map { nulls, offsets, .. } => {
@@ -414,23 +434,23 @@ fn append_to_builder(
     // not null value
     } else {
         match (builder, value) {
-            (FieldBuilder::Int32(b), Value::Number(num)) => {
-                if let Some(n) = num.as_i64() {
-                    if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
-                        b.append_value(n as i32);
-                    } else {
-                        b.append_null();
-                    }
-                } else {
-                    b.append_null();
-                }
+            (FieldBuilder::Boolean(b), Value::Bool(bool)) => b.append_value(*bool),
+            (FieldBuilder::Date32(b), Value::String(string)) => {
+                let date32 = parse_date32(string, options)?;
+                b.append_value(date32);
             }
-            (FieldBuilder::Int64(b), Value::Number(num)) => {
-                if let Some(n) = num.as_i64() {
-                    b.append_value(n);
-                } else {
-                    b.append_null();
-                }
+            (FieldBuilder::Decimal128 { builder, precision, scale }, _) => {
+                match value {
+                    Value::Number(n) => {
+                        let decimal128 = parse_decimal_to_i128(&n.to_string(), precision, scale)?;
+                        builder.append_value(decimal128);
+                    },
+                    Value::String(s) => {
+                        let decimal128 = parse_decimal_to_i128(s, precision, scale)?;
+                        builder.append_value(decimal128);
+                    },
+                    _ => builder.append_null(),
+                };
             }
             (FieldBuilder::Float32(b), Value::Number(num)) => {
                 if let Some(float) = num.as_f64() {
@@ -450,44 +470,77 @@ fn append_to_builder(
                     b.append_null();
                 }
             }
-            (FieldBuilder::Decimal128 { builder, scale, .. }, Value::Number(num)) => {
-                let scale_factor = 10i128.pow(*scale as u32);
-                if let Some(i) = num.as_i128() {
-                    builder.append_value(i * scale_factor);
-                } else if let Some(f) = num.as_f64() {
-                    let decimal = (f * scale_factor as f64).round() as i128;
-                    builder.append_value(decimal);
+            // TODO: 1) verify string size 2) other Values can be converted to strings
+            (FieldBuilder::LargeString(b), Value::String(string)) => b.append_value(string),
+            (FieldBuilder::Int8(b), Value::Number(num)) => {
+                if let Some(n) = num.as_i64() {
+                    if n >= i8::MIN as i64 && n <= i8::MAX as i64 {
+                        b.append_value(n as i8);
+                    } else {
+                        b.append_null();
+                    }
+                }
+            }
+            (FieldBuilder::Int16(b), Value::Number(num)) => {
+                if let Some(n) = num.as_i64() {
+                    if n >= i16::MIN as i64 && n <= i16::MAX as i64 {
+                        b.append_value(n as i16);
+                    } else {
+                        b.append_null();
+                    }
+                }
+            }
+            (FieldBuilder::Int32(b), Value::Number(num)) => {
+                if let Some(n) = num.as_i64() {
+                    if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
+                        b.append_value(n as i32);
+                    } else {
+                        b.append_null();
+                    }
+                } else {
+                    b.append_null();
+                }
+            }
+            (FieldBuilder::Int64(b), Value::Number(num)) => {
+                if let Some(n) = num.as_i64() {
+                    b.append_value(n);
+                } else {
+                    b.append_null();
+                }
+            }
+            (FieldBuilder::String(b), Value::String(string)) => b.append_value(string),
+            (FieldBuilder::TimestampMicrosecondBuilder{ builder, tz }, Value::String(string)) => {
+                let naive_datetime = parse_timestamp(string, tz.clone(), options, session_timezone)?;
+                if let Some(timestamp_microseconds) = TimestampMicrosecondType::from_datetime(naive_datetime) {
+                    builder.append_value(timestamp_microseconds);
                 } else {
                     builder.append_null();
                 }
             }
-            (FieldBuilder::TimestampMicrosecondBuilder(b), Value::String(string)) => {
-                let ts = if let Ok(timestamp) =
-                    NaiveDateTime::parse_from_str(string, &options.timestamp_format)
-                {
-                    timestamp
-                } else if let Ok(date) =
-                    NaiveDate::parse_from_str(string, &options.timestamp_format)
-                {
-                    date.and_hms_opt(0, 0, 0)
-                        .ok_or(DataFusionError::Execution(format!(
-                            "Should be unreachable: unable to add HH:mm::ss when parsing date {:?} into format {:?}",
-                            date,
-                            &options.timestamp_format
-                        )))?
+            (FieldBuilder::TimestampMillisecondBuilder{ builder, tz }, Value::String(string)) => {
+                let naive_datetime = parse_timestamp(string, tz.clone(), options, session_timezone)?;
+                if let Some(timestamp_milliseconds) = TimestampMillisecondType::from_datetime(naive_datetime) {
+                    builder.append_value(timestamp_milliseconds);
                 } else {
-                    return Err(DataFusionError::Execution(format!(
-                        "Timestamp error: can't parse {string:?} to {:?}",
-                        options.timestamp_format
-                    )));
-                };
-
-
-                let micro_seconds = ts.and_utc().timestamp_micros();
-                b.append_value(micro_seconds);
+                    builder.append_null();
+                }
             }
-            (FieldBuilder::String(b), Value::String(string)) => b.append_value(string),
-            (FieldBuilder::Boolean(b), Value::Bool(bool)) => b.append_value(*bool),
+            (FieldBuilder::TimestampNanosecondBuilder{ builder, tz }, Value::String(string)) => {
+                let naive_datetime = parse_timestamp(string, tz.clone(), options, session_timezone)?;
+                if let Some(timestamp_nanoseconds) = TimestampNanosecondType::from_datetime(naive_datetime) {
+                    builder.append_value(timestamp_nanoseconds);
+                } else {
+                    builder.append_null();
+                }
+            }
+            (FieldBuilder::TimestampSecondBuilder{ builder, tz }, Value::String(string)) => {
+                let naive_datetime = parse_timestamp(string, tz.clone(), options, session_timezone)?;
+                if let Some(timestamp_second) = TimestampSecondType::from_datetime(naive_datetime) {
+                    builder.append_value(timestamp_second);
+                } else {
+                    builder.append_null();
+                }
+            }
             (
                 FieldBuilder::Struct {
                     fields,
@@ -511,7 +564,7 @@ fn append_to_builder(
                             field.name()
                         )));
                     };
-                    append_to_builder(nested_builder, val, options)?;
+                    append_to_builder(nested_builder, val, options, session_timezone)?;
                 }
             }
             (
@@ -531,7 +584,7 @@ fn append_to_builder(
                         "key": k,
                         "value": v
                     });
-                    append_to_builder(struct_builder, &entry, options)?;
+                    append_to_builder(struct_builder, &entry, options, session_timezone)?;
                 }
                 let curr_len = offsets.last().unwrap() + obj.len() as i32;
                 offsets.push(curr_len);
@@ -547,7 +600,7 @@ fn append_to_builder(
             ) => {
                 nulls.push(true);
                 for val in arr.iter() {
-                    append_to_builder(values, val, options)?;
+                    append_to_builder(values, val, options, session_timezone)?;
                 }
                 let curr_len = offsets.last().unwrap() + arr.len() as i32;
                 offsets.push(curr_len);
@@ -563,7 +616,7 @@ fn append_to_builder(
                 Value::Object(_),
             ) => {
                 nulls.push(true);
-                append_to_builder(nested_builder, value, options)?;
+                append_to_builder(nested_builder, value, options, session_timezone)?;
                 let curr_len = offsets.last().unwrap() + 1_i32; // only need to increment by 1
                 offsets.push(curr_len);
             }
@@ -578,14 +631,21 @@ fn append_to_builder(
 
 fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
     match builder {
-        FieldBuilder::Int32(mut b) => Ok(Arc::new(b.finish())),
-        FieldBuilder::Int64(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Boolean(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Date32(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Decimal128 { mut builder, .. } => Ok(Arc::new(builder.finish())),
         FieldBuilder::Float32(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Float64(mut b) => Ok(Arc::new(b.finish())),
-        FieldBuilder::Decimal128 { mut builder, .. } => Ok(Arc::new(builder.finish())),
+        FieldBuilder::LargeString(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Int8(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Int16(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Int32(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Int64(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::String(mut b) => Ok(Arc::new(b.finish())),
-        FieldBuilder::Boolean(mut b) => Ok(Arc::new(b.finish())),
-        FieldBuilder::TimestampMicrosecondBuilder(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::TimestampMicrosecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
+        FieldBuilder::TimestampMillisecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
+        FieldBuilder::TimestampNanosecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
+        FieldBuilder::TimestampSecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
         FieldBuilder::Struct {
             fields,
             nested_builders,
@@ -637,366 +697,12 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
     }
 }
 
-// TODO: remove below unnecessary fns
-/// Parse JSON strings into a StructArray.
-fn parse_json_to_struct(
-    rows: &StringArray,
-    fields: &Fields,
-    options: &SparkFromJsonOptions,
-    session_timezone: &str,
-) -> Result<ArrayRef> {
-    let num_rows = rows.len();
-    let mut children_scalars: Vec<Vec<ScalarValue>> =
-        vec![Vec::with_capacity(num_rows); fields.len()];
-    let mut validity: Vec<bool> = Vec::with_capacity(num_rows);
-
-    for i in 0..num_rows {
-        if rows.is_null(i) {
-            for (j, field) in fields.iter().enumerate() {
-                children_scalars[j].push(ScalarValue::try_new_null(field.data_type())?);
-            }
-            validity.push(false);
-        } else {
-            let json_str = rows.value(i);
-            match serde_json::from_str::<Value>(json_str) {
-                Ok(Value::Object(obj)) => {
-                    for (j, field) in fields.iter().enumerate() {
-                        let field_value = obj.get(field.name());
-                        children_scalars[j].push(json_value_to_scalar(
-                            field_value,
-                            field.data_type(),
-                            options,
-                            session_timezone,
-                        )?);
-                    }
-                    validity.push(true);
-                }
-                _ => {
-                    // Parse error or non-object → struct with null fields (PERMISSIVE mode)
-                    for (j, field) in fields.iter().enumerate() {
-                        children_scalars[j].push(ScalarValue::try_new_null(field.data_type())?);
-                    }
-                    validity.push(true);
-                }
-            }
-        }
-    }
-
-    let children_arrays: Vec<ArrayRef> = children_scalars
-        .into_iter()
-        .map(|arr| ScalarValue::iter_to_array(arr))
-        .collect::<Result<_>>()?;
-
-    Ok(Arc::new(StructArray::new(
-        fields.clone(),
-        children_arrays,
-        Some(validity.into()),
-    )))
-}
-
-/// Parse JSON strings into a ListArray.
-fn parse_json_to_list(
-    rows: &StringArray,
-    element_field: &FieldRef,
-    options: &SparkFromJsonOptions,
-    session_timezone: &str,
-) -> Result<ArrayRef> {
-    let num_rows = rows.len();
-    let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
-    let mut all_values: Vec<ScalarValue> = Vec::new();
-    let mut validity: Vec<bool> = Vec::with_capacity(num_rows);
-    let mut current_offset: i32 = 0;
-    offsets.push(current_offset);
-
-    for i in 0..num_rows {
-        if rows.is_null(i) {
-            offsets.push(current_offset);
-            validity.push(false);
-        } else {
-            let json_str = rows.value(i);
-            match serde_json::from_str::<Value>(json_str) {
-                Ok(Value::Array(arr)) => {
-                    for item in &arr {
-                        all_values.push(json_value_to_scalar(
-                            Some(item),
-                            element_field.data_type(),
-                            options,
-                            session_timezone,
-                        )?);
-                    }
-                    current_offset += arr.len() as i32;
-                    offsets.push(current_offset);
-                    validity.push(true);
-                }
-                _ => {
-                    offsets.push(current_offset);
-                    validity.push(false);
-                }
-            }
-        }
-    }
-
-    let values_array = if all_values.is_empty() {
-        new_empty_array(element_field.data_type())
-    } else {
-        ScalarValue::iter_to_array(all_values)?
-    };
-
-    let offset_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets));
-    Ok(Arc::new(ListArray::new(
-        element_field.clone(),
-        offset_buffer,
-        values_array,
-        Some(validity.into()),
-    )))
-}
-
-/// Parse JSON strings into a MapArray.
-fn parse_json_to_map(
-    rows: &StringArray,
-    map_field: &FieldRef,
-    keys_sorted: bool,
-    options: &SparkFromJsonOptions,
-    session_timezone: &str,
-) -> Result<ArrayRef> {
-    let DataType::Struct(entry_fields) = map_field.data_type() else {
-        return exec_err!("Expected struct entries field in Map type");
-    };
-    let key_field = &entry_fields[0];
-    let value_field = &entry_fields[1];
-
-    let num_rows = rows.len();
-    let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
-    let mut all_keys: Vec<ScalarValue> = Vec::new();
-    let mut all_values: Vec<ScalarValue> = Vec::new();
-    let mut validity: Vec<bool> = Vec::with_capacity(num_rows);
-    let mut current_offset: i32 = 0;
-    offsets.push(current_offset);
-
-    for i in 0..num_rows {
-        if rows.is_null(i) {
-            offsets.push(current_offset);
-            validity.push(false);
-        } else {
-            let json_str = rows.value(i);
-            match serde_json::from_str::<Value>(json_str) {
-                Ok(Value::Object(obj)) => {
-                    for (k, v) in &obj {
-                        all_keys.push(json_value_to_scalar(
-                            Some(&Value::String(k.clone())),
-                            key_field.data_type(),
-                            options,
-                            session_timezone,
-                        )?);
-                        all_values.push(json_value_to_scalar(
-                            Some(v),
-                            value_field.data_type(),
-                            options,
-                            session_timezone,
-                        )?);
-                    }
-                    current_offset += obj.len() as i32;
-                    offsets.push(current_offset);
-                    validity.push(true);
-                }
-                _ => {
-                    offsets.push(current_offset);
-                    validity.push(false);
-                }
-            }
-        }
-    }
-
-    let keys_array = if all_keys.is_empty() {
-        new_empty_array(key_field.data_type())
-    } else {
-        ScalarValue::iter_to_array(all_keys)?
-    };
-
-    let values_array = if all_values.is_empty() {
-        new_empty_array(value_field.data_type())
-    } else {
-        ScalarValue::iter_to_array(all_values)?
-    };
-
-    let entries = StructArray::new(entry_fields.clone(), vec![keys_array, values_array], None);
-
-    let offset_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets));
-    Ok(Arc::new(MapArray::new(
-        map_field.clone(),
-        offset_buffer,
-        entries,
-        Some(validity.into()),
-        keys_sorted,
-    )))
-}
-
-/// Convert a JSON value to a ScalarValue of the target DataType.
-fn json_value_to_scalar(
-    value: Option<&Value>,
-    data_type: &DataType,
-    options: &SparkFromJsonOptions,
-    session_timezone: &str,
-) -> Result<ScalarValue> {
-    match value {
-        None | Some(Value::Null) => ScalarValue::try_new_null(data_type),
-        Some(val) => match data_type {
-            DataType::Boolean => match val {
-                Value::Bool(b) => Ok(ScalarValue::Boolean(Some(*b))),
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Int8 => match val {
-                Value::Number(n) => Ok(ScalarValue::Int8(n.as_i64().map(|v| v as i8))),
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Int16 => match val {
-                Value::Number(n) => Ok(ScalarValue::Int16(n.as_i64().map(|v| v as i16))),
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Int32 => match val {
-                Value::Number(n) => Ok(ScalarValue::Int32(n.as_i64().map(|v| v as i32))),
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Int64 => match val {
-                Value::Number(n) => Ok(ScalarValue::Int64(n.as_i64())),
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Float32 => match val {
-                Value::Number(n) => Ok(ScalarValue::Float32(n.as_f64().map(|v| v as f32))),
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Float64 => match val {
-                Value::Number(n) => Ok(ScalarValue::Float64(n.as_f64())),
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Utf8 => match val {
-                Value::String(s) => Ok(ScalarValue::Utf8(Some(s.clone()))),
-                other => Ok(ScalarValue::Utf8(Some(other.to_string()))),
-            },
-            DataType::LargeUtf8 => match val {
-                Value::String(s) => Ok(ScalarValue::LargeUtf8(Some(s.clone()))),
-                other => Ok(ScalarValue::LargeUtf8(Some(other.to_string()))),
-            },
-            DataType::Date32 => match val {
-                Value::String(s) => parse_date32(s, options),
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Timestamp(time_unit, tz) => match val {
-                Value::String(s) => {
-                    parse_timestamp(s, *time_unit, tz.clone(), options, session_timezone)
-                }
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Decimal128(precision, scale) => {
-                let parse_decimal = |input: &str| -> Result<ScalarValue> {
-                    let unscaled = parse_decimal_to_i128(input, *precision, *scale)?;
-                    Ok(ScalarValue::Decimal128(Some(unscaled), *precision, *scale))
-                };
-                match val {
-                    Value::Number(n) => parse_decimal(&n.to_string()),
-                    Value::String(s) => parse_decimal(s),
-                    _ => ScalarValue::try_new_null(data_type),
-                }
-            }
-            DataType::Struct(fields) => match val {
-                Value::Object(obj) => {
-                    let arrays: Vec<ArrayRef> = fields
-                        .iter()
-                        .map(|field| {
-                            let field_value = obj.get(field.name());
-                            let scalar = json_value_to_scalar(
-                                field_value,
-                                field.data_type(),
-                                options,
-                                session_timezone,
-                            )?;
-                            scalar.to_array()
-                        })
-                        .collect::<Result<_>>()?;
-                    Ok(ScalarValue::Struct(Arc::new(StructArray::new(
-                        fields.clone(),
-                        arrays,
-                        None,
-                    ))))
-                }
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::List(element_field) => match val {
-                Value::Array(arr) => {
-                    let scalars: Vec<ScalarValue> = arr
-                        .iter()
-                        .map(|item| {
-                            json_value_to_scalar(
-                                Some(item),
-                                element_field.data_type(),
-                                options,
-                                session_timezone,
-                            )
-                        })
-                        .collect::<Result<_>>()?;
-                    Ok(ScalarValue::List(ScalarValue::new_list(
-                        scalars.as_slice(),
-                        element_field.data_type(),
-                        true,
-                    )))
-                }
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            DataType::Map(map_field, keys_sorted) => match val {
-                Value::Object(obj) => {
-                    let DataType::Struct(entry_fields) = map_field.data_type() else {
-                        return exec_err!("Expected struct entries field in Map type");
-                    };
-                    let key_field = &entry_fields[0];
-                    let value_field = &entry_fields[1];
-
-                    let mut keys: Vec<ScalarValue> = Vec::with_capacity(obj.len());
-                    let mut values: Vec<ScalarValue> = Vec::with_capacity(obj.len());
-                    for (k, v) in obj {
-                        keys.push(json_value_to_scalar(
-                            Some(&Value::String(k.clone())),
-                            key_field.data_type(),
-                            options,
-                            session_timezone,
-                        )?);
-                        values.push(json_value_to_scalar(
-                            Some(v),
-                            value_field.data_type(),
-                            options,
-                            session_timezone,
-                        )?);
-                    }
-                    let keys_array = ScalarValue::iter_to_array(keys)?;
-                    let values_array = ScalarValue::iter_to_array(values)?;
-                    let keys_len = keys_array.len();
-                    let struct_array = StructArray::try_new(
-                        entry_fields.clone(),
-                        vec![keys_array, values_array],
-                        None,
-                    )?;
-                    let offsets = OffsetBuffer::new(vec![0, keys_len as i32].into());
-                    let map_array = MapArray::try_new(
-                        Arc::clone(map_field),
-                        offsets,
-                        struct_array,
-                        None,
-                        *keys_sorted,
-                    )?;
-                    Ok(ScalarValue::Map(Arc::new(map_array)))
-                }
-                _ => ScalarValue::try_new_null(data_type),
-            },
-            _ => ScalarValue::try_new_null(data_type),
-        },
-    }
-}
-
 /// Parse a decimal string into an unscaled `i128` value for `Decimal128(precision, scale)`.
 ///
 /// Handles integer, fractional, and scientific notation inputs. Fractional digits are
 /// padded or truncated (with rounding) to match the target scale. Validates that the
 /// result fits within the declared precision.
-fn parse_decimal_to_i128(input: &str, precision: u8, scale: i8) -> Result<i128> {
+fn parse_decimal_to_i128(input: &str, precision: &u8, scale: &i8) -> Result<<Decimal128Type as ArrowPrimitiveType>::Native> {
     let s = input.trim();
     if s.is_empty() {
         return Err(DataFusionError::Execution(
@@ -1044,7 +750,7 @@ fn parse_decimal_to_i128(input: &str, precision: u8, scale: i8) -> Result<i128> 
     // effective_scale = number of fractional digits minus the exponent
     // e.g. "1.23e1" → frac_part.len()=2, exponent=1, effective_scale=1
     let effective_scale = frac_part.len() as i32 - exponent;
-    let scale_delta = scale as i32 - effective_scale;
+    let scale_delta = scale.clone() as i32 - effective_scale;
 
     // Combine integer and fractional digits into one coefficient
     let digits = format!("{int_part}{frac_part}");
@@ -1095,7 +801,7 @@ fn parse_decimal_to_i128(input: &str, precision: u8, scale: i8) -> Result<i128> 
     } else {
         result.unsigned_abs().to_string().len() as u32
     };
-    if digit_count > precision as u32 {
+    if digit_count > precision.clone() as u32 {
         return Err(DataFusionError::Execution(format!(
             "Decimal value '{input}' exceeds declared precision {precision} and scale {scale}"
         )));
@@ -1104,29 +810,23 @@ fn parse_decimal_to_i128(input: &str, precision: u8, scale: i8) -> Result<i128> 
     Ok(result)
 }
 
-/// Parse a date string into a ScalarValue::Date32.
-fn parse_date32(s: &str, options: &SparkFromJsonOptions) -> Result<ScalarValue> {
+fn parse_date32(s: &str, options: &SparkFromJsonOptions) -> Result<<Date32Type as ArrowPrimitiveType>::Native> {
     let format = &options.date_format;
-    let date = NaiveDate::parse_from_str(s, format).map_err(|e| {
+    let naive_date = NaiveDate::parse_from_str(s, &format).map_err(|e| {
         DataFusionError::Execution(format!(
             "Failed to parse date '{s}' with format '{format}': {e}"
         ))
     })?;
-    let Some(epoch) = NaiveDate::from_ymd_opt(1970, 1, 1) else {
-        return exec_err!("failed to construct Unix epoch date");
-    };
-    let days = (date - epoch).num_days() as i32;
-    Ok(ScalarValue::Date32(Some(days)))
+    Ok(Date32Type::from_naive_date(naive_date))
 }
 
 /// Parse a timestamp string into a ScalarValue::Timestamp.
 fn parse_timestamp(
     s: &str,
-    time_unit: TimeUnit,
     timezone: Option<Arc<str>>,
     options: &SparkFromJsonOptions,
     session_timezone: &str,
-) -> Result<ScalarValue> {
+) -> Result<DateTime<Utc>> {
     let format = &options.timestamp_format;
 
     let naive_datetime = if let Ok(datetime) = NaiveDateTime::parse_from_str(s, format) {
@@ -1156,28 +856,7 @@ fn parse_timestamp(
         localize_with_fallback(&tz, &naive_datetime)?
     };
 
-    match time_unit {
-        TimeUnit::Second => Ok(ScalarValue::TimestampSecond(
-            Some(utc_datetime.timestamp()),
-            timezone,
-        )),
-        TimeUnit::Millisecond => Ok(ScalarValue::TimestampMillisecond(
-            Some(utc_datetime.timestamp_millis()),
-            timezone,
-        )),
-        TimeUnit::Microsecond => Ok(ScalarValue::TimestampMicrosecond(
-            Some(utc_datetime.timestamp_micros()),
-            timezone,
-        )),
-        TimeUnit::Nanosecond => {
-            let nanos = utc_datetime.timestamp_nanos_opt().ok_or_else(|| {
-                DataFusionError::Execution(format!(
-                    "Failed to parse timestamp '{s}': value out of range for nanoseconds"
-                ))
-            })?;
-            Ok(ScalarValue::TimestampNanosecond(Some(nanos), timezone))
-        }
-    }
+    Ok(utc_datetime)
 }
 
 /// Parses a schema string into an Arrow DataType. The schema may be a bare field list
