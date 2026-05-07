@@ -7,7 +7,6 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use k8s_openapi::{DeepMerge, Resource};
-use kube::api::{DeleteParams, ListParams};
 use kube::Api;
 use rand::distr::Uniform;
 use rand::RngExt;
@@ -29,7 +28,6 @@ pub struct KubernetesWorkerManagerOptions {
     pub worker_pod_name_prefix: String,
     pub worker_service_account_name: String,
     pub worker_pod_template: String,
-    pub delete_worker_pods_on_stop: bool,
 }
 
 pub struct KubernetesWorkerManager {
@@ -103,10 +101,6 @@ impl KubernetesWorkerManager {
             (
                 "app.kubernetes.io/instance".to_string(),
                 format!("{}-{}", self.name, id),
-            ),
-            (
-                "sail.lakesail.com/worker-manager".to_string(),
-                self.name.clone(),
             ),
         ])
     }
@@ -282,16 +276,6 @@ impl WorkerManager for KubernetesWorkerManager {
     }
 
     async fn stop(&self) -> ExecutionResult<()> {
-        if self.options.delete_worker_pods_on_stop {
-            self.pods()
-                .await?
-                .delete_collection(
-                    &DeleteParams::default(),
-                    &ListParams::default()
-                        .labels(&format!("sail.lakesail.com/worker-manager={}", self.name)),
-                )
-                .await?;
-        }
         Ok(())
     }
 }
@@ -344,10 +328,6 @@ mod tests {
                 "app.kubernetes.io/instance".to_string(),
                 "test-instance".to_string(),
             ),
-            (
-                "sail.lakesail.com/worker-manager".to_string(),
-                "test-manager".to_string(),
-            ),
         ]);
         labels.extend(default_labels.clone());
 
@@ -375,10 +355,6 @@ mod tests {
         assert_eq!(
             labels.get("app.kubernetes.io/instance"),
             Some(&"test-instance".to_string())
-        );
-        assert_eq!(
-            labels.get("sail.lakesail.com/worker-manager"),
-            Some(&"test-manager".to_string())
         );
     }
 }
