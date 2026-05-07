@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sail_common::spec;
 use sail_sql_analyzer::expression::{from_ast_expression, from_ast_object_name};
 use sail_sql_analyzer::parser::{parse_expression, parse_object_name, parse_one_statement};
@@ -17,6 +19,37 @@ use crate::spark::connect::{
 
 struct RelationMetadata {
     plan_id: Option<i64>,
+}
+
+/// Extract a [`spec::TableColumnDefinition`] from a field, preserving metadata
+/// like generation expressions and comments.
+fn table_column_definition_from_field(field: &Arc<spec::Field>) -> spec::TableColumnDefinition {
+    use sail_common_datafusion::catalog::SPARK_GENERATION_EXPRESSION_METADATA_KEY;
+    use sail_common_datafusion::column_features::ColumnFeatureKey;
+
+    let gen_expr_key = ColumnFeatureKey::GenerationExpression.as_str();
+
+    let mut comment = None;
+    let mut generated_always_as = None;
+    for (key, value) in &field.metadata {
+        match key.as_str() {
+            "comment" => {
+                comment = Some(value.clone());
+            }
+            k if k == gen_expr_key || k == SPARK_GENERATION_EXPRESSION_METADATA_KEY => {
+                generated_always_as = Some(value.clone());
+            }
+            _ => {}
+        }
+    }
+    spec::TableColumnDefinition {
+        name: field.name.clone(),
+        data_type: field.data_type.clone(),
+        nullable: field.nullable,
+        default: None,
+        comment,
+        generated_always_as,
+    }
 }
 
 impl From<Option<RelationCommon>> for RelationMetadata {
@@ -1397,14 +1430,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 let columns = schema
                     .fields
                     .into_iter()
-                    .map(|field| spec::TableColumnDefinition {
-                        name: field.name.clone(),
-                        data_type: field.data_type.clone(),
-                        nullable: field.nullable,
-                        default: None,
-                        comment: None,
-                        generated_always_as: None,
-                    })
+                    .map(table_column_definition_from_field)
                     .collect();
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
@@ -1441,14 +1467,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 let columns = schema
                     .fields
                     .into_iter()
-                    .map(|field| spec::TableColumnDefinition {
-                        name: field.name.clone(),
-                        data_type: field.data_type.clone(),
-                        nullable: field.nullable,
-                        default: None,
-                        comment: None,
-                        generated_always_as: None,
-                    })
+                    .map(table_column_definition_from_field)
                     .collect();
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,

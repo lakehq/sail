@@ -13,11 +13,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
@@ -336,20 +336,6 @@ impl IcebergRestCatalogProvider {
 
         let comment = get_property(&properties, "comment");
 
-        let options: Vec<_> = properties
-            .extract_if(|k, _| k.trim().to_lowercase().starts_with("options."))
-            .map(|(k, v)| {
-                let trimmed = k.trim().to_string();
-                let stripped =
-                    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("options.") {
-                        trimmed[8..].to_string()
-                    } else {
-                        trimmed
-                    };
-                (stripped, v)
-            })
-            .collect();
-
         if let Some(metadata_location) = result.metadata_location {
             properties.insert("metadata-location".to_string(), metadata_location);
         }
@@ -414,7 +400,6 @@ impl IcebergRestCatalogProvider {
                 partition_by,
                 sort_by,
                 bucket_by: None,
-                options,
                 properties,
             },
         })
@@ -611,7 +596,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map_err(|e| match e {
                 apis::Error::ResponseError(apis::ResponseContent { status, .. }) => {
                     if status == 404 {
-                        CatalogError::NotFound("namespace", quote_namespace_if_needed(database))
+                        CatalogError::NotFound(
+                            CatalogObject::Namespace,
+                            quote_namespace_if_needed(database),
+                        )
                     } else {
                         CatalogError::External(format!(
                             "Failed to load namespace {}: {e}",
@@ -686,10 +674,40 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     ) -> CatalogResult<()> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
-        let DropDatabaseOptions {
-            if_exists,
-            cascade: _,
-        } = options;
+        let DropDatabaseOptions { if_exists, cascade } = options;
+
+        if cascade {
+            // For CASCADE, first drop all tables and views in the namespace before dropping the namespace.
+            let prefix = catalog_config
+                .props
+                .get(REST_CATALOG_PROP_PREFIX)
+                .map(|s| s.as_str());
+            let ns_string = Self::namespace_string(database);
+            let tables_result = client
+                .catalog_api_api()
+                .list_tables(&ns_string, None, None, prefix)
+                .await;
+            if let Ok(tables) = tables_result {
+                for identifier in tables.identifiers.unwrap_or_default() {
+                    let _ = client
+                        .catalog_api_api()
+                        .drop_table(&ns_string, &identifier.name, Some(true), prefix)
+                        .await;
+                }
+            }
+            let views_result = client
+                .catalog_api_api()
+                .list_views(&ns_string, None, None, prefix)
+                .await;
+            if let Ok(views) = views_result {
+                for identifier in views.identifiers.unwrap_or_default() {
+                    let _ = client
+                        .catalog_api_api()
+                        .drop_view(&ns_string, &identifier.name, prefix)
+                        .await;
+                }
+            }
+        }
 
         match client
             .catalog_api_api()
@@ -733,7 +751,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
-            options,
             properties,
         } = options;
 
@@ -792,10 +809,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
         let mut props = HashMap::new();
-        // TODO: Is this correct for options?
-        for (k, v) in options {
-            props.insert(format!("options.{k}"), v);
-        }
         if let Some(c) = comment {
             props.insert("comment".to_string(), c);
         }
@@ -851,7 +864,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     if status == 404 =>
                 {
                     CatalogError::NotFound(
-                        "table",
+                        CatalogObject::Table,
                         format!(
                             "{}.{}",
                             quote_namespace_if_needed(database),
@@ -902,7 +915,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     partition_by: Vec::new(),
                     sort_by: Vec::new(),
                     bucket_by: None,
-                    options: Vec::new(),
                     properties: Vec::new(),
                 },
             })
@@ -938,6 +950,17 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             }
             Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
+    }
+
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "alter table in Iceberg catalog".to_string(),
+        ))
     }
 
     async fn create_view(

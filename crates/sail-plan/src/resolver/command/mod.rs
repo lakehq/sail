@@ -274,7 +274,14 @@ impl PlanResolver<'_> {
                     table: table.into(),
                 })
             }
-            CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
+            CommandNode::AlterTable {
+                table,
+                if_exists,
+                operation,
+            } => {
+                self.resolve_catalog_alter_table(table, if_exists, operation, state)
+                    .await
+            }
             CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),
             CommandNode::LoadData { .. } => Err(PlanError::todo("CommandNode::LoadData")),
             CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),
@@ -286,8 +293,11 @@ impl PlanResolver<'_> {
             CommandNode::DescribeCatalog { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeCatalog"))
             }
-            CommandNode::DescribeDatabase { .. } => {
-                Err(PlanError::todo("CommandNode::DescribeDatabase"))
+            CommandNode::DescribeDatabase { database, extended } => {
+                self.resolve_catalog_command(CatalogCommand::DescribeDatabase {
+                    database: database.into(),
+                    extended,
+                })
             }
             CommandNode::DescribeTable {
                 table,

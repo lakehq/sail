@@ -27,7 +27,7 @@ use chrono::Utc;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -37,10 +37,10 @@ use crate::kernel::checkpoints::{
     create_checkpoint_for, create_log_compaction_for, should_create_compaction,
 };
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::kernel::DeltaOperation;
+use crate::kernel::{DeltaOperation, DeltaSnapshotConfig};
 use crate::spec::{
     checksum_path, temp_commit_path, Action, CommitAction, DeltaError, DeltaResult, Metadata,
-    TableFeature, Transaction,
+    TableFeature, Transaction, VersionChecksum,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
@@ -62,67 +62,108 @@ pub struct CommitMetrics {
 
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PostCommitMetrics {
-    pub new_checkpoint_created: bool,
-    pub num_log_files_cleaned_up: u64,
-}
-
-#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Metrics {
     pub num_retries: u64,
     pub new_checkpoint_created: bool,
     pub num_log_files_cleaned_up: u64,
 }
 
-#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+/// Metrics serialized as `commitInfo.operationMetrics`. `None` fields are omitted.
+#[derive(Default, Debug, PartialEq, Clone)]
 pub struct OperationMetrics {
     pub num_files: Option<u64>,
     pub num_output_rows: Option<u64>,
     pub num_output_bytes: Option<u64>,
     pub execution_time_ms: Option<u64>,
+    pub scan_time_ms: Option<u64>,
+    pub rewrite_time_ms: Option<u64>,
+    pub write_time_ms: Option<u64>,
     pub num_removed_files: Option<u64>,
     pub num_added_files: Option<u64>,
     pub num_output_files: Option<u64>,
     pub num_added_bytes: Option<u64>,
     pub num_removed_bytes: Option<u64>,
-    pub write_time_ms: Option<u64>,
+    pub num_deleted_rows: Option<u64>,
+    pub num_updated_rows: Option<u64>,
+    pub num_copied_rows: Option<u64>,
+    pub num_touched_rows: Option<u64>,
+    pub num_source_rows: Option<u64>,
+    pub num_target_rows_inserted: Option<u64>,
+    pub num_target_rows_updated: Option<u64>,
+    pub num_target_rows_deleted: Option<u64>,
+    pub num_target_rows_copied: Option<u64>,
+    pub num_target_files_added: Option<u64>,
+    pub num_target_files_removed: Option<u64>,
+    pub num_target_bytes_added: Option<u64>,
+    pub num_target_bytes_removed: Option<u64>,
+    pub num_deletion_vectors_added: Option<u64>,
+    pub num_deletion_vectors_updated: Option<u64>,
+    pub num_deletion_vectors_removed: Option<u64>,
     pub extra: HashMap<String, Value>,
+}
+
+impl Serialize for OperationMetrics {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.clone().into_map().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for OperationMetrics {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        HashMap::<String, Value>::deserialize(deserializer).map(Self::from)
+    }
 }
 
 impl OperationMetrics {
     pub fn into_map(self) -> HashMap<String, Value> {
         let mut out = self.extra;
-        if let Some(v) = self.num_files {
-            out.insert("numFiles".to_string(), Value::from(v));
+        macro_rules! insert_opt {
+            ($key:literal, $field:expr) => {
+                if let Some(v) = $field {
+                    out.insert($key.to_string(), Value::from(v));
+                }
+            };
         }
-        if let Some(v) = self.num_output_rows {
-            out.insert("numOutputRows".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_output_bytes {
-            out.insert("numOutputBytes".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.execution_time_ms {
-            out.insert("executionTimeMs".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_removed_files {
-            out.insert("numRemovedFiles".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_added_files {
-            out.insert("numAddedFiles".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_output_files {
-            out.insert("numOutputFiles".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_added_bytes {
-            out.insert("numAddedBytes".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.num_removed_bytes {
-            out.insert("numRemovedBytes".to_string(), Value::from(v));
-        }
-        if let Some(v) = self.write_time_ms {
-            out.insert("writeTimeMs".to_string(), Value::from(v));
-        }
+        insert_opt!("numFiles", self.num_files);
+        insert_opt!("numOutputRows", self.num_output_rows);
+        insert_opt!("numOutputBytes", self.num_output_bytes);
+        insert_opt!("executionTimeMs", self.execution_time_ms);
+        insert_opt!("scanTimeMs", self.scan_time_ms);
+        insert_opt!("rewriteTimeMs", self.rewrite_time_ms);
+        insert_opt!("writeTimeMs", self.write_time_ms);
+        insert_opt!("numRemovedFiles", self.num_removed_files);
+        insert_opt!("numAddedFiles", self.num_added_files);
+        insert_opt!("numOutputFiles", self.num_output_files);
+        insert_opt!("numAddedBytes", self.num_added_bytes);
+        insert_opt!("numRemovedBytes", self.num_removed_bytes);
+        insert_opt!("numDeletedRows", self.num_deleted_rows);
+        insert_opt!("numUpdatedRows", self.num_updated_rows);
+        insert_opt!("numCopiedRows", self.num_copied_rows);
+        insert_opt!("numTouchedRows", self.num_touched_rows);
+        insert_opt!("numSourceRows", self.num_source_rows);
+        insert_opt!("numTargetRowsInserted", self.num_target_rows_inserted);
+        insert_opt!("numTargetRowsUpdated", self.num_target_rows_updated);
+        insert_opt!("numTargetRowsDeleted", self.num_target_rows_deleted);
+        insert_opt!("numTargetRowsCopied", self.num_target_rows_copied);
+        insert_opt!("numTargetFilesAdded", self.num_target_files_added);
+        insert_opt!("numTargetFilesRemoved", self.num_target_files_removed);
+        insert_opt!("numTargetBytesAdded", self.num_target_bytes_added);
+        insert_opt!("numTargetBytesRemoved", self.num_target_bytes_removed);
+        insert_opt!("numDeletionVectorsAdded", self.num_deletion_vectors_added);
+        insert_opt!(
+            "numDeletionVectorsUpdated",
+            self.num_deletion_vectors_updated
+        );
+        insert_opt!(
+            "numDeletionVectorsRemoved",
+            self.num_deletion_vectors_removed
+        );
         out
     }
 
@@ -138,14 +179,127 @@ impl OperationMetrics {
         merge_opt(&mut self.num_output_rows, other.num_output_rows);
         merge_opt(&mut self.num_output_bytes, other.num_output_bytes);
         merge_opt(&mut self.execution_time_ms, other.execution_time_ms);
+        merge_opt(&mut self.scan_time_ms, other.scan_time_ms);
+        merge_opt(&mut self.rewrite_time_ms, other.rewrite_time_ms);
+        merge_opt(&mut self.write_time_ms, other.write_time_ms);
         merge_opt(&mut self.num_removed_files, other.num_removed_files);
         merge_opt(&mut self.num_added_files, other.num_added_files);
         merge_opt(&mut self.num_output_files, other.num_output_files);
         merge_opt(&mut self.num_added_bytes, other.num_added_bytes);
         merge_opt(&mut self.num_removed_bytes, other.num_removed_bytes);
-        merge_opt(&mut self.write_time_ms, other.write_time_ms);
+        merge_opt(&mut self.num_deleted_rows, other.num_deleted_rows);
+        merge_opt(&mut self.num_updated_rows, other.num_updated_rows);
+        merge_opt(&mut self.num_copied_rows, other.num_copied_rows);
+        merge_opt(&mut self.num_touched_rows, other.num_touched_rows);
+        merge_opt(&mut self.num_source_rows, other.num_source_rows);
+        merge_opt(
+            &mut self.num_target_rows_inserted,
+            other.num_target_rows_inserted,
+        );
+        merge_opt(
+            &mut self.num_target_rows_updated,
+            other.num_target_rows_updated,
+        );
+        merge_opt(
+            &mut self.num_target_rows_deleted,
+            other.num_target_rows_deleted,
+        );
+        merge_opt(
+            &mut self.num_target_rows_copied,
+            other.num_target_rows_copied,
+        );
+        merge_opt(
+            &mut self.num_target_files_added,
+            other.num_target_files_added,
+        );
+        merge_opt(
+            &mut self.num_target_files_removed,
+            other.num_target_files_removed,
+        );
+        merge_opt(
+            &mut self.num_target_bytes_added,
+            other.num_target_bytes_added,
+        );
+        merge_opt(
+            &mut self.num_target_bytes_removed,
+            other.num_target_bytes_removed,
+        );
+        merge_opt(
+            &mut self.num_deletion_vectors_added,
+            other.num_deletion_vectors_added,
+        );
+        merge_opt(
+            &mut self.num_deletion_vectors_updated,
+            other.num_deletion_vectors_updated,
+        );
+        merge_opt(
+            &mut self.num_deletion_vectors_removed,
+            other.num_deletion_vectors_removed,
+        );
 
         self.extra.extend(other.extra);
+    }
+
+    /// Derive operation-specific metrics from generic counters. Call once at commit time.
+    pub fn finalize_for(&mut self, operation: &crate::kernel::DeltaOperation) {
+        use crate::kernel::DeltaOperation;
+
+        match operation {
+            DeltaOperation::Delete { .. } => {
+                if self.num_copied_rows.is_none() {
+                    self.num_copied_rows = self.num_output_rows;
+                }
+                if self.num_deleted_rows.is_none() {
+                    if let (Some(touched), Some(copied)) =
+                        (self.num_touched_rows, self.num_copied_rows)
+                    {
+                        self.num_deleted_rows = Some(touched.saturating_sub(copied));
+                    }
+                }
+                if self.rewrite_time_ms.is_none() {
+                    self.rewrite_time_ms = self.write_time_ms;
+                }
+            }
+            DeltaOperation::Merge { .. } => {
+                if self.num_target_files_added.is_none() {
+                    self.num_target_files_added = self.num_added_files;
+                }
+                if self.num_target_files_removed.is_none() {
+                    self.num_target_files_removed = self.num_removed_files;
+                }
+                if self.num_target_bytes_added.is_none() {
+                    self.num_target_bytes_added = self.num_added_bytes;
+                }
+                if self.num_target_bytes_removed.is_none() {
+                    self.num_target_bytes_removed = self.num_removed_bytes;
+                }
+                if self.rewrite_time_ms.is_none() {
+                    self.rewrite_time_ms = self.write_time_ms;
+                }
+            }
+            DeltaOperation::FileSystemCheck { .. } => {
+                self.num_added_files = None;
+                self.num_added_bytes = None;
+                self.num_output_rows = None;
+                self.num_output_bytes = None;
+                self.num_output_files = None;
+            }
+            // TODO: Restore should report numRestoredFiles / numRemovedFiles /
+            // restoredFilesSize / removedFilesSize / numOfFilesAfterRestore /
+            // tableSizeAfterRestore. Requires the restore exec to aggregate these
+            // counts from the snapshot diff it produces.
+            DeltaOperation::Restore { .. }
+            | DeltaOperation::Write { .. }
+            | DeltaOperation::Create { .. }
+            | DeltaOperation::SetTableProperties { .. }
+            | DeltaOperation::UnsetTableProperties { .. } => {} // TODO: When the following operations are implemented, extend this match:
+                                                                //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
+                                                                //     executionTimeMs, scanTimeMs, rewriteTimeMs
+                                                                //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
+                                                                //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
+                                                                //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
+                                                                //     numDeletedFiles, numVacuumedDirectories
+        }
     }
 }
 
@@ -166,24 +320,60 @@ impl From<HashMap<String, Value>> for OperationMetrics {
         let num_output_rows = take_u64(&mut value, "numOutputRows");
         let num_output_bytes = take_u64(&mut value, "numOutputBytes");
         let execution_time_ms = take_u64(&mut value, "executionTimeMs");
+        let scan_time_ms = take_u64(&mut value, "scanTimeMs");
+        let rewrite_time_ms = take_u64(&mut value, "rewriteTimeMs");
+        let write_time_ms = take_u64(&mut value, "writeTimeMs");
         let num_removed_files = take_u64(&mut value, "numRemovedFiles");
         let num_added_files = take_u64(&mut value, "numAddedFiles");
         let num_output_files = take_u64(&mut value, "numOutputFiles");
         let num_added_bytes = take_u64(&mut value, "numAddedBytes");
         let num_removed_bytes = take_u64(&mut value, "numRemovedBytes");
-        let write_time_ms = take_u64(&mut value, "writeTimeMs");
+        let num_deleted_rows = take_u64(&mut value, "numDeletedRows");
+        let num_updated_rows = take_u64(&mut value, "numUpdatedRows");
+        let num_copied_rows = take_u64(&mut value, "numCopiedRows");
+        let num_touched_rows = take_u64(&mut value, "numTouchedRows");
+        let num_source_rows = take_u64(&mut value, "numSourceRows");
+        let num_target_rows_inserted = take_u64(&mut value, "numTargetRowsInserted");
+        let num_target_rows_updated = take_u64(&mut value, "numTargetRowsUpdated");
+        let num_target_rows_deleted = take_u64(&mut value, "numTargetRowsDeleted");
+        let num_target_rows_copied = take_u64(&mut value, "numTargetRowsCopied");
+        let num_target_files_added = take_u64(&mut value, "numTargetFilesAdded");
+        let num_target_files_removed = take_u64(&mut value, "numTargetFilesRemoved");
+        let num_target_bytes_added = take_u64(&mut value, "numTargetBytesAdded");
+        let num_target_bytes_removed = take_u64(&mut value, "numTargetBytesRemoved");
+        let num_deletion_vectors_added = take_u64(&mut value, "numDeletionVectorsAdded");
+        let num_deletion_vectors_updated = take_u64(&mut value, "numDeletionVectorsUpdated");
+        let num_deletion_vectors_removed = take_u64(&mut value, "numDeletionVectorsRemoved");
 
         Self {
             num_files,
             num_output_rows,
             num_output_bytes,
             execution_time_ms,
+            scan_time_ms,
+            rewrite_time_ms,
+            write_time_ms,
             num_removed_files,
             num_added_files,
             num_output_files,
             num_added_bytes,
             num_removed_bytes,
-            write_time_ms,
+            num_deleted_rows,
+            num_updated_rows,
+            num_copied_rows,
+            num_touched_rows,
+            num_source_rows,
+            num_target_rows_inserted,
+            num_target_rows_updated,
+            num_target_rows_deleted,
+            num_target_rows_copied,
+            num_target_files_added,
+            num_target_files_removed,
+            num_target_bytes_added,
+            num_target_bytes_removed,
+            num_deletion_vectors_added,
+            num_deletion_vectors_updated,
+            num_deletion_vectors_removed,
             extra: value,
         }
     }
@@ -214,6 +404,7 @@ impl CommitData {
         mut app_metadata: HashMap<String, Value>,
         operation_metrics: OperationMetrics,
         app_transactions: Vec<Transaction>,
+        user_metadata: Option<String>,
     ) -> Self {
         let is_blind_append = Self::is_blind_append(&actions, &operation);
         let mut commit_info = actions
@@ -223,6 +414,9 @@ impl CommitData {
                 _ => None,
             })
             .unwrap_or_else(|| operation.get_commit_info());
+        if let Some(value) = user_metadata {
+            commit_info.user_metadata = Some(value);
+        }
         if commit_info.in_commit_timestamp.is_none() {
             commit_info.in_commit_timestamp = commit_info
                 .info
@@ -561,6 +755,7 @@ pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
     pub(crate) operation_metrics: OperationMetrics,
     pub(crate) app_transaction: Vec<Transaction>,
+    pub(crate) user_metadata: Option<String>,
     max_retries: usize,
     create_checkpoint: bool,
     cleanup_expired_logs: Option<bool>,
@@ -572,6 +767,7 @@ impl Default for CommitProperties {
             app_metadata: Default::default(),
             operation_metrics: Default::default(),
             app_transaction: Vec::new(),
+            user_metadata: None,
             max_retries: DEFAULT_RETRIES,
             create_checkpoint: true,
             cleanup_expired_logs: None,
@@ -587,6 +783,12 @@ impl CommitProperties {
         operation_metrics: impl Into<OperationMetrics>,
     ) -> Self {
         self.operation_metrics = operation_metrics.into();
+        self
+    }
+
+    /// Set the user-defined commit metadata string written to `commitInfo.userMetadata`.
+    pub(crate) fn with_user_metadata(mut self, user_metadata: Option<String>) -> Self {
+        self.user_metadata = user_metadata;
         self
     }
 }
@@ -643,6 +845,7 @@ impl From<CommitProperties> for CommitBuilder {
                 cleanup_expired_logs: value.cleanup_expired_logs,
             }),
             app_transaction: value.app_transaction,
+            user_metadata: value.user_metadata,
             ..Default::default()
         }
     }
@@ -654,6 +857,7 @@ pub struct CommitBuilder {
     app_metadata: HashMap<String, Value>,
     operation_metrics: OperationMetrics,
     app_transaction: Vec<Transaction>,
+    user_metadata: Option<String>,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -667,6 +871,7 @@ impl Default for CommitBuilder {
             app_metadata: HashMap::new(),
             operation_metrics: OperationMetrics::default(),
             app_transaction: Vec::new(),
+            user_metadata: None,
             max_retries: DEFAULT_RETRIES,
             post_commit_hook: None,
             post_commit_hook_handler: None,
@@ -731,6 +936,7 @@ impl CommitBuilder {
             self.app_metadata,
             self.operation_metrics,
             self.app_transaction,
+            self.user_metadata,
         );
         PreCommit {
             log_store,
@@ -1058,8 +1264,358 @@ pub struct PostCommit {
 }
 
 impl PostCommit {
-    async fn write_version_checksum(&self, table_state: &DeltaSnapshot, operation_id: Uuid) {
-        if !table_state.table_properties().write_checksum_file_enabled() {
+    /// Build a version checksum incrementally from the previous version's CRC and the
+    /// current commit's actions, without requiring a full file list.
+    ///
+    /// Returns `None` when the CRC should be skipped (unsupported features or deletion
+    /// vectors in the commit). Falls back to [`Self::build_full_checksum_fallback`] when
+    /// the previous CRC is missing, corrupt, or when a [`CommitAction::Remove`] action
+    /// has no `size` field (which would otherwise produce an inaccurate `table_size_bytes`).
+    async fn build_incremental_checksum(&self) -> Option<VersionChecksum> {
+        let actions = &self.data.actions;
+
+        // Resolve effective protocol and metadata from the commit actions directly.
+        let base_protocol = self.table_data.as_ref().map(|s| s.protocol());
+        let base_metadata = self.table_data.as_ref().map(|s| s.metadata());
+        let protocol = actions
+            .iter()
+            .rev()
+            .find_map(|a| match a {
+                CommitAction::Protocol(p) => Some(p.clone()),
+                _ => None,
+            })
+            .or_else(|| base_protocol.cloned());
+        let metadata = actions
+            .iter()
+            .rev()
+            .find_map(|a| match a {
+                CommitAction::Metadata(m) => Some(m.clone()),
+                _ => None,
+            })
+            .or_else(|| base_metadata.cloned());
+        let (protocol, metadata) = match (protocol, metadata) {
+            (Some(p), Some(m)) => (p, m),
+            _ => {
+                debug!(
+                    "Skipping incremental CRC for version {}: protocol or metadata not available",
+                    self.version
+                );
+                return None;
+            }
+        };
+
+        // Skip CRC if protocol has unsupported features.
+        if protocol
+            .reader_features()
+            .into_iter()
+            .flatten()
+            .chain(protocol.writer_features().into_iter().flatten())
+            .any(|feature| matches!(feature, TableFeature::Unknown))
+        {
+            debug!(
+                "Skipping incremental CRC for version {}: unknown table features",
+                self.version
+            );
+            return None;
+        }
+        let reader_unsupported = PROTOCOL
+            .unsupported_reader_features(&protocol)
+            .map(|f| !f.is_empty())
+            .unwrap_or(true);
+        let writer_unsupported = PROTOCOL
+            .unsupported_writer_features(&protocol)
+            .map(|f| !f.is_empty())
+            .unwrap_or(true);
+        if reader_unsupported || writer_unsupported {
+            debug!(
+                "Skipping incremental CRC for version {}: unsupported protocol features",
+                self.version
+            );
+            return None;
+        }
+
+        // Check for deletion vectors in commit actions — skip CRC if present.
+        let has_dv = actions.iter().any(|a| match a {
+            CommitAction::Add(add) => add.deletion_vector.is_some(),
+            CommitAction::Remove(remove) => remove.deletion_vector.is_some(),
+            _ => false,
+        });
+        if has_dv {
+            debug!(
+                "Skipping incremental CRC for version {}: commit contains deletion vectors",
+                self.version
+            );
+            return None;
+        }
+
+        // Compute delta from commit actions.
+        let mut delta_num_files: i64 = 0;
+        let mut delta_size_bytes: i64 = 0;
+        for action in actions {
+            match action {
+                CommitAction::Add(add) => {
+                    delta_num_files = delta_num_files.checked_add(1)?;
+                    delta_size_bytes = delta_size_bytes.checked_add(add.size)?;
+                }
+                CommitAction::Remove(remove) => {
+                    delta_num_files = delta_num_files.checked_sub(1)?;
+                    match remove.size {
+                        Some(size) => {
+                            delta_size_bytes = delta_size_bytes.checked_sub(size)?;
+                        }
+                        None => {
+                            // Remove.size is optional per the Delta protocol; without it we
+                            // cannot compute an accurate incremental table_size_bytes.
+                            debug!(
+                                "Incremental CRC: Remove action missing size at version {}; \
+                                 falling back to full-snapshot CRC computation",
+                                self.version
+                            );
+                            return self.build_full_checksum_fallback().await;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Collect txn and domain metadata updates from the commit.
+        let commit_txns: Vec<Transaction> = actions
+            .iter()
+            .filter_map(|a| match a {
+                CommitAction::Txn(txn) => Some(txn.clone()),
+                _ => None,
+            })
+            .collect();
+        let commit_domains: Vec<crate::spec::DomainMetadata> = actions
+            .iter()
+            .filter_map(|a| match a {
+                CommitAction::DomainMetadata(dm) => Some(dm.clone()),
+                _ => None,
+            })
+            .collect();
+
+        // For version 0 (table creation), we don't need a previous CRC.
+        if self.version == 0 {
+            let mut set_transactions = commit_txns;
+            set_transactions
+                .sort_by(|a, b| a.app_id.cmp(&b.app_id).then(a.version.cmp(&b.version)));
+            let mut domain_metadata: Vec<_> =
+                commit_domains.into_iter().filter(|d| !d.removed).collect();
+            domain_metadata.sort_by(|a, b| a.domain.cmp(&b.domain));
+
+            return Some(VersionChecksum {
+                txn_id: self.data.version_checksum_txn_id(),
+                table_size_bytes: delta_size_bytes,
+                num_files: delta_num_files,
+                num_metadata: 1,
+                num_protocol: 1,
+                in_commit_timestamp_opt: self.data.version_checksum_in_commit_timestamp(),
+                set_transactions: (!set_transactions.is_empty()).then_some(set_transactions),
+                domain_metadata: (!domain_metadata.is_empty()).then_some(domain_metadata),
+                metadata: metadata.clone(),
+                protocol: protocol.clone(),
+                file_size_histogram: None,
+                all_files: None,
+            });
+        }
+
+        // Read the previous version's CRC.
+        let prev_version = self.version - 1;
+        let store = self.log_store.object_store(None);
+        let prev_crc_path = checksum_path(prev_version);
+        let prev_crc_bytes = match store.get(&prev_crc_path).await {
+            Ok(result) => match result.bytes().await {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    debug!(
+                        "Incremental CRC: failed to read prev CRC bytes at version {prev_version}: {err}; \
+                         falling back to full-snapshot CRC computation"
+                    );
+                    return self.build_full_checksum_fallback().await;
+                }
+            },
+            Err(err) => {
+                debug!(
+                    "Incremental CRC: prev CRC not available at version {prev_version}: {err}; \
+                     falling back to full-snapshot CRC computation"
+                );
+                return self.build_full_checksum_fallback().await;
+            }
+        };
+        let prev_checksum: VersionChecksum = match serde_json::from_slice(&prev_crc_bytes) {
+            Ok(c) => c,
+            Err(err) => {
+                debug!(
+                    "Incremental CRC: failed to deserialize prev CRC at version {prev_version}: {err}; \
+                     falling back to full-snapshot CRC computation"
+                );
+                return self.build_full_checksum_fallback().await;
+            }
+        };
+
+        // Bail if previous CRC had deletion vectors (signalled by being skipped).
+        // This is defensive — if the prev CRC exists, it was valid at that version.
+
+        // Compute new totals.
+        let num_files = prev_checksum.num_files.checked_add(delta_num_files)?;
+        let table_size_bytes = prev_checksum
+            .table_size_bytes
+            .checked_add(delta_size_bytes)?;
+
+        // Merge set_transactions: previous + commit updates (commit wins by app_id).
+        let mut txn_map: HashMap<String, Transaction> = prev_checksum
+            .set_transactions
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| (t.app_id.clone(), t))
+            .collect();
+        for txn in commit_txns {
+            txn_map.insert(txn.app_id.clone(), txn);
+        }
+        let mut set_transactions: Vec<Transaction> = txn_map.into_values().collect();
+        set_transactions.sort_by(|a, b| a.app_id.cmp(&b.app_id).then(a.version.cmp(&b.version)));
+
+        // Merge domain metadata: previous + commit updates (commit wins, removed=true removes).
+        let mut domain_map: HashMap<String, crate::spec::DomainMetadata> = prev_checksum
+            .domain_metadata
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| (d.domain.clone(), d))
+            .collect();
+        for dm in commit_domains {
+            if dm.removed {
+                domain_map.remove(&dm.domain);
+            } else {
+                domain_map.insert(dm.domain.clone(), dm);
+            }
+        }
+        let mut domain_metadata: Vec<_> = domain_map.into_values().collect();
+        domain_metadata.sort_by(|a, b| a.domain.cmp(&b.domain));
+
+        Some(VersionChecksum {
+            txn_id: self.data.version_checksum_txn_id(),
+            table_size_bytes,
+            num_files,
+            num_metadata: 1,
+            num_protocol: 1,
+            in_commit_timestamp_opt: self.data.version_checksum_in_commit_timestamp(),
+            set_transactions: (!set_transactions.is_empty()).then_some(set_transactions),
+            domain_metadata: (!domain_metadata.is_empty()).then_some(domain_metadata),
+            metadata: metadata.clone(),
+            protocol: protocol.clone(),
+            file_size_histogram: None,
+            all_files: None,
+        })
+    }
+
+    /// Full-snapshot fallback for CRC computation.
+    ///
+    /// Called when the incremental chain is broken (prev CRC missing or corrupt, or a
+    /// Remove action has no size). When a pre-commit snapshot (`table_data`) is available
+    /// it is updated by one version (reads only the new commit file).
+    async fn build_full_checksum_fallback(&self) -> Option<VersionChecksum> {
+        debug!(
+            "CRC full-snapshot fallback: loading full snapshot for version {}",
+            self.version
+        );
+        // Try to reuse the pre-commit snapshot.
+        let snapshot = if let Some(prev) = self
+            .table_data
+            .as_ref()
+            .filter(|s| s.load_config().require_files)
+        {
+            let mut snapshot = Arc::clone(prev);
+            match Arc::make_mut(&mut snapshot)
+                .update(self.log_store.as_ref(), Some(self.version as u64))
+                .await
+            {
+                Ok(()) => snapshot,
+                Err(e) => {
+                    debug!(
+                        "CRC full-snapshot fallback: failed to advance pre-commit snapshot to v{}: {e}; \
+                         falling back to fresh replay",
+                        self.version
+                    );
+                    match DeltaSnapshot::try_new(
+                        self.log_store.as_ref(),
+                        DeltaSnapshotConfig::default(),
+                        Some(self.version),
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(s) => Arc::new(s),
+                        Err(err) => {
+                            debug!(
+                                "CRC full-snapshot fallback: fresh replay also failed for version {}: {err}",
+                                self.version
+                            );
+                            return None;
+                        }
+                    }
+                }
+            }
+        } else {
+            match DeltaSnapshot::try_new(
+                self.log_store.as_ref(),
+                DeltaSnapshotConfig::default(), // require_files: true
+                Some(self.version),
+                None,
+            )
+            .await
+            {
+                Ok(s) => Arc::new(s),
+                Err(err) => {
+                    debug!(
+                        "CRC full-snapshot fallback: failed to load snapshot for version {}: {err}",
+                        self.version
+                    );
+                    return None;
+                }
+            }
+        };
+        match snapshot.build_version_checksum(
+            self.data.version_checksum_txn_id(),
+            self.data.version_checksum_in_commit_timestamp(),
+        ) {
+            Ok(Some(checksum)) => {
+                debug!(
+                    "CRC full-snapshot fallback: succeeded for version {}",
+                    self.version
+                );
+                Some(checksum)
+            }
+            Ok(None) => None,
+            Err(err) => {
+                debug!(
+                    "CRC full-snapshot fallback: build_version_checksum failed for version {}: {err}",
+                    self.version
+                );
+                None
+            }
+        }
+    }
+
+    async fn write_version_checksum_incremental(&self, operation_id: Uuid) {
+        // Check table property via snapshot or commit actions.
+        let write_checksum_enabled = if let Some(s) = self.table_data.as_ref() {
+            s.table_properties().write_checksum_file_enabled()
+        } else {
+            // New table creation: check the metadata action in the commit for the property.
+            self.data
+                .actions
+                .iter()
+                .find_map(|a| match a {
+                    CommitAction::Metadata(m) => {
+                        let props = crate::spec::TableProperties::from(m.configuration().iter());
+                        Some(props.write_checksum_file_enabled())
+                    }
+                    _ => None,
+                })
+                .unwrap_or(true) // Default: enabled for new tables.
+        };
+        if !write_checksum_enabled {
             debug!(
                 "Skipping version checksum for version {} because delta.writeChecksumFile.enabled=false",
                 self.version
@@ -1067,16 +1623,12 @@ impl PostCommit {
             return;
         }
 
-        let checksum = match table_state.build_version_checksum(
-            self.data.version_checksum_txn_id(),
-            self.data.version_checksum_in_commit_timestamp(),
-        ) {
-            Ok(Some(checksum)) => checksum,
-            Ok(None) => return,
-            Err(err) => {
-                warn!(
-                    "Failed to build version checksum for version {}: {}",
-                    self.version, err
+        let checksum = match self.build_incremental_checksum().await {
+            Some(c) => c,
+            None => {
+                debug!(
+                    "Skipping version checksum for version {} (incremental CRC unavailable)",
+                    self.version
                 );
                 return;
             }
@@ -1128,175 +1680,6 @@ impl PostCommit {
             }
         }
     }
-
-    /// Runs the post commit activities
-    async fn run_post_commit_hook(&self) -> DeltaResult<(Arc<DeltaSnapshot>, PostCommitMetrics)> {
-        let post_commit_operation_id = Uuid::new_v4();
-
-        // Always construct a state for the committed version so checkpoint + cleanup can run
-        // even when `table_data` isn't available (e.g. planner didn't provide a snapshot).
-        let mut state = if let Some(snapshot) = &self.table_data {
-            let mut snapshot = Arc::clone(snapshot);
-            if self.version != snapshot.version() {
-                Arc::make_mut(&mut snapshot)
-                    .update(self.log_store.as_ref(), Some(self.version as u64))
-                    .await?;
-            }
-            snapshot
-        } else {
-            Arc::new(
-                DeltaSnapshot::try_new(
-                    self.log_store.as_ref(),
-                    Default::default(),
-                    Some(self.version),
-                    None,
-                )
-                .await?,
-            )
-        };
-
-        self.write_version_checksum(state.as_ref(), post_commit_operation_id)
-            .await;
-
-        let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
-            cleanup_logs
-        } else {
-            state.table_properties().enable_expired_log_cleanup()
-        };
-        let will_create_checkpoint = self.create_checkpoint
-            && should_create_checkpoint(
-                self.version,
-                state.table_properties().checkpoint_interval().get() as i64,
-            );
-
-        // Run arbitrary before_post_commit_hook code
-        if let Some(custom_execute_handler) = &self.custom_execute_handler {
-            custom_execute_handler
-                .before_post_commit_hook(
-                    &self.log_store,
-                    will_create_checkpoint,
-                    post_commit_operation_id,
-                )
-                .await?
-        }
-
-        let mut new_checkpoint_created = false;
-        if will_create_checkpoint {
-            // Execute create checkpoint hook
-            new_checkpoint_created = self
-                .create_checkpoint(
-                    state.as_ref(),
-                    &self.log_store,
-                    self.version,
-                    post_commit_operation_id,
-                )
-                .await?;
-        }
-
-        let mut num_log_files_cleaned_up: u64 = 0;
-        if cleanup_logs && new_checkpoint_created {
-            let retention_millis = i64::try_from(
-                state
-                    .table_properties()
-                    .log_retention_duration()
-                    .as_millis(),
-            )
-            .unwrap_or(i64::MAX);
-            let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
-                .div_euclid(24 * 60 * 60 * 1000)
-                * (24 * 60 * 60 * 1000);
-            // Execute clean up logs hook
-            num_log_files_cleaned_up = cleanup_expired_delta_log_files(
-                state.as_ref(),
-                self.log_store.as_ref(),
-                cutoff_timestamp,
-                Some(post_commit_operation_id),
-            )
-            .await? as u64;
-            if num_log_files_cleaned_up > 0 {
-                state = Arc::new(
-                    DeltaSnapshot::try_new(
-                        self.log_store.as_ref(),
-                        state.load_config().clone(),
-                        Some(self.version),
-                        None,
-                    )
-                    .await?,
-                );
-            }
-        }
-
-        // Log compaction — independent of checkpoints.
-        if let Some(compaction_interval) = state.table_properties().log_compaction_interval() {
-            if should_create_compaction(self.version, compaction_interval) {
-                let start_version = self.version + 1 - compaction_interval as i64;
-                let retention_millis = i64::try_from(
-                    state
-                        .table_properties()
-                        .deleted_file_retention_duration()
-                        .as_millis(),
-                )
-                .unwrap_or(i64::MAX);
-                let min_file_retention_ts = Utc::now().timestamp_millis() - retention_millis;
-                if let Err(e) = create_log_compaction_for(
-                    start_version,
-                    self.version,
-                    self.log_store.as_ref(),
-                    min_file_retention_ts,
-                )
-                .await
-                {
-                    // Log compaction failure is non-fatal — it is an optimization only.
-                    warn!(
-                        "Failed to create log compaction for versions {} to {}: {}",
-                        start_version, self.version, e
-                    );
-                }
-            }
-        }
-
-        // Run arbitrary after_post_commit_hook code
-        if let Some(custom_execute_handler) = &self.custom_execute_handler {
-            custom_execute_handler
-                .after_post_commit_hook(
-                    &self.log_store,
-                    new_checkpoint_created,
-                    post_commit_operation_id,
-                )
-                .await?
-        }
-
-        Ok((
-            state,
-            PostCommitMetrics {
-                new_checkpoint_created,
-                num_log_files_cleaned_up,
-            },
-        ))
-    }
-    async fn create_checkpoint(
-        &self,
-        table_state: &DeltaSnapshot,
-        log_store: &LogStoreRef,
-        version: i64,
-        operation_id: Uuid,
-    ) -> DeltaResult<bool> {
-        if !table_state.load_config().require_files {
-            // Even if the in-memory snapshot was created without eagerly loading files, we can
-            // still build a kernel snapshot at the committed version and write a checkpoint.
-            // (The checkpoint writer will read state from the log as needed.)
-            debug!("table_state.load_config().require_files=false; creating checkpoint via kernel snapshot anyway");
-        }
-
-        let checkpoint_interval = table_state.table_properties().checkpoint_interval().get() as i64;
-        if should_create_checkpoint(version, checkpoint_interval) {
-            info!("Creating checkpoint for version {version}");
-            create_checkpoint_for(version, log_store.as_ref(), operation_id).await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
 }
 
 fn should_create_checkpoint(version: i64, checkpoint_interval: i64) -> bool {
@@ -1305,8 +1688,12 @@ fn should_create_checkpoint(version: i64, checkpoint_interval: i64) -> bool {
 
 /// A commit that successfully completed
 pub struct FinalizedCommit {
-    /// The new table state after a commit
-    pub snapshot: Arc<DeltaSnapshot>,
+    /// The new table state after a commit, if available.
+    ///
+    /// `None` when the post-commit state could not be loaded (e.g. transient I/O
+    /// error after the commit entry was durably written). The commit itself
+    /// succeeded regardless.
+    pub snapshot: Option<Arc<DeltaSnapshot>>,
 
     /// Version of the finalized commit
     pub version: i64,
@@ -1317,7 +1704,7 @@ pub struct FinalizedCommit {
 impl FinalizedCommit {
     /// The new table state after a commit
     #[expect(dead_code)]
-    pub fn snapshot(&self) -> Arc<DeltaSnapshot> {
+    pub fn snapshot(&self) -> Option<Arc<DeltaSnapshot>> {
         self.snapshot.clone()
     }
     /// Version of the finalized commit
@@ -1335,18 +1722,181 @@ impl std::future::IntoFuture for PostCommit {
         let this = self;
 
         Box::pin(async move {
-            match this.run_post_commit_hook().await {
-                Ok((snapshot, post_commit_metrics)) => Ok(FinalizedCommit {
-                    snapshot,
-                    version: this.version,
-                    metrics: Metrics {
-                        num_retries: this.metrics.num_retries,
-                        new_checkpoint_created: post_commit_metrics.new_checkpoint_created,
-                        num_log_files_cleaned_up: post_commit_metrics.num_log_files_cleaned_up,
-                    },
-                }),
-                Err(err) => Err(err),
+            let post_commit_operation_id = Uuid::new_v4();
+
+            let state: Option<Arc<DeltaSnapshot>> = match DeltaSnapshot::try_new(
+                this.log_store.as_ref(),
+                DeltaSnapshotConfig {
+                    require_files: false,
+                    ..Default::default()
+                },
+                Some(this.version),
+                None,
+            )
+            .await
+            {
+                Ok(s) => Some(Arc::new(s)),
+                Err(e) => {
+                    warn!(
+                            "Post-commit: failed to load state for version {} (post-commit activities skipped): {e}",
+                            this.version
+                        );
+                    None
+                }
+            };
+
+            let cleanup_logs_setting = this.cleanup_expired_logs.unwrap_or_else(|| {
+                state
+                    .as_ref()
+                    .map(|s| s.table_properties().enable_expired_log_cleanup())
+                    .unwrap_or(false) // conservative: skip cleanup if state unavailable
+            });
+            let will_create_checkpoint = this.create_checkpoint
+                && state.as_ref().is_some_and(|s| {
+                    should_create_checkpoint(
+                        this.version,
+                        s.table_properties().checkpoint_interval().get() as i64,
+                    )
+                });
+
+            let compaction_info = state
+                .as_ref()
+                .and_then(|s| s.table_properties().log_compaction_interval())
+                .filter(|&interval| should_create_compaction(this.version, interval));
+
+            this.write_version_checksum_incremental(post_commit_operation_id)
+                .await;
+
+            // --- Post-commit heavy work (checkpoint, cleanup, compaction) ---
+            // These run inline so that callers observe completed artifacts (e.g.
+            // checkpoint files) when the commit future resolves.
+
+            // before hook — best-effort: the commit entry has already been durably written
+            // to the log, so a hook failure here does not roll back the transaction.
+            if let Some(handler) = &this.custom_execute_handler {
+                if let Err(e) = handler
+                    .before_post_commit_hook(
+                        &this.log_store,
+                        will_create_checkpoint,
+                        post_commit_operation_id,
+                    )
+                    .await
+                {
+                    warn!(
+                        "before_post_commit_hook failed for version {}: {e}",
+                        this.version
+                    );
+                }
             }
+
+            // Checkpoint — best-effort: checkpoint creation is a performance optimization
+            // (the log can always be replayed from scratch). A failure is logged but does
+            // not cause the commit to be reported as failed.
+            let mut checkpoint_created = false;
+            if will_create_checkpoint {
+                info!("Creating checkpoint for version {}", this.version);
+                match create_checkpoint_for(
+                    this.version,
+                    this.log_store.as_ref(),
+                    post_commit_operation_id,
+                )
+                .await
+                {
+                    Ok(()) => checkpoint_created = true,
+                    Err(e) => {
+                        warn!(
+                            "Failed to create checkpoint for version {}: {e}",
+                            this.version
+                        );
+                    }
+                }
+            }
+
+            // Log cleanup
+            let mut num_log_files_cleaned_up: u64 = 0;
+            if cleanup_logs_setting && checkpoint_created {
+                if let Some(s) = state.as_ref() {
+                    let retention_millis =
+                        i64::try_from(s.table_properties().log_retention_duration().as_millis())
+                            .unwrap_or(i64::MAX);
+                    let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
+                        .div_euclid(24 * 60 * 60 * 1000)
+                        * (24 * 60 * 60 * 1000);
+                    match cleanup_expired_delta_log_files(
+                        s.as_ref(),
+                        this.log_store.as_ref(),
+                        cutoff_timestamp,
+                        Some(post_commit_operation_id),
+                    )
+                    .await
+                    {
+                        Ok(n) => num_log_files_cleaned_up = n as u64,
+                        Err(e) => {
+                            warn!(
+                                "Failed to clean up expired log files for version {}: {e}",
+                                this.version
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Log compaction
+            if let Some(compaction_interval) = compaction_info {
+                let start_version = this.version + 1 - compaction_interval as i64;
+                let retention_millis = i64::try_from(
+                    state
+                        .as_ref()
+                        .map(|s| {
+                            s.table_properties()
+                                .deleted_file_retention_duration()
+                                .as_millis()
+                        })
+                        .unwrap_or_default(),
+                )
+                .unwrap_or(i64::MAX);
+                let min_file_retention_ts = Utc::now().timestamp_millis() - retention_millis;
+                if let Err(e) = create_log_compaction_for(
+                    start_version,
+                    this.version,
+                    this.log_store.as_ref(),
+                    min_file_retention_ts,
+                )
+                .await
+                {
+                    warn!(
+                        "Failed to create log compaction for versions {} to {}: {e}",
+                        start_version, this.version
+                    );
+                }
+            }
+
+            // after hook
+            if let Some(handler) = &this.custom_execute_handler {
+                if let Err(e) = handler
+                    .after_post_commit_hook(
+                        &this.log_store,
+                        checkpoint_created,
+                        post_commit_operation_id,
+                    )
+                    .await
+                {
+                    warn!(
+                        "after_post_commit_hook failed for version {}: {e}",
+                        this.version
+                    );
+                }
+            }
+
+            Ok(FinalizedCommit {
+                snapshot: state,
+                version: this.version,
+                metrics: Metrics {
+                    num_retries: this.metrics.num_retries,
+                    new_checkpoint_created: checkpoint_created,
+                    num_log_files_cleaned_up,
+                },
+            })
         })
     }
 }
@@ -1430,7 +1980,7 @@ mod tests {
     async fn commit_writes_commit_info_first_monotonic_ict_and_checksum() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, true, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, true, false, &HashMap::new())?;
         let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
 
         let created = CommitBuilder::default()
@@ -1465,7 +2015,7 @@ mod tests {
         let appended = CommitBuilder::default()
             .with_actions(vec![])
             .build(
-                Some(created.snapshot.clone()),
+                created.snapshot.clone(),
                 log_store.clone(),
                 DeltaOperation::Write {
                     mode: SaveMode::Append,
@@ -1498,7 +2048,7 @@ mod tests {
     async fn finalize_attempt_actions_backfills_enablement_metadata() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -1516,11 +2066,16 @@ mod tests {
                 },
             )
             .await?;
-        let previous_timestamp = created.snapshot.version_timestamp(0).ok_or_else(|| {
-            DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
-        })?;
+        let previous_timestamp = created
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .version_timestamp(0)
+            .ok_or_else(|| {
+                DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
+            })?;
 
-        let upgrade_protocol = protocol_for_create(false, false, true, &HashMap::new())?;
+        let upgrade_protocol = protocol_for_create(false, false, true, false, &HashMap::new())?;
         let upgrade_metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
         let base_actions = CommitData::new(
             vec![
@@ -1535,12 +2090,13 @@ mod tests {
             HashMap::new(),
             OperationMetrics::default(),
             vec![],
+            None,
         )
         .actions;
 
         let finalized_actions = finalize_attempt_actions(
             &base_actions,
-            Some(&created.snapshot),
+            created.snapshot.as_ref(),
             1,
             Some(previous_timestamp),
             previous_timestamp.saturating_sub(10),
@@ -1577,11 +2133,13 @@ mod tests {
     async fn create_commit_rejects_unsupported_reader_features() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
+        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
+        // Use it to verify that the commit pipeline correctly rejects unsupported features.
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::DeletionVectors]),
-            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
         let metadata = test_metadata([]);
 
@@ -1613,7 +2171,7 @@ mod tests {
         assert!(matches!(
             err,
             DeltaError::Transaction(TransactionError::UnsupportedTableFeatures(features))
-                if features.contains(&TableFeature::DeletionVectors)
+                if features.contains(&TableFeature::VacuumProtocolCheck)
         ));
     }
 
@@ -1621,7 +2179,7 @@ mod tests {
     async fn commit_rejects_timestamp_ntz_schema_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -1642,16 +2200,13 @@ mod tests {
 
         let updated_schema =
             StructType::try_new([StructField::not_null("ts", DataType::TIMESTAMP_NTZ)])?;
-        let updated_metadata = created
-            .snapshot
-            .metadata()
-            .clone()
-            .with_schema(&updated_schema)?;
+        let snap = created.snapshot.as_ref().unwrap();
+        let updated_metadata = snap.metadata().clone().with_schema(&updated_schema)?;
 
         let result = CommitBuilder::default()
             .with_actions(vec![CommitAction::Metadata(updated_metadata)])
             .build(
-                Some(created.snapshot.clone()),
+                created.snapshot.clone(),
                 log_store,
                 DeltaOperation::Write {
                     mode: SaveMode::Append,
@@ -1682,7 +2237,7 @@ mod tests {
     async fn commit_rejects_domain_metadata_actions_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -1708,7 +2263,7 @@ mod tests {
                 removed: false,
             })])
             .build(
-                Some(created.snapshot.clone()),
+                created.snapshot.clone(),
                 log_store,
                 DeltaOperation::Write {
                     mode: SaveMode::Append,

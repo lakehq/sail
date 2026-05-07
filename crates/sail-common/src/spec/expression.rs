@@ -343,7 +343,9 @@ pub struct CommonInlineUserDefinedTableFunction {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TableFunctionDefinition {
     PythonUdtf {
-        return_type: DataType,
+        /// The return type of the UDTF. When `None`, the UDTF uses an `analyze` static method
+        /// to determine the return type dynamically at query analysis time.
+        return_type: Option<DataType>,
         eval_type: PySparkUdfType,
         command: Vec<u8>,
         python_version: String,

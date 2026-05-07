@@ -429,6 +429,7 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub expand_views_at_output: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -491,6 +492,16 @@ pub enum CatalogType {
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
     },
+    #[serde(alias = "hms", alias = "hive-metastore")]
+    HiveMetastore {
+        name: String,
+        uris: Vec<String>,
+        thrift_transport: Option<String>,
+        auth: Option<String>,
+        kerberos_service_principal: Option<String>,
+        min_sasl_qop: Option<String>,
+        connect_timeout_secs: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -511,7 +522,6 @@ pub struct PythonConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FlightConfig {
-    pub max_rows: usize,
     pub session_timeout_secs: u64,
 }
 

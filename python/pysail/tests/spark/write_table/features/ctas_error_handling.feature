@@ -16,7 +16,7 @@ Feature: CREATE TABLE AS SELECT error handling
         (2, 'Bob')
       AS t(id, name)
       """
-    Given statement template with error table already exists
+    Given statement template with error Table already exists
       """
       CREATE TABLE ctas_exists_table
       USING PARQUET

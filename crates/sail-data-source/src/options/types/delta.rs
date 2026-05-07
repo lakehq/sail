@@ -20,6 +20,7 @@ pub fn parse_delta_log_replay_strategy(
         _ => Err(DataSourceError::InvalidOption {
             key: key.to_string(),
             value: value.to_string(),
+            cause: None,
         }),
     }
 }

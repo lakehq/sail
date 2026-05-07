@@ -1,0 +1,16 @@
+>>> from pyspark.sql import types as T
+
+>>> schema = T.StructType([T.StructField("value", T.DoubleType(), True)])
+>>> df = spark.createDataFrame([(float("nan"),), (2.5,)], schema)
+>>> df.fillna(0).collect()
+[Row(value=0.0), Row(value=2.5)]
+
+>>> schema = T.StructType([T.StructField("value", T.FloatType(), True)])
+>>> df = spark.createDataFrame([(float("nan"),), (1.5,)], schema)
+>>> df.fillna(0).collect()
+[Row(value=0.0), Row(value=1.5)]
+
+>>> schema = T.StructType([T.StructField("value", T.DoubleType(), True)])
+>>> df = spark.createDataFrame([(1.5,), (None,)], schema)
+>>> df.fillna(0).collect()
+[Row(value=1.5), Row(value=0.0)]

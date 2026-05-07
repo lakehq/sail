@@ -935,6 +935,7 @@ pub struct CatalogDefinition {
 pub struct ViewDefinition {
     /// The corresponding SQL query that defines the view.
     pub definition: String,
+    pub input: Box<QueryPlan>,
     pub columns: Option<Vec<ViewColumnDefinition>>,
     pub if_not_exists: bool,
     pub replace: bool,
@@ -1301,6 +1302,8 @@ pub enum ExplainMode {
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
     Unknown,
+    SetTableProperties { properties: Vec<(String, String)> },
+    UnsetTableProperties { keys: Vec<String>, if_exists: bool },
     // TODO: add all the alter table operations
 }
 
