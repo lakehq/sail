@@ -370,6 +370,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 table_meta.format_version = table_meta
                     .format_version
                     .max(format_version_for_schema(&schema_iceberg));
+                let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
                 // bootstrap the first snapshot into the existing metadata using InPlace strategy
@@ -427,7 +428,8 @@ impl ExecutionPlan for IcebergCommitExec {
                         let mut action = tx
                             .fast_append()
                             .with_store_context(store_ctx.clone())
-                            .with_manifest_metadata(manifest_meta);
+                            .with_manifest_metadata(manifest_meta)
+                            .with_row_lineage_start_row_id(row_lineage_start_row_id);
                         for df in commit_info.data_files.clone().into_iter() {
                             action.add_file(df);
                         }
@@ -442,7 +444,8 @@ impl ExecutionPlan for IcebergCommitExec {
                             commit_info.data_files.clone(),
                             Some(store_ctx.clone()),
                             Some(manifest_meta),
-                        );
+                        )
+                        .with_row_lineage_start_row_id(row_lineage_start_row_id);
                         struct LocalOverwriteOperation;
                         impl SnapshotProduceOperation for LocalOverwriteOperation {
                             fn operation(&self) -> &'static str {
@@ -467,11 +470,13 @@ impl ExecutionPlan for IcebergCommitExec {
                 let updates = action_commit.into_updates();
                 log::trace!("commit_exec: applying updates: {:?}", &updates);
                 let mut newest_snapshot_seq: Option<i64> = None;
+                let mut newest_snapshot_added_rows: Option<i64> = None;
                 let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
                 for upd in updates {
                     match upd {
                         TableUpdate::AddSnapshot { snapshot } => {
                             newest_snapshot_seq = Some(snapshot.sequence_number());
+                            newest_snapshot_added_rows = snapshot.added_rows;
                             table_meta.snapshots.push(snapshot.clone());
                             table_meta.current_snapshot_id = Some(snapshot.snapshot_id());
                             table_meta.snapshot_log.push(SnapshotLog {
@@ -494,6 +499,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
                 table_meta.last_updated_ms = timestamp_ms;
+                if let Some(added_rows) = newest_snapshot_added_rows {
+                    table_meta.advance_next_row_id(added_rows);
+                }
 
                 // Add metadata_log entry referencing previous metadata file
                 table_meta
@@ -506,11 +514,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let new_meta_bytes = table_meta
                     .to_json()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let new_meta_rel = format!(
-                    "metadata/{:05}-{}.metadata.json",
-                    next_version,
-                    uuid::Uuid::new_v4()
-                );
+                let new_meta_rel = format!("metadata/v{next_version}.metadata.json");
 
                 log::trace!(
                     "Writing metadata: {} snapshot_id={:?} table_url={}",

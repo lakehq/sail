@@ -1156,6 +1156,7 @@ mod tests {
             last_partition_id,
             properties: HashMap::new(),
             current_snapshot_id: None,
+            next_row_id: None,
             snapshots: vec![],
             snapshot_log: vec![],
             metadata_log: vec![],

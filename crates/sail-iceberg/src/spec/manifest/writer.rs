@@ -123,6 +123,7 @@ impl ManifestWriter {
             deleted_rows_count: None,
             partitions: None,
             key_metadata: self.key_metadata,
+            first_row_id: None,
         }
     }
 

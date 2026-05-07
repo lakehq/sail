@@ -30,7 +30,7 @@ use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::snapshots::{SnapshotBuilder, SnapshotReference, SnapshotRetention};
-use crate::spec::TableMetadata;
+use crate::spec::{FormatVersion, TableMetadata};
 use crate::utils::WritePathMode;
 
 /// Strategy for persisting metadata during bootstrap
@@ -94,6 +94,7 @@ pub async fn bootstrap_new_table(
         format_version,
         crate::spec::ManifestContentType::Data,
     );
+    let row_lineage_start_row_id = (format_version >= FormatVersion::V3).then_some(0);
 
     // Use SnapshotProducer in bootstrap mode
     let producer = SnapshotProducer::new(
@@ -103,6 +104,7 @@ pub async fn bootstrap_new_table(
         Some(manifest_meta),
     )
     .with_bootstrap(true)
+    .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     let action_commit = producer
@@ -136,6 +138,9 @@ pub async fn bootstrap_new_table(
         last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
         properties: std::collections::HashMap::new(),
         current_snapshot_id: Some(snapshot.snapshot_id()),
+        next_row_id: snapshot.added_rows.and_then(|added_rows| {
+            row_lineage_start_row_id.map(|start_row_id| start_row_id + added_rows)
+        }),
         snapshots: vec![snapshot.clone()],
         snapshot_log: vec![SnapshotLog {
             timestamp_ms: commit_timestamp_ms,
@@ -159,12 +164,14 @@ pub async fn bootstrap_new_table(
         statistics: vec![],
         partition_statistics: vec![],
     };
+    let mut table_meta = table_meta;
+    table_meta.ensure_required_format_fields();
 
-    // Write metadata v00001
+    // Write metadata v1 using the Hadoop table convention for path-based compatibility.
     let new_meta_bytes = table_meta
         .to_json()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let new_meta_rel = format!("metadata/{:05}-{}.metadata.json", 1, uuid::Uuid::new_v4());
+    let new_meta_rel = "metadata/v1.metadata.json".to_string();
     let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
     store_ctx
         .prefixed
@@ -215,6 +222,8 @@ pub async fn bootstrap_first_snapshot(
     let format_version = table_meta
         .format_version
         .max(format_version_for_schema(&schema_iceberg));
+    table_meta.format_version = format_version;
+    let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
 
     // Create a minimal transaction context (no parent snapshot)
     let empty_snapshot = SnapshotBuilder::new()
@@ -245,6 +254,7 @@ pub async fn bootstrap_first_snapshot(
         Some(manifest_meta),
     )
     .with_bootstrap(true)
+    .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     let action_commit = producer
@@ -265,7 +275,6 @@ pub async fn bootstrap_first_snapshot(
     // Update table metadata with the new snapshot
     let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     table_meta.current_snapshot_id = Some(snapshot.snapshot_id());
-    table_meta.format_version = format_version;
     table_meta.snapshots.push(snapshot.clone());
     table_meta.snapshot_log.push(SnapshotLog {
         timestamp_ms: commit_timestamp_ms,
@@ -273,6 +282,9 @@ pub async fn bootstrap_first_snapshot(
     });
     table_meta.last_sequence_number = 1;
     table_meta.last_updated_ms = commit_timestamp_ms;
+    if let Some(added_rows) = snapshot.added_rows {
+        table_meta.advance_next_row_id(added_rows);
+    }
 
     // Add main branch reference if not present
     if !table_meta
@@ -343,11 +355,7 @@ pub async fn bootstrap_first_snapshot(
         PersistStrategy::NewVersion => {
             // Create a new metadata version
             let version = table_meta.metadata_log.len() + 1;
-            let new_meta_rel = format!(
-                "metadata/{:05}-{}.metadata.json",
-                version,
-                uuid::Uuid::new_v4()
-            );
+            let new_meta_rel = format!("metadata/v{version}.metadata.json");
             let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
             store_ctx
                 .prefixed

@@ -26,7 +26,7 @@ Feature: Delta Lake Variant support
       | protocol.minReaderVersion            | 3               |
       | protocol.minWriterVersion            | 7               |
       | protocol.readerFeatures              | ["variantType"] |
-      | protocol.writerFeatures              | ["variantType"] |
+      | protocol.writerFeatures              | ["variantType", "appendOnly", "invariants"] |
       | metaData.schemaString.fields[1].type | "variant"       |
     When query
       """

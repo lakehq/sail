@@ -106,6 +106,12 @@ pub fn protocol_for_create(
     if enable_variant {
         reader_features.push(TableFeature::VariantType);
         writer_features.push(TableFeature::VariantType);
+        if !writer_features.contains(&TableFeature::AppendOnly) {
+            writer_features.push(TableFeature::AppendOnly);
+        }
+        if !writer_features.contains(&TableFeature::Invariants) {
+            writer_features.push(TableFeature::Invariants);
+        }
     }
 
     // Extract features from `delta.feature.<name> = "supported"|"enabled"` configuration entries.
