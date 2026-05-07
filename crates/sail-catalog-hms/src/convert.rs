@@ -11,7 +11,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    identity_partition_fields, CatalogTableType, DatabaseStatus, TableColumnStatus, TableKind,
+    TableStatus,
 };
 
 use crate::data_type::{arrow_to_hive_type, hive_type_to_arrow};
@@ -91,12 +92,19 @@ pub(crate) fn table_to_status(
         .as_ref()
         .map(|keys| identity_partition_fields(&field_names(keys)))
         .unwrap_or_default();
+    let table_type = match table.table_type.as_deref() {
+        Some(EXTERNAL_TABLE_TYPE) => Some(CatalogTableType::External),
+        Some(MANAGED_TABLE_TYPE) => Some(CatalogTableType::Managed),
+        _ => None,
+    };
 
     Ok(TableStatus {
         catalog: Some(catalog.to_string()),
         database: database.clone().into(),
         name,
+        statistics: None,
         kind: TableKind::Table {
+            table_type,
             columns,
             comment,
             constraints: vec![],
@@ -137,6 +145,7 @@ pub(crate) fn view_to_status(
         catalog: Some(catalog.to_string()),
         database: database.clone().into(),
         name,
+        statistics: None,
         kind: TableKind::View {
             definition,
             columns: columns_from_hms(table.sd.as_ref(), None)?,

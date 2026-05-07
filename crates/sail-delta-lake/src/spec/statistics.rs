@@ -368,11 +368,8 @@ fn null_count_stats_schema(schema: &StructType) -> Option<StructType> {
             let data_type = match &field.data_type {
                 DataType::Array(_) | DataType::Map(_) | DataType::Variant(_) => DataType::LONG,
                 DataType::Struct(inner) => {
-                    if let Some(inner_schema) = null_count_stats_schema(inner) {
-                        DataType::from(inner_schema)
-                    } else {
-                        return None;
-                    }
+                    let inner_schema = null_count_stats_schema(inner)?;
+                    DataType::from(inner_schema)
                 }
                 DataType::Primitive(_) => DataType::LONG,
             };
