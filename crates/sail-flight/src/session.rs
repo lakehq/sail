@@ -72,7 +72,9 @@ pub fn create_flight_session_manager(
     let session_factory =
         create_flight_session_factory(config.clone(), runtime.clone(), system.clone())?;
     let factory = {
-        Box::new(move || Box::new(session_factory.clone()) as Box<dyn SessionFactory<ServerSessionInfo>>)
+        Box::new(move || {
+            Box::new(session_factory.clone()) as Box<dyn SessionFactory<ServerSessionInfo>>
+        })
     };
     let options = SessionManagerOptions::new(runtime.clone(), system, factory)
         .with_session_timeout(std::time::Duration::from_secs(
@@ -85,4 +87,3 @@ pub fn create_flight_session_manager(
         ))
     })
 }
-

@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::catalog::create_catalog_providers;
-use sail_catalog::provider::CatalogProvider;
-
 use datafusion::execution::cache::cache_manager::{
     CacheManagerConfig, FileMetadataCache, FileStatisticsCache, ListFilesCache,
 };
@@ -18,11 +15,14 @@ use log::debug;
 use sail_cache::file_listing_cache::MokaFileListingCache;
 use sail_cache::file_metadata_cache::MokaFileMetadataCache;
 use sail_cache::file_statistics_cache::MokaFileStatisticsCache;
+use sail_catalog::provider::CatalogProvider;
 use sail_common::config::{
     AppConfig, CacheType, FairMemoryPoolConfig, GreedyMemoryPoolConfig, MemoryPoolConfig,
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_object_store::DynamicObjectStoreRegistry;
+
+use crate::catalog::create_catalog_providers;
 
 #[derive(Clone)]
 pub struct RuntimeEnvFactory {

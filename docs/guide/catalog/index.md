@@ -89,5 +89,6 @@ When a mutation is performed through Sail, the relevant cache entries are automa
 | `create_view`        | view list cache for the database          |
 | `drop_view`          | view list cache for the database          |
 
-Read-only operations (`get_database`, `get_table`, `get_view`) are **not** cached and always hit the remote catalog directly. This is a deliberate design choice because individual lookups are fast and caching them would complicate invalidation logic.
+Read-only operations (`get_database`, `get_table`, `get_view`) are **not** cached and always hit the remote catalog directly.
+This is a deliberate design choice because individual lookups are fast and caching them would complicate invalidation logic.
 

@@ -777,7 +777,8 @@ impl CatalogProvider for GlueCatalogProvider {
         options: DropViewOptions,
     ) -> CatalogResult<()> {
         let database_name = Self::database_name(database)?;
-        let result = self.get_client()
+        let result = self
+            .get_client()
             .await?
             .delete_table()
             .database_name(database_name)
@@ -793,10 +794,15 @@ impl CatalogProvider for GlueCatalogProvider {
                     if options.if_exists {
                         Ok(())
                     } else {
-                        Err(CatalogError::NotFound(CatalogObject::View, view.to_string()))
+                        Err(CatalogError::NotFound(
+                            CatalogObject::View,
+                            view.to_string(),
+                        ))
                     }
                 } else {
-                    Err(CatalogError::External(format!("Failed to drop view: {service_err}")))
+                    Err(CatalogError::External(format!(
+                        "Failed to drop view: {service_err}"
+                    )))
                 }
             }
         }
@@ -879,5 +885,3 @@ mod tests {
             .contains("does not support multi-level database names"));
     }
 }
-
-

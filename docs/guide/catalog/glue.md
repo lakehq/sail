@@ -85,9 +85,9 @@ export SAIL_CATALOG__LIST='[{
 }]'
 ```
 
-*   `database_cache_enabled`: Whether to enable caching for database metadata.
-*   `database_cache_size`: The maximum number of database metadata entries to cache. When the limit is reached, older entries are evicted.
-*   `database_cache_ttl_secs`: The time-to-live (TTL) for cached database metadata in seconds.
-*   `table_cache_enabled`: Whether to enable caching for table metadata.
-*   `table_cache_size`: The maximum number of table metadata entries to cache. When the limit is reached, older entries are evicted.
-*   `table_cache_ttl_secs`: The time-to-live (TTL) for cached table metadata in seconds.
+- `database_cache_enabled`: Whether to enable caching for database metadata.
+- `database_cache_size`: The maximum number of database metadata entries to cache. When the limit is reached, older entries are evicted.
+- `database_cache_ttl_secs`: The time-to-live (TTL) for cached database metadata in seconds.
+- `table_cache_enabled`: Whether to enable caching for table metadata.
+- `table_cache_size`: The maximum number of table metadata entries to cache. When the limit is reached, older entries are evicted.
+- `table_cache_ttl_secs`: The time-to-live (TTL) for cached table metadata in seconds.

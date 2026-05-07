@@ -320,10 +320,7 @@ async fn test_multi_level_namespace_rejected() {
     let result = catalog
         .create_database(&multi_ns, simple_database_options())
         .await;
-    assert!(
-        result.is_err(),
-        "Expected error for multi-level namespace"
-    );
+    assert!(result.is_err(), "Expected error for multi-level namespace");
     assert!(
         matches!(
             result.unwrap_err(),
@@ -340,4 +337,3 @@ async fn test_multi_level_namespace_rejected() {
         sail_catalog::error::CatalogError::InvalidArgument(_)
     ));
 }
-

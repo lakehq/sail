@@ -115,7 +115,7 @@ mod tests {
     fn test_namespace_conversions() {
         let vec_str = vec!["a", "b"];
         let ns = Namespace::try_from(vec_str).unwrap();
-        
+
         let vec_arc: Vec<Arc<str>> = ns.clone().into();
         assert_eq!(vec_arc.len(), 2);
         assert_eq!(vec_arc[0].as_ref(), "a");

@@ -5,9 +5,7 @@ use datafusion::common::{plan_datafusion_err, Result};
 use datafusion_common::plan_err;
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
-use sail_catalog::provider::{
-    CachedCatalogProvider, CatalogProvider, RuntimeAwareCatalogProvider,
-};
+use sail_catalog::provider::{CachedCatalogProvider, CatalogProvider, RuntimeAwareCatalogProvider};
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
@@ -238,4 +236,3 @@ pub fn create_catalog_manager_with_providers(
     CatalogManager::try_new(options)
         .map_err(|e| plan_datafusion_err!("failed to create catalog manager: {e}"))
 }
-
