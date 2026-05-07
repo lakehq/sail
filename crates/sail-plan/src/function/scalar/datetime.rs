@@ -23,6 +23,7 @@ use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 
 use crate::error::{PlanError, PlanResult};
@@ -824,7 +825,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
-        ("year", F::unary(|arg| integer_part(arg, "YEAR"))),
+        ("year", F::udf(SparkYear::new())),
         ("years", F::unary(years)),
     ]
 }
