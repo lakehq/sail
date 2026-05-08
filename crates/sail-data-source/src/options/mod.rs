@@ -1,6 +1,9 @@
 pub mod parsers;
 pub mod types;
 
+use datafusion::catalog::Session;
+use sail_common_datafusion::datasource::OptionLayer;
+
 use crate::error::DataSourceResult;
 
 pub mod gen {
@@ -14,6 +17,10 @@ pub mod gen {
     include!(concat!(env!("OUT_DIR"), "/options/json.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/binary.rs"));
+}
+
+pub trait ResolveOptions: Sized {
+    fn resolve_options(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self>;
 }
 
 /// A trait for partially loaded options.
