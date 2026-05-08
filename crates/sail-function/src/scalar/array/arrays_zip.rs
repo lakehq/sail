@@ -136,9 +136,7 @@ impl ScalarUDFImpl for ArraysZip {
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let result = match args.return_field.data_type() {
             DataType::LargeList(_) => arrays_zip_generic::<i64>(&arrays, &field_names),
-            DataType::FixedSizeList(_, size) => {
-                arrays_zip_fixed_size(&arrays, size, &field_names)
-            }
+            DataType::FixedSizeList(_, size) => arrays_zip_fixed_size(&arrays, size, &field_names),
             _ => arrays_zip_generic::<i32>(&arrays, &field_names),
         }?;
         Ok(ColumnarValue::Array(result))
@@ -255,8 +253,13 @@ fn combine_validity_masks(arrays: &[ArrayRef]) -> Option<NullBuffer> {
     Some(NullBuffer::new(combined_validity))
 }
 
-fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32, field_names: &[String]) -> Result<ArrayRef> {
-    let (_num_rows, inner_fields, field_names) = num_rows_inner_fields_and_names(args, field_names)?;
+fn arrays_zip_fixed_size(
+    args: &[ArrayRef],
+    fixed_size: &i32,
+    field_names: &[String],
+) -> Result<ArrayRef> {
+    let (_num_rows, inner_fields, field_names) =
+        num_rows_inner_fields_and_names(args, field_names)?;
 
     let lists = args
         .iter()
@@ -292,7 +295,10 @@ fn arrays_zip_fixed_size(args: &[ArrayRef], fixed_size: &i32, field_names: &[Str
     )?))
 }
 
-fn arrays_zip_generic<O: OffsetSizeTrait>(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
+fn arrays_zip_generic<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    field_names: &[String],
+) -> Result<ArrayRef> {
     let (num_rows, inner_fields, field_names) = num_rows_inner_fields_and_names(args, field_names)?;
 
     // Create fields with nullable=true, preserving metadata from inner fields
