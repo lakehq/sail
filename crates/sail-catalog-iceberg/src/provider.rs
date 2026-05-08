@@ -1293,6 +1293,7 @@ fn build_sort_order(
         if let Some(&source_id) = name_to_id.get(&sort.column) {
             sort_fields.push(sail_iceberg::spec::sort::SortField {
                 source_id,
+                source_ids: vec![],
                 transform: sail_iceberg::Transform::Identity, // FIXME: This is wrong, col needs to be parsed.
                 direction: if sort.ascending {
                     sail_iceberg::spec::sort::SortDirection::Ascending

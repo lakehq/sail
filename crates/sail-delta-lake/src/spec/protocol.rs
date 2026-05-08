@@ -43,9 +43,8 @@ pub enum TableFeature {
     InCommitTimestamp,
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
-    // TODO: Implement reader/writer support for these newer protocol features.
-    // For now we only register the official names so protocol parsing succeeds and
-    // ProtocolChecker can reject unsupported tables explicitly.
+    // Keep official names for newer protocol features so parsing succeeds and
+    // ProtocolChecker can decide support explicitly.
     #[serde(rename = "icebergCompatV1")]
     IcebergCompatV1,
     #[serde(rename = "icebergCompatV2")]
