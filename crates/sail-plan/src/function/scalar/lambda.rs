@@ -92,8 +92,12 @@ fn filter_lambda(input: LambdaFunctionInput) -> PlanResult<Expr> {
         function_context,
     } = input;
 
-    // Native HigherOrderUDF path — no outer column capture needed and element type is known
-    if outer_columns.is_empty() && element_type != DataType::Null {
+    // Native HigherOrderUDF path — element type is known, and at most 1 lambda param.
+    // Outer column captures are handled by DF's spread_captures mechanism.
+    // 2-param lambdas are excluded: a DF bug in LambdaExpr::new incorrectly includes
+    // LambdaVariable indices in used_column_indices, causing index remapping that misaligns
+    // the evaluation batch when only the second param is used (TODO: fix upstream in DF).
+    if element_type != DataType::Null && index_var_name.is_none() {
         let body = replace_synthetic_columns_with_lambda_vars(
             resolved_lambda,
             &element_column_name,
@@ -115,7 +119,11 @@ fn filter_lambda(input: LambdaFunctionInput) -> PlanResult<Expr> {
         )));
     }
 
-    // Fallback: ScalarUDF path for lambdas with outer-column captures.
+    // Fallback: ScalarUDF path for 2-param lambdas (element + index).
+    // DF's LambdaExpr::new incorrectly includes LambdaVariable indices in
+    // used_column_indices, which misaligns the eval batch when only the index
+    // param is used. SparkArrayFilterExpr avoids this by compiling the predicate
+    // directly as a PhysicalExpr. TODO: remove once fixed upstream in DF.
     // Compile the PhysicalExpr once at planning time using the session state.
     let schema = build_batch_schema(
         &element_column_name,

@@ -137,7 +137,7 @@ impl ScanByDataFilesState {
                 range: None,
                 statistics: None,
                 ordering: None,
-                extensions: None,
+                extensions: Default::default(),
                 metadata_size_hint: None,
             });
         }

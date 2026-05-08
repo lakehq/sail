@@ -111,7 +111,7 @@ fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> 
                 range: None,
                 statistics: None,
                 ordering: None,
-                extensions: None,
+                extensions: Default::default(),
                 metadata_size_hint: None,
             })
         })
@@ -132,7 +132,7 @@ fn to_partitioned_files_with_version(
             range: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: Default::default(),
             metadata_size_hint: None,
         })
         .collect())

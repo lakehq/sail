@@ -342,3 +342,110 @@ Feature: array filter with lambda
         | [2]    |
         | [2, 4] |
         | []     |
+
+  Rule: Filter with null array input
+
+    Scenario: Filter a null array returns null
+      When query
+        """
+        SELECT filter(CAST(NULL AS ARRAY<INT>), x -> x > 0) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Filter null array of strings returns null
+      When query
+        """
+        SELECT filter(CAST(NULL AS ARRAY<STRING>), x -> x IS NOT NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Filter multi-row table with null array row
+      When query
+        """
+        SELECT filter(arr, x -> x > 0) AS result
+        FROM VALUES (array(1, 2, 3)), (CAST(NULL AS ARRAY<INT>)), (array(4, 5))
+        AS t(arr)
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+        | NULL      |
+        | [4, 5]    |
+
+    Scenario: Two-param lambda with null array row returns null
+      When query
+        """
+        SELECT filter(arr, (x, i) -> i = 0) AS result
+        FROM VALUES (array(10, 20)), (CAST(NULL AS ARRAY<INT>)), (array(30, 40, 50))
+        AS t(arr)
+        """
+      Then query result
+        | result |
+        | [10]   |
+        | NULL   |
+        | [30]   |
+
+  Rule: Filter with null elements - predicate returns null treated as false
+
+    Scenario: NULL elements excluded when predicate returns NULL
+      When query
+        """
+        SELECT filter(array(1, 2, 3, NULL), x -> x > 1) AS result
+        """
+      Then query result
+        | result |
+        | [2, 3] |
+
+    Scenario: All-null array filtered with IS NOT NULL predicate yields empty array
+      When query
+        """
+        SELECT filter(array(NULL, NULL), x -> x IS NOT NULL) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+  Rule: Filter with boolean arrays
+
+    Scenario: Filter boolean array keeping true values
+      When query
+        """
+        SELECT filter(array(true, false, true, false), x -> x = true) AS result
+        """
+      Then query result
+        | result       |
+        | [true, true] |
+
+    Scenario: Filter boolean array keeping false values
+      When query
+        """
+        SELECT filter(array(true, false, true, false), x -> x = false) AS result
+        """
+      Then query result
+        | result         |
+        | [false, false] |
+
+  Rule: Filter with nested arrays
+
+    @sail-bug
+    Scenario: Filter nested array by first element of inner array
+      When query
+        """
+        SELECT filter(array(array(1, 2), array(3, 4), array(5, 6)), x -> x[0] > 2) AS result
+        """
+      Then query result
+        | result           |
+        | [[3, 4], [5, 6]] |
+
+    Scenario: Filter nested array - all inner arrays have size greater than 1
+      When query
+        """
+        SELECT filter(array(array(1, 2), array(3, 4), array(5, 6)), x -> size(x) > 1) AS result
+        """
+      Then query result
+        | result                   |
+        | [[1, 2], [3, 4], [5, 6]] |

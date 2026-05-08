@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, ListArray};
 use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::utils::{adjust_offsets_for_slice, list_values};
+use datafusion_common::utils::{adjust_offsets_for_slice, list_values, list_values_row_number};
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
@@ -115,7 +116,7 @@ impl HigherOrderUDF for SparkArrayFilter {
                 let per_sublist_indices = build_per_sublist_indices_i32(offsets, list.len());
                 let indices: ArrayRef = Arc::new(per_sublist_indices);
                 let fv = Arc::clone(&flat_values);
-                let mask = eval_lambda(lambda, fv, indices, flat_len)?;
+                let mask = eval_lambda(lambda, list_array.as_ref(), fv, indices, flat_len)?;
 
                 let field = match list.data_type() {
                     DataType::List(f) => Arc::clone(f),
@@ -144,7 +145,7 @@ impl HigherOrderUDF for SparkArrayFilter {
                 let per_sublist_indices = build_per_sublist_indices_i64(offsets, list.len());
                 let indices: ArrayRef = Arc::new(per_sublist_indices);
                 let fv = Arc::clone(&flat_values);
-                let mask = eval_lambda(lambda, fv, indices, flat_len)?;
+                let mask = eval_lambda(lambda, list_array.as_ref(), fv, indices, flat_len)?;
 
                 let field = match list.data_type() {
                     DataType::LargeList(f) => Arc::clone(f),
@@ -197,13 +198,17 @@ fn build_per_sublist_indices_i64(offsets: &[i64], n_rows: usize) -> Int64Array {
 
 fn eval_lambda(
     lambda: &LambdaArgument,
+    list_array: &dyn Array,
     flat_values: ArrayRef,
     indices: ArrayRef,
     flat_len: usize,
 ) -> Result<BooleanArray> {
     let elem_fn = || Ok(Arc::clone(&flat_values));
     let idx_fn = || Ok(Arc::clone(&indices));
-    let mask_cv = lambda.evaluate(&[&elem_fn, &idx_fn])?;
+    let mask_cv = lambda.evaluate(&[&elem_fn, &idx_fn], |arrays| {
+        let row_indices = list_values_row_number(list_array)?;
+        Ok(take_arrays(arrays, &row_indices, None)?)
+    })?;
     let mask_array = mask_cv.into_array(flat_len)?;
 
     mask_array
