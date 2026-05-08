@@ -97,6 +97,20 @@ Feature: substring() and substr() extract substrings
         | result |
         | SQL    |
 
+    @sail-bug
+    Scenario: substring with pos beyond start of string (3-arg) returns empty
+      # Spark adjusts the length when pos is so negative it overshoots the start.
+      # effective_start = char_length + pos + 1 = 5 + (-100) + 1 = -94 < 1
+      # adjusted_len = max(5 - (1 - (-94)), 0) = max(-90, 0) = 0 → empty string
+      # Sail incorrectly clamps pos to 1 without adjusting len → returns "Spark".
+      When query
+        """
+        SELECT substring('Spark', -100, 5) AS result
+        """
+      Then query result
+        | result |
+        |        |
+
   Rule: Edge cases
 
     Scenario: substring length exceeds remaining string
