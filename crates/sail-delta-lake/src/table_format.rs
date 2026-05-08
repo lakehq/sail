@@ -13,11 +13,8 @@ use sail_common_datafusion::datasource::{
     RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
-use sail_data_source::error::DataSourceResult;
-use sail_data_source::options::gen::{
-    DeltaReadOptions, DeltaReadPartialOptions, DeltaWriteOptions, DeltaWritePartialOptions,
-};
-use sail_data_source::options::{BuildPartialOptions, PartialOptions};
+use sail_data_source::options::gen::{DeltaReadOptions, DeltaWriteOptions};
+use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
@@ -65,7 +62,7 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = resolve_delta_read_options(options)
+        let options = DeltaReadOptions::resolve_options(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         create_delta_source(ctx, table_url, schema, options).await
     }
@@ -104,7 +101,7 @@ impl TableFormat for DeltaTableFormat {
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let (options, table_properties) = split_delta_write_options_and_table_properties(options);
-        let delta_options = resolve_delta_write_options(options)
+        let delta_options = DeltaWriteOptions::resolve_options(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let object_store = ctx
@@ -243,7 +240,7 @@ impl TableFormat for DeltaTableFormat {
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
                 })?;
-                let delta_options = resolve_delta_write_options(info.target.options)?;
+                let delta_options = DeltaWriteOptions::resolve_options(ctx, info.target.options)?;
                 let delete_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -258,7 +255,8 @@ impl TableFormat for DeltaTableFormat {
             // ── Merge-on-Read MERGE ──────────────────────────────────────────
             (MergeStrategy::MergeOnRead, RowLevelCommand::Merge) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+                let delta_options =
+                    DeltaWriteOptions::resolve_options(ctx, info.target.options.clone())?;
                 let merge_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -281,7 +279,7 @@ impl TableFormat for DeltaTableFormat {
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
                 })?;
-                let delta_options = resolve_delta_write_options(info.target.options)?;
+                let delta_options = DeltaWriteOptions::resolve_options(ctx, info.target.options)?;
                 let delete_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -296,7 +294,8 @@ impl TableFormat for DeltaTableFormat {
             // ── Copy-on-Write MERGE ──────────────────────────────────────────
             (MergeStrategy::Eager, RowLevelCommand::Merge) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+                let delta_options =
+                    DeltaWriteOptions::resolve_options(ctx, info.target.options.clone())?;
                 let merge_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -578,24 +577,6 @@ async fn detect_merge_strategy(
     }
 }
 
-pub fn resolve_delta_read_options(options: Vec<OptionLayer>) -> DataSourceResult<DeltaReadOptions> {
-    let mut partial = DeltaReadPartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
-    }
-    partial.finalize()
-}
-
-pub fn resolve_delta_write_options(
-    options: Vec<OptionLayer>,
-) -> DataSourceResult<DeltaWriteOptions> {
-    let mut partial = DeltaWritePartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
-    }
-    partial.finalize()
-}
-
 fn resolve_delta_metadata_configuration(
     table_properties: &HashMap<String, String>,
 ) -> crate::spec::DeltaResult<HashMap<String, String>> {
@@ -631,7 +612,7 @@ fn split_delta_write_options_and_table_properties(
                         table_properties.insert(property_key, value);
                     } else if key.starts_with("option.") {
                         // Write option from the OPTIONS clause; keep in clean items
-                        // so that resolve_delta_write_options can process it.
+                        // so that DeltaWriteOptions::resolve_options can process it.
                         clean_items.push((key, value));
                     } else {
                         // Custom user table property (e.g. from TBLPROPERTIES); include

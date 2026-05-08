@@ -9,8 +9,9 @@ use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::binary::file_format::BinaryFileFormat;
-use crate::formats::binary::options::resolve_binary_read_options;
 use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::options::gen::BinaryReadOptions;
+use crate::options::ResolveOptions;
 
 pub mod file_format;
 pub mod options;
@@ -34,12 +35,12 @@ impl ListingFormat for BinaryListingFormat {
 
     fn create_read_format(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         options: Vec<OptionLayer>,
         _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(BinaryFileFormat::new(
-            resolve_binary_read_options(options)
+            BinaryReadOptions::resolve_options(ctx, options)
                 .map_err(datafusion_common::DataFusionError::from)?
                 .into_table_options(),
         )))
