@@ -68,6 +68,17 @@ fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(array_element(matches, lit(1i64)))
 }
 
+/// Extracts the integer value from a non-null integer literal expression.
+fn literal_as_i64(e: &expr::Expr) -> Option<i64> {
+    match e {
+        expr::Expr::Literal(ScalarValue::Int8(Some(n)), _) => Some(i64::from(*n)),
+        expr::Expr::Literal(ScalarValue::Int16(Some(n)), _) => Some(i64::from(*n)),
+        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) => Some(i64::from(*n)),
+        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) => Some(*n),
+        _ => None,
+    }
+}
+
 fn adjust_substr_position(
     string_len: expr::Expr,
     position: expr::Expr,
@@ -128,6 +139,25 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
+
+    // Fast path: constant non-null positive position (and non-negative length if present).
+    // adjust_substr_position is a no-op for pos >= 1, negative length can't happen with a
+    // literal >= 0, and a non-null literal never needs a NULL guard. Avoids generating a
+    // CASE WHEN tree for the common case (e.g. substr(col, 1, 30) in TPC-DS queries).
+    if let Some(pos_val) = literal_as_i64(&position) {
+        if pos_val >= 1 {
+            match length_opt {
+                None => return Ok(cast(expr_fn::substr(string, position), DataType::Utf8)),
+                Some(ref len_expr) if literal_as_i64(len_expr).map_or(false, |l| l >= 0) => {
+                    return Ok(cast(
+                        expr_fn::substring(string, position, length_opt.unwrap()),
+                        DataType::Utf8,
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
 
     // Save original position before casting, for the NULL-propagation guard below.
     let original_position = position.clone();
