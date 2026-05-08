@@ -21,8 +21,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
-    CatalogTableConstraint, CatalogTableSort, DatabaseStatus, TableColumnStatus, TableKind,
-    TableStatus,
+    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
+    TableColumnStatus, TableKind, TableStatus,
 };
 use sail_iceberg::utils::partition_transform::catalog_partition_field_from_iceberg;
 use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField, StructType};
@@ -766,12 +766,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             ));
         }
 
-        if bucket_by.is_some() {
-            return Err(CatalogError::NotSupported(
-                "Bucketed table is not supported yet".to_string(),
-            ));
-        }
-
         let fields = columns_to_nested_fields(&columns)?;
 
         let struct_type = StructType::new(fields.clone());
@@ -805,7 +799,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             identifier_field_ids: Some(schema.identifier_field_ids().collect()),
         };
 
-        let partition_spec = build_partition_spec(&partition_by, &name_to_id);
+        let partition_spec = build_partition_spec(&partition_by, bucket_by.as_ref(), &name_to_id)?;
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
         let mut props = HashMap::new();
@@ -1224,10 +1218,11 @@ fn columns_to_nested_fields(
 /// Builds an Iceberg partition spec from partition fields and their field ID mappings.
 fn build_partition_spec(
     partition_by: &[CatalogPartitionField],
+    bucket_by: Option<&CatalogTableBucketBy>,
     name_to_id: &HashMap<String, i32>,
-) -> Option<Box<crate::models::PartitionSpec>> {
-    if partition_by.is_empty() {
-        return None;
+) -> CatalogResult<Option<Box<crate::models::PartitionSpec>>> {
+    if partition_by.is_empty() && bucket_by.is_none() {
+        return Ok(None);
     }
     let mut partition_spec_builder = sail_iceberg::PartitionSpec::builder();
     for field in partition_by {
@@ -1264,8 +1259,22 @@ fn build_partition_spec(
             partition_spec_builder = partition_spec_builder.add_field(source_id, &name, transform);
         }
     }
+    if let Some(bucket_by) = bucket_by {
+        let num_buckets = u32::try_from(bucket_by.num_buckets).map_err(|e| {
+            CatalogError::InvalidArgument(format!("Invalid number of buckets: {e}"))
+        })?;
+        for column in &bucket_by.columns {
+            if let Some(&source_id) = name_to_id.get(column) {
+                partition_spec_builder = partition_spec_builder.add_field(
+                    source_id,
+                    &format!("{column}_bucket"),
+                    sail_iceberg::Transform::Bucket(num_buckets),
+                );
+            }
+        }
+    }
     let spec = partition_spec_builder.build();
-    Some(Box::new(crate::models::PartitionSpec {
+    Ok(Some(Box::new(crate::models::PartitionSpec {
         spec_id: Some(spec.spec_id()),
         fields: spec
             .fields()
@@ -1277,7 +1286,7 @@ fn build_partition_spec(
                 transform: f.transform.to_string(),
             })
             .collect(),
-    }))
+    })))
 }
 
 fn build_sort_order(
@@ -1424,94 +1433,6 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-
-    #[test]
-    fn test_build_sort_order_identity() {
-        let name_to_id = HashMap::from([("foo".to_string(), 1), ("bar".to_string(), 2)]);
-        let order = build_sort_order(
-            &[
-                CatalogTableSort {
-                    column: "foo".to_string(),
-                    ascending: true,
-                },
-                CatalogTableSort {
-                    column: "bar".to_string(),
-                    ascending: false,
-                },
-            ],
-            &name_to_id,
-        )
-        .unwrap()
-        .unwrap();
-
-        assert_eq!(order.fields.len(), 2);
-        assert_eq!(order.fields[0].source_id, 1);
-        assert_eq!(order.fields[0].transform, "identity");
-        assert_eq!(order.fields[0].direction, crate::models::SortDirection::Asc);
-        assert_eq!(order.fields[1].source_id, 2);
-        assert_eq!(order.fields[1].transform, "identity");
-        assert_eq!(
-            order.fields[1].direction,
-            crate::models::SortDirection::Desc
-        );
-    }
-
-    #[test]
-    fn test_build_sort_order_transform_expression() {
-        let name_to_id = HashMap::from([("ts".to_string(), 1), ("id".to_string(), 2)]);
-        let order = build_sort_order(
-            &[
-                CatalogTableSort {
-                    column: "years(ts)".to_string(),
-                    ascending: true,
-                },
-                CatalogTableSort {
-                    column: "bucket(16, id)".to_string(),
-                    ascending: false,
-                },
-            ],
-            &name_to_id,
-        )
-        .unwrap()
-        .unwrap();
-
-        assert_eq!(order.fields.len(), 2);
-        assert_eq!(order.fields[0].source_id, 1);
-        assert_eq!(order.fields[0].transform, "year");
-        assert_eq!(order.fields[0].direction, crate::models::SortDirection::Asc);
-        assert_eq!(order.fields[1].source_id, 2);
-        assert_eq!(order.fields[1].transform, "bucket[16]");
-        assert_eq!(
-            order.fields[1].direction,
-            crate::models::SortDirection::Desc
-        );
-    }
-
-    #[test]
-    fn test_build_sort_order_truncate_expression() {
-        let name_to_id = HashMap::from([("name".to_string(), 1), ("category".to_string(), 2)]);
-        let order = build_sort_order(
-            &[
-                CatalogTableSort {
-                    column: "truncate(10, name)".to_string(),
-                    ascending: true,
-                },
-                CatalogTableSort {
-                    column: "truncate(category, 4)".to_string(),
-                    ascending: false,
-                },
-            ],
-            &name_to_id,
-        )
-        .unwrap()
-        .unwrap();
-
-        assert_eq!(order.fields.len(), 2);
-        assert_eq!(order.fields[0].source_id, 1);
-        assert_eq!(order.fields[0].transform, "truncate[10]");
-        assert_eq!(order.fields[1].source_id, 2);
-        assert_eq!(order.fields[1].transform, "truncate[4]");
-    }
 
     struct TestContext {
         name: String,

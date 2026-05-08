@@ -17,7 +17,7 @@ use sail_sql_parser::ast::statement::{
     MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
     PartitionValue, PartitionValueList, PropertyKey, PropertyKeyList, PropertyKeyValue,
     PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
-    SortColumnList, Statement, UpdateTableAlias, ViewColumn,
+    SortColumnClause, SortColumnList, Statement, UpdateTableAlias, ViewColumn,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -1570,15 +1570,16 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                     let bucket_by = CreateTableBucketBy {
                         columns: names.into_items().collect(),
                         sort_columns: sort.map(
-                            |(
-                                _,
-                                _,
-                                SortColumnList {
-                                    left: _,
-                                    columns,
-                                    right: _,
-                                },
-                            )| columns.into_items().collect(),
+                            |SortColumnClause {
+                                 sorted: _,
+                                 by: _,
+                                 columns:
+                                     SortColumnList {
+                                         left: _,
+                                         columns,
+                                         right: _,
+                                     },
+                             }| columns.into_items().collect(),
                         ),
                         buckets: n,
                     };
@@ -1766,11 +1767,7 @@ fn from_ast_sort_column(sort: SortColumn) -> SqlResult<spec::SortOrder> {
         None => spec::SortDirection::Unspecified,
     };
     Ok(spec::SortOrder {
-        child: Box::new(spec::Expr::UnresolvedAttribute {
-            name: spec::ObjectName::bare(column.value),
-            plan_id: None,
-            is_metadata_column: false,
-        }),
+        child: Box::new(from_ast_expression(column)?),
         direction,
         null_ordering: spec::NullOrdering::Unspecified,
     })
