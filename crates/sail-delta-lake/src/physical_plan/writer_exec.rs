@@ -94,6 +94,7 @@ struct MergeRowMetrics {
     not_matched_by_source_updated: u64,
     matched_deleted: u64,
     not_matched_by_source_deleted: u64,
+    saw_detailed_merge_op: bool,
 }
 
 impl MergeRowMetrics {
@@ -112,22 +113,27 @@ impl MergeRowMetrics {
                 self.deleted = self.deleted.saturating_add(1)
             }
             v if v == i64::from(RowLevelOperationType::Noop.as_i32()) => {
+                self.saw_detailed_merge_op = true;
                 self.noop = self.noop.saturating_add(1)
             }
             v if v == i64::from(RowLevelOperationType::MatchedUpdate.as_i32()) => {
+                self.saw_detailed_merge_op = true;
                 self.updated = self.updated.saturating_add(1);
                 self.matched_updated = self.matched_updated.saturating_add(1);
             }
             v if v == i64::from(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32()) => {
+                self.saw_detailed_merge_op = true;
                 self.updated = self.updated.saturating_add(1);
                 self.not_matched_by_source_updated =
                     self.not_matched_by_source_updated.saturating_add(1);
             }
             v if v == i64::from(RowLevelOperationType::MatchedDelete.as_i32()) => {
+                self.saw_detailed_merge_op = true;
                 self.deleted = self.deleted.saturating_add(1);
                 self.matched_deleted = self.matched_deleted.saturating_add(1);
             }
             v if v == i64::from(RowLevelOperationType::NotMatchedBySourceDelete.as_i32()) => {
+                self.saw_detailed_merge_op = true;
                 self.deleted = self.deleted.saturating_add(1);
                 self.not_matched_by_source_deleted =
                     self.not_matched_by_source_deleted.saturating_add(1);
@@ -142,7 +148,7 @@ impl MergeRowMetrics {
             .saturating_add(self.matched_updated)
             .saturating_add(self.matched_deleted)
             .saturating_add(self.noop);
-        if detailed_source_rows > 0 {
+        if self.saw_detailed_merge_op {
             detailed_source_rows
         } else {
             self.inserted
@@ -844,7 +850,7 @@ impl DeltaWriterExec {
                 operation_metrics.num_target_rows_not_matched_by_source_deleted =
                     Some(merge_row_metrics.not_matched_by_source_deleted);
                 let source_rows = merge_row_metrics.source_rows();
-                if source_rows > 0 {
+                if source_rows > 0 || merge_row_metrics.saw_detailed_merge_op {
                     operation_metrics.num_source_rows = Some(source_rows);
                 }
             }

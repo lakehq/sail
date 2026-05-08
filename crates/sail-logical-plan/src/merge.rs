@@ -849,14 +849,6 @@ pub fn expand_merge(
     let can_fast_append = can_fast_append_insert_only(&options, target_schema, path_column)?;
 
     if can_fast_append {
-        let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
-            .project(append_presence_projection(
-                target_schema,
-                TARGET_PRESENT_COLUMN,
-                Some(path_column),
-            )?)?
-            .build()?;
-
         let join_on = options
             .join_key_pairs
             .iter()
@@ -864,35 +856,59 @@ pub fn expand_merge(
             .collect::<Result<Vec<_>>>()?;
         let residual_filter = combine_conjunction(&options.residual_predicates);
 
-        let join = Join::try_new(
+        let insert_rows = Join::try_new(
             Arc::new(source_plan.clone()),
-            Arc::new(augmented_target),
-            join_on,
-            residual_filter,
-            JoinType::Left,
+            Arc::new(target_plan.clone()),
+            join_on.clone(),
+            residual_filter.clone(),
+            JoinType::LeftAnti,
             JoinConstraint::On,
             NullEquality::NullEqualsNothing,
             false,
         )?;
-        let join = Arc::new(LogicalPlan::Join(join));
+        let insert_rows = LogicalPlan::Join(insert_rows);
+        let insert_operation = when(
+            insert_only_insert_filter(&options),
+            lit(RowLevelOperationType::Insert.as_i32()),
+        )
+        .otherwise(lit(RowLevelOperationType::Noop.as_i32()))?;
 
-        // Filter rows that do not match any NOT MATCHED BY TARGET clause conditions.
-        let insert_filter = insert_only_insert_filter(&options);
-        let filtered = LogicalPlanBuilder::from(join.as_ref().clone())
-            .filter(insert_filter)?
-            .build()?;
-
-        let projection_exprs = build_insert_only_projection(
+        let insert_projection_exprs = build_insert_only_projection(
             &options,
             target_schema,
             source_schema,
             path_column,
             row_index_column,
+            insert_operation,
         )?;
-        let projected = LogicalPlanBuilder::from(filtered)
-            .project(projection_exprs)?
+        let insert_projected = LogicalPlanBuilder::from(insert_rows)
+            .project(insert_projection_exprs)?
             .build()?;
-        let projected = apply_generation_projection(projected, &options.generated_column_exprs)?;
+        let insert_projected =
+            apply_generation_projection(insert_projected, &options.generated_column_exprs)?;
+
+        let noop_rows = Join::try_new(
+            Arc::new(source_plan.clone()),
+            Arc::new(target_plan.clone()),
+            join_on,
+            residual_filter,
+            JoinType::LeftSemi,
+            JoinConstraint::On,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        let noop_rows = LogicalPlan::Join(noop_rows);
+        let noop_projection_exprs =
+            build_insert_only_noop_projection(target_schema, path_column, row_index_column)?;
+        let noop_projected = LogicalPlanBuilder::from(noop_rows)
+            .project(noop_projection_exprs)?
+            .build()?;
+        let noop_projected =
+            apply_generation_projection(noop_projected, &options.generated_column_exprs)?;
+
+        let projected = LogicalPlanBuilder::from(insert_projected)
+            .union(noop_projected)?
+            .build()?;
 
         let touched_plan = LogicalPlanBuilder::empty(false).build()?;
         let command_schema = Arc::new(DFSchema::empty());
@@ -1235,9 +1251,10 @@ fn build_insert_only_projection(
     source_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
+    operation_expr: Expr,
 ) -> Result<Vec<Expr>> {
     // Match existing MERGE behavior: clause order determines first-match semantics.
-    // Matched source rows may flow through as `Noop` rows for metrics, but are not written.
+    // Source rows that should not be written flow through as `Noop` rows for metrics.
     let mut projections = Vec::new();
 
     // Source columns are prefixed with `__sail_src_`, so target field "id" maps
@@ -1296,7 +1313,7 @@ fn build_insert_only_projection(
             .map(|(p, v)| (Box::new(p), Box::new(v)))
             .collect::<Vec<_>>();
 
-        // Rows are pre-filtered by insert_only_insert_filter, but keep an else NULL to be safe.
+        // Rows not selected by any insert clause become `Noop`, so keep NULL as the data value.
         let expr = Expr::Case(Case {
             expr: None,
             when_then_expr,
@@ -1305,18 +1322,28 @@ fn build_insert_only_projection(
         projections.push(expr.alias(name));
     }
 
-    // Insert-only MERGE still emits matched source rows as `Noop` so format
-    // writers can count source participation without writing duplicate data.
-    let op_expr = Expr::Case(Case {
-        expr: None,
-        when_then_expr: vec![(
-            Box::new(col(TARGET_PRESENT_COLUMN).is_null()),
-            Box::new(lit(RowLevelOperationType::Insert.as_i32())),
-        )],
-        else_expr: Some(Box::new(lit(RowLevelOperationType::Noop.as_i32()))),
-    });
-    projections.push(op_expr.alias(OPERATION_COLUMN));
+    projections.push(operation_expr.alias(OPERATION_COLUMN));
 
+    Ok(projections)
+}
+
+fn build_insert_only_noop_projection(
+    target_schema: &DFSchemaRef,
+    path_column: &str,
+    row_index_column: Option<&str>,
+) -> Result<Vec<Expr>> {
+    let mut projections = Vec::new();
+    for field in target_schema.fields().iter() {
+        if field.name() == path_column
+            || row_index_column.is_some_and(|c| field.name() == c)
+            || field.name() == TARGET_ROW_ID_COLUMN
+        {
+            continue;
+        }
+        let null_value = ScalarValue::try_new_null(field.data_type())?;
+        projections.push(lit(null_value).alias(field.name().clone()));
+    }
+    projections.push(lit(RowLevelOperationType::Noop.as_i32()).alias(OPERATION_COLUMN));
     Ok(projections)
 }
 

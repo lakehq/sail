@@ -204,6 +204,48 @@ Feature: Delta Lake operationMetrics in commitInfo
         | operation        |
         | operationMetrics |
 
+    @sail-only
+    Scenario: Insert-only MERGE counts duplicate target matches once per source row
+      Given statement
+        """
+        INSERT INTO delta_op_metrics_merge VALUES (2,'duplicate','matched_update')
+        """
+      Given statement
+        """
+        MERGE INTO delta_op_metrics_merge AS t
+        USING src_op_metrics_merge AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      Then delta log latest commit info matches snapshot for paths
+        | path             |
+        | operation        |
+        | operationMetrics |
+
+    @sail-only
+    Scenario: Target-only MERGE actions report zero source rows
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_op_metrics_empty AS
+        SELECT * FROM VALUES
+          (CAST(NULL AS INT), CAST(NULL AS STRING), CAST(NULL AS STRING))
+        AS src(id, value, flag)
+        WHERE id IS NOT NULL
+        """
+      Given statement
+        """
+        MERGE INTO delta_op_metrics_merge AS t
+        USING src_op_metrics_empty AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.flag = 'source_update' THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        WHEN NOT MATCHED BY SOURCE AND t.flag = 'source_delete' THEN DELETE
+        """
+      Then delta log latest commit info matches snapshot for paths
+        | path             |
+        | operation        |
+        | operationMetrics |
+
   Rule: MERGE operationMetrics (Merge-on-Read with deletion vectors)
 
     Background:

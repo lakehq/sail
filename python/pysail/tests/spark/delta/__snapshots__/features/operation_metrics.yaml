@@ -80,7 +80,7 @@ data:
     numOutputRows: 4
     numRemovedBytes: 1069
     numRemovedFiles: 1
-    numSourceRows: 4
+    numSourceRows: 3
     numTargetBytesAdded: 4035
     numTargetBytesRemoved: 1069
     numTargetChangeFilesAdded: 0
@@ -131,6 +131,35 @@ data:
     numTouchedRows: 3
     rewriteTimeMs: <time_ms>
     scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_insertonly_merge_counts_duplicate_target_matches_once_per_source_row"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 985
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 985
+    numOutputFiles: 1
+    numOutputRows: 1
+    numSourceRows: 3
+    numTargetBytesAdded: 985
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 1
+    numTargetRowsCopied: 0
+    numTargetRowsDeleted: 0
+    numTargetRowsInserted: 1
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 0
+    numTargetRowsNotMatchedBySourceDeleted: 0
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 0
+    rewriteTimeMs: <time_ms>
     writeTimeMs: <time_ms>
 ---
 name: "test_insertonly_merge_fastappends_without_removing_files"
@@ -231,5 +260,40 @@ data:
     numRemovedBytes: 766
     numRemovedFiles: 1
     numTouchedRows: 3
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_targetonly_merge_actions_report_zero_source_rows"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1084
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1084
+    numOutputFiles: 1
+    numOutputRows: 4
+    numRemovedBytes: 1069
+    numRemovedFiles: 1
+    numSourceRows: 0
+    numTargetBytesAdded: 1084
+    numTargetBytesRemoved: 1069
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 1
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 3
+    numTargetRowsDeleted: 1
+    numTargetRowsInserted: 0
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 0
+    numTargetRowsNotMatchedBySourceDeleted: 1
+    numTargetRowsNotMatchedBySourceUpdated: 1
+    numTargetRowsUpdated: 1
+    numTouchedRows: 5
+    rewriteTimeMs: <time_ms>
     scanTimeMs: <time_ms>
     writeTimeMs: <time_ms>
