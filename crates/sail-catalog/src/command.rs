@@ -620,7 +620,7 @@ impl CatalogCommand {
 }
 
 fn storage_table_properties_are_authoritative(format: &str) -> bool {
-    matches!(format, "delta" | "iceberg")
+    format.eq_ignore_ascii_case("delta") || format.eq_ignore_ascii_case("iceberg")
 }
 
 #[derive(Serialize, Deserialize)]
