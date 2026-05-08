@@ -160,9 +160,7 @@ Feature: substring() and substr() extract substrings
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: null position argument (typed INT) returns null in 3-arg form
-      # Spark propagates NULL pos as NULL result. Sail bug: returns 'he' instead.
       When query
         """
         SELECT substring('hello', CAST(NULL AS INT), 2) AS result
@@ -171,9 +169,7 @@ Feature: substring() and substr() extract substrings
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: null position argument (untyped NULL) returns null in 3-arg form
-      # Spark propagates NULL pos as NULL result. Sail bug: returns 'he' instead.
       When query
         """
         SELECT substring('hello', NULL, 2) AS result
@@ -191,9 +187,7 @@ Feature: substring() and substr() extract substrings
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: null position argument in 2-arg form returns null
-      # Spark propagates NULL pos as NULL result. Sail bug: returns 'hello' instead.
       When query
         """
         SELECT substring('hello', CAST(NULL AS INT)) AS result
@@ -240,9 +234,7 @@ Feature: substring() and substr() extract substrings
         | result |
         | el     |
 
-    @sail-bug
     Scenario: position as FLOAT is accepted and truncated to int
-      # Spark casts FLOAT pos to INT (truncates). Sail bug: errors instead.
       When query
         """
         SELECT substring('hello', CAST(2.0 AS FLOAT), 2) AS result
@@ -251,9 +243,7 @@ Feature: substring() and substr() extract substrings
         | result |
         | el     |
 
-    @sail-bug
     Scenario: position as DOUBLE is accepted and truncated to int
-      # Spark casts DOUBLE pos to INT (truncates). Sail bug: errors instead.
       When query
         """
         SELECT substring('hello', 2.0, 2) AS result
@@ -262,9 +252,7 @@ Feature: substring() and substr() extract substrings
         | result |
         | el     |
 
-    @sail-bug
     Scenario: position as STRING is accepted and cast to int
-      # Spark casts STRING pos to INT. Sail bug: coercion error instead.
       When query
         """
         SELECT substring('hello', '2', 2) AS result
@@ -285,9 +273,7 @@ Feature: substring() and substr() extract substrings
 
   Rule: Length argument edge cases
 
-    @sail-bug
     Scenario: negative length returns empty string
-      # Spark treats negative length as empty result. Sail bug: raises an error.
       When query
         """
         SELECT substring('hello', 1, -1) AS result
@@ -337,10 +323,7 @@ Feature: substring() and substr() extract substrings
 
   Rule: BINARY input is sliced by byte offset, result type is BINARY
 
-    @sail-bug
     Scenario: binary substring with pos and len returns binary slice
-      # Spark returns BINARY type displayed as space-separated hex bytes.
-      # Sail bug: returns STRING type ('Hel') instead of BINARY ([48 65 6C]).
       When query
         """
         SELECT substring(X'48656C6C6F', 1, 3) AS result
@@ -349,10 +332,7 @@ Feature: substring() and substr() extract substrings
         | result     |
         | [48 65 6C] |
 
-    @sail-bug
     Scenario: binary substring without len returns binary suffix
-      # Spark returns BINARY type displayed as space-separated hex bytes.
-      # Sail bug: returns STRING type ('ello') instead of BINARY ([65 6C 6C 6F]).
       When query
         """
         SELECT substring(X'48656C6C6F', 2) AS result
@@ -361,10 +341,7 @@ Feature: substring() and substr() extract substrings
         | result          |
         | [65 6C 6C 6F]   |
 
-    @sail-bug
     Scenario: binary substring with negative pos returns binary suffix from end
-      # Spark returns BINARY type displayed as space-separated hex bytes.
-      # Sail bug: returns STRING type ('lo') instead of BINARY ([6C 6F]).
       When query
         """
         SELECT substring(X'48656C6C6F', -2, 2) AS result
@@ -373,10 +350,7 @@ Feature: substring() and substr() extract substrings
         | result  |
         | [6C 6F] |
 
-    @sail-bug
     Scenario: binary substring with pos=0 is treated as pos=1
-      # Spark returns BINARY type displayed as space-separated hex bytes.
-      # Sail bug: returns STRING type ('Hel') instead of BINARY ([48 65 6C]).
       When query
         """
         SELECT substring(X'48656C6C6F', 0, 3) AS result

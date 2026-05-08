@@ -4,7 +4,7 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
@@ -23,6 +23,7 @@ use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractAll;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
+use sail_function::scalar::string::spark_substr_binary::SparkSubstrBinary;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
@@ -68,27 +69,19 @@ fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn adjust_substr_position(
-    string: expr::Expr,
+    string_len: expr::Expr,
     position: expr::Expr,
     length_opt: Option<expr::Expr>,
 ) -> PlanResult<(expr::Expr, Option<expr::Expr>)> {
     match &position {
-        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) if *n > 0 => {
-            Ok((position, length_opt))
-        }
-        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) if *n > 0 => {
-            Ok((position, length_opt))
-        }
+        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) if *n > 0 => Ok((position, length_opt)),
+        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) if *n > 0 => Ok((position, length_opt)),
         expr::Expr::Literal(ScalarValue::Int64(Some(0)), _)
         | expr::Expr::Literal(ScalarValue::Int32(Some(0)), _) => Ok((lit(1i64), length_opt)),
         _ => {
             let effective_start = when(position.clone().gt(lit(0i64)), position.clone())
                 .when(position.clone().eq(lit(0i64)), lit(1i64))
-                .otherwise(
-                    cast(expr_fn::char_length(string), DataType::Int64)
-                        + position.clone()
-                        + lit(1i64),
-                )?;
+                .otherwise(cast(string_len, DataType::Int64) + position.clone() + lit(1i64))?;
             let clamped = expr_fn::greatest(vec![effective_start.clone(), lit(1i64)]);
             let length_opt = match length_opt {
                 Some(length) => Some(
@@ -117,19 +110,61 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (string, position) = arguments
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
+
+    let string_type = string.get_type(function_context.schema)?;
+    if matches!(string_type, DataType::Binary | DataType::LargeBinary) {
+        // Cast position to Int64: coerces FLOAT/DOUBLE/STRING and all integer subtypes.
+        let pos_i64 = cast(position, DataType::Int64);
+        // SparkSubstrBinary handles all Spark position semantics internally (1-based, pos=0,
+        // negative pos from end, overshoot adjustment, negative length, NULL propagation).
+        let binary = cast(string, DataType::Binary);
+        let length_opt = length_opt.map(|l| cast(l, DataType::Int64));
+        let udf = ScalarUDF::from(SparkSubstrBinary::new());
+        let args = match length_opt {
+            Some(length) => vec![binary, pos_i64, length],
+            None => vec![binary, pos_i64],
+        };
+        return Ok(udf.call(args));
+    }
+
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
+
+    // Save original position before casting, for the NULL-propagation guard below.
+    let original_position = position.clone();
+
+    // Cast position to Int64: coerces FLOAT/DOUBLE/STRING (truncating toward zero) and
+    // narrows all integer subtypes. BIGINT overflow (value > INT32_MAX) is a separate
+    // known limitation; DataFusion does not raise CAST_OVERFLOW on the Int64 cast path.
+    let position = cast(position, DataType::Int64);
+
+    // Clamp negative length to 0 — Spark returns empty string, DataFusion raises an error.
+    // Cast to Int64 first to ensure consistent types in the CASE WHEN expression.
+    let length_opt = length_opt.map(|l| {
+        let l_i64 = cast(l, DataType::Int64);
+        when(l_i64.clone().lt(lit(0i64)), lit(0i64))
+            .otherwise(l_i64)
+            .unwrap_or_else(|_| lit(0i64))
+    });
+
     // Spark uses 1-based indexing, treating pos=0 as pos=1 and negative pos as
     // counting from the end. For the 3-arg form, when pos overshoots the start
     // (effective_start < 1), the length must be reduced by the overshoot so the
     // endpoint stays correct — otherwise we'd return too many characters.
-    let (position, length_opt) = adjust_substr_position(string.clone(), position, length_opt)?;
+    let string_len = expr_fn::char_length(string.clone());
+    let (position, length_opt) = adjust_substr_position(string_len, position, length_opt)?;
     let substr_res = match length_opt {
         Some(length) => expr_fn::substring(string, position, length),
         None => expr_fn::substr(string, position),
     };
+
+    // NULL position must propagate to NULL result. greatest(NULL, 1) returns 1 in DataFusion
+    // (matches Spark's greatest semantics), so we must guard explicitly.
+    let result =
+        when(original_position.is_null(), lit(ScalarValue::Utf8(None))).otherwise(substr_res)?;
+
     // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
     //  when the return type is Utf8View.
-    Ok(cast(substr_res, DataType::Utf8))
+    Ok(cast(result, DataType::Utf8))
 }
 
 /// Spark `left(string, n)`: returns the leftmost n characters.
