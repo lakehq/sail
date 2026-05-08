@@ -532,6 +532,12 @@ fn extract_sort_int_arg(args: &[spec::Expr], index: usize, description: &str) ->
             spec::Literal::Int64 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
                 PlanError::invalid(format!("{description} must be a positive integer"))
             }),
+            spec::Literal::UInt8 { value: Some(v) } => Ok(u32::from(*v)),
+            spec::Literal::UInt16 { value: Some(v) } => Ok(u32::from(*v)),
+            spec::Literal::UInt32 { value: Some(v) } => Ok(*v),
+            spec::Literal::UInt64 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
+                PlanError::invalid(format!("{description} must be a positive integer"))
+            }),
             _ => Err(PlanError::invalid(format!(
                 "{description} must be an integer literal"
             ))),
