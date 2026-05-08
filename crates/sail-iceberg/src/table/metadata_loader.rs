@@ -336,6 +336,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used)]
     fn chooses_metadata_file_extension_from_properties() {
         assert_eq!(
             metadata_file_extension_from_properties(&HashMap::new()).unwrap(),
