@@ -581,6 +581,7 @@ async fn test_create_table() {
             &ns,
             "t1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: Some("peow".to_string()),
                 constraints: vec![],
@@ -598,6 +599,7 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -721,6 +723,7 @@ async fn test_create_table() {
             &ns,
             "t1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: Some("peow".to_string()),
                 constraints: vec![],
@@ -742,6 +745,7 @@ async fn test_create_table() {
             &ns,
             "t1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: Some("peow".to_string()),
                 constraints: vec![],
@@ -763,6 +767,7 @@ async fn test_create_table() {
             &ns,
             "t2",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: Some("test table".to_string()),
                 constraints: vec![CatalogTableConstraint::PrimaryKey {
@@ -799,6 +804,7 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -951,6 +957,7 @@ async fn test_get_table() {
             &ns,
             "t2",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: Some("test table".to_string()),
                 constraints: vec![CatalogTableConstraint::PrimaryKey {
@@ -988,6 +995,7 @@ async fn test_get_table() {
 
     let table = rest_catalog.get_table(&ns, "t2").await.unwrap();
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -1165,6 +1173,7 @@ async fn test_list_tables() {
             &ns,
             "table1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: None,
                 constraints: vec![],
@@ -1186,6 +1195,7 @@ async fn test_list_tables() {
             &ns,
             "table2",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: None,
                 constraints: vec![],
@@ -1250,6 +1260,7 @@ async fn test_drop_table() {
             &namespace,
             "t1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: None,
                 constraints: vec![],
@@ -1313,6 +1324,7 @@ async fn test_drop_table() {
             &namespace,
             "t2",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: None,
                 constraints: vec![],
@@ -1840,6 +1852,7 @@ async fn create_partitioned_table(
             namespace,
             table_name,
             CreateTableOptions {
+                external: false,
                 columns,
                 comment: None,
                 constraints: vec![],

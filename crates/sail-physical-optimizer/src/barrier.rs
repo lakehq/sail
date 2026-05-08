@@ -47,32 +47,39 @@ impl PhysicalOptimizerRule for EnforceBarrierPartitioning {
             let plan = barrier.plan();
             let target_partitions = plan.output_partitioning().partition_count();
 
+            let align = |child: &Arc<dyn ExecutionPlan>| {
+                let child_partitions = child.output_partitioning().partition_count();
+                // Skip wrapping if both the child and the actual plan have only one
+                // partition, since a single child partition is sufficient.
+                if child_partitions == 1 && target_partitions == 1 {
+                    return Ok(child.clone());
+                }
+                if target_partitions == 1 {
+                    // Coalesce to a single partition.
+                    Ok(Arc::new(CoalescePartitionsExec::new(child.clone()))
+                        as Arc<dyn ExecutionPlan>)
+                } else {
+                    // Fan out to the target partition count using round-robin.
+                    Ok(Arc::new(RepartitionExec::try_new(
+                        child.clone(),
+                        Partitioning::RoundRobinBatch(target_partitions),
+                    )?) as Arc<dyn ExecutionPlan>)
+                }
+            };
+
             let preconditions: Vec<Arc<dyn ExecutionPlan>> = barrier
                 .preconditions()
                 .iter()
-                .map(|precondition| {
-                    let precondition_partitions =
-                        precondition.output_partitioning().partition_count();
-                    // Skip wrapping if both the precondition and the actual plan have only one
-                    // partition, since a single precondition partition is sufficient.
-                    if precondition_partitions == 1 && target_partitions == 1 {
-                        return Ok(precondition.clone());
-                    }
-                    if target_partitions == 1 {
-                        // Coalesce to a single partition.
-                        Ok(Arc::new(CoalescePartitionsExec::new(precondition.clone()))
-                            as Arc<dyn ExecutionPlan>)
-                    } else {
-                        // Fan out to the target partition count using round-robin.
-                        Ok(Arc::new(RepartitionExec::try_new(
-                            precondition.clone(),
-                            Partitioning::RoundRobinBatch(target_partitions),
-                        )?) as Arc<dyn ExecutionPlan>)
-                    }
-                })
+                .map(align)
+                .collect::<Result<_>>()?;
+            let postconditions: Vec<Arc<dyn ExecutionPlan>> = barrier
+                .postconditions()
+                .iter()
+                .map(align)
                 .collect::<Result<_>>()?;
 
-            let barrier = BarrierExec::new(preconditions, plan.clone());
+            let barrier =
+                BarrierExec::with_postconditions(preconditions, plan.clone(), postconditions);
             Ok(Transformed::yes(Arc::new(barrier) as Arc<dyn ExecutionPlan>))
         })?;
         Ok(result.data)

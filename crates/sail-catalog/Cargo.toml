@@ -12,6 +12,7 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+object_store = { workspace = true }
 serde = { workspace = true }
 serde_arrow = { workspace = true }
 regex = { workspace = true }
@@ -19,3 +20,4 @@ lazy_static = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+url = { workspace = true }

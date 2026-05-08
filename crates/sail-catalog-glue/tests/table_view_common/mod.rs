@@ -36,6 +36,7 @@ pub fn col(name: &str, data_type: DataType) -> CreateTableColumnOptions {
 /// Helper to create table options with sensible defaults (parquet format, no partitioning).
 pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTableOptions {
     CreateTableOptions {
+        external: false,
         columns,
         comment: None,
         constraints: vec![],

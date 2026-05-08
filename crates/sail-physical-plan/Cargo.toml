@@ -14,6 +14,7 @@ sail-logical-plan = { path = "../sail-logical-plan" }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+async-stream = { workspace = true }
 futures = { workspace = true }
 tokio-stream = { workspace = true }
 lazy_static = { workspace = true }

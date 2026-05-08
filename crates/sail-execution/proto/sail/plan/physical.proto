@@ -783,4 +783,7 @@ message BarrierExecNode {
   repeated bytes preconditions = 1;
   // The main plan to execute after all preconditions are exhausted.
   bytes plan = 2;
+  // Postcondition plans to be exhausted after the main plan completes.
+  // Each element is a DataFusion PhysicalPlanNode encoded as bytes.
+  repeated bytes postconditions = 3;
 }

@@ -872,6 +872,7 @@ pub struct HtmlString {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDefinition {
+    pub external: bool,
     pub columns: Vec<TableColumnDefinition>,
     pub comment: Option<String>,
     pub constraints: Vec<TableConstraint>,
@@ -1301,6 +1302,7 @@ pub enum AlterTableOperation {
     Unknown,
     SetTableProperties { properties: Vec<(String, String)> },
     UnsetTableProperties { keys: Vec<String>, if_exists: bool },
+    SetLocation { location: String },
     // TODO: add all the alter table operations
 }
 

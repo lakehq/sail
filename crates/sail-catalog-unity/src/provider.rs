@@ -307,7 +307,9 @@ impl UnityCatalogProvider {
             catalog: Some(self.name.clone()),
             database,
             name,
+            statistics: None,
             kind: TableKind::Table {
+                table_type: None,
                 columns,
                 comment,
                 constraints: vec![],
@@ -506,6 +508,7 @@ impl CatalogProvider for UnityCatalogProvider {
     ) -> CatalogResult<TableStatus> {
         // Only external table creation is supported according to the Unity Catalog OpenAPI spec.
         let CreateTableOptions {
+            external: _,
             columns,
             comment,
             constraints,

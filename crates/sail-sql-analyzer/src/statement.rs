@@ -146,7 +146,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             create: _,
             or_replace,
             temporary: _, // TODO: handle temporary tables
-            external: _,  // TODO: handle external tables
+            external,
             table: _,
             if_not_exists,
             name,
@@ -162,6 +162,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let definition = TableDefinition {
                 or_replace: or_replace.is_some(),
                 if_not_exists: if_not_exists.is_some(),
+                external: external.is_some(),
                 using: using.map(|(_, x)| x),
                 columns,
                 clauses: clauses.try_into()?,
@@ -192,6 +193,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let definition = TableDefinition {
                 or_replace: true,
                 if_not_exists: false,
+                external: false,
                 using: using.map(|(_, x)| x),
                 columns,
                 clauses: clauses.try_into()?,
@@ -1145,6 +1147,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
 struct TableDefinition {
     or_replace: bool,
     if_not_exists: bool,
+    external: bool,
     using: Option<Ident>,
     columns: Option<ColumnDefinitionList>,
     clauses: CreateTableClauses,
@@ -1157,6 +1160,7 @@ fn from_ast_table_definition(
     let TableDefinition {
         or_replace,
         if_not_exists,
+        external,
         using,
         columns,
         clauses:
@@ -1248,7 +1252,9 @@ fn from_ast_table_definition(
     let options = options.map(from_ast_property_list).transpose()?;
     let properties = properties.map(from_ast_property_list).transpose()?;
     let columns = from_ast_table_columns(columns)?;
+    let external = external || location.is_some();
     let definition = spec::TableDefinition {
+        external,
         columns,
         comment: comment.map(from_ast_string).transpose()?,
         constraints: vec![],
@@ -1920,6 +1926,11 @@ fn from_ast_alter_table_operation(
                 if_exists: if_exists.is_some(),
             })
         }
+        AlterTableOperation::SetLocation { value, .. } => {
+            Ok(spec::AlterTableOperation::SetLocation {
+                location: from_ast_string(value)?,
+            })
+        }
         AlterTableOperation::RenameTable { .. }
         | AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::DropColumns { .. }
@@ -1928,7 +1939,6 @@ fn from_ast_alter_table_operation(
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
-        | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
         AlterTableOperation::AddColumns { items, .. }
         | AlterTableOperation::ReplaceColumns { items, .. } => {

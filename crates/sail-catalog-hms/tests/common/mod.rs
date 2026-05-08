@@ -112,6 +112,7 @@ pub fn simple_table_options_with_format(
     format: &str,
 ) -> CreateTableOptions {
     CreateTableOptions {
+        external: true,
         columns,
         comment: None,
         constraints: vec![],

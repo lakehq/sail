@@ -24,6 +24,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let spec::TableDefinition {
+            external,
             columns,
             comment,
             constraints,
@@ -46,13 +47,12 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
         }
+        let location = match location {
+            Some(location) => Some(location),
+            None => Some(self.resolve_default_table_location(&table).await?),
+        };
         let mut columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
-        let location = if let Some(location) = location {
-            location
-        } else {
-            self.resolve_default_table_location(&table).await?
-        };
         let format = self.resolve_catalog_table_format(file_format)?;
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
@@ -66,10 +66,11 @@ impl PlanResolver<'_> {
         let command = CatalogCommand::CreateTable {
             table: table.into(),
             options: CreateTableOptions {
+                external,
                 columns,
                 comment,
                 constraints,
-                location: Some(location),
+                location,
                 format,
                 partition_by,
                 sort_by,
@@ -91,6 +92,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         use super::super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
         let spec::TableDefinition {
+            external: _,
             columns,
             comment,
             constraints,
@@ -192,7 +194,7 @@ impl PlanResolver<'_> {
         self.resolve_write_with_builder(input, builder, state).await
     }
 
-    pub(in super::super) async fn resolve_default_table_location(
+    pub(in crate::resolver) async fn resolve_default_table_location(
         &self,
         table: &spec::ObjectName,
     ) -> PlanResult<String> {
@@ -423,6 +425,9 @@ impl PlanResolver<'_> {
             }
             spec::AlterTableOperation::UnsetTableProperties { keys, if_exists } => {
                 AlterTableOptions::UnsetTableProperties { keys, if_exists }
+            }
+            spec::AlterTableOperation::SetLocation { location } => {
+                AlterTableOptions::SetLocation { location }
             }
             spec::AlterTableOperation::Unknown => {
                 return Err(PlanError::todo("unsupported ALTER TABLE operation"));

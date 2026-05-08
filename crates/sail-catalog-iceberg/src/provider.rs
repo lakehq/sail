@@ -391,7 +391,9 @@ impl IcebergRestCatalogProvider {
             catalog: Some(self.name.clone()),
             database: database.clone().into(),
             name: table_name.to_string(),
+            statistics: None,
             kind: TableKind::Table {
+                table_type: None,
                 columns,
                 comment,
                 constraints,
@@ -493,6 +495,7 @@ impl IcebergRestCatalogProvider {
             catalog: Some(self.name.clone()),
             database: database.clone().into(),
             name: view_name.to_string(),
+            statistics: None,
             kind: TableKind::View {
                 definition,
                 columns,
@@ -741,6 +744,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
         let CreateTableOptions {
+            external: _,
             columns,
             comment,
             constraints,
@@ -906,7 +910,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 catalog: Some(self.name.clone()),
                 database: identifier.namespace,
                 name: identifier.name,
+                statistics: None,
                 kind: TableKind::Table {
+                    table_type: None,
                     columns: Vec::new(),
                     comment: None,
                     constraints: Vec::new(),
@@ -1129,6 +1135,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 catalog: Some(catalog.clone()),
                 database: identifier.namespace,
                 name: identifier.name,
+                statistics: None,
                 kind: TableKind::View {
                     definition: String::new(),
                     columns: Vec::new(),

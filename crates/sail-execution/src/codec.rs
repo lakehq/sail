@@ -1255,13 +1255,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Barrier(gen::BarrierExecNode {
                 preconditions,
                 plan,
+                postconditions,
             }) => {
                 let preconditions = preconditions
                     .into_iter()
                     .map(|i| self.try_decode_plan(&i, ctx))
                     .collect::<Result<_>>()?;
                 let plan = self.try_decode_plan(&plan, ctx)?;
-                Ok(Arc::new(BarrierExec::new(preconditions, plan)))
+                let postconditions = postconditions
+                    .into_iter()
+                    .map(|i| self.try_decode_plan(&i, ctx))
+                    .collect::<Result<_>>()?;
+                Ok(Arc::new(BarrierExec::with_postconditions(
+                    preconditions,
+                    plan,
+                    postconditions,
+                )))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
@@ -1962,9 +1971,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map(|child| self.try_encode_plan(child.clone()))
                 .collect::<Result<_>>()?;
             let plan = self.try_encode_plan(barrier_exec.plan().clone())?;
+            let postconditions = barrier_exec
+                .postconditions()
+                .iter()
+                .map(|child| self.try_encode_plan(child.clone()))
+                .collect::<Result<_>>()?;
             NodeKind::Barrier(gen::BarrierExecNode {
                 preconditions,
                 plan,
+                postconditions,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");

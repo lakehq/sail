@@ -118,6 +118,7 @@ pub(crate) async fn create_iceberg_table(
 /// Validates CreateTableOptions for Iceberg tables.
 fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<ValidatedIcebergOptions> {
     let CreateTableOptions {
+        external: _,
         columns,
         comment,
         constraints,

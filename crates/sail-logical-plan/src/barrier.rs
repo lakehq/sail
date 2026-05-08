@@ -13,6 +13,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
 pub struct BarrierNode {
     preconditions: Vec<Arc<LogicalPlan>>,
+    postconditions: Vec<Arc<LogicalPlan>>,
     plan: Arc<LogicalPlan>,
 }
 
@@ -20,12 +21,29 @@ impl BarrierNode {
     pub fn new(preconditions: Vec<Arc<LogicalPlan>>, plan: Arc<LogicalPlan>) -> Self {
         Self {
             preconditions,
+            postconditions: vec![],
+            plan,
+        }
+    }
+
+    pub fn with_postconditions(
+        preconditions: Vec<Arc<LogicalPlan>>,
+        plan: Arc<LogicalPlan>,
+        postconditions: Vec<Arc<LogicalPlan>>,
+    ) -> Self {
+        Self {
+            preconditions,
+            postconditions,
             plan,
         }
     }
 
     pub fn preconditions(&self) -> &[Arc<LogicalPlan>] {
         &self.preconditions
+    }
+
+    pub fn postconditions(&self) -> &[Arc<LogicalPlan>] {
+        &self.postconditions
     }
 
     pub fn plan(&self) -> &LogicalPlan {
@@ -43,6 +61,7 @@ impl UserDefinedLogicalNodeCore for BarrierNode {
             .iter()
             .map(|x| x.as_ref())
             .chain(std::iter::once(self.plan.as_ref()))
+            .chain(self.postconditions.iter().map(|x| x.as_ref()))
             .collect()
     }
 
@@ -65,11 +84,22 @@ impl UserDefinedLogicalNodeCore for BarrierNode {
         mut inputs: Vec<LogicalPlan>,
     ) -> datafusion_common::Result<Self> {
         exprs.zero()?;
+        let postcondition_count = self.postconditions.len();
+        let mut postconditions = Vec::with_capacity(postcondition_count);
+        for _ in 0..postcondition_count {
+            let Some(postcondition) = inputs.pop() else {
+                return plan_err!("{} requires a plan", self.name());
+            };
+            postconditions.push(Arc::new(postcondition));
+        }
+        postconditions.reverse();
+
         let Some(plan) = inputs.pop() else {
             return plan_err!("{} requires at least one input", self.name());
         };
         Ok(Self {
             preconditions: inputs.into_iter().map(Arc::new).collect(),
+            postconditions,
             plan: Arc::new(plan),
         })
     }

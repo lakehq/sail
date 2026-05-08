@@ -6969,12 +6969,14 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "lazy_static",
+ "object_store",
  "regex",
  "sail-common-datafusion",
  "serde",
  "serde_arrow",
  "thiserror 2.0.18",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -7008,9 +7010,11 @@ dependencies = [
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
+ "serde_json",
  "tempfile",
  "testcontainers",
  "tokio",
+ "url",
  "volo",
  "volo-thrift",
 ]
@@ -7475,6 +7479,7 @@ dependencies = [
 name = "sail-physical-plan"
 version = "0.6.2"
 dependencies = [
+ "async-stream",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",

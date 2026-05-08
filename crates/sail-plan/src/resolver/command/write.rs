@@ -228,6 +228,7 @@ impl PlanResolver<'_> {
                 .collect(),
         };
         let mut preconditions = vec![];
+        let mut postconditions = vec![];
         match target {
             WriteTarget::DataSource => {
                 if !table_properties.is_empty() {
@@ -306,9 +307,10 @@ impl PlanResolver<'_> {
                     file_write_options.sort_by =
                         info.sort_by.iter().cloned().map(|x| x.into()).collect();
                     file_write_options.bucket_by = info.bucket_by.clone().map(|x| x.into());
-                    let location = info.location.clone().ok_or_else(|| {
-                        PlanError::invalid(format!("table does not have a location: {table:?}"))
-                    })?;
+                    let location = match info.location.clone() {
+                        Some(location) => location,
+                        None => self.resolve_default_table_location(&table).await?,
+                    };
                     file_write_options.options.push(OptionLayer::OptionList {
                         items: vec![("path".to_string(), location)],
                     });
@@ -406,8 +408,9 @@ impl PlanResolver<'_> {
                     let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                     let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
                     let command = CatalogCommand::CreateTable {
-                        table: table.into(),
+                        table: table.clone().into(),
                         options: CreateTableOptions {
+                            external: true,
                             columns,
                             comment: None,
                             constraints: vec![],
@@ -427,13 +430,25 @@ impl PlanResolver<'_> {
                 file_write_options.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
                     .await?;
+                if !file_write_options.partition_by.is_empty()
+                    && !file_write_options.format.eq_ignore_ascii_case("iceberg")
+                {
+                    let command = CatalogCommand::RecoverPartitions {
+                        table: table.into(),
+                    };
+                    postconditions.push(Arc::new(self.resolve_catalog_command(command)?));
+                }
             }
         };
         let plan = LogicalPlan::Extension(Extension {
             node: Arc::new(FileWriteNode::new(Arc::new(input), file_write_options)),
         });
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(BarrierNode::new(preconditions, Arc::new(plan))),
+            node: Arc::new(BarrierNode::with_postconditions(
+                preconditions,
+                Arc::new(plan),
+                postconditions,
+            )),
         }))
     }
 
@@ -501,6 +516,7 @@ impl PlanResolver<'_> {
         };
         match status.kind {
             TableKind::Table {
+                table_type: _,
                 mut columns,
                 comment: _,
                 constraints: _,

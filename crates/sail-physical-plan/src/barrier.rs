@@ -5,7 +5,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_common::{exec_err, Result};
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 
 /// A physical plan node that enforces a barrier between preconditions and the actual plan.
 ///
@@ -31,15 +31,25 @@ use futures::{StreamExt, TryStreamExt};
 #[derive(Debug, Clone)]
 pub struct BarrierExec {
     preconditions: Vec<Arc<dyn ExecutionPlan>>,
+    postconditions: Vec<Arc<dyn ExecutionPlan>>,
     plan: Arc<dyn ExecutionPlan>,
     properties: Arc<PlanProperties>,
 }
 
 impl BarrierExec {
     pub fn new(preconditions: Vec<Arc<dyn ExecutionPlan>>, plan: Arc<dyn ExecutionPlan>) -> Self {
+        Self::with_postconditions(preconditions, plan, vec![])
+    }
+
+    pub fn with_postconditions(
+        preconditions: Vec<Arc<dyn ExecutionPlan>>,
+        plan: Arc<dyn ExecutionPlan>,
+        postconditions: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
         let properties = Arc::new(plan.properties().as_ref().clone());
         Self {
             preconditions,
+            postconditions,
             plan,
             properties,
         }
@@ -47,6 +57,10 @@ impl BarrierExec {
 
     pub fn preconditions(&self) -> &[Arc<dyn ExecutionPlan>] {
         &self.preconditions
+    }
+
+    pub fn postconditions(&self) -> &[Arc<dyn ExecutionPlan>] {
+        &self.postconditions
     }
 
     pub fn plan(&self) -> &Arc<dyn ExecutionPlan> {
@@ -83,6 +97,7 @@ impl ExecutionPlan for BarrierExec {
         self.preconditions
             .iter()
             .chain(std::iter::once(&self.plan))
+            .chain(self.postconditions.iter())
             .collect()
     }
 
@@ -90,13 +105,30 @@ impl ExecutionPlan for BarrierExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let postcondition_count = self.postconditions.len();
+        let mut postconditions = Vec::with_capacity(postcondition_count);
+        for _ in 0..postcondition_count {
+            let child = children.pop().ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(format!(
+                    "{} requires a plan",
+                    self.name()
+                ))
+            })?;
+            postconditions.push(child);
+        }
+        postconditions.reverse();
+
         let plan = children.pop().ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(format!(
                 "{} requires at least 1 child (the actual plan)",
                 self.name()
             ))
         })?;
-        Ok(Arc::new(Self::new(children, plan)))
+        Ok(Arc::new(Self::with_postconditions(
+            children,
+            plan,
+            postconditions,
+        )))
     }
 
     fn execute(
@@ -114,25 +146,35 @@ impl ExecutionPlan for BarrierExec {
             );
         }
         // Collect precondition streams to exhaust before running the actual plan.
-        let streams: Vec<SendableRecordBatchStream> = self
+        let precondition_streams: Vec<SendableRecordBatchStream> = self
             .preconditions
             .iter()
             .map(|precondition| precondition.execute(partition, context.clone()))
             .collect::<Result<_>>()?;
+        let postcondition_streams: Vec<SendableRecordBatchStream> = self
+            .postconditions
+            .iter()
+            .map(|postcondition| postcondition.execute(partition, context.clone()))
+            .collect::<Result<_>>()?;
         let plan = self.plan.clone();
         let schema = self.schema();
-        // Exhaust each precondition stream sequentially, then run the actual plan.
-        // We use a once-stream that resolves to the actual plan stream, then flatten.
-        let outer = futures::stream::once(async move {
-            for mut stream in streams {
+        let outer = async_stream::try_stream! {
+            for mut stream in precondition_streams {
                 while let Some(batch) = stream.next().await {
                     // Discard the batch; we only care about side effects.
                     batch?;
                 }
             }
-            plan.execute(partition, context)
-        })
-        .try_flatten();
+            let mut stream = plan.execute(partition, context)?;
+            while let Some(batch) = stream.next().await {
+                yield batch?;
+            }
+            for mut stream in postcondition_streams {
+                while let Some(batch) = stream.next().await {
+                    batch?;
+                }
+            }
+        };
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, outer)))
     }
 }

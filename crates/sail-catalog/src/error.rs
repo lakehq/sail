@@ -12,6 +12,7 @@ pub enum CatalogObject {
     Schema,
     Namespace,
     Table,
+    Partition,
     View,
     Function,
     TemporaryView,
@@ -26,6 +27,7 @@ impl fmt::Display for CatalogObject {
             CatalogObject::Schema => "Schema",
             CatalogObject::Namespace => "Namespace",
             CatalogObject::Table => "Table",
+            CatalogObject::Partition => "Partition",
             CatalogObject::View => "View",
             CatalogObject::Function => "Function",
             CatalogObject::TemporaryView => "Temporary View",
@@ -51,4 +53,22 @@ pub enum CatalogError {
     Internal(String),
     #[error("external error: {0}")]
     External(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CatalogObject;
+
+    #[test]
+    fn catalog_object_partition_displays_partition() {
+        assert_eq!(CatalogObject::Partition.to_string(), "Partition");
+    }
+
+    #[test]
+    fn partition_not_found_error_mentions_partition() {
+        let error =
+            super::CatalogError::NotFound(CatalogObject::Partition, "dt=2026-04-26".to_string());
+
+        assert_eq!(error.to_string(), "Partition not found: dt=2026-04-26");
+    }
 }

@@ -31,7 +31,6 @@ def pytest_configure(config):
         "markers",
         "yamlsnapshot: add metadata to customize the YAML snapshot",
     )
-
     configure_sail_environment()
 
 

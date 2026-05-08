@@ -313,17 +313,32 @@ Ensure expand_row_level_op is enabled; MERGE is currently only supported for lak
         } else if let Some(node) = node.as_any().downcast_ref::<CatalogCommandNode>() {
             let schema = node.schema().inner().clone();
             Arc::new(CatalogCommandExec::new(node.command().clone(), schema))
-        } else if let Some(_node) = node.as_any().downcast_ref::<BarrierNode>() {
-            let (plan, preconditions) = physical_inputs.split_last().ok_or_else(|| {
+        } else if let Some(node) = node.as_any().downcast_ref::<BarrierNode>() {
+            let precondition_count = node.preconditions().len();
+            let postcondition_count = node.postconditions().len();
+            if physical_inputs.len() != precondition_count + 1 + postcondition_count {
+                return internal_err!(
+                    "{} expected {} physical inputs but got {}",
+                    BarrierExec::static_name(),
+                    precondition_count + 1 + postcondition_count,
+                    physical_inputs.len()
+                );
+            }
+            let (preconditions, rest) = physical_inputs.split_at(precondition_count);
+            let (plan, postconditions) = rest.split_first().ok_or_else(|| {
                 datafusion_common::DataFusionError::Internal(format!(
                     "{} requires at least one physical input",
                     BarrierExec::static_name()
                 ))
             })?;
-            if preconditions.is_empty() {
+            if preconditions.is_empty() && postconditions.is_empty() {
                 plan.clone()
             } else {
-                Arc::new(BarrierExec::new(preconditions.to_vec(), plan.clone()))
+                Arc::new(BarrierExec::with_postconditions(
+                    preconditions.to_vec(),
+                    plan.clone(),
+                    postconditions.to_vec(),
+                ))
             }
         } else {
             return internal_err!("unsupported logical extension node: {:?}", node);

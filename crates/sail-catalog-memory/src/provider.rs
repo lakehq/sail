@@ -154,6 +154,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
         let CreateTableOptions {
+            external: _,
             columns,
             comment,
             constraints,
@@ -222,7 +223,9 @@ impl CatalogProvider for MemoryCatalogProvider {
             catalog: Some(self.name.clone()),
             database: database.clone().into(),
             name: table.to_string(),
+            statistics: None,
             kind: TableKind::Table {
+                table_type: None,
                 columns,
                 comment,
                 constraints,
@@ -307,7 +310,11 @@ impl CatalogProvider for MemoryCatalogProvider {
             .get_mut(table)
             .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.to_string()))?;
         match &mut status.kind {
-            TableKind::Table { properties, .. } => match options {
+            TableKind::Table {
+                location,
+                properties,
+                ..
+            } => match options {
                 AlterTableOptions::SetTableProperties {
                     properties: new_props,
                 } => {
@@ -331,6 +338,10 @@ impl CatalogProvider for MemoryCatalogProvider {
                         }
                         properties.retain(|(k, _)| k != key);
                     }
+                    Ok(())
+                }
+                AlterTableOptions::SetLocation { location: value } => {
+                    *location = Some(value);
                     Ok(())
                 }
             },
@@ -395,6 +406,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             catalog: Some(self.name.clone()),
             database: database.clone().into(),
             name: view.to_string(),
+            statistics: None,
             kind: TableKind::View {
                 columns,
                 definition,

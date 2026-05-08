@@ -91,6 +91,7 @@ pub(crate) async fn create_hive_table(
 /// Validates CreateTableOptions for Hive-style tables.
 fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<ValidatedHiveOptions> {
     let CreateTableOptions {
+        external: _,
         columns,
         comment,
         constraints,

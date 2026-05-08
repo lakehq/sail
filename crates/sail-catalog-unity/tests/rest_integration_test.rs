@@ -660,6 +660,7 @@ async fn test_create_table() {
             &ns,
             "t1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: Some("peow".to_string()),
                 constraints: vec![],
@@ -677,6 +678,7 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -791,6 +793,7 @@ async fn test_create_table() {
             &ns,
             "t1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: Some("peow".to_string()),
                 constraints: vec![],
@@ -812,6 +815,7 @@ async fn test_create_table() {
             &ns,
             "t1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: Some("peow".to_string()),
                 constraints: vec![],
@@ -859,6 +863,7 @@ async fn test_create_table() {
             &ns,
             "t2",
             CreateTableOptions {
+                external: false,
                 columns: column_options,
                 comment: Some("test table".to_string()),
                 constraints: vec![],
@@ -883,6 +888,7 @@ async fn test_create_table() {
         .unwrap();
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -1023,6 +1029,7 @@ async fn test_get_table() {
             &ns,
             "t2",
             CreateTableOptions {
+                external: false,
                 columns: column_options,
                 comment: Some("test table".to_string()),
                 constraints: vec![],
@@ -1051,6 +1058,7 @@ async fn test_get_table() {
     assert_eq!(table_ns.name, table_full_ns.name);
 
     let TableKind::Table {
+        table_type: _,
         columns,
         comment,
         constraints,
@@ -1180,6 +1188,7 @@ async fn test_list_tables() {
             &ns,
             "table1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: None,
                 constraints: vec![],
@@ -1201,6 +1210,7 @@ async fn test_list_tables() {
             &ns,
             "table2",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: None,
                 constraints: vec![],
@@ -1271,6 +1281,7 @@ async fn test_drop_table() {
             &namespace,
             "t1",
             CreateTableOptions {
+                external: false,
                 columns: column_options.clone(),
                 comment: None,
                 constraints: vec![],

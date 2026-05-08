@@ -176,3 +176,119 @@ async fn test_list_tables_excludes_views() {
     assert!(tables.iter().any(|table| table.name == "items"));
     assert!(tables.iter().all(|table| table.name != "v_items"));
 }
+
+#[tokio::test]
+#[ignore]
+async fn test_external_table_type_is_external() {
+    let test_name = "test_external_table_type_is_external";
+    let context = setup_with_database(test_name).await;
+    let catalog = &context.catalog;
+    let namespace = &context.namespace;
+
+    catalog
+        .create_table(
+            namespace,
+            "ext_items",
+            simple_table_options(test_name, vec![col("id", DataType::Int64)]),
+        )
+        .await
+        .unwrap();
+
+    let fetched = catalog.get_table(namespace, "ext_items").await.unwrap();
+    match &fetched.kind {
+        TableKind::Table { table_type, .. } => {
+            assert_eq!(table_type.as_deref(), Some("EXTERNAL"));
+        }
+        other => panic!("expected table kind, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_managed_table_type_is_managed() {
+    let test_name = "test_managed_table_type_is_managed";
+    let context = setup_with_database(test_name).await;
+    let catalog = &context.catalog;
+    let namespace = &context.namespace;
+
+    let mut options = simple_table_options(test_name, vec![col("id", DataType::Int64)]);
+    options.external = false;
+
+    catalog
+        .create_table(namespace, "managed_items", options)
+        .await
+        .unwrap();
+
+    let fetched = catalog.get_table(namespace, "managed_items").await.unwrap();
+    match &fetched.kind {
+        TableKind::Table { table_type, .. } => {
+            assert_eq!(table_type.as_deref(), Some("MANAGED"));
+        }
+        other => panic!("expected table kind, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_drop_external_table_succeeds() {
+    let test_name = "test_drop_external_table_succeeds";
+    let context = setup_with_database(test_name).await;
+    let catalog = &context.catalog;
+    let namespace = &context.namespace;
+
+    catalog
+        .create_table(
+            namespace,
+            "ext_items",
+            simple_table_options(test_name, vec![col("id", DataType::Int64)]),
+        )
+        .await
+        .unwrap();
+
+    catalog
+        .drop_table(
+            namespace,
+            "ext_items",
+            sail_catalog::provider::DropTableOptions {
+                if_exists: false,
+                purge: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let tables = catalog.list_tables(namespace).await.unwrap();
+    assert!(tables.iter().all(|table| table.name != "ext_items"));
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_drop_managed_table_succeeds() {
+    let test_name = "test_drop_managed_table_succeeds";
+    let context = setup_with_database(test_name).await;
+    let catalog = &context.catalog;
+    let namespace = &context.namespace;
+
+    let mut options = simple_table_options(test_name, vec![col("id", DataType::Int64)]);
+    options.external = false;
+
+    catalog
+        .create_table(namespace, "managed_items", options)
+        .await
+        .unwrap();
+
+    catalog
+        .drop_table(
+            namespace,
+            "managed_items",
+            sail_catalog::provider::DropTableOptions {
+                if_exists: false,
+                purge: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let tables = catalog.list_tables(namespace).await.unwrap();
+    assert!(tables.iter().all(|table| table.name != "managed_items"));
+}
