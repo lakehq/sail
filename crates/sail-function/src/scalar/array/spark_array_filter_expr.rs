@@ -313,9 +313,21 @@ impl SparkArrayFilterExpr {
                     )
                 })?
                 .clone(),
-            ColumnarValue::Scalar(s) => {
-                let bool_val = matches!(s, datafusion_common::ScalarValue::Boolean(Some(true)));
-                BooleanArray::from(vec![bool_val; values.len()])
+            ColumnarValue::Scalar(datafusion_common::ScalarValue::Boolean(Some(true))) => {
+                // Constant-true predicate: all elements pass, return array unchanged.
+                return Ok(array.clone());
+            }
+            ColumnarValue::Scalar(_) => {
+                // Constant-false or null predicate: emit empty sublists, preserve null rows.
+                let field = list_array.value_type();
+                let zero_offsets = OffsetBuffer::<i32>::new_zeroed(num_rows);
+                let empty_values = datafusion::arrow::array::new_empty_array(values.data_type());
+                return Ok(Arc::new(ListArray::try_new(
+                    Arc::new(Field::new_list_field(field, true)),
+                    zero_offsets,
+                    empty_values,
+                    list_array.nulls().cloned(),
+                )?));
             }
         };
 
