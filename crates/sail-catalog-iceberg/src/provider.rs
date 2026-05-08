@@ -994,20 +994,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let mut fields = Vec::new();
-        for (idx, col) in columns.iter().enumerate() {
+        for col in columns.iter() {
             let CreateViewColumnOptions {
                 name,
                 data_type,
                 nullable,
                 comment,
             } = col;
-            let field_id = idx as i32 + 1; // FIXME: Is this wrong?
             let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
                 CatalogError::External(format!(
                     "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
                 ))
             })?;
-            let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+            // Use a placeholder field id of 0; unique IDs (including for nested
+            // struct/list/map children) are assigned below by
+            // `SchemaEvolver::assign_schema_field_ids`.
+            let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
             if let Some(comment) = comment {
                 field = field.with_doc(comment);
             }
@@ -1018,6 +1020,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .with_fields(fields)
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
+        let schema = sail_iceberg::SchemaEvolver::assign_schema_field_ids(&schema)
+            .map_err(|e| CatalogError::External(format!("Failed to assign field ids: {e}")))?;
         let schema = crate::models::Schema {
             r#type: crate::models::schema::Type::Struct,
             fields: schema.fields().to_vec(),
@@ -1192,11 +1196,17 @@ where
 }
 
 /// Converts table column options to Iceberg nested fields.
+///
+/// All fields (top-level and nested) receive sequential, unique field IDs
+/// starting at 1. This is required because Iceberg uses field IDs for schema
+/// indexing and column identity, and nested children produced by
+/// `arrow_type_to_iceberg` would otherwise default to id 0 since the source
+/// `CreateTableColumnOptions` carry no Iceberg field-id metadata.
 fn columns_to_nested_fields(
     columns: &[CreateTableColumnOptions],
 ) -> CatalogResult<Vec<Arc<NestedField>>> {
     let mut fields = Vec::new();
-    for (idx, col) in columns.iter().enumerate() {
+    for col in columns.iter() {
         let CreateTableColumnOptions {
             name,
             data_type,
@@ -1205,20 +1215,28 @@ fn columns_to_nested_fields(
             default: _,
             generated_always_as: _,
         } = col;
-        let field_id = idx as i32 + 1; // FIXME: Is this wrong?
         let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
             CatalogError::External(format!(
                 "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
             ))
         })?;
         // TODO: `default` is not supported until Iceberg V3
-        let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+        // Use a placeholder field id of 0; unique IDs (including for nested
+        // struct/list/map children) are assigned below by
+        // `SchemaEvolver::assign_schema_field_ids`.
+        let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
         if let Some(comment) = comment {
             field = field.with_doc(comment);
         }
         fields.push(Arc::new(field));
     }
-    Ok(fields)
+    let temp_schema = sail_iceberg::spec::Schema::builder()
+        .with_fields(fields)
+        .build()
+        .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
+    let assigned = sail_iceberg::SchemaEvolver::assign_schema_field_ids(&temp_schema)
+        .map_err(|e| CatalogError::External(format!("Failed to assign field ids: {e}")))?;
+    Ok(assigned.fields().to_vec())
 }
 
 /// Builds an Iceberg partition spec from partition fields and their field ID mappings.
