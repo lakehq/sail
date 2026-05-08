@@ -1290,10 +1290,11 @@ fn build_sort_order(
 
     let mut sort_fields = Vec::new();
     for sort in sort_by {
-        if let Some(&source_id) = name_to_id.get(&sort.column) {
+        let (column, transform) = parse_sort_column(&sort.column)?;
+        if let Some(&source_id) = name_to_id.get(&column) {
             sort_fields.push(sail_iceberg::spec::sort::SortField {
                 source_id,
-                transform: sail_iceberg::Transform::Identity, // FIXME: This is wrong, col needs to be parsed.
+                transform,
                 direction: if sort.ascending {
                     sail_iceberg::spec::sort::SortDirection::Ascending
                 } else {
@@ -1338,6 +1339,75 @@ fn build_sort_order(
     })))
 }
 
+fn parse_sort_column(column: &str) -> CatalogResult<(String, sail_iceberg::Transform)> {
+    let column = column.trim();
+    let Some((function, arguments)) = parse_transform_function(column) else {
+        return Ok((column.to_string(), sail_iceberg::Transform::Identity));
+    };
+
+    let arguments = arguments.split(',').map(str::trim).collect::<Vec<_>>();
+
+    match function.to_ascii_lowercase().as_str() {
+        "year" | "years" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Year),
+        "month" | "months" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Month),
+        "day" | "days" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Day),
+        "hour" | "hours" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Hour),
+        "bucket" => {
+            let [num_buckets, column] = arguments.as_slice() else {
+                return Err(CatalogError::InvalidArgument(
+                    "bucket sort transform expects bucket count and column".to_string(),
+                ));
+            };
+            let num_buckets = num_buckets.parse::<u32>().map_err(|_| {
+                CatalogError::InvalidArgument(format!(
+                    "Invalid bucket count for sort transform: {num_buckets}"
+                ))
+            })?;
+            Ok((
+                column.to_string(),
+                sail_iceberg::Transform::Bucket(num_buckets),
+            ))
+        }
+        "truncate" => {
+            let [first, second] = arguments.as_slice() else {
+                return Err(CatalogError::InvalidArgument(
+                    "truncate sort transform expects width and column".to_string(),
+                ));
+            };
+            if let Ok(width) = first.parse::<u32>() {
+                Ok((second.to_string(), sail_iceberg::Transform::Truncate(width)))
+            } else if let Ok(width) = second.parse::<u32>() {
+                Ok((first.to_string(), sail_iceberg::Transform::Truncate(width)))
+            } else {
+                Err(CatalogError::InvalidArgument(format!(
+                    "Invalid truncate width for sort transform: {first}, {second}"
+                )))
+            }
+        }
+        _ => Err(CatalogError::InvalidArgument(format!(
+            "Unsupported sort transform function: {function}"
+        ))),
+    }
+}
+
+fn parse_transform_function(column: &str) -> Option<(&str, &str)> {
+    let column = column.strip_suffix(')')?;
+    let (function, arguments) = column.split_once('(')?;
+    Some((function.trim(), arguments))
+}
+
+fn parse_unary_sort_transform(
+    arguments: Vec<&str>,
+    transform: sail_iceberg::Transform,
+) -> CatalogResult<(String, sail_iceberg::Transform)> {
+    let [column] = arguments.as_slice() else {
+        return Err(CatalogError::InvalidArgument(
+            "sort transform expects a single column".to_string(),
+        ));
+    };
+    Ok((column.to_string(), transform))
+}
+
 #[expect(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
@@ -1345,6 +1415,94 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    #[test]
+    fn test_build_sort_order_identity() {
+        let name_to_id = HashMap::from([("foo".to_string(), 1), ("bar".to_string(), 2)]);
+        let order = build_sort_order(
+            &[
+                CatalogTableSort {
+                    column: "foo".to_string(),
+                    ascending: true,
+                },
+                CatalogTableSort {
+                    column: "bar".to_string(),
+                    ascending: false,
+                },
+            ],
+            &name_to_id,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(order.fields.len(), 2);
+        assert_eq!(order.fields[0].source_id, 1);
+        assert_eq!(order.fields[0].transform, "identity");
+        assert_eq!(order.fields[0].direction, crate::models::SortDirection::Asc);
+        assert_eq!(order.fields[1].source_id, 2);
+        assert_eq!(order.fields[1].transform, "identity");
+        assert_eq!(
+            order.fields[1].direction,
+            crate::models::SortDirection::Desc
+        );
+    }
+
+    #[test]
+    fn test_build_sort_order_transform_expression() {
+        let name_to_id = HashMap::from([("ts".to_string(), 1), ("id".to_string(), 2)]);
+        let order = build_sort_order(
+            &[
+                CatalogTableSort {
+                    column: "years(ts)".to_string(),
+                    ascending: true,
+                },
+                CatalogTableSort {
+                    column: "bucket(16, id)".to_string(),
+                    ascending: false,
+                },
+            ],
+            &name_to_id,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(order.fields.len(), 2);
+        assert_eq!(order.fields[0].source_id, 1);
+        assert_eq!(order.fields[0].transform, "year");
+        assert_eq!(order.fields[0].direction, crate::models::SortDirection::Asc);
+        assert_eq!(order.fields[1].source_id, 2);
+        assert_eq!(order.fields[1].transform, "bucket[16]");
+        assert_eq!(
+            order.fields[1].direction,
+            crate::models::SortDirection::Desc
+        );
+    }
+
+    #[test]
+    fn test_build_sort_order_truncate_expression() {
+        let name_to_id = HashMap::from([("name".to_string(), 1), ("category".to_string(), 2)]);
+        let order = build_sort_order(
+            &[
+                CatalogTableSort {
+                    column: "truncate(10, name)".to_string(),
+                    ascending: true,
+                },
+                CatalogTableSort {
+                    column: "truncate(category, 4)".to_string(),
+                    ascending: false,
+                },
+            ],
+            &name_to_id,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(order.fields.len(), 2);
+        assert_eq!(order.fields[0].source_id, 1);
+        assert_eq!(order.fields[0].transform, "truncate[10]");
+        assert_eq!(order.fields[1].source_id, 2);
+        assert_eq!(order.fields[1].transform, "truncate[4]");
+    }
 
     struct TestContext {
         name: String,
