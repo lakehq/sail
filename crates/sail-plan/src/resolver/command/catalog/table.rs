@@ -518,7 +518,7 @@ fn extract_sort_int_arg(args: &[spec::Expr], index: usize, description: &str) ->
             "sort transform function requires {description} at index {index}"
         ))
     })?;
-    match arg {
+    let value = match arg {
         spec::Expr::Literal(lit) => match lit {
             spec::Literal::Int8 { value: Some(v) } => u32::try_from(*v).map_err(|_| {
                 PlanError::invalid(format!("{description} must be a positive integer"))
@@ -545,5 +545,11 @@ fn extract_sort_int_arg(args: &[spec::Expr], index: usize, description: &str) ->
         _ => Err(PlanError::invalid(format!(
             "{description} must be an integer literal"
         ))),
+    }?;
+    if value == 0 {
+        return Err(PlanError::invalid(format!(
+            "{description} must be a positive integer"
+        )));
     }
+    Ok(value)
 }

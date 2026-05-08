@@ -1263,6 +1263,11 @@ fn build_partition_spec(
         let num_buckets = u32::try_from(bucket_by.num_buckets).map_err(|e| {
             CatalogError::InvalidArgument(format!("Invalid number of buckets: {e}"))
         })?;
+        if num_buckets == 0 {
+            return Err(CatalogError::InvalidArgument(
+                "number of buckets must be a positive integer".to_string(),
+            ));
+        }
         for column in &bucket_by.columns {
             if let Some(&source_id) = name_to_id.get(column) {
                 partition_spec_builder = partition_spec_builder.add_field(
@@ -1384,6 +1389,11 @@ fn parse_sort_column(column: &str) -> CatalogResult<(String, sail_iceberg::Trans
                     "bucket count for sort transform must be a valid unsigned integer: {num_buckets_str}"
                 ))
             })?;
+            if num_buckets == 0 {
+                return Err(CatalogError::InvalidArgument(
+                    "bucket count for sort transform must be a positive integer".to_string(),
+                ));
+            }
             Ok((
                 column.to_string(),
                 sail_iceberg::Transform::Bucket(num_buckets),
@@ -1395,13 +1405,15 @@ fn parse_sort_column(column: &str) -> CatalogResult<(String, sail_iceberg::Trans
                     "truncate sort transform expects width and column".to_string(),
                 ));
             };
-            if let Ok(width) = first.parse::<u32>() {
+            let parse_positive_u32 =
+                |s: &str| -> Option<u32> { s.parse::<u32>().ok().filter(|&w| w > 0) };
+            if let Some(width) = parse_positive_u32(first) {
                 Ok((second.to_string(), sail_iceberg::Transform::Truncate(width)))
-            } else if let Ok(width) = second.parse::<u32>() {
+            } else if let Some(width) = parse_positive_u32(second) {
                 Ok((first.to_string(), sail_iceberg::Transform::Truncate(width)))
             } else {
                 Err(CatalogError::InvalidArgument(format!(
-                    "truncate sort transform requires one argument to be a valid unsigned integer width, got: {first}, {second}"
+                    "truncate sort transform requires one argument to be a positive integer width, got: {first}, {second}"
                 )))
             }
         }
