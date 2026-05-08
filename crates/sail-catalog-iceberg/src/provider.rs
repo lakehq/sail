@@ -1353,14 +1353,14 @@ fn parse_sort_column(column: &str) -> CatalogResult<(String, sail_iceberg::Trans
         "day" | "days" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Day),
         "hour" | "hours" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Hour),
         "bucket" => {
-            let [num_buckets, column] = arguments.as_slice() else {
+            let [num_buckets_str, column] = arguments.as_slice() else {
                 return Err(CatalogError::InvalidArgument(
                     "bucket sort transform expects bucket count and column".to_string(),
                 ));
             };
-            let num_buckets = num_buckets.parse::<u32>().map_err(|_| {
+            let num_buckets = num_buckets_str.parse::<u32>().map_err(|_| {
                 CatalogError::InvalidArgument(format!(
-                    "Invalid bucket count for sort transform: {num_buckets}"
+                    "bucket count for sort transform must be a valid unsigned integer: {num_buckets_str}"
                 ))
             })?;
             Ok((
