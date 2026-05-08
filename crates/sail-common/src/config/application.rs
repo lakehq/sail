@@ -27,6 +27,7 @@ pub struct AppConfig {
     pub catalog: CatalogConfig,
     pub optimizer: OptimizerConfig,
     pub spark: SparkConfig,
+    pub flight: FlightConfig,
     pub python: PythonConfig,
     pub telemetry: TelemetryConfig,
     /// Reserved for internal use.
@@ -88,7 +89,6 @@ pub enum ExecutionMode {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub stack_size: usize,
-    pub enable_secondary: bool,
     pub memory_pool: MemoryPoolConfig,
     pub temporary_files: TemporaryFilesConfig,
 }
@@ -429,6 +429,7 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub expand_views_at_output: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -491,6 +492,16 @@ pub enum CatalogType {
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
     },
+    #[serde(alias = "hms", alias = "hive-metastore")]
+    HiveMetastore {
+        name: String,
+        uris: Vec<String>,
+        thrift_transport: Option<String>,
+        auth: Option<String>,
+        kerberos_service_principal: Option<String>,
+        min_sasl_qop: Option<String>,
+        connect_timeout_secs: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -506,6 +517,12 @@ pub struct PythonConfig {
     pub data_source_write_channel_capacity: usize,
     pub data_source_slow_write_warn_ms: u64,
     pub data_source_slow_read_warn_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlightConfig {
+    pub session_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

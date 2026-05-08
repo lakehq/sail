@@ -66,6 +66,8 @@ Chart.lock
 __pycache__/
 *.py[cod]
 *.so
+*.dylib
+*.dSYM/
 *.egg-info/
 *.egg
 .coverage

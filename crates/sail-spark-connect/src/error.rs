@@ -90,6 +90,7 @@ impl From<SqlError> for SparkError {
             SqlError::InternalError(message) => SparkError::InternalError(message),
             SqlError::SqlParserError(e) => SparkError::InvalidArgument(e.to_string()),
             SqlError::NotImplemented(message) => SparkError::NotImplemented(message),
+            SqlError::AnalysisError(message) => SparkError::AnalysisError(message),
         }
     }
 }
@@ -279,6 +280,44 @@ impl SparkThrowable {
     }
 }
 
+/// The maximum length of a gRPC status message in bytes.
+///
+/// gRPC has a hard limit of 16384 bytes for the total metadata size.
+/// When error details are present, the message is encoded in two headers:
+/// - `grpc-message`: percent-encoded (worst case 3x expansion for non-ASCII bytes)
+/// - `grpc-status-details-bin`: base64-encoded protobuf (~4/3x expansion)
+///
+/// Combined worst-case encoding overhead is approximately 4.33x the raw message length
+/// (3x + 4/3x). A cap of 3700 bytes keeps the combined encoded size under 16384 bytes
+/// even in the worst case (3700 * 4.33 ≈ 16,021), with some margin for other headers.
+const MAX_GRPC_STATUS_MESSAGE_LEN: usize = 3700;
+
+const TRUNCATED_SUFFIX: &str = "\n[truncated]";
+
+/// Truncate a gRPC status message to at most [`MAX_GRPC_STATUS_MESSAGE_LEN`] bytes.
+///
+/// Truncation respects UTF-8 character boundaries. If the original message ends with
+/// a newline character, the truncated result also ends with a newline so that callers
+/// that rely on a trailing newline (e.g. Python traceback formatting) are not affected.
+fn truncate_grpc_message(message: &str) -> String {
+    if message.len() <= MAX_GRPC_STATUS_MESSAGE_LEN {
+        return message.to_string();
+    }
+    let trailing_newline = message.ends_with('\n');
+    let suffix = if trailing_newline {
+        format!("{TRUNCATED_SUFFIX}\n")
+    } else {
+        TRUNCATED_SUFFIX.to_string()
+    };
+    let take = MAX_GRPC_STATUS_MESSAGE_LEN.saturating_sub(suffix.len());
+    // Walk back from `take` bytes to find a valid UTF-8 char boundary.
+    let mut pos = take;
+    while pos > 0 && !message.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    format!("{}{suffix}", &message[..pos])
+}
+
 impl From<SparkThrowable> for Status {
     fn from(throwable: SparkThrowable) -> Status {
         let class = throwable.class_name();
@@ -290,10 +329,16 @@ impl From<SparkThrowable> for Status {
         let mut details = ErrorDetails::new();
         details.set_error_info(class, "org.apache.spark", metadata);
 
+        // Truncate the message if it exceeds the maximum length.
+        // gRPC has a hard limit of 16384 bytes for total metadata size.
+        // Both `grpc-message` and `grpc-status-details-bin` encode the message,
+        // so long messages (e.g., Python tracebacks) can easily exceed the limit.
+        let message = truncate_grpc_message(throwable.message());
+
         // The original Spark Connect server implementation uses the "INTERNAL" status code
         // for all Spark exceptions, so we do the same here.
         // Reference: org.apache.spark.sql.connect.utils.ErrorUtils#buildStatusFromThrowable
-        Status::with_error_details(Code::Internal, throwable.message(), details)
+        Status::with_error_details(Code::Internal, message, details)
     }
 }
 
@@ -368,8 +413,12 @@ impl From<SparkError> for Status {
                 SparkThrowable::UnsupportedOperationException(s).into()
             }
             SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
-            e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
-            e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
+            e @ SparkError::SendError(_) => {
+                Status::cancelled(truncate_grpc_message(&e.to_string()))
+            }
+            e @ SparkError::InternalError(_) => {
+                Status::internal(truncate_grpc_message(&e.to_string()))
+            }
         }
     }
 }

@@ -1,13 +1,14 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
-use datafusion_expr::{cast, expr, lit, when};
+use datafusion_expr::{cast, expr, lit, when, ScalarUDF};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
 use sail_function::scalar::json::{
-    json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf,
+    json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf, SparkFromJson,
+    SparkSchemaOfJson,
 };
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::ScalarFunction;
+use crate::function::common::{ScalarFunction, ScalarFunctionBuilder as F, ScalarFunctionInput};
 
 fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr> {
     let paths: Vec<expr::Expr> = match path {
@@ -42,6 +43,9 @@ fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     // to_json accepts 1 or 2 arguments:
     // - to_json(expr) - convert expr to JSON string
     // - to_json(expr, options) - convert expr to JSON string with options
+    // Note: the SparkToJson UDF detects Variant inputs and delegates to variant_to_json,
+    // which ignores any options provided.
+    // See: https://docs.databricks.com/en/sql/language-manual/functions/to_json.html
     match args.len() {
         1 | 2 => Ok(to_json_udf().call(args)),
         n => Err(PlanError::invalid(format!(
@@ -50,16 +54,25 @@ fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     }
 }
 
-pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
-    use crate::function::common::ScalarFunctionBuilder as F;
+fn from_json(
+    ScalarFunctionInput {
+        arguments,
+        function_context,
+    }: ScalarFunctionInput,
+) -> PlanResult<expr::Expr> {
+    let tz = function_context.plan_config.session_timezone.clone();
+    let udf = ScalarUDF::from(SparkFromJson::new(tz));
+    Ok(udf.call(arguments))
+}
 
+pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
     vec![
-        ("from_json", F::unknown("from_json")),
+        ("from_json", F::custom(from_json)),
         ("get_json_object", F::binary(get_json_object)),
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
         ("json_tuple", F::unknown("json_tuple")),
-        ("schema_of_json", F::unknown("schema_of_json")),
+        ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
         ("to_json", F::var_arg(to_json)),
     ]
 }

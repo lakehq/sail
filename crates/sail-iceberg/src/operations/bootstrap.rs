@@ -19,17 +19,21 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result};
+use object_store::ObjectStoreExt;
 use url::Url;
 
 use crate::io::StoreContext;
+use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotProduceOperation, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
-use crate::spec::metadata::format::FormatVersion;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::snapshots::{SnapshotBuilder, SnapshotReference, SnapshotRetention};
-use crate::spec::TableMetadata;
+use crate::spec::{FormatVersion, TableMetadata};
+use crate::table::metadata_loader::{
+    encode_metadata_file, metadata_file_extension_from_properties, metadata_file_version_from_path,
+};
 use crate::utils::WritePathMode;
 
 /// Strategy for persisting metadata during bootstrap
@@ -71,6 +75,7 @@ pub async fn bootstrap_new_table(
         .partition_spec
         .clone()
         .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+    let format_version = format_version_for_schema(&iceberg_schema);
 
     // Create a minimal transaction context (no parent snapshot)
     let empty_snapshot = SnapshotBuilder::new()
@@ -89,9 +94,10 @@ pub async fn bootstrap_new_table(
         Arc::new(iceberg_schema.clone()),
         iceberg_schema.schema_id(),
         partition_spec.clone(),
-        FormatVersion::V2,
+        format_version,
         crate::spec::ManifestContentType::Data,
     );
+    let row_lineage_start_row_id = (format_version >= FormatVersion::V3).then_some(0);
 
     // Use SnapshotProducer in bootstrap mode
     let producer = SnapshotProducer::new(
@@ -101,6 +107,7 @@ pub async fn bootstrap_new_table(
         Some(manifest_meta),
     )
     .with_bootstrap(true)
+    .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     let action_commit = producer
@@ -118,10 +125,10 @@ pub async fn bootstrap_new_table(
         })
         .ok_or_else(|| DataFusionError::Plan("No snapshot in bootstrap commit".to_string()))?;
 
-    // Build minimal TableMetadata V2
+    // Build minimal TableMetadata, using v3 when the schema requires v3 types.
     let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     let table_meta = TableMetadata {
-        format_version: FormatVersion::V2,
+        format_version,
         table_uuid: None,
         location: table_url.to_string(),
         last_sequence_number: 1,
@@ -134,6 +141,10 @@ pub async fn bootstrap_new_table(
         last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
         properties: std::collections::HashMap::new(),
         current_snapshot_id: Some(snapshot.snapshot_id()),
+        next_row_id: snapshot.added_rows.and_then(|added_rows| {
+            row_lineage_start_row_id.map(|start_row_id| start_row_id + added_rows)
+        }),
+        encryption_keys: vec![],
         snapshots: vec![snapshot.clone()],
         snapshot_log: vec![SnapshotLog {
             timestamp_ms: commit_timestamp_ms,
@@ -157,12 +168,17 @@ pub async fn bootstrap_new_table(
         statistics: vec![],
         partition_statistics: vec![],
     };
+    let mut table_meta = table_meta;
+    table_meta.ensure_required_format_fields();
 
-    // Write metadata v00001
-    let new_meta_bytes = table_meta
+    // Write metadata v1 using the Hadoop table convention for path-based compatibility.
+    let new_meta_json = table_meta
         .to_json()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let new_meta_rel = format!("metadata/{:05}-{}.metadata.json", 1, uuid::Uuid::new_v4());
+    let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
+    let new_meta_rel = format!("metadata/v1{file_extension}");
+    let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
     store_ctx
         .prefixed
@@ -210,6 +226,11 @@ pub async fn bootstrap_first_snapshot(
         .default_partition_spec()
         .cloned()
         .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+    let format_version = table_meta
+        .format_version
+        .max(format_version_for_schema(&schema_iceberg));
+    table_meta.format_version = format_version;
+    let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
 
     // Create a minimal transaction context (no parent snapshot)
     let empty_snapshot = SnapshotBuilder::new()
@@ -228,7 +249,7 @@ pub async fn bootstrap_first_snapshot(
         Arc::new(schema_iceberg.clone()),
         schema_iceberg.schema_id(),
         partition_spec.clone(),
-        FormatVersion::V2,
+        format_version,
         crate::spec::ManifestContentType::Data,
     );
 
@@ -240,6 +261,7 @@ pub async fn bootstrap_first_snapshot(
         Some(manifest_meta),
     )
     .with_bootstrap(true)
+    .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     let action_commit = producer
@@ -267,6 +289,9 @@ pub async fn bootstrap_first_snapshot(
     });
     table_meta.last_sequence_number = 1;
     table_meta.last_updated_ms = commit_timestamp_ms;
+    if let Some(added_rows) = snapshot.added_rows {
+        table_meta.advance_next_row_id(added_rows);
+    }
 
     // Add main branch reference if not present
     if !table_meta
@@ -287,7 +312,7 @@ pub async fn bootstrap_first_snapshot(
     }
 
     // Serialize and write metadata
-    let new_meta_bytes = table_meta
+    let new_meta_json = table_meta
         .to_json()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -304,6 +329,8 @@ pub async fn bootstrap_first_snapshot(
             } else {
                 "metadata/00000.metadata.json".to_string()
             };
+            let new_meta_bytes = encode_metadata_file(&rel_name, &new_meta_json)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let rel_path = object_store::path::Path::from(rel_name.as_str());
             store_ctx
                 .prefixed
@@ -336,12 +363,13 @@ pub async fn bootstrap_first_snapshot(
         }
         PersistStrategy::NewVersion => {
             // Create a new metadata version
-            let version = table_meta.metadata_log.len() + 1;
-            let new_meta_rel = format!(
-                "metadata/{:05}-{}.metadata.json",
-                version,
-                uuid::Uuid::new_v4()
-            );
+            let version = metadata_file_version_from_path(latest_meta_path)
+                .map(|version| version + 1)
+                .unwrap_or_else(|| table_meta.metadata_log.len() as i32 + 1);
+            let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
+            let new_meta_rel = format!("metadata/v{version}{file_extension}");
+            let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
             store_ctx
                 .prefixed

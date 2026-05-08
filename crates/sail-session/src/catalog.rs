@@ -7,6 +7,7 @@ use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
+use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_onelake::OneLakeCatalogProvider;
@@ -142,6 +143,27 @@ pub fn create_catalog_manager(
                         runtime.io().clone(),
                     )?;
                     Ok((name.to_string(), Arc::new(runtime_aware)))
+                }
+                CatalogType::HiveMetastore {
+                    name,
+                    uris,
+                    thrift_transport,
+                    auth,
+                    kerberos_service_principal,
+                    min_sasl_qop,
+                    connect_timeout_secs,
+                } => {
+                    let config = HmsCatalogConfig {
+                        uris: uris.clone(),
+                        thrift_transport: thrift_transport.clone(),
+                        auth: auth.clone(),
+                        kerberos_service_principal: kerberos_service_principal.clone(),
+                        min_sasl_qop: min_sasl_qop.clone(),
+                        connect_timeout_secs: *connect_timeout_secs,
+                    };
+                    let provider =
+                        HmsCatalogProvider::try_new(name.to_string(), config, runtime.clone())?;
+                    Ok((name.to_string(), Arc::new(provider)))
                 }
             }
         })

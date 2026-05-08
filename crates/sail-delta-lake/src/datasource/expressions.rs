@@ -22,14 +22,13 @@ use std::sync::Arc;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, DFSchema, Result};
-use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator, TableProviderFilterPushDown};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::expressions::Column as PhysicalColumn;
 
-use crate::kernel::DeltaResult;
+use crate::spec::DeltaResult;
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 
@@ -39,8 +38,7 @@ pub fn simplify_expr(
     df_schema: &DFSchema,
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let props = ExecutionProps::new();
-    let simplify_context = SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+    let simplify_context = SimplifyContext::default().with_schema(df_schema.clone().into());
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     let simplified = simplifier.simplify(expr)?;
 

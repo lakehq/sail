@@ -10,7 +10,12 @@ import pytest
 from _pytest.doctest import DoctestItem
 from pyspark.sql import SparkSession
 
-from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+
+# This doctest option flag is used to annotate tests involving
+# extended Spark features supported by Sail.
+# The test will be skipped when running on JVM Spark.
+SAIL_ONLY = doctest.register_optionflag("SAIL_ONLY")
 
 
 def pytest_configure(config):
@@ -20,12 +25,17 @@ def pytest_configure(config):
         "markers",
         "sail-only: mark test as Sail-only (skipped when running against Spark JVM)",
     )
+    config.addinivalue_line(
+        "markers",
+        "catalog_integration: mark test as requiring external catalog services "
+        "(deselected by default; pass -m catalog_integration to run)",
+    )
     # Load all pytest-bdd step modules.
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.file_tree")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.sql")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.plan")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.delta_log")
-    config.pluginmanager.import_plugin("pysail.tests.spark.steps.dataframe")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.delta_log")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.iceberg_metadata")
 
 
 if TYPE_CHECKING:
@@ -163,12 +173,32 @@ class DoctestMarker:
 
 DOCTEST_MARKERS = [
     DoctestMarker(
-        keywords=["test_python_datasource_read.txt"],
+        keywords=["test_python_read.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
     ),
     DoctestMarker(
-        keywords=["test_python_datasource_read_arrow.txt"],
+        keywords=["test_python_read_arrow.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_scalar_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udf requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_agg_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udf requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_grouped_map_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="applyInArrow requires PySpark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_cogrouped_map_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="applyInArrow requires PySpark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_udtf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
     ),
 ]
 
@@ -180,6 +210,21 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
                 if all(k in item.keywords for k in test.keywords):
                     for marker in test.markers:
                         item.add_marker(marker)
+
+    # Mark @sail-bug scenarios as xfail when running against Sail
+    if not is_jvm_spark():
+        for item in items:
+            marker = item.get_closest_marker("sail-bug")
+            if marker:
+                reason = marker.kwargs.get("reason", "Known Sail bug")
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
+
+    # Skip @spark-4 scenarios on PySpark < 4.x (e.g., Variant type not supported)
+    if pyspark_version() < (4,):
+        skip_spark4 = pytest.mark.skip(reason="Requires PySpark 4+ (e.g., Variant type)")
+        for item in items:
+            if item.get_closest_marker("spark-4"):
+                item.add_marker(skip_spark4)
 
     if is_jvm_spark():
         skip_sail_only = pytest.mark.skip(reason="Sail-only feature, not supported by Spark")

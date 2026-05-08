@@ -1,13 +1,16 @@
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
-use sail_catalog::provider::{CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions};
+use sail_catalog::manager::CatalogManager;
+use sail_catalog::provider::{
+    AlterTableOptions, CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions,
+};
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;
-use uuid::Uuid;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -43,23 +46,22 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
         }
-        let columns = self.resolve_table_columns(columns, state)?;
+        let mut columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
         let location = if let Some(location) = location {
             location
         } else {
-            self.resolve_default_table_location(&table)?
+            self.resolve_default_table_location(&table).await?
         };
         let format = self.resolve_catalog_table_format(file_format)?;
-        let partition_by = partition_by
-            .into_iter()
-            .map(|x| CatalogPartitionField {
-                column: x.into(),
-                transform: None,
-            })
-            .collect();
+        let partition_by =
+            self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
+        let properties = properties
+            .into_iter()
+            .chain(options.into_iter().map(|(k, v)| (format!("option.{k}"), v)))
+            .collect();
 
         let command = CatalogCommand::CreateTable {
             table: table.into(),
@@ -74,7 +76,6 @@ impl PlanResolver<'_> {
                 bucket_by,
                 if_not_exists,
                 replace,
-                options,
                 properties,
             },
         };
@@ -88,7 +89,7 @@ impl PlanResolver<'_> {
         query: spec::QueryPlan,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use super::super::write::{WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget};
+        use super::super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
         let spec::TableDefinition {
             columns,
             comment,
@@ -115,17 +116,6 @@ impl PlanResolver<'_> {
                 "CLUSTER BY in CREATE TABLE AS SELECT statement",
             ));
         }
-        if replace {
-            return Err(PlanError::todo(
-                "REPLACE in CREATE TABLE AS SELECT statement",
-            ));
-        }
-        if !properties.is_empty() {
-            return Err(PlanError::todo(
-                "PROPERTIES in CREATE TABLE AS SELECT statement",
-            ));
-        }
-
         if !sort_by.is_empty() {
             return Err(PlanError::todo(
                 "SORT_BY in CREATE TABLE AS SELECT statement",
@@ -155,71 +145,148 @@ impl PlanResolver<'_> {
             ));
         }
 
+        // Column definitions are not allowed in PARTITIONED BY for CTAS.
+        let partition_by_exprs = partition_by
+            .into_iter()
+            .map(|item| match item {
+                spec::PartitionColumn::Definition(_) => Err(PlanError::invalid(
+                    "column definitions are not allowed in PARTITIONED BY \
+                     for CREATE TABLE AS SELECT statement",
+                )),
+                spec::PartitionColumn::Expression(expr) => Ok(expr),
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+
         // Rename the input using names in the PlanResolverState, opaque field ID -> fieldInfo.name
         let input = self.resolve_query_plan(query, state).await?;
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
         let input = rename_logical_plan(input, &column_names)?;
         let format = self.resolve_catalog_table_format(file_format)?;
-        // Handle location: add to options if specified
         let mut write_options = options;
         if let Some(location) = location {
-            write_options.push(("location".to_string(), location));
+            write_options.push(("path".to_string(), location));
         }
 
-        // Set write mode and action based on if_not_exists
-        let write_mode = if if_not_exists {
+        // Set write mode based on create-or-replace / if-not-exists semantics.
+        let write_mode = if replace {
+            WriteMode::Replace {
+                error_if_absent: false,
+            }
+        } else if if_not_exists {
             WriteMode::IgnoreIfExists
         } else {
             WriteMode::ErrorIfExists
         };
-        let action = if if_not_exists {
-            WriteTableAction::CreateIfNotExists
-        } else {
-            WriteTableAction::Create
-        };
-        let partition_by = partition_by
-            .into_iter()
-            .map(|c| CatalogPartitionField {
-                column: c.into(),
-                transform: None,
-            })
-            .collect();
+        let partition_by = self.resolve_write_partition_by_expressions(partition_by_exprs)?;
         let builder = WritePlanBuilder::new()
-            .with_target(WriteTarget::NewTable { table, action })
+            .with_target(WriteTarget::Table {
+                table,
+                column_match: WriteColumnMatch::ByName,
+            })
             .with_mode(write_mode)
             .with_format(format)
             .with_partition_by(partition_by)
+            .with_table_properties(properties)
             .with_options(write_options);
 
         self.resolve_write_with_builder(input, builder, state).await
     }
 
-    pub(in super::super) fn resolve_default_table_location(
+    pub(in super::super) async fn resolve_default_table_location(
         &self,
         table: &spec::ObjectName,
     ) -> PlanResult<String> {
-        let name: String = table
-            .parts()
-            .last()
-            .ok_or_else(|| PlanError::invalid("missing table name"))?
-            .clone()
-            .into();
-        let name = name
-            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-            .to_lowercase();
+        let [qualifier @ .., last] = table.parts() else {
+            return Err(PlanError::invalid("missing table name"));
+        };
+        let name: String = last.clone().into();
+        // For characters in the table name that are not alphanumeric, `-`, or `_`,
+        // replace with a fixed-width hex encoding of the Unicode code point:
+        // `u+XXXX` for U+0000..U+FFFF and `U+XXXXXXXX` for U+10000..U+10FFFF.
+        let name: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c.to_string()
+                } else {
+                    let v = c as u32;
+                    if v <= 0xFFFF {
+                        format!("u+{v:04X}")
+                    } else {
+                        format!("U+{v:08X}")
+                    }
+                }
+            })
+            .collect();
         // We use our own logic to map tables to locations. This avoids conflicts
         // and avoids issues with special characters in table names.
         // Note that this is different from how Spark handles table locations
         // for the default catalog.
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let location = catalog_manager
+            .get_database_by_qualifier(qualifier)
+            .await?
+            .location;
+        let (base, suffix) = match &location {
+            Some(loc) => (
+                loc.trim_end_matches(object_store::path::DELIMITER),
+                String::new(),
+            ),
+            None => (
+                self.config
+                    .default_warehouse_directory
+                    .trim_end_matches(object_store::path::DELIMITER),
+                format!("-{}", uuid::Uuid::new_v4()),
+            ),
+        };
         Ok(format!(
-            "{}{}{}-{}",
-            self.config.default_warehouse_directory,
+            "{}{}{}{}",
+            base,
             object_store::path::DELIMITER,
             name,
-            Uuid::new_v4()
+            suffix,
         ))
     }
 
+    fn resolve_catalog_table_partition_by(
+        &self,
+        partition_by: Vec<spec::PartitionColumn>,
+        columns: &mut Vec<CreateTableColumnOptions>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<CatalogPartitionField>> {
+        let mut result = Vec::with_capacity(partition_by.len());
+        for item in partition_by {
+            match item {
+                spec::PartitionColumn::Expression(expr) => {
+                    result.push(self.resolve_partition_by_expression(expr)?);
+                }
+                spec::PartitionColumn::Definition(column) => {
+                    let resolved = self.resolve_table_columns(vec![column], state)?.one()?;
+                    if let Some(existing) = columns
+                        .iter()
+                        .find(|c| c.name.eq_ignore_ascii_case(&resolved.name))
+                    {
+                        if existing.data_type != resolved.data_type {
+                            return Err(PlanError::invalid(format!(
+                                "partition column '{}' has incompatible type: \
+                                 column definition has {:?} but PARTITIONED BY clause has {:?}",
+                                resolved.name, existing.data_type, resolved.data_type
+                            )));
+                        }
+                    } else {
+                        columns.push(resolved.clone());
+                    }
+                    result.push(CatalogPartitionField {
+                        column: resolved.name,
+                        transform: None,
+                    });
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Resolves a table file format clause to the concrete format name to write.
     fn resolve_catalog_table_format(
         &self,
         file_format: Option<spec::TableFileFormat>,
@@ -341,5 +408,30 @@ impl PlanResolver<'_> {
                 num_buckets,
             }
         }))
+    }
+
+    pub(in super::super) async fn resolve_catalog_alter_table(
+        &self,
+        table: spec::ObjectName,
+        if_exists: bool,
+        operation: spec::AlterTableOperation,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let options = match operation {
+            spec::AlterTableOperation::SetTableProperties { properties } => {
+                AlterTableOptions::SetTableProperties { properties }
+            }
+            spec::AlterTableOperation::UnsetTableProperties { keys, if_exists } => {
+                AlterTableOptions::UnsetTableProperties { keys, if_exists }
+            }
+            spec::AlterTableOperation::Unknown => {
+                return Err(PlanError::todo("unsupported ALTER TABLE operation"));
+            }
+        };
+        self.resolve_catalog_command(CatalogCommand::AlterTable {
+            table: table.into(),
+            if_exists,
+            options,
+        })
     }
 }

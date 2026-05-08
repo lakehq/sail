@@ -235,8 +235,13 @@ impl TryFrom<Expression> for spec::Expr {
                         .collect::<SparkResult<_>>()?,
                 })
             }
-            ExprType::NamedArgumentExpression(_) => {
-                Err(SparkError::todo("named argument expression"))
+            ExprType::NamedArgumentExpression(named) => {
+                // Convert named argument (used for Python UDF kwargs)
+                let value = named.value.required("named argument value")?;
+                Ok(spec::Expr::NamedArgument {
+                    key: named.key,
+                    value: Box::new((*value).try_into()?),
+                })
             }
             ExprType::MergeAction(_) => Err(SparkError::todo("merge action expression")),
             ExprType::TypedAggregateExpression(_) => {
@@ -519,9 +524,9 @@ impl TryFrom<udtf::Function> for spec::TableFunctionDefinition {
                 command,
                 python_ver,
             }) => {
-                let return_type = return_type.required("Python UDTF return type")?;
+                let return_type = return_type.map(|rt| rt.try_into()).transpose()?;
                 Ok(spec::TableFunctionDefinition::PythonUdtf {
-                    return_type: return_type.try_into()?,
+                    return_type,
                     eval_type: spec::PySparkUdfType::try_from(eval_type)?,
                     command,
                     python_version: python_ver,

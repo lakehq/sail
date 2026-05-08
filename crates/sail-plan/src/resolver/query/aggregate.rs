@@ -1,17 +1,38 @@
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::utils::{expr_as_column_expr, find_aggregate_exprs};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_python_udf::get_udf_display_name;
+use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
+
+/// Returns the name of a volatile (non-deterministic) scalar expression found
+/// in an aggregate context. Catches two Spark CheckAnalysis violations:
+/// 1. Volatile scalar UDF used directly in aggregate projections (outside any aggregate fn)
+/// 2. Volatile scalar UDF nested inside aggregate function arguments
+fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
+    let mut found_name: Option<String> = None;
+    let _ = expr.apply(|e| {
+        if let Expr::ScalarFunction(f) = e {
+            if f.func.signature().volatility == Volatility::Volatile {
+                found_name = Some(f.func.name().to_string());
+                return Ok(TreeNodeRecursion::Stop);
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    found_name
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_aggregate(
@@ -34,6 +55,19 @@ impl PlanResolver<'_> {
         let projections = self
             .resolve_named_expressions(projections, schema, state)
             .await?;
+
+        // Spark CheckAnalysis: reject non-deterministic expressions in aggregate context
+        for proj in &projections {
+            if let Some(name) = find_volatile_in_aggregate_context(&proj.expr) {
+                return Err(PlanError::AnalysisError(format!(
+                    "Non-deterministic expression {name} should not appear in an aggregate query",
+                )));
+            }
+        }
+
+        // Spark CheckAnalysis: GroupedAgg Pandas/Arrow UDFs cannot be mixed with regular
+        // (non-UDF) aggregate functions in the same .agg() call.
+        Self::check_no_mixed_grouped_agg_udf(&projections)?;
 
         let grouping = {
             let mut scope = state.enter_aggregate_scope(AggregateState::Grouping {
@@ -136,12 +170,10 @@ impl PlanResolver<'_> {
                         "group-by name count does not match expression count: {name:?} {exprs:?}",
                     )));
                 }
-                grouping_exprs.extend(exprs.iter().zip(name.into_iter()).map(|(expr, name)| {
-                    NamedExpr {
-                        name: vec![name],
-                        expr: expr.clone(),
-                        metadata: metadata.clone(),
-                    }
+                grouping_exprs.extend(exprs.iter().zip(name).map(|(expr, name)| NamedExpr {
+                    name: vec![name],
+                    expr: expr.clone(),
+                    metadata: metadata.clone(),
                 }));
                 aggregate_or_grouping_exprs.extend(exprs);
             }
@@ -179,6 +211,8 @@ impl PlanResolver<'_> {
         let (plan, projections) =
             self.rewrite_projection::<MonotonicIdRewriter>(plan, projections, state)?;
         let (plan, projections) =
+            self.rewrite_projection::<SparkPartitionIdRewriter>(plan, projections, state)?;
+        let (plan, projections) =
             self.rewrite_projection::<ExplodeRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<WindowRewriter>(plan, projections, state)?;
@@ -213,5 +247,45 @@ impl PlanResolver<'_> {
                 }
             })
             .data()?)
+    }
+
+    /// Spark CheckAnalysis: GroupedAgg Pandas/Arrow UDFs cannot be mixed with regular
+    /// (non-UDF) aggregate functions in the same `.agg()` call.
+    fn check_no_mixed_grouped_agg_udf(projections: &[NamedExpr]) -> PlanResult<()> {
+        let mut pyspark_agg_name: Option<String> = None;
+        let mut has_regular_agg = false;
+        for proj in projections {
+            let _ = proj.expr.apply(|e| {
+                if let Expr::AggregateFunction(agg) = e {
+                    if agg
+                        .func
+                        .inner()
+                        .as_any()
+                        .downcast_ref::<PySparkGroupAggregateUDF>()
+                        .is_some()
+                    {
+                        if pyspark_agg_name.is_none() {
+                            let full = agg.func.name();
+                            pyspark_agg_name = Some(get_udf_display_name(full).to_string());
+                        }
+                    } else {
+                        has_regular_agg = true;
+                    }
+                    // Don't recurse into the aggregate's args — no nested aggs here
+                    return Ok(TreeNodeRecursion::Jump);
+                }
+                Ok(TreeNodeRecursion::Continue)
+            });
+        }
+        if let Some(udf_name) = pyspark_agg_name {
+            if has_regular_agg {
+                return Err(PlanError::AnalysisError(format!(
+                    // Spark tests expect this error message. Typo is intended.
+                    "The group aggregate pandas UDF `{udf_name}` cannot be invoked \
+                     together with as other, non-pandas aggregate functions."
+                )));
+            }
+        }
+        Ok(())
     }
 }
