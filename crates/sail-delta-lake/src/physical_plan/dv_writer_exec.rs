@@ -1,6 +1,5 @@
 //! Physical execution node for Merge-on-Read deletion vector writing.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;

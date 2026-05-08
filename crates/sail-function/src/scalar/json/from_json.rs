@@ -104,7 +104,6 @@ impl SparkFromJson {
 }
 
 impl ScalarUDFImpl for SparkFromJson {
-
     fn name(&self) -> &str {
         Self::FROM_JSON_NAME
     }

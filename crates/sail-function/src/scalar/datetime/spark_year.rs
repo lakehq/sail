@@ -36,7 +36,6 @@ impl SparkYear {
 }
 
 impl ScalarUDFImpl for SparkYear {
-
     fn name(&self) -> &str {
         "spark_year"
     }

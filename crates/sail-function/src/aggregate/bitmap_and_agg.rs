@@ -46,7 +46,6 @@ impl BitmapAndAggFunction {
 }
 
 impl AggregateUDFImpl for BitmapAndAggFunction {
-
     fn name(&self) -> &str {
         "bitmap_and_agg"
     }

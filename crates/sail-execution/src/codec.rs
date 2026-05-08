@@ -1829,8 +1829,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 version: dv_rows_writer_exec.version(),
                 operation_json,
             })
-        } else if let Some(iceberg_writer_exec) = node.downcast_ref::<IcebergWriterExec>()
-        {
+        } else if let Some(iceberg_writer_exec) = node.downcast_ref::<IcebergWriterExec>() {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(iceberg_writer_exec.sink_mode())?;
             let options = serde_json::to_string(iceberg_writer_exec.options())

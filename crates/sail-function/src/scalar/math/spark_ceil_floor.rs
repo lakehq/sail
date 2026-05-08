@@ -193,7 +193,11 @@ fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
         DataType::Int8 | DataType::Int16 | DataType::Int32 => {
             return Ok(ExprSimplifyResult::Simplified(Expr::Cast(expr::Cast {
                 expr: Box::new(arg),
-                field: Arc::new(datafusion::arrow::datatypes::Field::new("", DataType::Int64, false)),
+                field: Arc::new(datafusion::arrow::datatypes::Field::new(
+                    "",
+                    DataType::Int64,
+                    false,
+                )),
             })));
         }
         _ => {}
