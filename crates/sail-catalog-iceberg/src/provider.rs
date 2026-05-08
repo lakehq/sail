@@ -1348,10 +1348,18 @@ fn parse_sort_column(column: &str) -> CatalogResult<(String, sail_iceberg::Trans
     let arguments = arguments.split(',').map(str::trim).collect::<Vec<_>>();
 
     match function.to_ascii_lowercase().as_str() {
-        "year" | "years" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Year),
-        "month" | "months" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Month),
-        "day" | "days" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Day),
-        "hour" | "hours" => parse_unary_sort_transform(arguments, sail_iceberg::Transform::Hour),
+        "year" | "years" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Year)
+        }
+        "month" | "months" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Month)
+        }
+        "day" | "days" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Day)
+        }
+        "hour" | "hours" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Hour)
+        }
         "bucket" => {
             let [num_buckets_str, column] = arguments.as_slice() else {
                 return Err(CatalogError::InvalidArgument(
@@ -1380,7 +1388,7 @@ fn parse_sort_column(column: &str) -> CatalogResult<(String, sail_iceberg::Trans
                 Ok((first.to_string(), sail_iceberg::Transform::Truncate(width)))
             } else {
                 Err(CatalogError::InvalidArgument(format!(
-                    "Invalid truncate width for sort transform: {first}, {second}"
+                    "truncate sort transform requires one argument to be a valid unsigned integer width, got: {first}, {second}"
                 )))
             }
         }
@@ -1397,13 +1405,14 @@ fn parse_transform_function(column: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_unary_sort_transform(
+    function: &str,
     arguments: Vec<&str>,
     transform: sail_iceberg::Transform,
 ) -> CatalogResult<(String, sail_iceberg::Transform)> {
     let [column] = arguments.as_slice() else {
-        return Err(CatalogError::InvalidArgument(
-            "sort transform expects a single column".to_string(),
-        ));
+        return Err(CatalogError::InvalidArgument(format!(
+            "{function} sort transform expects a single column"
+        )));
     };
     Ok((column.to_string(), transform))
 }
