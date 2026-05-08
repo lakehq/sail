@@ -845,7 +845,7 @@ pub fn expand_merge(
         &options.on_condition
     );
 
-    // Detect insert-only MERGE that can use fast append (anti-join + no touched files).
+    // Detect insert-only MERGE that can use fast append (no touched files).
     let can_fast_append = can_fast_append_insert_only(&options, target_schema, path_column)?;
 
     if can_fast_append {
@@ -1236,8 +1236,8 @@ fn build_insert_only_projection(
     path_column: &str,
     row_index_column: Option<&str>,
 ) -> Result<Vec<Expr>> {
-    // Match existing MERGE behavior: produce one output row per inserted source row,
-    // with clause order determining first-match semantics.
+    // Match existing MERGE behavior: clause order determines first-match semantics.
+    // Matched source rows may flow through as `Noop` rows for metrics, but are not written.
     let mut projections = Vec::new();
 
     // Source columns are prefixed with `__sail_src_`, so target field "id" maps
