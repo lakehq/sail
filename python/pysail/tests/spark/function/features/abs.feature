@@ -863,3 +863,31 @@ Feature: abs comprehensive tests
         SELECT abs(abs(CAST(-2147483648 AS INT))) AS result
         """
       Then query error .*\[ARITHMETIC_OVERFLOW\].*
+
+  Rule: cross-nesting result correctness
+
+    Scenario: ceil of abs for INT returns correct values
+      When query
+        """
+        SELECT ceil(abs(v)) AS result
+        FROM VALUES (CAST(-5 AS INT)), (CAST(0 AS INT)), (CAST(5 AS INT))
+        AS t(v) ORDER BY result
+        """
+      Then query result ordered
+        | result |
+        | 0      |
+        | 5      |
+        | 5      |
+
+    Scenario: ceil of abs for BIGINT returns correct values
+      When query
+        """
+        SELECT ceil(abs(v)) AS result
+        FROM VALUES (CAST(-5 AS BIGINT)), (CAST(0 AS BIGINT)), (CAST(5 AS BIGINT))
+        AS t(v) ORDER BY result
+        """
+      Then query result ordered
+        | result |
+        | 0      |
+        | 5      |
+        | 5      |
