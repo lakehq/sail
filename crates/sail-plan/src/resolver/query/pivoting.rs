@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::ScalarValue;
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
     col, expr, lit, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, ScalarUDF,
 };
@@ -57,38 +57,10 @@ impl PlanResolver<'_> {
             .await?;
 
         // 4. Determine grouping columns.
-        //    If grouping is empty (SQL case), infer from remaining columns
-        //    by excluding pivot columns and columns used in aggregates.
+        //    SQL PIVOT: infer from input minus pivot/aggregate columns.
+        //    DataFrame API: use the explicit `groupBy(...)` list.
         let grouping_named = if grouping.is_empty() {
-            let input_names = Self::get_field_names(schema, state)?;
-            let columns = Self::resolve_columns(self, schema, &input_names, state)?;
-
-            // Collect user-visible names referenced by pivot columns and aggregates.
-            let mut used_cols: HashSet<String> = HashSet::new();
-            for name in &pivot_col_names {
-                used_cols.insert(name.clone());
-            }
-            // Extract opaque field IDs from aggregate expressions, then map to user-visible names.
-            for agg in &aggregate_named {
-                let mut opaque_ids: HashSet<String> = HashSet::new();
-                collect_column_names(&agg.expr, &mut opaque_ids);
-                for id in &opaque_ids {
-                    if let Ok(info) = state.get_field_info(id) {
-                        used_cols.insert(info.name().to_string());
-                    }
-                }
-            }
-
-            columns
-                .iter()
-                .zip(input_names.iter())
-                .filter(|(_, name)| !used_cols.contains(name.as_str()))
-                .map(|(c, name)| NamedExpr {
-                    name: vec![name.clone()],
-                    expr: col(c.flat_name()),
-                    metadata: vec![],
-                })
-                .collect::<Vec<_>>()
+            self.infer_pivot_grouping_columns(schema, &pivot_col_names, &aggregate_named, state)?
         } else {
             self.resolve_named_expressions(grouping, schema, state)
                 .await?
@@ -161,6 +133,52 @@ impl PlanResolver<'_> {
             true, // with_grouping_expressions: include group-by columns in output
             state,
         )
+    }
+
+    fn infer_pivot_grouping_columns(
+        &self,
+        schema: &DFSchemaRef,
+        pivot_col_names: &[String],
+        aggregate_named: &[NamedExpr],
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<NamedExpr>> {
+        // Skip hidden fields: `resolve_columns` filters them out, so listing
+        // their names would produce `[UNRESOLVED_COLUMN]` errors.
+        let input_names: Vec<String> = schema
+            .fields()
+            .iter()
+            .filter_map(|field| {
+                let info = state.get_field_info(field.name()).ok()?;
+                (!info.is_hidden()).then(|| info.name().to_string())
+            })
+            .collect();
+        let columns = Self::resolve_columns(self, schema, &input_names, state)?;
+
+        let mut used_cols: HashSet<String> = HashSet::new();
+        for name in pivot_col_names {
+            used_cols.insert(name.clone());
+        }
+        // Aggregate expressions reference opaque field IDs; map back to user-visible names.
+        for agg in aggregate_named {
+            let mut opaque_ids: HashSet<String> = HashSet::new();
+            collect_column_names(&agg.expr, &mut opaque_ids);
+            for id in &opaque_ids {
+                if let Ok(info) = state.get_field_info(id) {
+                    used_cols.insert(info.name().to_string());
+                }
+            }
+        }
+
+        Ok(columns
+            .iter()
+            .zip(input_names.iter())
+            .filter(|(_, name)| !used_cols.contains(name.as_str()))
+            .map(|(c, name)| NamedExpr {
+                name: vec![name.clone()],
+                expr: col(c.flat_name()),
+                metadata: vec![],
+            })
+            .collect::<Vec<_>>())
     }
 
     /// Compute distinct values for the pivot column by executing a query.
