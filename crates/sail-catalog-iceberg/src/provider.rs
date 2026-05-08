@@ -1348,6 +1348,10 @@ fn build_sort_order(
     })))
 }
 
+/// Parses a catalog sort column into the Iceberg source column and transform.
+///
+/// The input is either a plain column name or a transform expression such as
+/// `years(ts)`, `bucket(16, id)`, or `truncate(4, category)`.
 fn parse_sort_column(column: &str) -> CatalogResult<(String, sail_iceberg::Transform)> {
     let column = column.trim();
     let Some((function, arguments)) = parse_transform_function(column) else {

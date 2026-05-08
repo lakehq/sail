@@ -439,6 +439,10 @@ impl PlanResolver<'_> {
     }
 }
 
+/// Resolves a CREATE TABLE sort transform into the string format consumed by catalogs.
+///
+/// Supported transforms are year/month/day/hour (singular or plural), bucket(count, column),
+/// and truncate(width, column) or truncate(column, width).
 fn resolve_catalog_sort_transform_function(func: spec::UnresolvedFunction) -> PlanResult<String> {
     let function_name: Vec<String> = func.function_name.into();
     let function_name = function_name.one()?;

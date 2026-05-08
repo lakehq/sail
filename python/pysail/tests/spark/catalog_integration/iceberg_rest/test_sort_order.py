@@ -27,6 +27,7 @@ def _load_table_metadata(iceberg_rest_endpoint: str, table_name: str) -> dict:
     namespace = urllib.parse.quote(NAMESPACE, safe="")
     table = urllib.parse.quote(table_name, safe="")
     url = f"{iceberg_rest_endpoint}/v1/namespaces/{namespace}/tables/{table}"
+    # Safe: the URL is built from the controlled Iceberg REST fixture endpoint.
     with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
         return json.load(response)["metadata"]
 
