@@ -398,6 +398,14 @@ Feature: Iceberg REST catalog table operations
       """
     Then query result has row where "col_name" is "id"
     Then query result has row where "col_name" is "profile"
+    Then query result row where "col_name" is "profile" has "data_type" containing "struct"
+    Then query result row where "col_name" is "profile" has "data_type" containing "name"
+    Then query result row where "col_name" is "profile" has "data_type" containing "contacts"
+    Then query result row where "col_name" is "profile" has "data_type" containing "array"
+    Then query result row where "col_name" is "profile" has "data_type" containing "kind"
+    Then query result row where "col_name" is "profile" has "data_type" containing "value"
+    Then query result row where "col_name" is "profile" has "data_type" containing "scores"
+    Then query result row where "col_name" is "profile" has "data_type" containing "map"
 
   Scenario: Create a partitioned table with a nested STRUCT column
     Given statement
@@ -417,8 +425,11 @@ Feature: Iceberg REST catalog table operations
     Then query result has row where "col_name" is "id"
     Then query result has row where "col_name" is "category"
     Then query result has row where "col_name" is "meta"
+    Then query result row where "col_name" is "meta" has "data_type" containing "struct"
+    Then query result row where "col_name" is "meta" has "data_type" containing "created_by"
+    Then query result row where "col_name" is "meta" has "data_type" containing "created_at"
 
-  Scenario: Create a table with PRIMARY KEY alongside a nested STRUCT column
+  Scenario: Create a table with a NOT NULL column alongside a nested STRUCT column
     Given statement
       """
       CREATE TABLE iceberg_table_test.pk_nested_t (
