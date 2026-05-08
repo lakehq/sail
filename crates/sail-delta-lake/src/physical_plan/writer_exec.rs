@@ -449,8 +449,9 @@ impl DeltaWriterExec {
         let table_exists = self.table_exists;
         let input_schema =
             normalize_delta_schema(&Self::schema_without_operation_column(&self.input.schema()));
+        let sink_schema =
+            normalize_delta_schema(&Self::schema_without_operation_column(&self.sink_schema));
         let operation_override = self.operation_override.clone();
-        // let sink_schema = self.sink_schema.clone();
         let session_timezone = context
             .session_config()
             .options()
@@ -563,7 +564,7 @@ impl DeltaWriterExec {
 
                 Self::handle_schema_evolution(table, &input_schema, schema_mode).await?
             } else {
-                (input_schema.clone(), Vec::new())
+                (sink_schema.clone(), Vec::new())
             };
             let final_schema = normalize_delta_schema(&final_schema);
 
