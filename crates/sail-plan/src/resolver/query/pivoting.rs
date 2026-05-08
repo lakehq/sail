@@ -218,6 +218,15 @@ impl PlanResolver<'_> {
                     let name =
                         formatter.literal_to_string(&scalar, &self.config.session_timezone)?;
                     values.push((scalar, name));
+                    if values.len() > self.config.pivot_max_values {
+                        return Err(PlanError::AnalysisError(format!(
+                            "The pivot column {pivot_col_expr} has more than {} distinct values, \
+                             this could indicate an error. If this was intended, set \
+                             spark.sql.pivotMaxValues to at least the number of distinct values \
+                             of the pivot column.",
+                            self.config.pivot_max_values,
+                        )));
+                    }
                 }
             }
         }
