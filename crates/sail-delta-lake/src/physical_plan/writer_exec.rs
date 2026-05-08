@@ -61,8 +61,8 @@ use crate::schema::{
     protocol_for_create, schema_contains_type_widening_metadata, schema_has_generated_columns,
 };
 use crate::spec::{
-    contains_timestampntz_arrow, Action, ColumnMappingMode, ColumnMetadataKey, MetadataValue,
-    StructField, StructType, TableProperties,
+    contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
+    ColumnMetadataKey, MetadataValue, StructField, StructType, TableProperties,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
@@ -473,6 +473,7 @@ impl DeltaWriterExec {
                 // fall back to `options.generation_expressions`, which the planner resolves
                 // from the write input's logical schema at plan-build time.
                 let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
+                let has_variant = contains_variant_arrow(final_schema.as_ref());
                 let mut kernel_schema = StructType::try_from(final_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 if !options.generation_expressions.is_empty() {
@@ -504,6 +505,7 @@ impl DeltaWriterExec {
                     has_timestamp_ntz,
                     TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
                     schema_has_generated_columns(&metadata_schema),
+                    has_variant,
                     &configuration,
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
