@@ -68,7 +68,7 @@ pub struct TableMetadata {
     /// A long higher than all assigned row IDs; the next snapshot's first-row-id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_row_id: Option<i64>,
-    /// Iceberg v3 encrypted table keys. Sail preserves this metadata but does not decrypt data yet.
+    /// Iceberg v3 encrypted table keys. We preserves this metadata but does not decrypt data yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub encryption_keys: Vec<EncryptedKey>,
     /// A list of valid snapshots
