@@ -3841,7 +3841,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: bitmap_and_agg"
+        "success": "ok"
       }
     },
     {
@@ -3863,7 +3863,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: bitmap_and_agg"
+        "success": "ok"
       }
     },
     {

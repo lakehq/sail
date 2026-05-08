@@ -61,6 +61,7 @@ message ExtendedPhysicalPlanNode {
     RelaxedTzCastExecNode relaxed_tz_cast = 46;
     SparkPartitionIdExecNode spark_partition_id = 47;
     DeletionVectorWriterExecNode deletion_vector_writer = 48;
+    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
   }
 }
 
@@ -94,6 +95,7 @@ message ExtendedScalarUdf {
     SparkNextDayUdf spark_next_day = 15;
     SparkTimeUdf spark_time = 16;
     SparkArrayFilterUdf spark_array_filter = 17;
+    SparkFromJsonUdf spark_from_json = 18;
   }
 }
 
@@ -203,6 +205,10 @@ message SparkArrayFilterUdf {
 message OuterColumnRef {
   string name = 1;
   bytes data_type = 2;
+}
+
+message SparkFromJsonUdf {
+  string session_timezone = 1;
 }
 
 message StandardUdaf {}
@@ -732,6 +738,16 @@ message DeletionVectorWriterExecNode {
   bytes table_schema = 4;
   int64 version = 5;
   optional string operation_json = 6;
+}
+
+message DeletionVectorRowsWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  string path_column = 3;
+  string row_index_column = 4;
+  int64 version = 5;
+  optional string operation_json = 6;
+  bytes adds_input = 7;
 }
 
 message PythonDataSourceInputPartition {

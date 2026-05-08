@@ -5,18 +5,12 @@
 [![PyPI Release](https://img.shields.io/pypi/v/pysail)](https://pypi.org/project/pysail/)
 [![Static Slack Badge](https://img.shields.io/badge/slack-LakeSail_Community-3762E0?logo=slack)](https://www.launchpass.com/lakesail-community/free)
 
-Sail is an open-source **unified and distributed multimodal computation framework** created by [LakeSail](https://lakesail.com/).
-
-Our mission is to **unify batch processing, stream processing, and compute-intensive AI workloads**. Sail is a compute engine that is:
+Sail is a **drop-in Apache Spark replacement** written in Rust, unifying batch processing, stream processing, and compute-intensive AI workloads on a distributed, multimodal compute engine.
 
 - **Compatible** with the Spark Connect protocol, supporting the Spark SQL and DataFrame API with no code rewrites required.
-- **~4x faster** than Spark in benchmarks (up to 8x in specific workloads).
-- **94% cheaper** on infrastructure costs.
 - **100% Rust-native** with no JVM overhead, delivering memory safety, instant startup, and predictable performance.
-
-**🚀 Sail outperforms Spark, popular Spark accelerators, Databricks, and Snowflake on [ClickBench](https://go.lakesail.com/clickbench).**
-
-**💬 [Join our Slack community](https://www.launchpass.com/lakesail-community/free)** to ask questions, share feedback, and connect with other Sail users and contributors.
+- **~4× faster** (up to 8× in specific workloads) than Spark and **94% cheaper** on infrastructure costs. See **[derived TPC-H benchmarks](#benchmark-results)**.
+- **Proven on [ClickBench](https://go.lakesail.com/clickbench)**, outperforming Spark, popular Spark accelerators, Databricks, and Snowflake.
 
 ## Documentation
 
@@ -30,11 +24,8 @@ Sail is available as a Python package on PyPI. You can install it along with PyS
 
 ```bash
 pip install pysail
-pip install "pyspark[connect]"
+pip install "pyspark-client"
 ```
-
-Alternatively, you can install the lightweight client package `pyspark-client` since Spark 4.0.
-The `pyspark-connect` package, which is equivalent to `pyspark[connect]`, is also available since Spark 4.0.
 
 ### Advanced Use Cases
 
@@ -99,36 +90,53 @@ See the [Migration Guide](https://docs.lakesail.com/sail/latest/introduction/mig
 
 ## Feature Highlights
 
+### Lakehouse Formats and Catalog Providers
+
+Sail provides native support for the [Delta Lake](https://docs.lakesail.com/sail/latest/guide/sources/delta/) and [Apache Iceberg](https://docs.lakesail.com/sail/latest/guide/sources/iceberg/) table formats.
+It integrates with catalog providers including Apache Iceberg REST Catalog, AWS Glue, Unity Catalog, Hive Metastore, and Microsoft OneLake.
+
+For more details on usage and best practices, see the [Data Sources Guide](https://docs.lakesail.com/sail/latest/guide/sources/) and [Catalog Guide](https://docs.lakesail.com/sail/latest/guide/catalog/).
+
 ### Storage
 
-Sail supports a variety of storage backends for reading and writing data. You can read more details in our [Storage Guide](https://docs.lakesail.com/sail/latest/guide/storage/).
-
-Here are the storage options supported:
+Sail supports a variety of storage backends for reading and writing data, including:
 
 - AWS S3
-- Cloudflare R2
 - Azure
-- Google Cloud Storage
 - Hugging Face
+- Cloudflare R2
+- Google Cloud Storage
 - HDFS
 - File systems
 - HTTP/HTTPS
 - In-memory storage
 
-### Lakehouse Formats
+See the [Storage Guide](https://docs.lakesail.com/sail/latest/guide/storage/) for more details.
 
-Sail provides native support for modern lakehouse table formats, offering reliable storage layers with strong data management guarantees and ensuring interoperability with existing datasets.
+## Why Choose Sail?
 
-Please refer to the following guides for the supported formats:
+For over 15 years, Spark has been the default engine for distributed data processing, powering ETL, machine learning, and analytics pipelines across nearly every industry.
 
-- [Delta Lake Guide](https://docs.lakesail.com/sail/latest/guide/formats/delta.html)
-- [Apache Iceberg Guide](https://docs.lakesail.com/sail/latest/guide/formats/iceberg.html)
+But the JVM foundation that made Spark possible is now what holds it back. Sail is built to be a familiar, performant alternative without the JVM tax.
 
-### Catalog Providers
+### Sail is Spark-compatible
 
-Sail supports multiple catalog providers, such as the Apache Iceberg REST Catalog and Unity Catalog. You can manage datasets as external tables and integrate with broader data-platform ecosystems.
+Sail offers a drop-in replacement for Spark SQL and the Spark DataFrame API. Existing PySpark code works out of the box once you connect your Spark client session to Sail over the Spark Connect protocol.
 
-For more details on usage and best practices, see the [Catalog Guide](https://docs.lakesail.com/sail/latest/guide/catalog/).
+- **Spark SQL Dialect Support.** A custom Rust parser (built with parser combinators and Rust procedural macros) covers Spark SQL syntax with production-grade accuracy.
+- **DataFrame API Support.** Spark DataFrame operations run on Sail with identical semantics.
+- **Python UDF, UDAF, UDWF, and UDTF Support.** Python, Pandas, and Arrow UDFs all follow the same conventions as Spark.
+
+### Sail’s Advantages over Spark
+
+- **Rust-Native Engine.** No garbage collection pauses, no JVM memory tuning, and low memory footprint.
+- **Columnar Format and Vectorized Execution.** Built on top of [Apache Arrow](https://github.com/apache/arrow) and [Apache DataFusion](https://github.com/apache/datafusion), the columnar in-memory format and SIMD instructions unlock blazing-fast query execution.
+- **Lightning-Fast Python UDFs.** Python code runs inside Sail with zero serialization overhead as Arrow array pointers enable zero-copy data sharing.
+- **Performant Data Shuffling.** Workers exchange Arrow columnar data directly, minimizing shuffle costs for joins and aggregations.
+- **Lightweight, Stateless Workers.** Workers start in seconds, consume only a few megabytes of memory at idle, and scale elastically to cut cloud costs and simplify operations.
+- **Concurrency and Memory Safety You Can Trust.** Rust’s ownership model prevents null pointers, race conditions, and unsafe memory access for unmatched reliability.
+
+Ready to bring your existing workloads over? Our [Migration Guide](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/) shows you how.
 
 ## Benchmark Results
 
@@ -150,44 +158,9 @@ These results come from a derived TPC-H benchmark (22 queries, scale factor 100,
 
 See the full analysis and graphs on our [Benchmark Results](https://docs.lakesail.com/sail/latest/introduction/benchmark-results/) page.
 
-## Why Choose Sail?
-
-When Spark was invented over 15 years ago, it was revolutionary. It redefined distributed data processing and powered ETL, machine learning, and analytics pipelines across industries.
-
-But Spark’s JVM-based architecture now struggles to meet modern demands for performance and cloud efficiency:
-
-- **Garbage collection pauses** introduce latency spikes.
-- **Serialization overhead** slows data exchange between JVM and Python.
-- **Heavy executors** drive up cloud costs and complicate scaling.
-- **Row-based processing** performs poorly on analytical workloads and leaves hardware efficiency untapped.
-- **Slow startup** delays workloads, hurting interactive and on-demand use cases.
-
-Sail solves these problems with a modern, Rust-native design.
-
-### Sail is Spark-compatible
-
-Sail offers a drop-in replacement for Spark SQL and the Spark DataFrame API. Existing PySpark code works out of the box once you connect your Spark client session to Sail over the Spark Connect protocol.
-
-- **Spark SQL Dialect Support.** A custom Rust parser (built with parser combinators and Rust procedural macros) covers Spark SQL syntax with production-grade accuracy.
-- **DataFrame API Support.** Spark DataFrame operations run on Sail with identical semantics.
-- **Python UDF, UDAF, UDWF, and UDTF Support.** Python, Pandas, and Arrow UDFs all follow the same conventions as Spark.
-
-### Sail’s Advantages over Spark
-
-- **Rust-Native Engine.** No garbage collection pauses, no JVM memory tuning, and low memory footprint.
-- **Columnar Format and Vectorized Execution.** Built on top of [Apache Arrow](https://github.com/apache/arrow) and [Apache DataFusion](https://github.com/apache/datafusion), the columnar in-memory format and SIMD instructions unlock blazing-fast query execution.
-- **Lightning-Fast Python UDFs.** Python code runs inside Sail with zero serialization overhead as Arrow array pointers enable zero-copy data sharing.
-- **Performant Data Shuffling.** Workers exchange Arrow columnar data directly, minimizing shuffle costs for joins and aggregations.
-- **Lightweight, Stateless Workers.** Workers start in seconds, consume only a few megabytes of memory at idle, and scale elastically to cut cloud costs and simplify operations.
-- **Concurrency and Memory Safety You Can Trust.** Rust’s ownership model prevents null pointers, race conditions, and unsafe memory access for unmatched reliability.
-
-Curious about how Sail stacks up against Spark? Explore our [Why Sail?](https://lakesail.com/why-sail/) page. Ready to bring your existing workloads over? Our [Migration Guide](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/) shows you how.
-
 ## Further Reading
 
 - [Architecture](https://docs.lakesail.com/sail/latest/concepts/architecture/) – Overview of Sail’s design for both local and cluster modes, and how it transitions seamlessly between them.
 - [Query Planning](https://docs.lakesail.com/sail/latest/concepts/query-planning/) – Detailed explanation of how Sail parses SQL and Spark relations, builds logical and physical plans, and handles execution for local and cluster modes.
 - [SQL](https://docs.lakesail.com/sail/latest/guide/sql/) and [DataFrame](https://docs.lakesail.com/sail/latest/guide/dataframe/) Features – Complete reference for Spark SQL and DataFrame API compatibility.
 - [LakeSail Blog](https://lakesail.com/blog/) – Updates on Sail releases, benchmarks, and technical insights.
-
-**✨Using Sail? [Tell us your story](https://lakesail.com/share-story/) and get free merch!✨**

@@ -11,7 +11,7 @@
 // limitations under the License.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, BooleanArray, UInt64Array};
@@ -24,10 +24,12 @@ use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 
 use crate::spec::partition::PartitionSpec;
+use crate::spec::transform::Transform;
 use crate::spec::types::values::{Datum, Literal, PrimitiveLiteral};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{DataFile, Manifest, ManifestContentType, ManifestList, Schema};
 use crate::utils::conversions::{scalar_to_primitive_literal, to_scalar};
+use crate::utils::transform::apply_transform;
 // TODO: Implement robust logical expression parsing for summary pruning
 
 /// Pruning statistics over Iceberg DataFiles
@@ -249,24 +251,21 @@ pub fn prune_files(
 pub fn prune_manifests_by_partition_summaries<'a>(
     manifest_list: &'a ManifestList,
     table_schema: &Schema,
-    partition_specs: &std::collections::HashMap<i32, PartitionSpec>,
+    partition_specs: &HashMap<i32, PartitionSpec>,
     filters: &[Expr],
 ) -> Vec<&'a crate::spec::manifest_list::ManifestFile> {
-    // TODO: Add support for non-identity transforms (day/month/hour/bucket/truncate)
-    let eq_filters = collect_identity_eq_filters(table_schema, filters);
-    let in_filters = collect_identity_in_filters(table_schema, filters);
-    let range_filters = collect_identity_range_filters(table_schema, filters);
     manifest_list
         .entries()
         .iter()
         .filter(|mf| mf.content == ManifestContentType::Data)
         .filter(|mf| {
-            if eq_filters.is_empty() {
-                return true;
-            }
             let Some(spec) = partition_specs.get(&mf.partition_spec_id) else {
                 return true;
             };
+            let predicates = partition_predicates_for_spec(table_schema, spec, filters);
+            if predicates.is_empty() {
+                return true;
+            }
             let Some(part_summaries) = mf.partitions.as_ref() else {
                 return true;
             };
@@ -274,118 +273,51 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                 Ok(t) => t,
                 Err(_) => return true,
             };
-            for (source_id, lit) in &eq_filters {
-                if let Some((idx, _pf)) = spec.fields().iter().enumerate().find(|(_, pf)| {
-                    pf.source_id == *source_id
-                        && matches!(pf.transform, crate::spec::transform::Transform::Identity)
-                }) {
-                    if let Some(summary) = part_summaries.get(idx) {
-                        let field_ty = part_type.fields().get(idx).map(|nf| nf.field_type.as_ref());
-                        if let Some(Type::Primitive(prim_ty)) = field_ty {
-                            // TODO: Handle contains_null/contains_nan from FieldSummary
-                            let lower = summary
-                                .lower_bound_bytes
-                                .as_ref()
-                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
-                            let upper = summary
-                                .upper_bound_bytes
-                                .as_ref()
-                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
+            predicates.iter().all(|predicate| {
+                let Some(summary) = part_summaries.get(predicate.field_index) else {
+                    return true;
+                };
+                let Some(Type::Primitive(prim_ty)) = part_type
+                    .fields()
+                    .get(predicate.field_index)
+                    .map(|nf| nf.field_type.as_ref())
+                else {
+                    return true;
+                };
+                let lower = summary
+                    .lower_bound_bytes
+                    .as_ref()
+                    .and_then(|b| prim_ty.literal_from_bytes(b).ok());
+                let upper = summary
+                    .upper_bound_bytes
+                    .as_ref()
+                    .and_then(|b| prim_ty.literal_from_bytes(b).ok());
+                partition_predicate_may_match_bounds(predicate, lower.as_ref(), upper.as_ref())
+            })
+        })
+        .collect()
+}
 
-                            if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
-                                if lit < lb || lit > ub {
-                                    return false;
-                                }
-                            } else if let Some(lb) = lower.as_ref() {
-                                if lit < lb {
-                                    return false;
-                                }
-                            } else if let Some(ub) = upper.as_ref() {
-                                if lit > ub {
-                                    return false;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+pub fn prune_data_files_by_partition_values(
+    files: Vec<DataFile>,
+    table_schema: &Schema,
+    partition_spec: &PartitionSpec,
+    filters: &[Expr],
+) -> Vec<DataFile> {
+    let predicates = partition_predicates_for_spec(table_schema, partition_spec, filters);
+    if predicates.is_empty() {
+        return files;
+    }
 
-            for (source_id, lits) in &in_filters {
-                if let Some((idx, _pf)) = spec.fields().iter().enumerate().find(|(_, pf)| {
-                    pf.source_id == *source_id
-                        && matches!(pf.transform, crate::spec::transform::Transform::Identity)
-                }) {
-                    if let Some(summary) = part_summaries.get(idx) {
-                        let field_ty = part_type.fields().get(idx).map(|nf| nf.field_type.as_ref());
-                        if let Some(Type::Primitive(prim_ty)) = field_ty {
-                            let lower = summary
-                                .lower_bound_bytes
-                                .as_ref()
-                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
-                            let upper = summary
-                                .upper_bound_bytes
-                                .as_ref()
-                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
-                            if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
-                                let mut any_in = false;
-                                for lit in lits {
-                                    if !(lit < lb || lit > ub) {
-                                        any_in = true;
-                                        break;
-                                    }
-                                }
-                                if !any_in {
-                                    return false;
-                                }
-                            } else if let Some(lb) = lower.as_ref() {
-                                let any_in = lits.iter().any(|v| v >= lb);
-                                if !any_in {
-                                    return false;
-                                }
-                            } else if let Some(ub) = upper.as_ref() {
-                                let any_in = lits.iter().any(|v| v <= ub);
-                                if !any_in {
-                                    return false;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            for (source_id, range) in &range_filters {
-                if let Some((idx, _pf)) = spec.fields().iter().enumerate().find(|(_, pf)| {
-                    pf.source_id == *source_id
-                        && matches!(pf.transform, crate::spec::transform::Transform::Identity)
-                }) {
-                    if let Some(summary) = part_summaries.get(idx) {
-                        let field_ty = part_type.fields().get(idx).map(|nf| nf.field_type.as_ref());
-                        if let Some(Type::Primitive(prim_ty)) = field_ty {
-                            let lower = summary
-                                .lower_bound_bytes
-                                .as_ref()
-                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
-                            let upper = summary
-                                .upper_bound_bytes
-                                .as_ref()
-                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
-                            if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
-                                if let Some((ref qmin, _incl_min)) = range.min {
-                                    if qmin > ub {
-                                        return false;
-                                    }
-                                }
-                                if let Some((ref qmax, _incl_max)) = range.max {
-                                    if qmax < lb {
-                                        return false;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            true
+    files
+        .into_iter()
+        .filter(|file| {
+            predicates.iter().all(|predicate| {
+                let Some(value) = file.partition().get(predicate.field_index) else {
+                    return true;
+                };
+                partition_predicate_may_match_value(predicate, value.as_ref())
+            })
         })
         .collect()
 }
@@ -411,7 +343,7 @@ pub fn prune_manifest_entries(
         .collect()
 }
 
-fn collect_identity_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, PrimitiveLiteral)> {
+fn collect_source_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, PrimitiveLiteral)> {
     fn strip(expr: &Expr) -> &Expr {
         match expr {
             Expr::Cast(c) => strip(&c.expr),
@@ -467,10 +399,10 @@ fn collect_identity_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, P
     result
 }
 
-fn collect_identity_in_filters(
+fn collect_source_in_filters(
     schema: &Schema,
     filters: &[Expr],
-) -> std::collections::HashMap<i32, Vec<PrimitiveLiteral>> {
+) -> HashMap<i32, Vec<PrimitiveLiteral>> {
     fn strip(expr: &Expr) -> &Expr {
         match expr {
             Expr::Cast(c) => strip(&c.expr),
@@ -479,13 +411,9 @@ fn collect_identity_in_filters(
         }
     }
 
-    let mut result: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
+    let mut result: HashMap<_, Vec<_>> = HashMap::new();
 
-    fn visit_expr(
-        acc: &mut std::collections::HashMap<i32, Vec<PrimitiveLiteral>>,
-        schema: &Schema,
-        e: &Expr,
-    ) {
+    fn visit_expr(acc: &mut HashMap<i32, Vec<PrimitiveLiteral>>, schema: &Schema, e: &Expr) {
         match e {
             Expr::InList(in_list) if !in_list.negated => {
                 let e = strip(&in_list.expr);
@@ -519,16 +447,271 @@ fn collect_identity_in_filters(
     result
 }
 
+#[derive(Clone)]
+struct PartitionPredicate {
+    field_index: usize,
+    constraint: PartitionConstraint,
+}
+
+#[derive(Clone)]
+enum PartitionConstraint {
+    Eq(PrimitiveLiteral),
+    In(Vec<PrimitiveLiteral>),
+    Range(RangeConstraint),
+}
+
 #[derive(Clone, Default)]
 struct RangeConstraint {
     min: Option<(PrimitiveLiteral, bool)>,
     max: Option<(PrimitiveLiteral, bool)>,
 }
 
-fn collect_identity_range_filters(
+fn partition_predicates_for_spec(
+    schema: &Schema,
+    spec: &PartitionSpec,
+    filters: &[Expr],
+) -> Vec<PartitionPredicate> {
+    let eq_filters = collect_source_eq_filters(schema, filters);
+    let in_filters = collect_source_in_filters(schema, filters);
+    let range_filters = collect_source_range_filters(schema, filters);
+
+    let mut predicates = Vec::new();
+    for (field_index, partition_field) in spec.fields().iter().enumerate() {
+        if matches!(
+            partition_field.transform,
+            Transform::Void | Transform::Unknown
+        ) {
+            continue;
+        }
+        let Some(source_field) = schema.field_by_id(partition_field.source_id) else {
+            continue;
+        };
+        let source_type = source_field.field_type.as_ref();
+
+        for (_, literal) in eq_filters
+            .iter()
+            .filter(|(source_id, _)| *source_id == partition_field.source_id)
+        {
+            if let Some(value) =
+                transform_primitive_literal(partition_field.transform, source_type, literal.clone())
+            {
+                predicates.push(PartitionPredicate {
+                    field_index,
+                    constraint: PartitionConstraint::Eq(value),
+                });
+            }
+        }
+
+        if let Some(literals) = in_filters.get(&partition_field.source_id) {
+            let mut values = Vec::new();
+            let mut seen = HashSet::new();
+            for literal in literals {
+                if let Some(value) = transform_primitive_literal(
+                    partition_field.transform,
+                    source_type,
+                    literal.clone(),
+                ) {
+                    if seen.insert(value.clone()) {
+                        values.push(value);
+                    }
+                }
+            }
+            if !values.is_empty() {
+                predicates.push(PartitionPredicate {
+                    field_index,
+                    constraint: PartitionConstraint::In(values),
+                });
+            }
+        }
+
+        if let Some(range) = range_filters.get(&partition_field.source_id) {
+            if let Some(range) =
+                transform_range_constraint(partition_field.transform, source_type, range)
+            {
+                predicates.push(PartitionPredicate {
+                    field_index,
+                    constraint: PartitionConstraint::Range(range),
+                });
+            }
+        }
+    }
+
+    predicates
+}
+
+fn transform_primitive_literal(
+    transform: Transform,
+    source_type: &Type,
+    literal: PrimitiveLiteral,
+) -> Option<PrimitiveLiteral> {
+    match apply_transform(transform, source_type, Some(Literal::Primitive(literal))) {
+        Some(Literal::Primitive(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn transform_range_constraint(
+    transform: Transform,
+    source_type: &Type,
+    range: &RangeConstraint,
+) -> Option<RangeConstraint> {
+    if !transform.preserves_order() {
+        return None;
+    }
+
+    let min = range.min.as_ref().and_then(|(literal, inclusive)| {
+        transform_bound_literal(transform, source_type, literal, true, *inclusive)
+            .map(|value| (value, true))
+    });
+    let max = range.max.as_ref().and_then(|(literal, inclusive)| {
+        transform_bound_literal(transform, source_type, literal, false, *inclusive)
+            .map(|value| (value, true))
+    });
+
+    if min.is_none() && max.is_none() {
+        None
+    } else {
+        Some(RangeConstraint { min, max })
+    }
+}
+
+fn transform_bound_literal(
+    transform: Transform,
+    source_type: &Type,
+    literal: &PrimitiveLiteral,
+    is_lower_bound: bool,
+    inclusive: bool,
+) -> Option<PrimitiveLiteral> {
+    let literal = if inclusive {
+        literal.clone()
+    } else {
+        adjust_exclusive_bound(source_type, literal, is_lower_bound)
+            .unwrap_or_else(|| literal.clone())
+    };
+    transform_primitive_literal(transform, source_type, literal)
+}
+
+fn adjust_exclusive_bound(
+    source_type: &Type,
+    literal: &PrimitiveLiteral,
+    is_lower_bound: bool,
+) -> Option<PrimitiveLiteral> {
+    let primitive_type = source_type.as_primitive_type()?;
+    match (primitive_type, literal) {
+        (PrimitiveType::Int | PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
+            shift_i32(*value, is_lower_bound).map(PrimitiveLiteral::Int)
+        }
+        (
+            PrimitiveType::Long
+            | PrimitiveType::Time
+            | PrimitiveType::Timestamp
+            | PrimitiveType::Timestamptz
+            | PrimitiveType::TimestampNs
+            | PrimitiveType::TimestamptzNs,
+            PrimitiveLiteral::Long(value),
+        ) => shift_i64(*value, is_lower_bound).map(PrimitiveLiteral::Long),
+        _ => None,
+    }
+}
+
+fn shift_i32(value: i32, increment: bool) -> Option<i32> {
+    if increment {
+        value.checked_add(1)
+    } else {
+        value.checked_sub(1)
+    }
+}
+
+fn shift_i64(value: i64, increment: bool) -> Option<i64> {
+    if increment {
+        value.checked_add(1)
+    } else {
+        value.checked_sub(1)
+    }
+}
+
+fn partition_predicate_may_match_bounds(
+    predicate: &PartitionPredicate,
+    lower: Option<&PrimitiveLiteral>,
+    upper: Option<&PrimitiveLiteral>,
+) -> bool {
+    match &predicate.constraint {
+        PartitionConstraint::Eq(value) => literal_may_match_bounds(value, lower, upper),
+        PartitionConstraint::In(values) => values
+            .iter()
+            .any(|value| literal_may_match_bounds(value, lower, upper)),
+        PartitionConstraint::Range(range) => range_may_match_bounds(range, lower, upper),
+    }
+}
+
+fn partition_predicate_may_match_value(
+    predicate: &PartitionPredicate,
+    value: Option<&Literal>,
+) -> bool {
+    let Some(Literal::Primitive(value)) = value else {
+        return true;
+    };
+    match &predicate.constraint {
+        PartitionConstraint::Eq(expected) => value == expected,
+        PartitionConstraint::In(values) => values.contains(value),
+        PartitionConstraint::Range(range) => literal_may_match_range(value, range),
+    }
+}
+
+fn literal_may_match_bounds(
+    value: &PrimitiveLiteral,
+    lower: Option<&PrimitiveLiteral>,
+    upper: Option<&PrimitiveLiteral>,
+) -> bool {
+    if let Some(lower) = lower {
+        if value < lower {
+            return false;
+        }
+    }
+    if let Some(upper) = upper {
+        if value > upper {
+            return false;
+        }
+    }
+    true
+}
+
+fn range_may_match_bounds(
+    range: &RangeConstraint,
+    lower: Option<&PrimitiveLiteral>,
+    upper: Option<&PrimitiveLiteral>,
+) -> bool {
+    if let (Some((min, inclusive)), Some(upper)) = (&range.min, upper) {
+        if min > upper || (min == upper && !inclusive) {
+            return false;
+        }
+    }
+    if let (Some((max, inclusive)), Some(lower)) = (&range.max, lower) {
+        if max < lower || (max == lower && !inclusive) {
+            return false;
+        }
+    }
+    true
+}
+
+fn literal_may_match_range(value: &PrimitiveLiteral, range: &RangeConstraint) -> bool {
+    if let Some((min, inclusive)) = &range.min {
+        if value < min || (value == min && !inclusive) {
+            return false;
+        }
+    }
+    if let Some((max, inclusive)) = &range.max {
+        if value > max || (value == max && !inclusive) {
+            return false;
+        }
+    }
+    true
+}
+
+fn collect_source_range_filters(
     schema: &Schema,
     filters: &[Expr],
-) -> std::collections::HashMap<i32, RangeConstraint> {
+) -> HashMap<i32, RangeConstraint> {
     fn strip(expr: &Expr) -> &Expr {
         match expr {
             Expr::Cast(c) => strip(&c.expr),
@@ -541,7 +724,7 @@ fn collect_identity_range_filters(
         match cur {
             None => *cur = Some(cand),
             Some((ref mut v, ref mut incl)) => {
-                if cand.0 > *v || (cand.0 == *v && cand.1 && !*incl) {
+                if cand.0 > *v || (cand.0 == *v && !cand.1 && *incl) {
                     *v = cand.0;
                     *incl = cand.1;
                 }
@@ -552,7 +735,7 @@ fn collect_identity_range_filters(
         match cur {
             None => *cur = Some(cand),
             Some((ref mut v, ref mut incl)) => {
-                if cand.0 < *v || (cand.0 == *v && cand.1 && !*incl) {
+                if cand.0 < *v || (cand.0 == *v && !cand.1 && *incl) {
                     *v = cand.0;
                     *incl = cand.1;
                 }
@@ -560,36 +743,57 @@ fn collect_identity_range_filters(
         }
     }
 
-    let mut result: std::collections::HashMap<i32, RangeConstraint> =
-        std::collections::HashMap::new();
+    let mut result: HashMap<i32, RangeConstraint> = HashMap::new();
 
-    fn visit_expr(
-        acc: &mut std::collections::HashMap<i32, RangeConstraint>,
+    fn add_min(
+        acc: &mut HashMap<i32, RangeConstraint>,
         schema: &Schema,
-        e: &Expr,
+        column_name: &str,
+        literal: &datafusion::common::scalar::ScalarValue,
+        inclusive: bool,
     ) {
+        if let Some(field) = schema.field_by_name(column_name) {
+            if let Ok(pl) = scalar_to_primitive_literal(literal) {
+                let entry = acc.entry(field.id).or_default();
+                tighten_min(&mut entry.min, (pl, inclusive));
+            }
+        }
+    }
+
+    fn add_max(
+        acc: &mut HashMap<i32, RangeConstraint>,
+        schema: &Schema,
+        column_name: &str,
+        literal: &datafusion::common::scalar::ScalarValue,
+        inclusive: bool,
+    ) {
+        if let Some(field) = schema.field_by_name(column_name) {
+            if let Ok(pl) = scalar_to_primitive_literal(literal) {
+                let entry = acc.entry(field.id).or_default();
+                tighten_max(&mut entry.max, (pl, inclusive));
+            }
+        }
+    }
+
+    fn visit_expr(acc: &mut HashMap<i32, RangeConstraint>, schema: &Schema, e: &Expr) {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = e {
             let l = strip(left);
             let r = strip(right);
             match op {
                 Operator::Gt | Operator::GtEq => {
                     if let (Expr::Column(c), Expr::Literal(sv, _)) = (l, r) {
-                        if let Some(field) = schema.field_by_name(&c.name) {
-                            if let Ok(pl) = scalar_to_primitive_literal(sv) {
-                                let entry = acc.entry(field.id).or_default();
-                                tighten_min(&mut entry.min, (pl, *op == Operator::GtEq));
-                            }
-                        }
+                        add_min(acc, schema, &c.name, sv, *op == Operator::GtEq);
+                    }
+                    if let (Expr::Literal(sv, _), Expr::Column(c)) = (l, r) {
+                        add_max(acc, schema, &c.name, sv, *op == Operator::GtEq);
                     }
                 }
                 Operator::Lt | Operator::LtEq => {
                     if let (Expr::Column(c), Expr::Literal(sv, _)) = (l, r) {
-                        if let Some(field) = schema.field_by_name(&c.name) {
-                            if let Ok(pl) = scalar_to_primitive_literal(sv) {
-                                let entry = acc.entry(field.id).or_default();
-                                tighten_max(&mut entry.max, (pl, *op == Operator::LtEq));
-                            }
-                        }
+                        add_max(acc, schema, &c.name, sv, *op == Operator::LtEq);
+                    }
+                    if let (Expr::Literal(sv, _), Expr::Column(c)) = (l, r) {
+                        add_min(acc, schema, &c.name, sv, *op == Operator::LtEq);
                     }
                 }
                 Operator::And => {

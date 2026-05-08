@@ -59,8 +59,8 @@ use crate::schema::{
     schema_has_generated_columns,
 };
 use crate::spec::{
-    contains_timestampntz_arrow, Action, ColumnMappingMode, ColumnMetadataKey, MetadataValue,
-    StructField, StructType, TableProperties,
+    contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
+    ColumnMetadataKey, MetadataValue, StructField, StructType, TableProperties,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
@@ -472,6 +472,7 @@ impl DeltaWriterExec {
                 // fall back to `options.generation_expressions`, which the planner resolves
                 // from the write input's logical schema at plan-build time.
                 let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
+                let has_variant = contains_variant_arrow(final_schema.as_ref());
                 let mut kernel_schema = StructType::try_from(final_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 if !options.generation_expressions.is_empty() {
@@ -503,6 +504,7 @@ impl DeltaWriterExec {
                     has_timestamp_ntz,
                     TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
                     schema_has_generated_columns(&metadata_schema),
+                    has_variant,
                     &configuration,
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -690,6 +692,12 @@ impl DeltaWriterExec {
 
             let operation = operation_override.or(operation);
 
+            // TODO: for MERGE, populate numSourceRows / numTargetRowsInserted /
+            // numTargetRowsUpdated / numTargetRowsDeleted / numTargetRowsCopied by
+            // counting rows per OPERATION_COLUMN value in the writer input stream
+            // (copy=0, insert=1, update=2, delete=3). The column is currently stripped
+            // before this point — plumb it through as side metrics without writing it
+            // to disk.
             let operation_metrics = OperationMetrics {
                 num_files: Some(num_added_files),
                 num_output_rows: Some(total_rows),

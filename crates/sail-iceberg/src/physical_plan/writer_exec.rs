@@ -26,7 +26,6 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
-use object_store::ObjectStoreExt;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -324,14 +323,11 @@ impl ExecutionPlan for IcebergWriterExec {
             ) = if table_exists {
                 let latest_meta =
                     crate::table::find_latest_metadata_file(&object_store, &table_url).await?;
-                let meta_path = object_store::path::Path::from(latest_meta.as_str());
-                let bytes = object_store
-                    .get(&meta_path)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .bytes()
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let bytes = crate::table::metadata_loader::load_metadata_file_bytes(
+                    &object_store,
+                    &latest_meta,
+                )
+                .await?;
                 let table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let data_dir = Self::resolve_data_dir(&table_meta, &table_url);

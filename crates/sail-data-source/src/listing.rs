@@ -26,30 +26,7 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     options_vec: Vec<OptionLayer>,
     listing_format: &ListingTableFormat<T>,
 ) -> Result<Arc<Schema>> {
-    // The logic is similar to `ListingOptions::infer_schema()`
-    // but here we also check for the existence of files.
-    let mut file_groups = vec![];
-    for url in urls {
-        let store = ctx.runtime_env().object_store(url)?;
-        let files: Vec<_> = list_all_files(
-            url,
-            ctx,
-            &store,
-            &options.file_extension,
-            extension_with_compression.as_deref(),
-        )
-        .await?
-        // Here we sample up to 10 files to infer the schema.
-        // The value is hard-coded here since DataFusion uses the same hard-coded value
-        // for operations such as `infer_partitions_from_path`.
-        // We can make it configurable if DataFusion makes those operations configurable
-        // as well in the future.
-        .take(10)
-        .try_collect()
-        .await?;
-        file_groups.push((store, files));
-    }
-
+    let file_groups = list_sample_files(ctx, urls, extension_with_compression.as_deref()).await?;
     let empty = file_groups.iter().all(|(_, files)| files.is_empty());
     if empty {
         let urls = urls
@@ -60,52 +37,14 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
         return plan_err!("No files found in the specified paths: {urls}")?;
     }
 
-    let file_extension = if let Some(extension_with_compression) = extension_with_compression {
-        resolve_listing_file_extension(
-            &file_groups,
-            &options.file_extension,
-            extension_with_compression,
-        )
-    } else {
-        let result = infer_listing_file_extension(&file_groups, &options.file_extension);
-        if let Some(result) = result {
-            let (file_extension, compression_type) = result;
-            let file_compression_type = CompressionTypeVariant::from_str(
-                compression_type
-                    .strip_prefix(".")
-                    .unwrap_or(compression_type.as_str()),
-            )?;
-            options.format = listing_format.inner().create_read_format(
-                ctx,
-                options_vec.clone(),
-                Some(file_compression_type),
-            )?;
-            Some(file_extension)
-        } else {
-            None
-        }
-    };
-    if let Some(file_extension) = file_extension.clone() {
-        options.file_extension = file_extension;
-    };
-    // DataFusion's scan-time listing filters with case-sensitive `ends_with`
-    // against `options.file_extension`. The base extension here comes from the
-    // `FileFormat` (always lowercase), so files named e.g. `data.CSV` would be
-    // dropped at scan time even though we accepted them above. Replace it with
-    // the actual case observed on disk so DataFusion's filter accepts them.
-    //
-    // TODO: this only carries one case-variant through to scan time. A
-    // directory containing a mix (e.g. both `data.csv` and `data.CSV`) will
-    // keep the canonical lowercase variant when present and otherwise fall
-    // back to the dominant observed case, silently dropping the other
-    // variants. Properly supporting mixed-case extensions requires
-    // bypassing DataFusion's case-sensitive
-    // `ListingTableUrl::list_prefixed_files` filter — e.g. via a custom
-    // `TableProvider` that does its own listing, or by upstreaming
-    // case-insensitive matching into DataFusion.
-    if let Some(observed) = observed_file_extension_case(&file_groups, &options.file_extension) {
-        options.file_extension = observed;
-    }
+    apply_inferred_compression(
+        ctx,
+        options,
+        &file_groups,
+        extension_with_compression,
+        &options_vec,
+        listing_format,
+    )?;
 
     let mut schemas = vec![];
     for (store, files) in file_groups.iter() {
@@ -146,43 +85,110 @@ fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
         && s.as_bytes()[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
 }
 
-/// Inspect the listed files and return the case-variant of `file_extension`
-/// to hand off to DataFusion's case-sensitive scan-time filter.
+/// List up to 10 files per URL into in-memory groups, suitable for schema
+/// inference and compression detection.
 ///
-/// Prefers the original (lowercase) `file_extension` when at least one file
-/// already matches it exactly, so mixed-case directories keep working for
-/// the canonical case. Otherwise falls back to the most common case-variant
-/// observed on disk (e.g. `.CSV`) so a directory of uniformly uppercase
-/// files is still readable.
-///
-/// `file_extension` is ASCII, so the suffix slice always lands on a UTF-8
-/// char boundary.
-fn observed_file_extension_case(
+/// The base file-extension filter is intentionally cleared (passed as `""`)
+/// so callers see every non-hidden file in the directory — matching Spark's
+/// behavior of reading every file regardless of extension. The hidden-file
+/// glob attached in [`crate::url::resolve_listing_urls`] still excludes
+/// `_*` / `.*` files. `extension_with_compression` is preserved so that an
+/// explicitly requested compressed variant still narrows the listing.
+async fn list_sample_files(
+    ctx: &dyn Session,
+    urls: &[ListingTableUrl],
+    extension_with_compression: Option<&str>,
+) -> Result<Vec<(Arc<dyn ObjectStore>, Vec<ObjectMeta>)>> {
+    // The logic is similar to `ListingOptions::infer_schema()`
+    // but here we also check for the existence of files.
+    let mut file_groups = vec![];
+    for url in urls {
+        let store = ctx.runtime_env().object_store(url)?;
+        // Pass `""` so the base extension filter accepts every path (Spark parity).
+        let files: Vec<_> = list_all_files(url, ctx, &store, "", extension_with_compression)
+            .await?
+            // Here we sample up to 10 files to infer the schema.
+            // The value is hard-coded here since DataFusion uses the same hard-coded value
+            // for operations such as `infer_partitions_from_path`.
+            // We can make it configurable if DataFusion makes those operations configurable
+            // as well in the future.
+            .take(10)
+            .try_collect()
+            .await?;
+        file_groups.push((store, files));
+    }
+    Ok(file_groups)
+}
+
+/// Inspect the suffixes in `file_groups` and, if a compressed variant is
+/// observed, rebuild `options.format` with the matching compression and
+/// update `options.file_extension`. Compression is carried by the
+/// `FileFormat` itself (DataFusion consults `format.compression_type()`
+/// when reading bytes), which is why we re-create the format here.
+fn apply_inferred_compression<T: ListingFormat>(
+    ctx: &dyn Session,
+    options: &mut ListingOptions,
     file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
-    file_extension: &str,
-) -> Option<String> {
-    if file_extension.is_empty() {
-        return None;
-    }
-    let len = file_extension.len();
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    let mut exact_match = false;
-    for (_, object_metas) in file_groups {
-        for object_meta in object_metas {
-            let path = object_meta.location.as_ref();
-            if ends_with_ignore_ascii_case(path, file_extension) {
-                let observed = &path[path.len() - len..];
-                if observed == file_extension {
-                    exact_match = true;
-                }
-                *counts.entry(observed.to_string()).or_default() += 1;
-            }
+    extension_with_compression: &Option<String>,
+    options_vec: &[OptionLayer],
+    listing_format: &ListingTableFormat<T>,
+) -> Result<()> {
+    let file_extension = if let Some(extension_with_compression) = extension_with_compression {
+        resolve_listing_file_extension(
+            file_groups,
+            &options.file_extension,
+            extension_with_compression,
+        )
+    } else {
+        let result = infer_listing_file_extension(file_groups, &options.file_extension);
+        if let Some(result) = result {
+            let (file_extension, compression_type) = result;
+            let file_compression_type = CompressionTypeVariant::from_str(
+                compression_type
+                    .strip_prefix(".")
+                    .unwrap_or(compression_type.as_str()),
+            )?;
+            options.format = listing_format.inner().create_read_format(
+                ctx,
+                options_vec.to_vec(),
+                Some(file_compression_type),
+            )?;
+            Some(file_extension)
+        } else {
+            None
         }
+    };
+    if let Some(file_extension) = file_extension.clone() {
+        options.file_extension = file_extension;
+    };
+    Ok(())
+}
+
+/// Best-effort compression auto-detection for callers that bypass
+/// [`resolve_listing_schema`] (i.e. an explicit schema was provided).
+/// Lists a sample of files and applies any detected compression to
+/// `options`. Silently no-ops when the listing is empty so the
+/// downstream scan can surface "no files found" with full context.
+pub async fn detect_listing_compression<T: ListingFormat>(
+    ctx: &dyn Session,
+    urls: &[ListingTableUrl],
+    options: &mut ListingOptions,
+    extension_with_compression: &Option<String>,
+    options_vec: &[OptionLayer],
+    listing_format: &ListingTableFormat<T>,
+) -> Result<()> {
+    let file_groups = list_sample_files(ctx, urls, extension_with_compression.as_deref()).await?;
+    if file_groups.iter().all(|(_, files)| files.is_empty()) {
+        return Ok(());
     }
-    if exact_match {
-        return Some(file_extension.to_string());
-    }
-    counts.into_iter().max_by_key(|(_, c)| *c).map(|(k, _)| k)
+    apply_inferred_compression(
+        ctx,
+        options,
+        &file_groups,
+        extension_with_compression,
+        options_vec,
+        listing_format,
+    )
 }
 
 fn resolve_listing_file_extension(
@@ -190,7 +196,11 @@ fn resolve_listing_file_extension(
     file_extension: &str,
     extension_with_compression: &str,
 ) -> Option<String> {
-    // TODO: Future work can support reading all files of the same `FileFormat` regardless of the file extension.
+    // TODO: compression detection only fires when a file's base extension
+    //  matches the format's canonical one (e.g. `.csv` for CSV). Files like
+    //  `data.tsv.gz` won't get GZIP applied automatically. Spark detects
+    //  compression from any trailing `.gz` / `.bz2` / `.xz` / `.zstd`
+    //  suffix regardless of base.
     let mut count_with_compression = 0;
     let mut count_without_compression = 0;
     for (_, object_metas) in file_groups {
@@ -214,7 +224,11 @@ fn infer_listing_file_extension(
     file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
     file_extension: &str,
 ) -> Option<(String, String)> {
-    // TODO: Future work can support reading all files of the same `FileFormat` regardless of the file extension.
+    // TODO: compression detection only fires when a file's base extension
+    //  matches the format's canonical one (e.g. `.csv` for CSV). Files like
+    //  `data.tsv.gz` won't get GZIP applied automatically. Spark detects
+    //  compression from any trailing `.gz` / `.bz2` / `.xz` / `.zstd`
+    //  suffix regardless of base.
     let mut counts: HashMap<(String, String), usize> = HashMap::new();
     let mut base_count = 0;
     for (_, object_metas) in file_groups {
@@ -320,6 +334,7 @@ pub fn rewrite_listing_partitions(mut config: ListingTableConfig) -> Result<List
         .table_partition_cols
         .iter_mut()
         .for_each(|(_col, data_type)| {
+            // FIXME: infer concrete partition types (Int / Float / String) from observed values to match Spark's `partitionColumnTypeInference`.
             if matches!(data_type, DataType::Dictionary(_, _)) {
                 *data_type = DataType::Utf8;
             }

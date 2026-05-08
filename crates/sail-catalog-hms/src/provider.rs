@@ -884,12 +884,6 @@ impl CatalogProvider for HmsCatalogProvider {
                 "Hive Metastore catalog does not support BUCKET BY for generic tables".to_string(),
             ));
         }
-        if !options.options.is_empty() {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support table OPTIONS for generic tables"
-                    .to_string(),
-            ));
-        }
         if options.partition_by.iter().any(|field| {
             field.transform.is_some() && field.transform != Some(PartitionTransform::Identity)
         }) {
@@ -1208,7 +1202,6 @@ mod tests {
                     bucket_by: None,
                     if_not_exists: false,
                     replace: false,
-                    options: vec![],
                     properties: vec![],
                 },
             )
