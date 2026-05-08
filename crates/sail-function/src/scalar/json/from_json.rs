@@ -225,9 +225,13 @@ fn parse_rows(
             append_to_builder(&mut builder, &Value::Null, &options, session_timezone)?;
         } else {
             let json_str = rows.value(i);
-            let value = serde_json::from_str::<serde_json::Value>(json_str)
-                .map_err(|e| DataFusionError::Execution(format!("Unable to parse json: {e}")))?;
-            append_to_builder(&mut builder, &value, &options, session_timezone)?;
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
+                append_to_builder(&mut builder, &value, &options, session_timezone)?;
+            } else {
+                // on invalid json handle PERMISSIVE mode
+                // note other modes aren't handled yet
+                append_permissive_parse_error(&mut builder, &options, session_timezone)?;
+            }
         }
     }
     finish_builder(builder)
@@ -628,6 +632,32 @@ fn append_to_builder(
     Ok(())
 }
 
+/// Handle PERMISSIVE MODE. When json fails to parse:
+/// - struct: stays valid but each value gets null
+/// - map: invalid, coerce to null
+/// - list: invalid, coerce to null
+fn append_permissive_parse_error(builder: &mut FieldBuilder, options: &SparkFromJsonOptions, session_timezone: &str) -> Result<()> {
+    match builder {
+        FieldBuilder::Struct { nested_builders, nulls, .. } => {
+            nulls.push(true);
+            for nested_builder in nested_builders.iter_mut() {
+                append_to_builder(nested_builder, &Value::Null, options, session_timezone)?;
+            }
+        },
+        FieldBuilder::Map { offsets, nulls, .. } => {
+            nulls.push(false);
+            let curr = *offsets.last().unwrap();
+            offsets.push(curr);
+        },
+        FieldBuilder::List { offsets, nulls, .. } => {
+            nulls.push(false);
+            let curr = *offsets.last().unwrap();
+            offsets.push(curr);
+        },
+        other => unreachable!("function shouldn't act on builder type: {other:#?}")
+    };
+    Ok(())
+}
 
 fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
     match builder {
