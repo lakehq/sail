@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import pytest
 from pyspark.sql import SparkSession
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 pytestmark = pytest.mark.catalog_integration
 
@@ -316,3 +317,51 @@ def test_spark_alters_datasource_table_location_sail_reads_new_path(
     assert properties.get("Location") == new_location
     sail_rows = hms_s3_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in sail_rows] == [(2, "new")]
+
+
+def test_spark_catalog_api_creates_table_sail_reads_external_table(
+    reference_spark_s3: SparkSession,
+    hms_s3_spark: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Spark catalog API createTable metadata is readable from Sail."""
+    table = "roundtrip_catalog_api_external"
+    table_fqn = f"{hms_s3_database}.{table}"
+    location = f"s3://hms-warehouse/{hms_s3_database}/{table}"
+
+    reference_spark_s3.catalog.createTable(
+        table_fqn,
+        path=location,
+        source="parquet",
+        schema=StructType(
+            [
+                StructField("id", IntegerType(), True),
+                StructField("name", StringType(), True),
+            ]
+        ),
+    )
+    reference_spark_s3.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
+
+    _assert_sail_describes_spark_table(hms_s3_spark, table_fqn, table_type="EXTERNAL")
+    sail_rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    assert [(r.id, r.name) for r in sail_rows] == [(1, "alice"), (2, "bob")]
+
+
+def test_spark_dataframe_writer_creates_table_sail_reads_external_table(
+    reference_spark_s3: SparkSession,
+    hms_s3_spark: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Spark DataFrameWriter saveAsTable metadata is readable from Sail."""
+    table = "roundtrip_dataframe_writer"
+    table_fqn = f"{hms_s3_database}.{table}"
+    location = f"s3://hms-warehouse/{hms_s3_database}/{table}"
+
+    reference_spark_s3.createDataFrame([(1, "alice"), (2, "bob")], schema="id INT, name STRING").write.saveAsTable(
+        table_fqn,
+        path=location,
+    )
+
+    _assert_sail_describes_spark_table(hms_s3_spark, table_fqn, table_type="EXTERNAL")
+    sail_rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    assert [(r.id, r.name) for r in sail_rows] == [(1, "alice"), (2, "bob")]

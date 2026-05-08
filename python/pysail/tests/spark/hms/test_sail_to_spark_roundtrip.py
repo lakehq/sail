@@ -385,6 +385,9 @@ def test_sail_creates_external_table_via_catalog_api(
         table,
         table_type="EXTERNAL",
     )
+    ref_properties = _describe_extended_properties(reference_spark_s3, table_fqn)
+    assert ref_properties.get("Type") == "EXTERNAL"
+    assert ref_properties.get("Provider", "").lower() == "parquet"
 
 
 def test_sail_dataframe_writer_creates_spark_readable_external_table(
@@ -408,5 +411,8 @@ def test_sail_dataframe_writer_creates_spark_readable_external_table(
         table,
         table_type="EXTERNAL",
     )
+    ref_properties = _describe_extended_properties(reference_spark_s3, table_fqn)
+    assert ref_properties.get("Type") == "EXTERNAL"
+    assert ref_properties.get("Provider", "").lower() == "parquet"
     rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "alice"), (2, "bob")]
