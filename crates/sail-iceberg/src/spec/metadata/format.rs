@@ -18,7 +18,7 @@
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/table_metadata.rs
 
 /// Format version of Iceberg.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Default)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum FormatVersion {
     /// Version 1
     V1 = 1,
@@ -27,6 +27,18 @@ pub enum FormatVersion {
     V2 = 2,
     /// Version 3
     V3 = 3,
+}
+
+impl PartialOrd for FormatVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FormatVersion {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (*self as i32).cmp(&(*other as i32))
+    }
 }
 
 impl serde::Serialize for FormatVersion {

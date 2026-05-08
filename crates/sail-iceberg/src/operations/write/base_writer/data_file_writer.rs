@@ -103,15 +103,17 @@ fn aggregate_from_parquet_metadata(
         for (column_index, c) in rg.columns().iter().enumerate() {
             let _path = c.column_descr().path().string();
             let leaf_info = c.column_descr().self_type().get_basic_info();
-            let field_id = if leaf_info.has_id() {
-                leaf_info.id()
+            let Some(field_id) = (if leaf_info.has_id() {
+                Some(leaf_info.id())
             } else {
                 let root_info = schema_descr.get_column_root(column_index).get_basic_info();
                 if root_info.has_id() {
-                    root_info.id()
+                    Some(root_info.id())
                 } else {
-                    column_index as i32
+                    None
                 }
+            }) else {
+                continue;
             };
             *col_sizes.entry(field_id).or_insert(0) += c.compressed_size() as u64;
             *val_counts.entry(field_id).or_insert(0) += c.num_values() as u64;

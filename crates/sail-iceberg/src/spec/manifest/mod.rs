@@ -82,7 +82,7 @@ pub fn read_data_files_from_avro<R: std::io::Read>(
             let value = value.map_err(|e| format!("Avro read error: {e}"))?;
             let serde_df: _serde::DataFileSerde =
                 avro_from_value(&value).map_err(|e| format!("Avro decode DataFile error: {e}"))?;
-            Ok(serde_df.into_data_file(partition_spec_id, partition_type, Some(schema)))
+            serde_df.into_data_file(partition_spec_id, partition_type, Some(schema))
         })
         .collect::<Result<Vec<_>, String>>()
 }
@@ -149,7 +149,7 @@ impl Manifest {
                 metadata.partition_spec.spec_id(),
                 &partition_type,
                 Some(&metadata.schema),
-            ));
+            )?);
         }
 
         Ok((metadata, entries))

@@ -190,20 +190,20 @@ impl ManifestEntryV2 {
         partition_spec_id: i32,
         partition_type: &StructType,
         schema: Option<&Schema>,
-    ) -> super::ManifestEntry {
+    ) -> Result<super::ManifestEntry, String> {
         let status = match self.status {
             1 => super::ManifestStatus::Added,
             2 => super::ManifestStatus::Deleted,
             _ => super::ManifestStatus::Existing,
         };
-        super::ManifestEntry::new(
+        Ok(super::ManifestEntry::new(
             status,
             self.snapshot_id,
             self.sequence_number,
             self.file_sequence_number,
             self.data_file
-                .into_data_file(partition_spec_id, partition_type, schema),
-        )
+                .into_data_file(partition_spec_id, partition_type, schema)?,
+        ))
     }
 }
 
@@ -223,11 +223,23 @@ fn int_long_map_from(values: HashMap<i32, u64>) -> Option<Vec<IntLongMapEntry>> 
     }
 }
 
-fn int_long_map_into(values: Option<Vec<IntLongMapEntry>>) -> HashMap<i32, u64> {
+fn int_long_map_into(
+    name: &str,
+    values: Option<Vec<IntLongMapEntry>>,
+) -> Result<HashMap<i32, u64>, String> {
     values
         .unwrap_or_default()
         .into_iter()
-        .map(|entry| (entry.key, entry.value.max(0) as u64))
+        .map(|entry| {
+            if entry.value < 0 {
+                Err(format!(
+                    "Invalid negative value {} for Iceberg data file metric `{name}` field id {}",
+                    entry.value, entry.key
+                ))
+            } else {
+                Ok((entry.key, entry.value as u64))
+            }
+        })
         .collect()
 }
 
@@ -284,22 +296,34 @@ fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapE
 }
 
 fn bytes_map_into(
+    name: &str,
     values: Option<Vec<IntBytesMapEntry>>,
     schema: Option<&Schema>,
-) -> HashMap<i32, Datum> {
+) -> Result<HashMap<i32, Datum>, String> {
     values
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|entry| {
+        .map(|entry| {
             let primitive = schema
                 .and_then(|schema| schema.field_by_id(entry.key))
                 .and_then(|field| match field.field_type.as_ref() {
                     Type::Primitive(primitive) => Some(primitive.clone()),
                     Type::Struct(_) | Type::List(_) | Type::Map(_) => None,
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Cannot decode Iceberg data file metric `{name}` for non-primitive or unknown field id {}",
+                        entry.key
+                    )
                 })?;
             primitive
                 .literal_from_bytes(&entry.value)
-                .ok()
+                .map_err(|error| {
+                    format!(
+                        "Cannot decode Iceberg data file metric `{name}` for field id {}: {error}",
+                        entry.key
+                    )
+                })
                 .map(|literal| (entry.key, Datum::new(primitive, literal)))
         })
         .collect()
@@ -377,7 +401,7 @@ impl DataFileSerde {
         partition_spec_id: i32,
         partition_type: &StructType,
         schema: Option<&Schema>,
-    ) -> super::DataFile {
+    ) -> Result<super::DataFile, String> {
         let content = match self.content {
             0 => DataContentType::Data,
             1 => DataContentType::PositionDeletes,
@@ -391,7 +415,7 @@ impl DataFileSerde {
             "PUFFIN" => DataFileFormat::Puffin,
             _ => DataFileFormat::Parquet,
         };
-        super::DataFile {
+        Ok(super::DataFile {
             content,
             file_path: self.file_path,
             file_format,
@@ -401,12 +425,12 @@ impl DataFileSerde {
                 .unwrap_or_default(),
             record_count: self.record_count as u64,
             file_size_in_bytes: self.file_size_in_bytes as u64,
-            column_sizes: int_long_map_into(self.column_sizes),
-            value_counts: int_long_map_into(self.value_counts),
-            null_value_counts: int_long_map_into(self.null_value_counts),
-            nan_value_counts: int_long_map_into(self.nan_value_counts),
-            lower_bounds: bytes_map_into(self.lower_bounds, schema),
-            upper_bounds: bytes_map_into(self.upper_bounds, schema),
+            column_sizes: int_long_map_into("column_sizes", self.column_sizes)?,
+            value_counts: int_long_map_into("value_counts", self.value_counts)?,
+            null_value_counts: int_long_map_into("null_value_counts", self.null_value_counts)?,
+            nan_value_counts: int_long_map_into("nan_value_counts", self.nan_value_counts)?,
+            lower_bounds: bytes_map_into("lower_bounds", self.lower_bounds, schema)?,
+            upper_bounds: bytes_map_into("upper_bounds", self.upper_bounds, schema)?,
             block_size_in_bytes: None,
             key_metadata: self.key_metadata,
             split_offsets: self.split_offsets.unwrap_or_default(),
@@ -417,6 +441,6 @@ impl DataFileSerde {
             referenced_data_file: self.referenced_data_file,
             content_offset: self.content_offset,
             content_size_in_bytes: self.content_size_in_bytes,
-        }
+        })
     }
 }

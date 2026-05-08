@@ -300,7 +300,7 @@ pub enum PrimitiveType {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         crs: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        edge: Option<String>,
+        algorithm: Option<String>,
     },
 }
 
@@ -482,8 +482,8 @@ impl Serialize for PrimitiveType {
             }
             PrimitiveType::Fixed(l) => serialize_fixed(l, serializer),
             PrimitiveType::Geometry { crs } => serialize_geometry(crs.as_deref(), serializer),
-            PrimitiveType::Geography { crs, edge } => {
-                serialize_geography(crs.as_deref(), edge.as_deref(), serializer)
+            PrimitiveType::Geography { crs, algorithm } => {
+                serialize_geography(crs.as_deref(), algorithm.as_deref(), serializer)
             }
             _ => PrimitiveType::serialize(self, serializer),
         }
@@ -518,7 +518,7 @@ fn deserialize_geography(value: &str) -> PrimitiveType {
     let mut parts = parse_parameterized_type(value, "geography").into_iter();
     PrimitiveType::Geography {
         crs: parts.next(),
-        edge: parts.next(),
+        algorithm: parts.next(),
     }
 }
 
@@ -534,14 +534,16 @@ where
 
 fn serialize_geography<S>(
     crs: Option<&str>,
-    edge: Option<&str>,
+    algorithm: Option<&str>,
     serializer: S,
 ) -> std::result::Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    match (crs, edge) {
-        (Some(crs), Some(edge)) => serializer.serialize_str(&format!("geography({crs},{edge})")),
+    match (crs, algorithm) {
+        (Some(crs), Some(algorithm)) => {
+            serializer.serialize_str(&format!("geography({crs},{algorithm})"))
+        }
         (Some(crs), None) => serializer.serialize_str(&format!("geography({crs})")),
         _ => serializer.serialize_str("geography"),
     }
@@ -624,8 +626,8 @@ impl fmt::Display for PrimitiveType {
                 Some(crs) => write!(f, "geometry({crs})"),
                 None => write!(f, "geometry"),
             },
-            PrimitiveType::Geography { crs, edge } => match (crs, edge) {
-                (Some(crs), Some(edge)) => write!(f, "geography({crs},{edge})"),
+            PrimitiveType::Geography { crs, algorithm } => match (crs, algorithm) {
+                (Some(crs), Some(algorithm)) => write!(f, "geography({crs},{algorithm})"),
                 (Some(crs), None) => write!(f, "geography({crs})"),
                 _ => write!(f, "geography"),
             },
