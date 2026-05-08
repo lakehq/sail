@@ -296,34 +296,22 @@ fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapE
 }
 
 fn bytes_map_into(
-    name: &str,
     values: Option<Vec<IntBytesMapEntry>>,
     schema: Option<&Schema>,
-) -> Result<HashMap<i32, Datum>, String> {
+) -> HashMap<i32, Datum> {
     values
         .unwrap_or_default()
         .into_iter()
-        .map(|entry| {
+        .filter_map(|entry| {
             let primitive = schema
                 .and_then(|schema| schema.field_by_id(entry.key))
                 .and_then(|field| match field.field_type.as_ref() {
                     Type::Primitive(primitive) => Some(primitive.clone()),
                     Type::Struct(_) | Type::List(_) | Type::Map(_) => None,
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "Cannot decode Iceberg data file metric `{name}` for non-primitive or unknown field id {}",
-                        entry.key
-                    )
                 })?;
             primitive
                 .literal_from_bytes(&entry.value)
-                .map_err(|error| {
-                    format!(
-                        "Cannot decode Iceberg data file metric `{name}` for field id {}: {error}",
-                        entry.key
-                    )
-                })
+                .ok()
                 .map(|literal| (entry.key, Datum::new(primitive, literal)))
         })
         .collect()
@@ -429,8 +417,8 @@ impl DataFileSerde {
             value_counts: int_long_map_into("value_counts", self.value_counts)?,
             null_value_counts: int_long_map_into("null_value_counts", self.null_value_counts)?,
             nan_value_counts: int_long_map_into("nan_value_counts", self.nan_value_counts)?,
-            lower_bounds: bytes_map_into("lower_bounds", self.lower_bounds, schema)?,
-            upper_bounds: bytes_map_into("upper_bounds", self.upper_bounds, schema)?,
+            lower_bounds: bytes_map_into(self.lower_bounds, schema),
+            upper_bounds: bytes_map_into(self.upper_bounds, schema),
             block_size_in_bytes: None,
             key_metadata: self.key_metadata,
             split_offsets: self.split_offsets.unwrap_or_default(),
