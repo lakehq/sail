@@ -35,7 +35,6 @@ pub struct CreateTableOptions {
     pub bucket_by: Option<CatalogTableBucketBy>,
     pub if_not_exists: bool,
     pub replace: bool,
-    pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
 }
 

@@ -497,10 +497,25 @@ pub async fn resolve_listing_urls(
     for path in paths {
         for url in GlobUrl::parse(&path)? {
             let url = rewrite_directory_url(url, ctx).await?;
+            let url = attach_default_glob(url)?;
             urls.push(url.try_into()?);
         }
     }
     Ok(urls)
+}
+
+/// If `url` points to a directory and the user did not supply an explicit
+/// glob, attach a default pattern that excludes file names starting with
+/// `.` or `_` (commit/_SUCCESS markers, `.crc` checksum files, etc.).
+/// Matches Spark's `HiddenFileFilter` semantics so users migrating from
+/// Spark see the same set of files included in directory reads.
+fn attach_default_glob(mut url: GlobUrl) -> Result<GlobUrl> {
+    if url.glob.is_none() && url.base.path().ends_with(object_store::path::DELIMITER) {
+        let pattern = Pattern::new("[!._]*")
+            .map_err(|e| plan_datafusion_err!("default hidden-file glob: {e}"))?;
+        url.glob = Some(pattern);
+    }
+    Ok(url)
 }
 
 pub async fn rewrite_directory_url(url: GlobUrl, session: &dyn Session) -> Result<GlobUrl> {

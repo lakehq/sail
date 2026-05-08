@@ -180,3 +180,47 @@ Feature: Iceberg read path (driver vs metadata-as-data)
         | id | value |
         | 3  | 30    |
         | 4  | 40    |
+
+  Rule: Transform partition predicates remain correct on metadata-as-data path
+    Background:
+      Given variable location for temporary directory iceberg_read_metadata_day_filter
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_metadata_day_filter
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_metadata_day_filter (
+          id INT,
+          payload_timestamp TIMESTAMP,
+          payload STRING
+        )
+        USING iceberg
+        PARTITIONED BY (days(payload_timestamp))
+        LOCATION {{ location.uri }}
+        OPTIONS (metadataAsDataRead 'true')
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_metadata_day_filter VALUES
+          (1, TIMESTAMP '2024-01-01 10:00:00', 'day1-a'),
+          (2, TIMESTAMP '2024-01-01 11:00:00', 'day1-b'),
+          (3, TIMESTAMP '2024-01-02 10:00:00', 'day2-a'),
+          (4, TIMESTAMP '2024-01-02 11:00:00', 'day2-b'),
+          (5, TIMESTAMP '2024-01-03 10:00:00', 'day3-a'),
+          (6, TIMESTAMP '2024-01-03 11:00:00', 'day3-b')
+        """
+
+    @sail-only
+    Scenario: Day-transform timestamp range predicate is honored, not dropped
+      When query
+        """
+        SELECT id, payload FROM iceberg_metadata_day_filter
+        WHERE payload_timestamp >= TIMESTAMP '2024-01-02 00:00:00'
+          AND payload_timestamp < TIMESTAMP '2024-01-03 00:00:00'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | payload |
+        | 3  | day2-a  |
+        | 4  | day2-b  |

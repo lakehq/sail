@@ -193,6 +193,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "quote",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "randstr",
     "status": "supported"
   },

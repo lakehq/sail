@@ -21,6 +21,9 @@ use crate::logical_expr::ExprWithSource;
 /// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
 pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
 
+/// File-local row index metadata column for row-level modifications that write deletion vectors.
+pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
+
 /// Row-level operation type column appended to the expanded MERGE output.
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
@@ -28,7 +31,7 @@ pub const OPERATION_COLUMN: &str = "__sail_operation_type";
 /// A layer of options that can be applied to a data source.
 /// Multiple layers are used to represent different sources of options,
 /// applied in order so that later layers override earlier ones.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum OptionLayer {
     /// Options stored as table properties in a catalog.
     TablePropertyList { items: Vec<(String, String)> },
@@ -101,6 +104,12 @@ pub trait MergeCapableSource: Send + Sync {
 
     /// Returns a reconfigured source with the file column enabled.
     fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
+
+    /// Returns the file-local row index column name if already configured.
+    fn row_index_column_name(&self) -> Option<&str>;
+
+    /// Returns a reconfigured source with the file-local row index column enabled.
+    fn with_row_index_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -157,7 +166,6 @@ pub struct SinkInfo {
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Option<LexRequirement>,
-    pub table_properties: HashMap<String, String>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
@@ -169,51 +177,30 @@ pub struct SinkInfo {
     pub logical_schema: Option<datafusion_common::DFSchemaRef>,
 }
 
-impl SinkInfo {
-    /// Returns the path from options, or an empty string if not set.
-    /// Checks the `"path"` key first, then `"location"`.
-    /// Key comparison is case-insensitive.
-    pub fn path(&self) -> String {
-        let find = |key: &str| -> Option<String> {
-            for layer in self.options.iter().rev() {
-                let items = match layer {
-                    OptionLayer::OptionList { items } => items,
-                    OptionLayer::TablePropertyList { items } => items,
-                    _ => continue,
-                };
-                if let Some(v) = items.iter().find_map(|(k, v)| {
-                    if k.eq_ignore_ascii_case(key) {
-                        Some(v.clone())
-                    } else {
-                        None
-                    }
-                }) {
-                    return Some(v);
+/// Returns the path from options, or `None` if not set.
+/// Checks the `"path"` key first, then `"location"`.
+/// Key comparison is case-insensitive.
+pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
+    let find = |key: &str| -> Option<String> {
+        for layer in options.iter().rev() {
+            let items = match layer {
+                OptionLayer::OptionList { items } => items,
+                OptionLayer::TablePropertyList { items } => items,
+                _ => continue,
+            };
+            if let Some(v) = items.iter().find_map(|(k, v)| {
+                if k.eq_ignore_ascii_case(key) {
+                    Some(v.clone())
+                } else {
+                    None
                 }
+            }) {
+                return Some(v);
             }
-            None
-        };
-        find("path")
-            .or_else(|| find("location"))
-            .unwrap_or_default()
-    }
-}
-
-/// Searches option sets in reverse order for a case-insensitive key match.
-/// Returns the value from the last option set that contains the key, or `None`.
-pub fn find_option(options: &[HashMap<String, String>], key: &str) -> Option<String> {
-    for set in options.iter().rev() {
-        if let Some(value) = set.iter().find_map(|(k, v)| {
-            if k.eq_ignore_ascii_case(key) {
-                Some(v.clone())
-            } else {
-                None
-            }
-        }) {
-            return Some(value);
         }
-    }
-    None
+        None
+    };
+    find("path").or_else(|| find("location"))
 }
 
 /// The kind of row-level DML command being executed.
@@ -263,6 +250,8 @@ pub struct RowLevelWriteInfo {
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths (MERGE targeted rewrite).
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
+    pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
     pub with_schema_evolution: bool,
     /// Override for commit operation metadata.
     pub operation_override: Option<OperationOverride>,

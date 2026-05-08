@@ -14,6 +14,7 @@ pub mod log_segment;
 pub mod snapshot;
 pub mod transaction;
 
+pub(crate) mod checkpoint_augment;
 pub(crate) mod checkpoints;
 mod config;
 
