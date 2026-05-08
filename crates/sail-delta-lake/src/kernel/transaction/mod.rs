@@ -661,7 +661,9 @@ fn validate_effective_commit_target(
     })?;
 
     PROTOCOL.can_write_to_protocol(&protocol)?;
-    PROTOCOL.check_can_write_timestamp_ntz_to_protocol(&protocol, &metadata.parse_schema()?)?;
+    let schema = metadata.parse_schema()?;
+    PROTOCOL.check_can_write_timestamp_ntz_to_protocol(&protocol, &schema)?;
+    PROTOCOL.check_can_write_variant_to_protocol(&protocol, &schema)?;
 
     if actions_as_actions
         .iter()
@@ -1980,7 +1982,7 @@ mod tests {
     async fn commit_writes_commit_info_first_monotonic_ict_and_checksum() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, true, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, true, false, false, &HashMap::new())?;
         let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
 
         let created = CommitBuilder::default()
@@ -2048,7 +2050,7 @@ mod tests {
     async fn finalize_attempt_actions_backfills_enablement_metadata() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -2075,7 +2077,8 @@ mod tests {
                 DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
             })?;
 
-        let upgrade_protocol = protocol_for_create(false, false, true, false, &HashMap::new())?;
+        let upgrade_protocol =
+            protocol_for_create(false, false, true, false, false, &HashMap::new())?;
         let upgrade_metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
         let base_actions = CommitData::new(
             vec![
@@ -2179,7 +2182,7 @@ mod tests {
     async fn commit_rejects_timestamp_ntz_schema_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -2237,7 +2240,7 @@ mod tests {
     async fn commit_rejects_domain_metadata_actions_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, false, false, false, &HashMap::new())?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
