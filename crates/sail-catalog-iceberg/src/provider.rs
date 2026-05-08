@@ -1006,9 +1006,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
                 ))
             })?;
-            // Use a placeholder field id of 0; unique IDs (including for nested
-            // struct/list/map children) are assigned below by
-            // `SchemaEvolver::assign_schema_field_ids`.
+            // Use a placeholder field id of 0; after all fields are collected,
+            // `SchemaEvolver::assign_schema_field_ids` assigns unique IDs
+            // including for nested struct/list/map children.
             let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
             if let Some(comment) = comment {
                 field = field.with_doc(comment);
@@ -1197,11 +1197,12 @@ where
 
 /// Converts table column options to Iceberg nested fields.
 ///
-/// All fields (top-level and nested) receive sequential, unique field IDs
-/// starting at 1. This is required because Iceberg uses field IDs for schema
-/// indexing and column identity, and nested children produced by
-/// `arrow_type_to_iceberg` would otherwise default to id 0 since the source
-/// `CreateTableColumnOptions` carry no Iceberg field-id metadata.
+/// Ensures all fields (top-level and nested) receive sequential, unique field
+/// IDs starting at 1 via `SchemaEvolver::assign_schema_field_ids`. This is
+/// required because Iceberg uses field IDs for schema indexing and column
+/// identity, and nested children produced by `arrow_type_to_iceberg` would
+/// otherwise default to id 0 since the source `CreateTableColumnOptions` carry
+/// no Iceberg field-id metadata.
 fn columns_to_nested_fields(
     columns: &[CreateTableColumnOptions],
 ) -> CatalogResult<Vec<Arc<NestedField>>> {
@@ -1221,9 +1222,9 @@ fn columns_to_nested_fields(
             ))
         })?;
         // TODO: `default` is not supported until Iceberg V3
-        // Use a placeholder field id of 0; unique IDs (including for nested
-        // struct/list/map children) are assigned below by
-        // `SchemaEvolver::assign_schema_field_ids`.
+        // Use a placeholder field id of 0; after all fields are collected,
+        // `SchemaEvolver::assign_schema_field_ids` assigns unique IDs including
+        // for nested struct/list/map children.
         let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
         if let Some(comment) = comment {
             field = field.with_doc(comment);
