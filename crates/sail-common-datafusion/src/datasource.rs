@@ -24,7 +24,11 @@ pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
 /// File-local row index metadata column for row-level modifications that write deletion vectors.
 pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 
-/// Row-level operation type column appended to the expanded MERGE output.
+/// Row-level operation type column appended to expanded row-level write output.
+///
+/// This is internal Sail metadata. Format writers may use it to route rows,
+/// collect operation metrics, or produce low-level delete artifacts, but must
+/// remove it before persisting user data.
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
 
@@ -65,18 +69,31 @@ impl OptionLayer {
     }
 }
 
-/// Row-level operation type tag.
+/// Internal row intent tag for row-level write plans.
+///
+/// The numeric values are not table-format protocol values. They are stable
+/// within Sail physical plans so logical expansion and format writers can share
+/// a compact representation of per-row intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum RowLevelOperationType {
+    /// Existing target row is rewritten unchanged.
     Copy = 0,
+    /// Existing target row is deleted.
     Delete = 1,
+    /// Existing target row is rewritten with updated values.
     Update = 2,
+    /// Source row is inserted as a new target row.
     Insert = 3,
+    /// Source row participates in metrics or checks but is not written.
     Noop = 4,
+    /// Matched target row is deleted by a MERGE clause.
     MatchedDelete = 5,
+    /// Matched target row is updated by a MERGE clause.
     MatchedUpdate = 6,
+    /// Target-only row is deleted by a MERGE clause.
     NotMatchedBySourceDelete = 7,
+    /// Target-only row is updated by a MERGE clause.
     NotMatchedBySourceUpdate = 8,
 }
 

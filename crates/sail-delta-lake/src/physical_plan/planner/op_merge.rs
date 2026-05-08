@@ -44,6 +44,8 @@ use crate::physical_plan::{DeltaCommitExec, DeltaWriterExec};
 ///
 /// The operation column is intentionally preserved for DeltaWriterExec so it can
 /// populate MERGE operationMetrics before dropping the column from Parquet output.
+/// TODO: Share this internal-column boundary with future row-level writers so
+/// each sink can consume row intent before stripping Sail metadata.
 const INTERNAL_MERGE_COLUMNS: &[&str] = &[PATH_COLUMN];
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully

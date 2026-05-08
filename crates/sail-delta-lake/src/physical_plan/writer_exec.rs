@@ -79,6 +79,10 @@ enum SchemaMode {
     Overwrite,
 }
 
+/// Counts internal row intent tags before they are stripped from writer input.
+///
+/// These counters are derived from Sail metadata columns only. The metadata is
+/// removed before data batches are validated against the persisted table schema.
 #[derive(Debug, Default, Clone, Copy)]
 struct MergeRowMetrics {
     copied: u64,
@@ -1113,6 +1117,8 @@ impl DeltaWriterExec {
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
 
+    // TODO: Move row-intent filtering/counting into a shared helper once another
+    // row-level writer consumes `OPERATION_COLUMN`.
     fn metric_only_filter_mask(batch: &RecordBatch) -> Result<Option<BooleanArray>> {
         let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
             return Ok(None);

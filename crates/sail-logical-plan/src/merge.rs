@@ -1242,7 +1242,7 @@ fn build_insert_only_projection(
 
     // Source columns are prefixed with `__sail_src_`, so target field "id" maps
     // to source column "__sail_src_id". Keys are lowercased for case-insensitive
-    // resolution (Spark's default).
+    // SQL resolution.
     let source_exprs_by_name: HashMap<String, Expr> = source_schema
         .fields()
         .iter()
@@ -1305,6 +1305,8 @@ fn build_insert_only_projection(
         projections.push(expr.alias(name));
     }
 
+    // Insert-only MERGE still emits matched source rows as `Noop` so format
+    // writers can count source participation without writing duplicate data.
     let op_expr = Expr::Case(Case {
         expr: None,
         when_then_expr: vec![(
@@ -1319,7 +1321,7 @@ fn build_insert_only_projection(
 }
 
 fn should_check_cardinality(matched_clauses: &[MergeMatchedClause]) -> bool {
-    // Spark semantics: If there are no matched clauses, nothing to check.
+    // MERGE semantics: if there are no matched clauses, nothing to check.
     // If there is exactly one matched clause and it is an unconditional DELETE, skip.
     if matched_clauses.is_empty() {
         return false;
@@ -1522,7 +1524,7 @@ fn build_merge_projection(
     // Find the source expression that corresponds to a target field by name.
     // Source columns are prefixed with `__sail_src_`, so target field "id"
     // maps to source column "__sail_src_id". Keys are lowercased for
-    // case-insensitive resolution (Spark's default).
+    // case-insensitive SQL resolution.
     let source_expr_for_target = |target_name: &str| -> Expr {
         let prefixed = format!("__sail_src_{}", target_name.to_ascii_lowercase());
         source_exprs_by_name
@@ -1691,8 +1693,12 @@ fn build_merge_projection(
         }
     }
 
-    // Append the operation type column so downstream writers know per-row semantics.
-    // Delete rows are preserved as metric-only rows and filtered out by the Delta writer.
+    // Append the operation type column so downstream writers know per-row intent.
+    // Delete rows are preserved as metric-only rows; sinks that rewrite data
+    // files must filter them after consuming the tag.
+    // TODO: When more row-level sinks consume this projection, keep row intent
+    // handling centralized around `OPERATION_COLUMN` instead of deriving it from
+    // each writer's local plan shape.
     let insert_op = lit(RowLevelOperationType::Insert.as_i32());
     let copy_op = lit(RowLevelOperationType::Copy.as_i32());
     let op_expr = Expr::Case(Case {
