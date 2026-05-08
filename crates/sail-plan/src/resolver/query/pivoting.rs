@@ -191,11 +191,15 @@ impl PlanResolver<'_> {
         let service = self.ctx.extension::<PlanService>()?;
         let formatter = service.plan_formatter();
 
-        // Build: SELECT DISTINCT pivot_col FROM input ORDER BY pivot_col
+        // Alias the projection so the sort can reference it by name. Without
+        // the alias, sorting by `pivot_col_expr` would re-evaluate against
+        // source columns that the project just dropped, breaking computed
+        // pivot expressions like `col("year") + 1`.
+        const PIVOT_VALUE_ALIAS: &str = "__pivot_value";
         let distinct_plan = LogicalPlanBuilder::from(input.clone())
-            .project(vec![pivot_col_expr.clone()])?
+            .project(vec![pivot_col_expr.clone().alias(PIVOT_VALUE_ALIAS)])?
             .distinct()?
-            .sort(vec![pivot_col_expr.clone().sort(true, true)])?
+            .sort(vec![col(PIVOT_VALUE_ALIAS).sort(true, true)])?
             .build()?;
 
         let batches = self
