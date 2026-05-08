@@ -14,8 +14,9 @@ use std::collections::HashMap;
 
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{
-    ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata,
-    Protocol, StructType, TableFeature,
+    contains_timestampntz, contains_variant, ColumnMappingMode, ColumnMetadataKey,
+    DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, StructType, TableFeature,
+    TableProperties,
 };
 
 /// Check if a Delta StructType schema contains any columns with generation expressions.
@@ -69,6 +70,25 @@ pub fn metadata_for_create_with_struct_type(
         schema,
         partition_columns,
         created_time,
+        configuration,
+    )
+}
+
+/// Build Protocol for an existing metadata action by deriving required features from schema and configuration.
+pub fn protocol_for_metadata(metadata: &Metadata) -> DeltaResult<Protocol> {
+    let configuration = metadata.configuration();
+    let table_properties = TableProperties::from(configuration.iter());
+    let schema = metadata.parse_schema()?;
+    let enable_column_mapping = table_properties
+        .column_mapping_mode
+        .is_some_and(|mode| !matches!(mode, ColumnMappingMode::None));
+
+    protocol_for_create(
+        enable_column_mapping,
+        contains_timestampntz(schema.fields()),
+        table_properties.enable_in_commit_timestamps(),
+        schema_has_generated_columns(&schema),
+        contains_variant(schema.fields()),
         configuration,
     )
 }
@@ -191,8 +211,10 @@ pub fn protocol_for_create(
 mod tests {
     use std::collections::HashMap;
 
-    use super::protocol_for_create;
-    use crate::spec::{DeltaResult, TableFeature};
+    use super::{protocol_for_create, protocol_for_metadata};
+    use crate::spec::{
+        ColumnMetadataKey, DataType, DeltaResult, Metadata, StructField, StructType, TableFeature,
+    };
 
     #[test]
     fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {
@@ -244,6 +266,38 @@ mod tests {
         let protocol = protocol_for_create(false, false, false, false, true, &HashMap::new())?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::VariantType));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantType));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_metadata_activates_schema_and_property_features() -> DeltaResult<()> {
+        let schema = StructType::try_new([
+            StructField::nullable("id", DataType::INTEGER),
+            StructField::nullable("event_time", DataType::TIMESTAMP_NTZ),
+            StructField::nullable("payload", DataType::unshredded_variant()),
+            StructField::nullable("generated_id", DataType::INTEGER)
+                .with_metadata([(ColumnMetadataKey::GenerationExpression.as_ref(), "id + 1")]),
+        ])?;
+        let mut configuration = HashMap::new();
+        configuration.insert("delta.columnMapping.mode".to_string(), "name".to_string());
+        configuration.insert(
+            "delta.enableInCommitTimestamps".to_string(),
+            "true".to_string(),
+        );
+        let metadata = Metadata::try_new(None, None, schema, vec![], 0, configuration)?;
+
+        let protocol = protocol_for_metadata(&metadata)?;
+
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::ColumnMapping));
+        assert!(protocol.has_writer_feature(&TableFeature::ColumnMapping));
+        assert!(protocol.has_reader_feature(&TableFeature::TimestampWithoutTimezone));
+        assert!(protocol.has_writer_feature(&TableFeature::TimestampWithoutTimezone));
+        assert!(protocol.has_writer_feature(&TableFeature::InCommitTimestamp));
+        assert!(protocol.has_writer_feature(&TableFeature::GeneratedColumns));
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
         assert!(protocol.has_writer_feature(&TableFeature::VariantType));
         Ok(())

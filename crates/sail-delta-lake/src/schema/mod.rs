@@ -22,7 +22,7 @@ pub use converter::{
 };
 pub use manager::{
     evolve_schema, metadata_for_create_with_struct_type, protocol_for_create,
-    schema_has_generated_columns,
+    protocol_for_metadata, schema_has_generated_columns,
 };
 pub use mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,

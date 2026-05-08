@@ -65,12 +65,18 @@ impl PartitionField {
     }
 
     pub fn source_id(&self) -> Result<i32, String> {
+        self.compatibility_source_id().ok_or_else(|| {
+            "Iceberg v3 multi-argument partition transforms are not yet supported".to_string()
+        })
+    }
+
+    fn compatibility_source_id(&self) -> Option<i32> {
         if self.source_id != 0 {
-            Ok(self.source_id)
+            Some(self.source_id)
         } else if self.source_ids.len() == 1 {
-            Ok(self.source_ids[0])
+            Some(self.source_ids[0])
         } else {
-            Err("Iceberg v3 multi-argument partition transforms are not yet supported".to_string())
+            None
         }
     }
 }
@@ -187,7 +193,14 @@ impl PartitionSpec {
         }
 
         for (this_field, other_field) in self.fields.iter().zip(other.fields.iter()) {
-            if this_field.source_id().ok() != other_field.source_id().ok()
+            let Some(this_source_id) = this_field.compatibility_source_id() else {
+                return false;
+            };
+            let Some(other_source_id) = other_field.compatibility_source_id() else {
+                return false;
+            };
+
+            if this_source_id != other_source_id
                 || this_field.name != other_field.name
                 || this_field.transform != other_field.transform
             {

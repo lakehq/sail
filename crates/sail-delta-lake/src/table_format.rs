@@ -322,8 +322,7 @@ impl TableFormat for DeltaTableFormat {
         if_exists: bool,
     ) -> Result<()> {
         use crate::kernel::transaction::CommitBuilder;
-        use crate::schema::manager::protocol_for_create;
-        use crate::spec::TableProperties;
+        use crate::schema::protocol_for_metadata;
 
         // Parse the location into a URL. Handles both absolute filesystem paths
         // (e.g. `/tmp/table`) and fully-qualified URLs (`file://`, `s3://`, ...).
@@ -397,16 +396,8 @@ impl TableFormat for DeltaTableFormat {
         // Derive the desired protocol from the new configuration and merge it with the
         // existing protocol. We only ever upgrade: features already present on the table
         // are preserved, and new feature requirements are added.
-        let new_config = new_metadata.configuration().clone();
-        let desired_protocol = protocol_for_create(
-            false,
-            false,
-            TableProperties::from(new_config.iter()).enable_in_commit_timestamps(),
-            false,
-            false,
-            &new_config,
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired_protocol = protocol_for_metadata(&new_metadata)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let existing_protocol = snapshot.protocol();
         let (merged_protocol, protocol_upgraded) =
