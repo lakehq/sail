@@ -13,6 +13,7 @@ from pyspark.sql.types import (
     FloatType,
     IntegerType,
     LongType,
+    MapType,
     Row,
     StringType,
     StructField,
@@ -410,6 +411,44 @@ class TestDeltaSchemaHandling:
         type_changes = value_field["metadata"]["delta.typeChanges"]
         assert type_changes[-1]["fromType"] == "float"
         assert type_changes[-1]["toType"] == "double"
+
+    def test_delta_schema_merge_map_key_type_widening(self, spark, tmp_path):
+        """mergeSchema records type widening metadata for map key promotion."""
+        delta_path = tmp_path / "delta_map_key_type_widening"
+
+        initial_schema = StructType([StructField("attrs", MapType(IntegerType(), StringType()), True)])
+        initial_data = [Row(attrs={1: "one"})]
+        df1 = spark.createDataFrame(initial_data, schema=initial_schema)
+        df1.createOrReplaceTempView("_tw_map_key_initial")
+        spark.sql("DROP TABLE IF EXISTS delta_merge_map_key_type_widening_tbl")
+        spark.sql(
+            f"""
+            CREATE TABLE delta_merge_map_key_type_widening_tbl
+            USING DELTA
+            LOCATION '{delta_path}'
+            TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+            AS SELECT * FROM _tw_map_key_initial
+            """  # noqa: S608
+        )
+
+        widened_schema = StructType([StructField("attrs", MapType(LongType(), StringType()), True)])
+        widened_data = [Row(attrs={2147483648: "wide"})]
+        spark.createDataFrame(widened_data, schema=widened_schema).write.format("delta").mode("append").option(
+            "mergeSchema", "true"
+        ).save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path))
+        assert result_df.schema["attrs"].dataType == MapType(LongType(), StringType())
+        assert {tuple(row.attrs.items()) for row in result_df.collect()} == {
+            ((1, "one"),),
+            ((2147483648, "wide"),),
+        }
+
+        attrs_field = _delta_field(_latest_delta_schema(delta_path), "attrs")
+        type_changes = attrs_field["metadata"]["delta.typeChanges"]
+        assert type_changes[-1]["fromType"] == "integer"
+        assert type_changes[-1]["toType"] == "long"
+        assert type_changes[-1]["fieldPath"] == "key"
 
     def test_delta_schema_merge_type_widening_requires_table_property(self, spark, tmp_path):
         """mergeSchema rejects widening existing columns unless type widening is enabled."""

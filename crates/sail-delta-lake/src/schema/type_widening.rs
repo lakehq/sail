@@ -48,15 +48,18 @@ impl TypeChange {
 }
 
 pub fn protocol_supports_type_widening(protocol: &Protocol) -> bool {
-    protocol.has_reader_feature(&TableFeature::TypeWidening)
-        || protocol.has_reader_feature(&TableFeature::TypeWideningPreview)
+    protocol.min_reader_version() >= 3
+        && (protocol.has_reader_feature(&TableFeature::TypeWidening)
+            || protocol.has_reader_feature(&TableFeature::TypeWideningPreview))
 }
 
 pub fn protocol_can_write_type_widening(protocol: &Protocol) -> bool {
-    (protocol.has_reader_feature(&TableFeature::TypeWidening)
-        && protocol.has_writer_feature(&TableFeature::TypeWidening))
-        || (protocol.has_reader_feature(&TableFeature::TypeWideningPreview)
-            && protocol.has_writer_feature(&TableFeature::TypeWideningPreview))
+    protocol.min_reader_version() >= 3
+        && protocol.min_writer_version() >= 7
+        && ((protocol.has_reader_feature(&TableFeature::TypeWidening)
+            && protocol.has_writer_feature(&TableFeature::TypeWidening))
+            || (protocol.has_reader_feature(&TableFeature::TypeWideningPreview)
+                && protocol.has_writer_feature(&TableFeature::TypeWideningPreview)))
 }
 
 pub fn schema_contains_type_widening_metadata(schema: &StructType) -> bool {
@@ -405,13 +408,11 @@ fn rewrite_field(existing: &StructField, candidate: &StructField) -> DeltaResult
         metadata: candidate.metadata().clone(),
     };
 
-    let key = ColumnMetadataKey::TypeChanges.as_ref();
-    if !rewritten.metadata.contains_key(key) {
-        if let Some(existing_value) = existing.metadata().get(key) {
-            rewritten
-                .metadata
-                .insert(key.to_string(), existing_value.clone());
-        }
+    for (key, existing_value) in existing.metadata() {
+        rewritten
+            .metadata
+            .entry(key.clone())
+            .or_insert_with(|| existing_value.clone());
     }
 
     append_type_changes_to_field(rewritten, changes)
@@ -759,6 +760,36 @@ mod tests {
     }
 
     #[test]
+    fn protocol_type_widening_requires_table_feature_versions() {
+        let legacy_protocol = Protocol::new(
+            1,
+            2,
+            Some(vec![TableFeature::TypeWidening]),
+            Some(vec![TableFeature::TypeWidening]),
+        );
+        assert!(!protocol_supports_type_widening(&legacy_protocol));
+        assert!(!protocol_can_write_type_widening(&legacy_protocol));
+
+        let reader_only_protocol = Protocol::new(
+            3,
+            2,
+            Some(vec![TableFeature::TypeWidening]),
+            Some(vec![TableFeature::TypeWidening]),
+        );
+        assert!(protocol_supports_type_widening(&reader_only_protocol));
+        assert!(!protocol_can_write_type_widening(&reader_only_protocol));
+
+        let supported_protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TypeWidening]),
+            Some(vec![TableFeature::TypeWidening]),
+        );
+        assert!(protocol_supports_type_widening(&supported_protocol));
+        assert!(protocol_can_write_type_widening(&supported_protocol));
+    }
+
+    #[test]
     fn rejects_iceberg_incompatible_writes_for_iceberg_tables() -> DeltaResult<()> {
         let plain_protocol = Protocol::new(
             3,
@@ -881,6 +912,25 @@ mod tests {
         assert_eq!(values_changes[0].from_type, DataType::SHORT);
         assert_eq!(values_changes[0].to_type, DataType::INTEGER);
         assert_eq!(values_changes[0].field_path, ["element"]);
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_existing_field_metadata_when_recording_type_changes() -> DeltaResult<()> {
+        let existing = StructType::try_new([StructField::nullable("id", DataType::INTEGER)
+            .add_metadata([("comment", MetadataValue::String("primary id".to_string()))])])?;
+        let candidate = StructType::try_new([StructField::nullable("id", DataType::LONG)])?;
+
+        let updated = add_type_widening_metadata(&existing, &candidate)?;
+        let id = updated
+            .field("id")
+            .ok_or_else(|| DeltaTableError::missing_column("id"))?;
+
+        assert_eq!(
+            id.metadata().get("comment"),
+            Some(&MetadataValue::String("primary id".to_string()))
+        );
+        assert_eq!(type_changes_from_field(id)?.len(), 1);
         Ok(())
     }
 }

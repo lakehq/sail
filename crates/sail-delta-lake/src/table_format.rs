@@ -30,11 +30,10 @@ use crate::physical_plan::planner::{
 use crate::schema::{
     add_type_widening_metadata, alter_column_type as alter_delta_column_type, collect_type_changes,
     evolve_schema, is_supported_type_change_for_write, protocol_can_write_type_widening,
-    schema_contains_type_widening_metadata,
 };
 use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
-    DataType as DeltaDataType, DeltaOperation, StructType,
+    DataType as DeltaDataType, DeltaOperation, Protocol, StructField, StructType, TableFeature,
 };
 use crate::table::{open_table_with_object_store, open_table_with_object_store_and_table_config};
 use crate::{create_delta_source, DeltaTableError};
@@ -404,6 +403,11 @@ impl TableFormat for DeltaTableFormat {
         // are preserved, and new feature requirements are added.
         let desired_protocol = protocol_for_metadata(&new_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            snapshot.protocol(),
+            &desired_protocol,
+            new_metadata.configuration(),
+        );
 
         let existing_protocol = snapshot.protocol();
         let (merged_protocol, protocol_upgraded) =
@@ -505,14 +509,10 @@ impl TableFormat for DeltaTableFormat {
             }
         }
 
-        let candidate_kernel = if !type_changes.is_empty()
-            || schema_contains_type_widening_metadata(&current_kernel)
-        {
-            add_type_widening_metadata(&current_kernel, &candidate_kernel)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-        } else {
-            candidate_kernel
-        };
+        let operation_column = operation_column_json(&candidate_kernel, &column_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let candidate_kernel = add_type_widening_metadata(&current_kernel, &candidate_kernel)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let kmode = snapshot.effective_column_mapping_mode();
         let (_final_kernel, updated_metadata) =
@@ -526,8 +526,7 @@ impl TableFormat for DeltaTableFormat {
                 Some(snapshot),
                 table.log_store(),
                 DeltaOperation::AlterColumn {
-                    column: column_path.join("."),
-                    data_type: data_type.to_string(),
+                    column: operation_column,
                 },
             )
             .await
@@ -540,6 +539,139 @@ fn format_schema_change_path(struct_path: &[String], field_path: &[String]) -> S
     let mut path = struct_path.to_vec();
     path.extend(field_path.iter().cloned());
     path.join(".")
+}
+
+fn operation_column_json(
+    schema: &StructType,
+    column_path: &[String],
+) -> crate::spec::DeltaResult<serde_json::Value> {
+    let field = resolve_operation_column_field(schema, column_path)?;
+    let metadata = serde_json::to_value(field.metadata()).map_err(DeltaTableError::generic_err)?;
+    Ok(serde_json::json!({
+        "name": column_path.join("."),
+        "type": field.data_type().to_string(),
+        "nullable": field.is_nullable(),
+        "metadata": metadata,
+    }))
+}
+
+fn resolve_operation_column_field(
+    schema: &StructType,
+    column_path: &[String],
+) -> crate::spec::DeltaResult<StructField> {
+    let Some((name, nested_path)) = column_path.split_first() else {
+        return Err(DeltaTableError::schema(
+            "ALTER COLUMN TYPE requires a column name",
+        ));
+    };
+    let field = schema
+        .field(name)
+        .ok_or_else(|| DeltaTableError::missing_column(column_path.join(".")))?;
+    if nested_path.is_empty() {
+        Ok(field.clone())
+    } else {
+        resolve_operation_nested_field(field.data_type(), nested_path)
+    }
+}
+
+fn resolve_operation_nested_field(
+    data_type: &DeltaDataType,
+    path: &[String],
+) -> crate::spec::DeltaResult<StructField> {
+    let Some((name, nested_path)) = path.split_first() else {
+        return Err(DeltaTableError::schema(
+            "ALTER COLUMN TYPE requires a column name",
+        ));
+    };
+
+    match data_type {
+        DeltaDataType::Struct(struct_type) => {
+            let field = struct_type
+                .field(name)
+                .ok_or_else(|| DeltaTableError::missing_column(path.join(".")))?;
+            if nested_path.is_empty() {
+                Ok(field.clone())
+            } else {
+                resolve_operation_nested_field(field.data_type(), nested_path)
+            }
+        }
+        DeltaDataType::Array(array) if name == "element" => synthetic_operation_field(
+            name,
+            array.element_type(),
+            array.contains_null(),
+            nested_path,
+        ),
+        DeltaDataType::Map(map) if name == "key" => {
+            synthetic_operation_field(name, map.key_type(), false, nested_path)
+        }
+        DeltaDataType::Map(map) if name == "value" => synthetic_operation_field(
+            name,
+            map.value_type(),
+            map.value_contains_null(),
+            nested_path,
+        ),
+        DeltaDataType::Array(_) => Err(DeltaTableError::schema(format!(
+            "expected 'element' for array column path, found '{name}'"
+        ))),
+        DeltaDataType::Map(_) => Err(DeltaTableError::schema(format!(
+            "expected 'key' or 'value' for map column path, found '{name}'"
+        ))),
+        other => Err(DeltaTableError::schema(format!(
+            "cannot resolve ALTER COLUMN TYPE path segment '{name}' through {other}"
+        ))),
+    }
+}
+
+fn synthetic_operation_field(
+    name: &str,
+    data_type: &DeltaDataType,
+    nullable: bool,
+    nested_path: &[String],
+) -> crate::spec::DeltaResult<StructField> {
+    if nested_path.is_empty() {
+        Ok(StructField::new(name, data_type.clone(), nullable))
+    } else {
+        resolve_operation_nested_field(data_type, nested_path)
+    }
+}
+
+fn protocol_without_feature(protocol: &Protocol, feature: TableFeature) -> Protocol {
+    let reader_features = protocol.reader_features().map(|features| {
+        features
+            .iter()
+            .filter(|item| **item != feature)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    let writer_features = protocol.writer_features().map(|features| {
+        features
+            .iter()
+            .filter(|item| **item != feature)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    Protocol::new(
+        protocol.min_reader_version(),
+        protocol.min_writer_version(),
+        reader_features,
+        writer_features,
+    )
+}
+
+fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+    existing: &Protocol,
+    desired: &Protocol,
+    configuration: &HashMap<String, String>,
+) -> Protocol {
+    let existing_supports_preview = existing.has_reader_feature(&TableFeature::TypeWideningPreview)
+        || existing.has_writer_feature(&TableFeature::TypeWideningPreview);
+    let stable_explicitly_requested = configuration.contains_key("delta.feature.typeWidening");
+
+    if existing_supports_preview && !stable_explicitly_requested {
+        protocol_without_feature(desired, TableFeature::TypeWidening)
+    } else {
+        desired.clone()
+    }
 }
 
 /// Merge an existing protocol with a desired one. The result preserves every feature and

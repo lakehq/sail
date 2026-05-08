@@ -130,16 +130,9 @@ impl DeltaTypeConverter {
                         )))
                     }
                 };
-                if t_key.data_type() != i_key.data_type() {
-                    return Err(DataFusionError::Plan(format!(
-                        "Schema evolution failed: incompatible map key types for field '{}': {:?} vs {:?}",
-                        table_field.name(),
-                        t_key.data_type(),
-                        i_key.data_type()
-                    )));
-                }
+                let merged_key = Self::promote_field_types(t_key, i_key)?;
                 let merged_val = Self::promote_field_types(t_val, i_val)?;
-                let kv_struct = DataType::Struct(vec![t_key.as_ref().clone(), merged_val].into());
+                let kv_struct = DataType::Struct(vec![merged_key, merged_val].into());
                 let kv_field = Field::new(table_kv.name(), kv_struct, false);
                 let _ = i_sorted;
                 Some(DataType::Map(Arc::new(kv_field), *t_sorted))
@@ -263,7 +256,9 @@ impl DeltaTypeConverter {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::datatypes::Field;
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{Field, Fields};
 
     use super::*;
 
@@ -332,6 +327,46 @@ mod tests {
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_map_key_type_promotion() -> Result<()> {
+        let table_entries = Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Utf8, true),
+            ])),
+            false,
+        );
+        let input_entries = Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Int64, false),
+                Field::new("value", DataType::Utf8, true),
+            ])),
+            false,
+        );
+        let table_field = Field::new("m", DataType::Map(Arc::new(table_entries), false), true);
+        let input_field = Field::new("m", DataType::Map(Arc::new(input_entries), false), true);
+
+        let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)?;
+
+        match result.data_type() {
+            DataType::Map(entries, _) => match entries.data_type() {
+                DataType::Struct(fields) => {
+                    assert_eq!(fields[0].data_type(), &DataType::Int64);
+                    assert_eq!(fields[1].data_type(), &DataType::Utf8);
+                    Ok(())
+                }
+                other => Err(DataFusionError::Plan(format!(
+                    "expected map entries struct, got {other}"
+                ))),
+            },
+            other => Err(DataFusionError::Plan(format!(
+                "expected map type, got {other}"
+            ))),
+        }
     }
 
     #[test]
