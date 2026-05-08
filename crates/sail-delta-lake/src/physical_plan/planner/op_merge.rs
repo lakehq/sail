@@ -23,7 +23,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, Partitioning};
 use datafusion_common::{not_impl_err, JoinType, NullEquality};
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
 use sail_common_datafusion::datasource::{
@@ -41,10 +41,10 @@ use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::physical_plan::{DeltaCommitExec, DeltaWriterExec};
 
 /// Internal metadata columns stripped before passing rows to DeltaWriterExec.
-const INTERNAL_MERGE_COLUMNS: &[&str] = &[
-    PATH_COLUMN,
-    sail_common_datafusion::datasource::OPERATION_COLUMN,
-];
+///
+/// The operation column is intentionally preserved for DeltaWriterExec so it can
+/// populate MERGE operationMetrics before dropping the column from Parquet output.
+const INTERNAL_MERGE_COLUMNS: &[&str] = &[PATH_COLUMN];
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
 /// expanded (handled by ExpandRowLevelOp) and passed down as pre-expanded plans.
@@ -191,48 +191,53 @@ pub async fn build_merge_plan_mor(
         merge_operation.clone(),
     )?);
 
-    let commit_input: Arc<dyn ExecutionPlan> =
-        if let Some(deletion_vector_plan) = deletion_vector_plan {
-            let touched_plan = touched_plan_opt.ok_or_else(|| {
-                DataFusionError::Plan(
-                    "pre-expanded MERGE plan missing touched-file input for deletion vectors"
-                        .to_string(),
-                )
-            })?;
-            let touched_adds = build_adds_from_touched_files(
-                ctx,
-                &snapshot_state,
-                touched_plan,
-                ctx.table_url(),
-                version,
-                &partition_columns,
-                LogReplayOptions {
-                    include_extended_add_metadata: true,
-                    ..Default::default()
-                },
+    let commit_input: Arc<dyn ExecutionPlan> = if let Some(deletion_vector_plan) =
+        deletion_vector_plan
+    {
+        let touched_plan = touched_plan_opt.ok_or_else(|| {
+            DataFusionError::Plan(
+                "pre-expanded MERGE plan missing touched-file input for deletion vectors"
+                    .to_string(),
             )
-            .await?;
-            let target_partitions = ctx.session().config().target_partitions().max(1);
-            let deletion_vector_plan =
-                hash_repartition_by_column(deletion_vector_plan, PATH_COLUMN, target_partitions)?;
-            let deletion_vector_plan =
-                sort_by_column_preserving_partitioning(deletion_vector_plan, PATH_COLUMN)?;
-            let touched_adds =
-                hash_repartition_by_column(touched_adds, PATH_COLUMN, target_partitions)?;
-            let dv_writer: Arc<dyn ExecutionPlan> =
-                Arc::new(crate::physical_plan::DeletionVectorRowsWriterExec::new(
-                    deletion_vector_plan,
-                    touched_adds,
-                    ctx.table_url().clone(),
-                    PATH_COLUMN,
-                    sail_common_datafusion::datasource::MERGE_ROW_INDEX_COLUMN,
-                    version,
-                    merge_operation,
-                )?);
-            UnionExec::try_new(vec![writer, dv_writer])?
-        } else {
-            writer
-        };
+        })?;
+        let touched_adds = build_adds_from_touched_files(
+            ctx,
+            &snapshot_state,
+            touched_plan,
+            ctx.table_url(),
+            version,
+            &partition_columns,
+            LogReplayOptions {
+                include_extended_add_metadata: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+        let target_partitions = ctx.session().config().target_partitions().max(1);
+        let deletion_vector_plan =
+            hash_repartition_by_column(deletion_vector_plan, PATH_COLUMN, target_partitions)?;
+        let deletion_vector_plan =
+            sort_by_column_preserving_partitioning(deletion_vector_plan, PATH_COLUMN)?;
+        let deletion_vector_partition_count = deletion_vector_plan
+            .output_partitioning()
+            .partition_count()
+            .max(1);
+        let touched_adds =
+            hash_repartition_by_column(touched_adds, PATH_COLUMN, deletion_vector_partition_count)?;
+        let dv_writer: Arc<dyn ExecutionPlan> =
+            Arc::new(crate::physical_plan::DeletionVectorRowsWriterExec::new(
+                deletion_vector_plan,
+                touched_adds,
+                ctx.table_url().clone(),
+                PATH_COLUMN,
+                sail_common_datafusion::datasource::MERGE_ROW_INDEX_COLUMN,
+                version,
+                merge_operation,
+            )?);
+        UnionExec::try_new(vec![writer, dv_writer])?
+    } else {
+        writer
+    };
 
     Ok(Arc::new(DeltaCommitExec::new(
         Arc::new(CoalescePartitionsExec::new(commit_input)),

@@ -125,10 +125,14 @@ Feature: Delta Lake operationMetrics in commitInfo
         """
 
     @sail-only
-    Scenario: DV DELETE reports numDeletionVectorsAdded and zero numCopiedRows
+    Scenario: DV DELETE updates an existing deletion vector
       Given statement
         """
         DELETE FROM delta_op_metrics_delete_dv WHERE id = 3
+        """
+      Given statement
+        """
+        DELETE FROM delta_op_metrics_delete_dv WHERE id = 4
         """
       Then delta log latest commit info matches snapshot for paths
         | path             |
@@ -151,25 +155,34 @@ Feature: Delta Lake operationMetrics in commitInfo
       Given statement
         """
         INSERT INTO delta_op_metrics_merge VALUES
-          (1,'old','keep'),(2,'old','update'),(3,'old','delete')
+          (1,'old','keep'),
+          (2,'old','matched_update'),
+          (3,'old','matched_delete'),
+          (5,'old','source_update'),
+          (6,'old','source_delete')
         """
       Given statement
         """
         CREATE OR REPLACE TEMP VIEW src_op_metrics_merge AS
         SELECT * FROM VALUES
-          (2,'new','insert'),(3,'any','ignored'),(4,'ins','insert')
+          (2,'new','matched_update'),
+          (3,'any','matched_delete'),
+          (4,'ins','insert')
         AS src(id, value, flag)
         """
 
     @sail-only
-    Scenario: Full MERGE reports target file and byte counters
+    Scenario: Full MERGE reports detailed target row counters
       Given statement
         """
         MERGE INTO delta_op_metrics_merge AS t
         USING src_op_metrics_merge AS s
         ON t.id = s.id
-        WHEN MATCHED AND t.flag = 'update' THEN UPDATE SET value = s.value
-        WHEN MATCHED AND t.flag = 'delete' THEN DELETE
+        WHEN MATCHED AND t.flag = 'matched_update' THEN UPDATE SET value = s.value
+        WHEN MATCHED AND t.flag = 'matched_delete' THEN DELETE
+        WHEN NOT MATCHED BY SOURCE AND t.flag = 'source_update' THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        WHEN NOT MATCHED BY SOURCE AND t.flag = 'source_delete' THEN DELETE
         WHEN NOT MATCHED THEN INSERT *
         """
       Then delta log latest commit info matches snapshot for paths
@@ -185,6 +198,47 @@ Feature: Delta Lake operationMetrics in commitInfo
         USING src_op_metrics_merge AS s
         ON t.id = s.id
         WHEN NOT MATCHED THEN INSERT *
+        """
+      Then delta log latest commit info matches snapshot for paths
+        | path             |
+        | operation        |
+        | operationMetrics |
+
+  Rule: MERGE operationMetrics (Merge-on-Read with deletion vectors)
+
+    Background:
+      Given variable location for temporary directory op_metrics_merge_dv
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_op_metrics_merge_dv
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_op_metrics_merge_dv
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')
+        AS SELECT * FROM VALUES
+          (1,'a'),(2,'b'),(3,'c'),(4,'d')
+        AS t(id, value)
+        """
+      Given statement
+        """
+        DELETE FROM delta_op_metrics_merge_dv WHERE id = 1
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_op_metrics_merge_dv AS
+        SELECT * FROM VALUES (3,'delete') AS src(id, value)
+        """
+
+    @sail-only
+    Scenario: MERGE DELETE on DV table reports target deletion vector update counters
+      Given statement
+        """
+        MERGE INTO delta_op_metrics_merge_dv AS t
+        USING src_op_metrics_merge_dv AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN DELETE
         """
       Then delta log latest commit info matches snapshot for paths
         | path             |

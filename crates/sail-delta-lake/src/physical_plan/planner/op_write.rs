@@ -215,7 +215,7 @@ async fn build_overwrite_if_plan(
 
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
     let log_replay_options = LogReplayOptions {
-        include_stats_json: !partition_only,
+        include_stats_json: true,
         ..Default::default()
     };
     let meta_scan: Arc<dyn ExecutionPlan> =
@@ -264,7 +264,7 @@ async fn build_old_data_plan(
     let version = snapshot_state.version();
     let partition_only = !predicate_requires_stats(&condition_expr, ctx.partition_columns());
     let log_replay_options = LogReplayOptions {
-        include_stats_json: !partition_only,
+        include_stats_json: true,
         ..Default::default()
     };
     let meta_scan: Arc<dyn ExecutionPlan> =

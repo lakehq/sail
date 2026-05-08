@@ -181,16 +181,9 @@ impl DeletionVectorRowsWriterExec {
             .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
 
         let schema = delta_action_schema()?;
-        let input_partition_count = input.output_partitioning().partition_count().max(1);
-        let adds_input_partition_count = adds_input.output_partitioning().partition_count().max(1);
-        if input_partition_count != adds_input_partition_count {
-            return Err(DataFusionError::Plan(format!(
-                "DeletionVectorRowsWriterExec requires inputs with the same partition count, got {input_partition_count} and {adds_input_partition_count}"
-            )));
-        }
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(input_partition_count),
+            Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
         ));
@@ -390,20 +383,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        let distribution_for = |input: &Arc<dyn ExecutionPlan>, name: &str| {
-            let idx = match input.schema().index_of(name) {
-                Ok(i) => i,
-                Err(_) => return Distribution::SinglePartition,
-            };
-            let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-                Arc::new(Column::new(name, idx));
-            Distribution::HashPartitioned(vec![expr])
-        };
-
-        vec![
-            distribution_for(&self.input, &self.path_column),
-            distribution_for(&self.adds_input, &self.path_column),
-        ]
+        vec![Distribution::SinglePartition, Distribution::SinglePartition]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -428,8 +408,13 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let mut stream = self.input.execute(partition, context.clone())?;
+        if partition != 0 {
+            return internal_err!("DeletionVectorRowsWriterExec has a single output partition");
+        }
+        let input = Arc::clone(&self.input);
+        let input_partition_count = input.output_partitioning().partition_count().max(1);
         let adds_input = Arc::clone(&self.adds_input);
+        let adds_partition_count = adds_input.output_partitioning().partition_count().max(1);
         let table_url = self.table_url.clone();
         let path_column = self.path_column.clone();
         let row_index_column = self.row_index_column.clone();
@@ -442,17 +427,19 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let exec_start = Instant::now();
 
-            let mut adds_stream = adds_input.execute(partition, context.clone())?;
             let mut add_by_path = HashMap::new();
-            while let Some(batch_result) = adds_stream.next().await {
-                let batch = batch_result?;
-                let adds = if batch.column_by_name(COL_ACTION).is_some() {
-                    decode_adds_from_batch(&batch)?
-                } else {
-                    meta_adds::decode_adds_from_meta_batch(&batch, None)?
-                };
-                for add in adds {
-                    add_by_path.insert(add.path.clone(), add);
+            for adds_partition in 0..adds_partition_count {
+                let mut adds_stream = adds_input.execute(adds_partition, context.clone())?;
+                while let Some(batch_result) = adds_stream.next().await {
+                    let batch = batch_result?;
+                    let adds = if batch.column_by_name(COL_ACTION).is_some() {
+                        decode_adds_from_batch(&batch)?
+                    } else {
+                        meta_adds::decode_adds_from_meta_batch(&batch, None)?
+                    };
+                    for add in adds {
+                        add_by_path.insert(add.path.clone(), add);
+                    }
                 }
             }
 
@@ -471,74 +458,77 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             let mut current_path: Option<String> = None;
             let mut current_bitmap = DeletionVectorBitmap::new();
 
-            while let Some(batch_result) = stream.next().await {
-                let batch = batch_result?;
-                let path_idx = batch.schema().index_of(&path_column)?;
-                let row_index_idx = batch.schema().index_of(&row_index_column)?;
+            for input_partition in 0..input_partition_count {
+                let mut stream = input.execute(input_partition, context.clone())?;
+                while let Some(batch_result) = stream.next().await {
+                    let batch = batch_result?;
+                    let path_idx = batch.schema().index_of(&path_column)?;
+                    let row_index_idx = batch.schema().index_of(&row_index_column)?;
 
-                let paths = batch
-                    .column(path_idx)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "MERGE DV path column '{path_column}' must be Utf8"
-                        ))
-                    })?;
-                let row_indices = batch
-                    .column(row_index_idx)
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "MERGE DV row-index column '{row_index_column}' must be Int64"
-                        ))
-                    })?;
-
-                for row in 0..batch.num_rows() {
-                    if paths.is_null(row) || row_indices.is_null(row) {
-                        return Err(DataFusionError::Execution(
-                            "MERGE DV rows must have non-null file path and row index".to_string(),
-                        ));
-                    }
-                    let row_index = row_indices.value(row);
-                    if row_index < 0 {
-                        return Err(DataFusionError::Execution(format!(
-                            "MERGE DV row index must be non-negative, got {row_index}"
-                        )));
-                    }
-                    let path = paths.value(row);
-                    if current_path
-                        .as_deref()
-                        .is_some_and(|current| current != path)
-                    {
-                        let flushed_path =
-                            current_path.replace(path.to_string()).ok_or_else(|| {
-                                DataFusionError::Internal("missing MERGE DV path".into())
-                            })?;
-                        let flushed_bitmap = std::mem::take(&mut current_bitmap);
-                        if let Some(stats) = write_merge_dv_actions_for_path(
-                            flushed_path,
-                            flushed_bitmap,
-                            &add_by_path,
-                            &object_store,
-                            &table_url,
-                            &dv_writer,
-                            deletion_timestamp,
-                            &mut output_actions,
-                        )
-                        .await?
-                        {
-                            total_deleted_rows += stats.newly_deleted_rows;
-                            num_dv_added += 1;
-                            if stats.had_existing_dv {
-                                num_dv_updated += 1;
-                            }
+                    let paths = batch
+                        .column(path_idx)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "MERGE DV path column '{path_column}' must be Utf8"
+                            ))
+                        })?;
+                    let row_indices = batch
+                        .column(row_index_idx)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "MERGE DV row-index column '{row_index_column}' must be Int64"
+                            ))
+                        })?;
+                    for row in 0..batch.num_rows() {
+                        if paths.is_null(row) || row_indices.is_null(row) {
+                            return Err(DataFusionError::Execution(
+                                "MERGE DV rows must have non-null file path and row index"
+                                    .to_string(),
+                            ));
                         }
-                    } else if current_path.is_none() {
-                        current_path = Some(path.to_string());
+                        let row_index = row_indices.value(row);
+                        if row_index < 0 {
+                            return Err(DataFusionError::Execution(format!(
+                                "MERGE DV row index must be non-negative, got {row_index}"
+                            )));
+                        }
+                        let path = paths.value(row);
+                        if current_path
+                            .as_deref()
+                            .is_some_and(|current| current != path)
+                        {
+                            let flushed_path =
+                                current_path.replace(path.to_string()).ok_or_else(|| {
+                                    DataFusionError::Internal("missing MERGE DV path".into())
+                                })?;
+                            let flushed_bitmap = std::mem::take(&mut current_bitmap);
+                            if let Some(stats) = write_merge_dv_actions_for_path(
+                                flushed_path,
+                                flushed_bitmap,
+                                &add_by_path,
+                                &object_store,
+                                &table_url,
+                                &dv_writer,
+                                deletion_timestamp,
+                                &mut output_actions,
+                            )
+                            .await?
+                            {
+                                total_deleted_rows += stats.newly_deleted_rows;
+                                num_dv_added += 1;
+                                if stats.had_existing_dv {
+                                    num_dv_updated += 1;
+                                }
+                            }
+                        } else if current_path.is_none() {
+                            current_path = Some(path.to_string());
+                        }
+                        current_bitmap.insert(row_index as u64);
                     }
-                    current_bitmap.insert(row_index as u64);
                 }
             }
 
@@ -577,6 +567,10 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 execution_time_ms: Some(exec_start.elapsed().as_millis() as u64),
                 num_removed_files: Some(num_dv_added),
                 num_added_files: Some(num_dv_added),
+                num_target_rows_deleted: Some(total_deleted_rows),
+                num_target_deletion_vectors_added: Some(num_dv_added),
+                num_target_deletion_vectors_updated: Some(num_dv_updated),
+                num_target_deletion_vectors_removed: Some(num_dv_updated),
                 ..Default::default()
             };
 
@@ -826,9 +820,7 @@ impl ExecutionPlan for DeletionVectorWriterExec {
                 num_copied_rows: Some(0),
                 num_deletion_vectors_added: Some(num_dv_added),
                 num_deletion_vectors_updated: Some(num_dv_updated),
-                // TODO: numDeletionVectorsRemoved is not populated here because MoR DELETE
-                // only updates/adds DVs. It should be emitted from MERGE/UPDATE paths that
-                // physically drop files previously carrying DVs.
+                num_deletion_vectors_removed: Some(num_dv_updated),
                 ..Default::default()
             };
 

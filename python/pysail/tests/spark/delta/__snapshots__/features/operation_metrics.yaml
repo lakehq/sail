@@ -19,9 +19,13 @@ data:
   operationMetrics:
     executionTimeMs: <time_ms>
     numAddedBytes: 734
+    numAddedChangeFiles: 0
     numAddedFiles: 1
     numCopiedRows: 3
     numDeletedRows: 2
+    numDeletionVectorsAdded: 0
+    numDeletionVectorsRemoved: 0
+    numDeletionVectorsUpdated: 0
     numFiles: 1
     numOutputBytes: 734
     numOutputFiles: 1
@@ -38,13 +42,65 @@ data:
   operation: DELETE
   operationMetrics:
     executionTimeMs: <time_ms>
+    numAddedChangeFiles: 0
     numAddedFiles: 1
     numCopiedRows: 0
     numDeletedRows: 1
     numDeletionVectorsAdded: 1
+    numDeletionVectorsRemoved: 0
     numDeletionVectorsUpdated: 0
     numRemovedFiles: 1
     scanTimeMs: <time_ms>
+---
+name: "test_dv_delete_updates_an_existing_deletion_vector"
+data:
+  operation: DELETE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedChangeFiles: 0
+    numAddedFiles: 1
+    numCopiedRows: 0
+    numDeletedRows: 1
+    numDeletionVectorsAdded: 1
+    numDeletionVectorsRemoved: 1
+    numDeletionVectorsUpdated: 1
+    numRemovedFiles: 1
+    scanTimeMs: <time_ms>
+---
+name: "test_full_merge_reports_detailed_target_row_counters"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 4035
+    numAddedFiles: 4
+    numFiles: 4
+    numOutputBytes: 4035
+    numOutputFiles: 4
+    numOutputRows: 4
+    numRemovedBytes: 1069
+    numRemovedFiles: 1
+    numSourceRows: 4
+    numTargetBytesAdded: 4035
+    numTargetBytesRemoved: 1069
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 4
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 1
+    numTargetRowsDeleted: 2
+    numTargetRowsInserted: 1
+    numTargetRowsMatchedDeleted: 1
+    numTargetRowsMatchedUpdated: 1
+    numTargetRowsNotMatchedBySourceDeleted: 1
+    numTargetRowsNotMatchedBySourceUpdated: 1
+    numTargetRowsUpdated: 2
+    numTouchedRows: 5
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
 ---
 name: "test_full_merge_reports_target_file_and_byte_counters"
 data:
@@ -59,10 +115,19 @@ data:
     numOutputRows: 3
     numRemovedBytes: 1017
     numRemovedFiles: 1
+    numSourceRows: 3
     numTargetBytesAdded: 2945
     numTargetBytesRemoved: 1017
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
     numTargetFilesAdded: 3
     numTargetFilesRemoved: 1
+    numTargetRowsCopied: 1
+    numTargetRowsDeleted: 1
+    numTargetRowsInserted: 1
+    numTargetRowsUpdated: 1
     numTouchedRows: 3
     rewriteTimeMs: <time_ms>
     scanTimeMs: <time_ms>
@@ -79,8 +144,52 @@ data:
     numOutputBytes: 985
     numOutputFiles: 1
     numOutputRows: 1
+    numSourceRows: 3
     numTargetBytesAdded: 985
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
     numTargetFilesAdded: 1
+    numTargetRowsCopied: 0
+    numTargetRowsDeleted: 0
+    numTargetRowsInserted: 1
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 0
+    numTargetRowsNotMatchedBySourceDeleted: 0
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 0
+    rewriteTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_merge_delete_on_dv_table_reports_target_deletion_vector_update_counters"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 0
+    numAddedFiles: 1
+    numFiles: 0
+    numOutputBytes: 0
+    numOutputFiles: 0
+    numOutputRows: 0
+    numRemovedFiles: 1
+    numSourceRows: 1
+    numTargetBytesAdded: 0
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 1
+    numTargetDeletionVectorsRemoved: 1
+    numTargetDeletionVectorsUpdated: 1
+    numTargetFilesAdded: 1
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 0
+    numTargetRowsDeleted: 1
+    numTargetRowsInserted: 0
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 0
+    numTargetRowsNotMatchedBySourceDeleted: 0
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 0
     rewriteTimeMs: <time_ms>
     writeTimeMs: <time_ms>
 ---
@@ -90,14 +199,20 @@ data:
   operationMetrics:
     executionTimeMs: <time_ms>
     numAddedBytes: 0
+    numAddedChangeFiles: 0
     numAddedFiles: 0
     numCopiedRows: 0
+    numDeletedRows: 2
+    numDeletionVectorsAdded: 0
+    numDeletionVectorsRemoved: 0
+    numDeletionVectorsUpdated: 0
     numFiles: 0
     numOutputBytes: 0
     numOutputFiles: 0
     numOutputRows: 0
     numRemovedBytes: 463
     numRemovedFiles: 1
+    numTouchedRows: 2
     rewriteTimeMs: <time_ms>
     scanTimeMs: <time_ms>
     writeTimeMs: <time_ms>

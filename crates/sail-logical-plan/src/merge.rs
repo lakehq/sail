@@ -849,7 +849,14 @@ pub fn expand_merge(
     let can_fast_append = can_fast_append_insert_only(&options, target_schema, path_column)?;
 
     if can_fast_append {
-        // source ANTI target
+        let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
+            .project(append_presence_projection(
+                target_schema,
+                TARGET_PRESENT_COLUMN,
+                Some(path_column),
+            )?)?
+            .build()?;
+
         let join_on = options
             .join_key_pairs
             .iter()
@@ -859,10 +866,10 @@ pub fn expand_merge(
 
         let join = Join::try_new(
             Arc::new(source_plan.clone()),
-            Arc::new(target_plan.clone()),
+            Arc::new(augmented_target),
             join_on,
             residual_filter,
-            JoinType::LeftAnti,
+            JoinType::Left,
             JoinConstraint::On,
             NullEquality::NullEqualsNothing,
             false,
@@ -1015,7 +1022,7 @@ fn build_default_merge_expansion(
 
     let delete_expr = delete_pred.unwrap_or_else(|| lit(false));
     let insert_expr = insert_pred.unwrap_or_else(|| lit(false));
-    let active_expr = target_present.and(not(delete_expr.clone())).or(insert_expr);
+    let active_expr = target_present.or(insert_expr);
 
     let filtered = LogicalPlanBuilder::from(join.as_ref().clone())
         .filter(active_expr)?
@@ -1298,8 +1305,15 @@ fn build_insert_only_projection(
         projections.push(expr.alias(name));
     }
 
-    // Insert-only path: all rows are INSERTs.
-    projections.push(lit(RowLevelOperationType::Insert.as_i32()).alias(OPERATION_COLUMN));
+    let op_expr = Expr::Case(Case {
+        expr: None,
+        when_then_expr: vec![(
+            Box::new(col(TARGET_PRESENT_COLUMN).is_null()),
+            Box::new(lit(RowLevelOperationType::Insert.as_i32())),
+        )],
+        else_expr: Some(Box::new(lit(RowLevelOperationType::Noop.as_i32()))),
+    });
+    projections.push(op_expr.alias(OPERATION_COLUMN));
 
     Ok(projections)
 }
@@ -1637,23 +1651,75 @@ fn build_merge_projection(
     // targeted rewrite (filter writer input to touched files, while keeping inserts).
     projections.push(col(path_column).alias(path_column.to_string()));
 
+    let mut matched_update_pred: Option<Expr> = None;
+    let mut not_matched_by_source_update_pred: Option<Expr> = None;
+    let mut matched_delete_pred: Option<Expr> = None;
+    let mut not_matched_by_source_delete_pred: Option<Expr> = None;
+
+    for clause in &options.matched_clauses {
+        let mut pred = col(TARGET_PRESENT_COLUMN)
+            .is_not_null()
+            .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
+        if let Some(cond) = &clause.condition {
+            pred = pred.and(cond.expr.clone());
+        }
+        match &clause.action {
+            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_) => {
+                matched_update_pred = or_pred(matched_update_pred, pred);
+            }
+            MergeMatchedAction::Delete => {
+                matched_delete_pred = or_pred(matched_delete_pred, pred);
+            }
+        }
+    }
+    for clause in &options.not_matched_by_source_clauses {
+        let mut pred = col(TARGET_PRESENT_COLUMN)
+            .is_not_null()
+            .and(col(SOURCE_PRESENT_COLUMN).is_null());
+        if let Some(cond) = &clause.condition {
+            pred = pred.and(cond.expr.clone());
+        }
+        match &clause.action {
+            MergeNotMatchedBySourceAction::UpdateSet(_) => {
+                not_matched_by_source_update_pred =
+                    or_pred(not_matched_by_source_update_pred, pred);
+            }
+            MergeNotMatchedBySourceAction::Delete => {
+                not_matched_by_source_delete_pred =
+                    or_pred(not_matched_by_source_delete_pred, pred);
+            }
+        }
+    }
+
     // Append the operation type column so downstream writers know per-row semantics.
-    //   INSERT = 3 (not_matched_by_target → insert)
-    //   UPDATE = 2 (matched → update, not_matched_by_source → update, or unchanged copy)
-    //   DELETE is already filtered out, but matched → delete clauses are excluded above.
-    //
-    // Rows that survive the active_expr filter are either:
-    //   - Target rows (present) that were not deleted → UPDATE (2)
-    //   - Source-only rows (not_matched_by_target) that matched insert clauses → INSERT (3)
+    // Delete rows are preserved as metric-only rows and filtered out by the Delta writer.
     let insert_op = lit(RowLevelOperationType::Insert.as_i32());
-    let update_op = lit(RowLevelOperationType::Update.as_i32());
+    let copy_op = lit(RowLevelOperationType::Copy.as_i32());
     let op_expr = Expr::Case(Case {
         expr: None,
-        when_then_expr: vec![(
-            Box::new(col(TARGET_PRESENT_COLUMN).is_null()),
-            Box::new(insert_op),
-        )],
-        else_expr: Some(Box::new(update_op)),
+        when_then_expr: vec![
+            (
+                Box::new(col(TARGET_PRESENT_COLUMN).is_null()),
+                Box::new(insert_op),
+            ),
+            (
+                Box::new(matched_update_pred.unwrap_or_else(|| lit(false))),
+                Box::new(lit(RowLevelOperationType::MatchedUpdate.as_i32())),
+            ),
+            (
+                Box::new(not_matched_by_source_update_pred.unwrap_or_else(|| lit(false))),
+                Box::new(lit(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32())),
+            ),
+            (
+                Box::new(matched_delete_pred.unwrap_or_else(|| lit(false))),
+                Box::new(lit(RowLevelOperationType::MatchedDelete.as_i32())),
+            ),
+            (
+                Box::new(not_matched_by_source_delete_pred.unwrap_or_else(|| lit(false))),
+                Box::new(lit(RowLevelOperationType::NotMatchedBySourceDelete.as_i32())),
+            ),
+        ],
+        else_expr: Some(Box::new(copy_op)),
     });
     projections.push(op_expr.alias(OPERATION_COLUMN));
 

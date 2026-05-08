@@ -69,9 +69,15 @@ impl OptionLayer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum RowLevelOperationType {
+    Copy = 0,
     Delete = 1,
     Update = 2,
     Insert = 3,
+    Noop = 4,
+    MatchedDelete = 5,
+    MatchedUpdate = 6,
+    NotMatchedBySourceDelete = 7,
+    NotMatchedBySourceUpdate = 8,
 }
 
 impl RowLevelOperationType {

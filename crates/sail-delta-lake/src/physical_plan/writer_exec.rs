@@ -25,8 +25,10 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
-use datafusion::arrow::compute::SortOptions;
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBuilder, Int32Array, Int64Array, PrimitiveArray,
+};
+use datafusion::arrow::compute::{filter_record_batch, SortOptions};
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
@@ -45,7 +47,9 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{once, StreamExt};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::datasource::{
+    PhysicalSinkMode, RowLevelOperationType, OPERATION_COLUMN,
+};
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
@@ -73,6 +77,121 @@ enum SchemaMode {
     Merge,
     /// Overwrite existing schema with new schema
     Overwrite,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct MergeRowMetrics {
+    copied: u64,
+    inserted: u64,
+    updated: u64,
+    deleted: u64,
+    noop: u64,
+    matched_updated: u64,
+    not_matched_by_source_updated: u64,
+    matched_deleted: u64,
+    not_matched_by_source_deleted: u64,
+}
+
+impl MergeRowMetrics {
+    fn add_operation_value(&mut self, value: i64) {
+        match value {
+            v if v == i64::from(RowLevelOperationType::Copy.as_i32()) => {
+                self.copied = self.copied.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::Insert.as_i32()) => {
+                self.inserted = self.inserted.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::Update.as_i32()) => {
+                self.updated = self.updated.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::Delete.as_i32()) => {
+                self.deleted = self.deleted.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::Noop.as_i32()) => {
+                self.noop = self.noop.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::MatchedUpdate.as_i32()) => {
+                self.updated = self.updated.saturating_add(1);
+                self.matched_updated = self.matched_updated.saturating_add(1);
+            }
+            v if v == i64::from(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32()) => {
+                self.updated = self.updated.saturating_add(1);
+                self.not_matched_by_source_updated =
+                    self.not_matched_by_source_updated.saturating_add(1);
+            }
+            v if v == i64::from(RowLevelOperationType::MatchedDelete.as_i32()) => {
+                self.deleted = self.deleted.saturating_add(1);
+                self.matched_deleted = self.matched_deleted.saturating_add(1);
+            }
+            v if v == i64::from(RowLevelOperationType::NotMatchedBySourceDelete.as_i32()) => {
+                self.deleted = self.deleted.saturating_add(1);
+                self.not_matched_by_source_deleted =
+                    self.not_matched_by_source_deleted.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    fn source_rows(self) -> u64 {
+        let detailed_source_rows = self
+            .inserted
+            .saturating_add(self.matched_updated)
+            .saturating_add(self.matched_deleted)
+            .saturating_add(self.noop);
+        if detailed_source_rows > 0 {
+            detailed_source_rows
+        } else {
+            self.inserted
+                .saturating_add(self.updated)
+                .saturating_add(self.deleted)
+                .saturating_add(self.noop)
+        }
+    }
+
+    fn accumulate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
+            return Ok(());
+        };
+        let column = batch.column(index);
+        match column.data_type() {
+            DataType::Int32 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {OPERATION_COLUMN} as Int32"
+                        ))
+                    })?;
+                for row in 0..values.len() {
+                    if values.is_valid(row) {
+                        self.add_operation_value(i64::from(values.value(row)));
+                    }
+                }
+            }
+            DataType::Int64 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {OPERATION_COLUMN} as Int64"
+                        ))
+                    })?;
+                for row in 0..values.len() {
+                    if values.is_valid(row) {
+                        self.add_operation_value(values.value(row));
+                    }
+                }
+            }
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "MERGE operation metric column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Physical execution node for Delta Lake writing operations
@@ -318,7 +437,8 @@ impl DeltaWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let input_schema = normalize_delta_schema(&self.input.schema());
+        let input_schema =
+            normalize_delta_schema(&Self::schema_without_operation_column(&self.input.schema()));
         let operation_override = self.operation_override.clone();
         // let sink_schema = self.sink_schema.clone();
         let session_timezone = context
@@ -626,11 +746,18 @@ impl DeltaWriterExec {
             let mut total_rows = 0u64;
             let mut data = stream;
             let mut write_time_ms: u64 = 0;
+            let mut merge_row_metrics = MergeRowMetrics::default();
 
             while let Some(batch_result) = data.next().await {
                 let batch_start = Instant::now();
                 let batch = batch_result?;
+                merge_row_metrics.accumulate_batch(&batch)?;
+                let batch = Self::filter_metric_only_operation_rows(batch)?;
+                let batch = Self::strip_operation_column(batch)?;
                 let rows: u64 = u64::try_from(batch.num_rows()).unwrap_or_default();
+                if rows == 0 {
+                    continue;
+                }
                 total_rows += rows;
 
                 // Debug: input vs target schema field names for each batch
@@ -686,13 +813,7 @@ impl DeltaWriterExec {
 
             let operation = operation_override.or(operation);
 
-            // TODO: for MERGE, populate numSourceRows / numTargetRowsInserted /
-            // numTargetRowsUpdated / numTargetRowsDeleted / numTargetRowsCopied by
-            // counting rows per OPERATION_COLUMN value in the writer input stream
-            // (copy=0, insert=1, update=2, delete=3). The column is currently stripped
-            // before this point — plumb it through as side metrics without writing it
-            // to disk.
-            let operation_metrics = OperationMetrics {
+            let mut operation_metrics = OperationMetrics {
                 num_files: Some(num_added_files),
                 num_output_rows: Some(total_rows),
                 num_output_bytes: Some(num_added_bytes),
@@ -703,6 +824,26 @@ impl DeltaWriterExec {
                 write_time_ms: Some(write_time_ms.saturating_add(close_time_ms)),
                 ..Default::default()
             };
+            if matches!(operation.as_ref(), Some(DeltaOperation::Merge { .. })) {
+                operation_metrics.num_target_rows_inserted = Some(merge_row_metrics.inserted);
+                operation_metrics.num_target_rows_updated = Some(merge_row_metrics.updated);
+                if merge_row_metrics.deleted > 0 {
+                    operation_metrics.num_target_rows_deleted = Some(merge_row_metrics.deleted);
+                }
+                operation_metrics.num_target_rows_copied = Some(merge_row_metrics.copied);
+                operation_metrics.num_target_rows_matched_updated =
+                    Some(merge_row_metrics.matched_updated);
+                operation_metrics.num_target_rows_not_matched_by_source_updated =
+                    Some(merge_row_metrics.not_matched_by_source_updated);
+                operation_metrics.num_target_rows_matched_deleted =
+                    Some(merge_row_metrics.matched_deleted);
+                operation_metrics.num_target_rows_not_matched_by_source_deleted =
+                    Some(merge_row_metrics.not_matched_by_source_deleted);
+                let source_rows = merge_row_metrics.source_rows();
+                if source_rows > 0 {
+                    operation_metrics.num_source_rows = Some(source_rows);
+                }
+            }
 
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
             output_bytes.add(usize::try_from(num_added_bytes).unwrap_or(usize::MAX));
@@ -925,6 +1066,110 @@ impl DeltaWriterExec {
             }
         }
         Ok(())
+    }
+
+    fn schema_without_operation_column(schema: &SchemaRef) -> SchemaRef {
+        if schema.column_with_name(OPERATION_COLUMN).is_none() {
+            return Arc::clone(schema);
+        }
+        Arc::new(Schema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| field.name() != OPERATION_COLUMN)
+                .map(|field| field.as_ref().clone())
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    fn strip_operation_column(batch: RecordBatch) -> Result<RecordBatch> {
+        let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
+            return Ok(batch);
+        };
+        let fields = batch
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(field_index, _)| *field_index != index)
+            .map(|(_, field)| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        let columns = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(column_index, _)| *column_index != index)
+            .map(|(_, column)| Arc::clone(column))
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+    }
+
+    fn filter_metric_only_operation_rows(batch: RecordBatch) -> Result<RecordBatch> {
+        let Some(mask) = Self::metric_only_filter_mask(&batch)? else {
+            return Ok(batch);
+        };
+        filter_record_batch(&batch, &mask)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+    }
+
+    fn metric_only_filter_mask(batch: &RecordBatch) -> Result<Option<BooleanArray>> {
+        let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
+            return Ok(None);
+        };
+        let column = batch.column(index);
+        let mut has_metric_only_row = false;
+        let mut builder = BooleanBuilder::with_capacity(column.len());
+
+        let is_metric_only = |value| {
+            matches!(
+                value,
+                v if v == i64::from(RowLevelOperationType::Noop.as_i32())
+                    || v == i64::from(RowLevelOperationType::Delete.as_i32())
+                    || v == i64::from(RowLevelOperationType::MatchedDelete.as_i32())
+                    || v == i64::from(RowLevelOperationType::NotMatchedBySourceDelete.as_i32())
+            )
+        };
+
+        match column.data_type() {
+            DataType::Int32 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {OPERATION_COLUMN} as Int32"
+                        ))
+                    })?;
+                for row in 0..values.len() {
+                    let keep = values.is_null(row) || !is_metric_only(i64::from(values.value(row)));
+                    has_metric_only_row |= !keep;
+                    builder.append_value(keep);
+                }
+            }
+            DataType::Int64 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {OPERATION_COLUMN} as Int64"
+                        ))
+                    })?;
+                for row in 0..values.len() {
+                    let keep = values.is_null(row) || !is_metric_only(values.value(row));
+                    has_metric_only_row |= !keep;
+                    builder.append_value(keep);
+                }
+            }
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "MERGE operation metric column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
+                )));
+            }
+        }
+
+        Ok(has_metric_only_row.then(|| builder.finish()))
     }
 
     /// Validate and adapt a batch to match the final schema
