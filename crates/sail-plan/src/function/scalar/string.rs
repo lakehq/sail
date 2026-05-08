@@ -67,6 +67,47 @@ fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(array_element(matches, lit(1i64)))
 }
 
+fn adjust_substr_position(
+    string: expr::Expr,
+    position: expr::Expr,
+    length_opt: Option<expr::Expr>,
+) -> PlanResult<(expr::Expr, Option<expr::Expr>)> {
+    match &position {
+        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) if *n > 0 => {
+            Ok((position, length_opt))
+        }
+        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) if *n > 0 => {
+            Ok((position, length_opt))
+        }
+        expr::Expr::Literal(ScalarValue::Int64(Some(0)), _)
+        | expr::Expr::Literal(ScalarValue::Int32(Some(0)), _) => Ok((lit(1i64), length_opt)),
+        _ => {
+            let effective_start = when(position.clone().gt(lit(0i64)), position.clone())
+                .when(position.clone().eq(lit(0i64)), lit(1i64))
+                .otherwise(
+                    cast(expr_fn::char_length(string), DataType::Int64)
+                        + position.clone()
+                        + lit(1i64),
+                )?;
+            let clamped = expr_fn::greatest(vec![effective_start.clone(), lit(1i64)]);
+            let length_opt = match length_opt {
+                Some(length) => Some(
+                    when(
+                        effective_start.clone().lt(lit(1i64)),
+                        expr_fn::greatest(vec![
+                            length.clone() + effective_start - lit(1i64),
+                            lit(0i64),
+                        ]),
+                    )
+                    .otherwise(length)?,
+                ),
+                None => None,
+            };
+            Ok((clamped, length_opt))
+        }
+    }
+}
+
 fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         mut arguments,
@@ -77,28 +118,11 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
-    // Spark uses 1-based indexing, but treats pos=0 the same as pos=1 (start of string).
-    // For negative positions, Spark counts from the end of the string.
-    // DataFusion follows the SQL standard where pos=0 reduces the effective length by 1,
-    // and pos<0 reduces even more. We convert Spark's semantics to DataFusion's:
-    // - pos > 0: use as-is (1-based from start)
-    // - pos = 0: use 1 (same behavior as pos=1 in Spark)
-    // - pos < 0: use greatest(char_length(str) + pos + 1, 1) (absolute position from end)
-    // For literal positive positions (the common case), we skip the CASE WHEN to keep plans clean.
-    let position = match &position {
-        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) if *n > 0 => position,
-        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) if *n > 0 => position,
-        expr::Expr::Literal(ScalarValue::Int64(Some(0)), _)
-        | expr::Expr::Literal(ScalarValue::Int32(Some(0)), _) => lit(1i64),
-        _ => when(position.clone().gt(lit(0i64)), position.clone())
-            .when(position.clone().eq(lit(0i64)), lit(1i64))
-            .otherwise(expr_fn::greatest(vec![
-                cast(expr_fn::char_length(string.clone()), DataType::Int64)
-                    + position.clone()
-                    + lit(1i64),
-                lit(1i64),
-            ]))?,
-    };
+    // Spark uses 1-based indexing, treating pos=0 as pos=1 and negative pos as
+    // counting from the end. For the 3-arg form, when pos overshoots the start
+    // (effective_start < 1), the length must be reduced by the overshoot so the
+    // endpoint stays correct — otherwise we'd return too many characters.
+    let (position, length_opt) = adjust_substr_position(string.clone(), position, length_opt)?;
     let substr_res = match length_opt {
         Some(length) => expr_fn::substring(string, position, length),
         None => expr_fn::substr(string, position),

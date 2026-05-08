@@ -97,7 +97,6 @@ Feature: substring() and substr() extract substrings
         | result |
         | SQL    |
 
-    @sail-bug
     Scenario: substring with pos beyond start of string (3-arg) returns empty
       # Spark adjusts the length when pos is so negative it overshoots the start.
       # effective_start = char_length + pos + 1 = 5 + (-100) + 1 = -94 < 1
