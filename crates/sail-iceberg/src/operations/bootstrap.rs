@@ -31,6 +31,9 @@ use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::snapshots::{SnapshotBuilder, SnapshotReference, SnapshotRetention};
 use crate::spec::{FormatVersion, TableMetadata};
+use crate::table::metadata_loader::{
+    encode_metadata_file, metadata_file_extension_from_properties, metadata_file_version_from_path,
+};
 use crate::utils::WritePathMode;
 
 /// Strategy for persisting metadata during bootstrap
@@ -169,10 +172,13 @@ pub async fn bootstrap_new_table(
     table_meta.ensure_required_format_fields();
 
     // Write metadata v1 using the Hadoop table convention for path-based compatibility.
-    let new_meta_bytes = table_meta
+    let new_meta_json = table_meta
         .to_json()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let new_meta_rel = "metadata/v1.metadata.json".to_string();
+    let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
+    let new_meta_rel = format!("metadata/v1{file_extension}");
+    let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
     store_ctx
         .prefixed
@@ -306,7 +312,7 @@ pub async fn bootstrap_first_snapshot(
     }
 
     // Serialize and write metadata
-    let new_meta_bytes = table_meta
+    let new_meta_json = table_meta
         .to_json()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -323,6 +329,8 @@ pub async fn bootstrap_first_snapshot(
             } else {
                 "metadata/00000.metadata.json".to_string()
             };
+            let new_meta_bytes = encode_metadata_file(&rel_name, &new_meta_json)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let rel_path = object_store::path::Path::from(rel_name.as_str());
             store_ctx
                 .prefixed
@@ -355,8 +363,13 @@ pub async fn bootstrap_first_snapshot(
         }
         PersistStrategy::NewVersion => {
             // Create a new metadata version
-            let version = table_meta.metadata_log.len() + 1;
-            let new_meta_rel = format!("metadata/v{version}.metadata.json");
+            let version = metadata_file_version_from_path(latest_meta_path)
+                .map(|version| version + 1)
+                .unwrap_or_else(|| table_meta.metadata_log.len() as i32 + 1);
+            let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
+            let new_meta_rel = format!("metadata/v{version}{file_extension}");
+            let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
             store_ctx
                 .prefixed

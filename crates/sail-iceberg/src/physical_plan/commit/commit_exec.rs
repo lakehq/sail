@@ -44,7 +44,10 @@ use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
-use crate::table::metadata_loader::metadata_file_version_from_path;
+use crate::table::metadata_loader::{
+    encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
+    metadata_file_version_from_path,
+};
 use crate::utils::get_object_store_from_context;
 const MAX_COMMIT_RETRIES: usize = 5;
 
@@ -336,15 +339,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .map_err(|e| DataFusionError::External(Box::new(e)))?
                 };
 
-                let meta_path = object_store::path::Path::from(latest_meta.as_str());
-                let bytes = store_ctx
-                    .base
-                    .get(&meta_path)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .bytes()
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
@@ -512,10 +507,14 @@ impl ExecutionPlan for IcebergCommitExec {
                         metadata_file: latest_meta.clone(),
                     });
 
-                let new_meta_bytes = table_meta
+                let new_meta_json = table_meta
                     .to_json()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let new_meta_rel = format!("metadata/v{next_version}.metadata.json");
+                let file_extension =
+                    metadata_file_extension_from_properties(&table_meta.properties)?;
+                let new_meta_rel = format!("metadata/v{next_version}{file_extension}");
+                let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 log::trace!(
                     "Writing metadata: {} snapshot_id={:?} table_url={}",

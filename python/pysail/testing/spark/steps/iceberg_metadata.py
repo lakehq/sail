@@ -6,6 +6,7 @@ import gzip
 import json
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -75,6 +76,15 @@ def _load_metadata_file(path: Path) -> dict:
     opener = gzip.open if compressed else Path.open
     with opener(path, "rt", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _write_metadata_file(path: Path, metadata: dict) -> None:
+    stem_and_codec = _metadata_file_stem(path.name)
+    assert stem_and_codec is not None, f"invalid metadata file name: {path.name!r}"
+    _, compressed = stem_and_codec
+    opener = gzip.open if compressed else Path.open
+    with opener(path, "wt", encoding="utf-8") as f:
+        json.dump(metadata, f, separators=(",", ":"))
 
 
 def _find_latest_metadata(table_location: Path) -> dict:
@@ -211,8 +221,40 @@ def _ordered_snapshots(metadata: dict) -> list[dict]:
 
 def _write_metadata(table_location: Path, metadata: dict) -> None:
     path = _latest_metadata_path(table_location)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(metadata, f, separators=(",", ":"))
+    _write_metadata_file(path, metadata)
+
+
+def _rewrite_latest_metadata_file(table_location: Path, *, uuid_prefixed: bool, compressed: bool) -> Path:
+    old_path = _latest_metadata_path(table_location)
+    version = _metadata_file_version(old_path)
+    assert version is not None, f"cannot determine metadata version from {old_path.name!r}"
+    metadata = _load_metadata_file(old_path)
+
+    suffix = ".gz.metadata.json" if compressed else ".metadata.json"
+    file_name = f"{version:05d}-{uuid.UUID(int=version)}{suffix}" if uuid_prefixed else f"v{version}{suffix}"
+
+    new_path = old_path.parent / file_name
+    _write_metadata_file(new_path, metadata)
+    if new_path != old_path:
+        old_path.unlink()
+
+    hint = new_path.name if uuid_prefixed else str(version)
+    (table_location / "metadata" / "version-hint.text").write_text(hint, encoding="utf-8")
+    return new_path
+
+
+@given("iceberg latest metadata file uses UUID-prefixed naming")
+def rewrite_latest_metadata_to_uuid_prefix(variables: dict) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg metadata rewrite"
+    _rewrite_latest_metadata_file(Path(location.path), uuid_prefixed=True, compressed=False)
+
+
+@given("iceberg latest metadata file uses UUID-prefixed gzip naming")
+def rewrite_latest_metadata_to_uuid_prefix_gzip(variables: dict) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg metadata rewrite"
+    _rewrite_latest_metadata_file(Path(location.path), uuid_prefixed=True, compressed=True)
 
 
 def _find_latest_snapshot(table_location: Path) -> dict | None:

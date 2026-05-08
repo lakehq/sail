@@ -10,17 +10,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{self, Read};
+use std::collections::HashMap;
+use std::io::{self, Read, Write};
 use std::sync::Arc;
 
-use datafusion::common::{plan_err, Result};
+use datafusion::common::{plan_err, DataFusionError, Result};
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use object_store::path::Path as ObjectPath;
+use object_store::ObjectStoreExt;
 use url::Url;
+
+const METADATA_COMPRESSION_PROPERTY: &str = "write.metadata.compression-codec";
+const METADATA_COMPRESSION_NONE: &str = "none";
+const METADATA_COMPRESSION_GZIP: &str = "gzip";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MetadataFileCodec {
     None,
     Gzip,
+}
+
+impl MetadataFileCodec {
+    fn from_property_value(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            METADATA_COMPRESSION_NONE => Ok(Self::None),
+            METADATA_COMPRESSION_GZIP => Ok(Self::Gzip),
+            other => plan_err!("Unsupported Iceberg metadata compression codec: {other}"),
+        }
+    }
+
+    fn file_extension(self) -> &'static str {
+        match self {
+            Self::None => ".metadata.json",
+            Self::Gzip => ".gz.metadata.json",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,12 +105,48 @@ pub(crate) fn decode_metadata_file(path: &str, data: &[u8]) -> io::Result<Vec<u8
     }
 }
 
+pub(crate) fn encode_metadata_file(path: &str, data: &[u8]) -> io::Result<Vec<u8>> {
+    match metadata_file_codec_from_path(path) {
+        Some(MetadataFileCodec::Gzip) => {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(data)?;
+            encoder.finish()
+        }
+        Some(MetadataFileCodec::None) | None => Ok(data.to_vec()),
+    }
+}
+
+pub(crate) fn metadata_file_extension_from_properties(
+    properties: &HashMap<String, String>,
+) -> Result<&'static str> {
+    let codec = properties
+        .get(METADATA_COMPRESSION_PROPERTY)
+        .map(String::as_str)
+        .unwrap_or(METADATA_COMPRESSION_NONE);
+    Ok(MetadataFileCodec::from_property_value(codec)?.file_extension())
+}
+
+pub(crate) async fn load_metadata_file_bytes(
+    object_store: &Arc<dyn object_store::ObjectStore>,
+    metadata_location: &str,
+) -> Result<Vec<u8>> {
+    let metadata_path = ObjectPath::from(metadata_location);
+    let metadata_data = object_store
+        .get(&metadata_path)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .bytes()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    decode_metadata_file(metadata_location, &metadata_data)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
 pub async fn find_latest_metadata_file(
     object_store: &Arc<dyn object_store::ObjectStore>,
     table_url: &Url,
 ) -> Result<String> {
     use futures::TryStreamExt;
-    use object_store::ObjectStoreExt;
 
     log::trace!("Finding latest metadata file");
     let base_path = crate::utils::url_to_object_path(table_url)?;
@@ -180,13 +242,15 @@ pub async fn find_latest_metadata_file(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::{self, Write};
 
     use flate2::write::GzEncoder;
     use flate2::Compression;
 
     use super::{
-        decode_metadata_file, parse_metadata_file_name, MetadataFileCodec, MetadataFileName,
+        decode_metadata_file, encode_metadata_file, metadata_file_extension_from_properties,
+        parse_metadata_file_name, MetadataFileCodec, MetadataFileName,
     };
 
     #[test]
@@ -252,5 +316,46 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn encodes_gzip_metadata_files() -> io::Result<()> {
+        let encoded =
+            encode_metadata_file("metadata/v1.gz.metadata.json", br#"{"format-version":2}"#)?;
+        assert_ne!(encoded, br#"{"format-version":2}"#);
+        assert_eq!(
+            decode_metadata_file("metadata/v1.gz.metadata.json", &encoded)?,
+            br#"{"format-version":2}"#.to_vec()
+        );
+        assert_eq!(
+            encode_metadata_file("metadata/v1.metadata.json", br#"{"format-version":2}"#)?,
+            br#"{"format-version":2}"#.to_vec()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn chooses_metadata_file_extension_from_properties() {
+        assert_eq!(
+            metadata_file_extension_from_properties(&HashMap::new()).unwrap(),
+            ".metadata.json"
+        );
+
+        let mut properties = HashMap::new();
+        properties.insert(
+            "write.metadata.compression-codec".to_string(),
+            "gzip".to_string(),
+        );
+        assert_eq!(
+            metadata_file_extension_from_properties(&properties).unwrap(),
+            ".gz.metadata.json"
+        );
+
+        properties.insert(
+            "write.metadata.compression-codec".to_string(),
+            "zstd".to_string(),
+        );
+        assert!(metadata_file_extension_from_properties(&properties).is_err());
     }
 }
