@@ -299,6 +299,9 @@ fn bytes_map_into(
     values: Option<Vec<IntBytesMapEntry>>,
     schema: Option<&Schema>,
 ) -> HashMap<i32, Datum> {
+    // TODO: Preserve raw bound bytes like `Map<Integer, ByteBuffer>` metrics.
+    // For now, keep only bounds we can decode into `Datum`; unknown fields and unsupported
+    // primitive encodings are ignored so manifest reads remain non-fatal after schema evolution.
     values
         .unwrap_or_default()
         .into_iter()
