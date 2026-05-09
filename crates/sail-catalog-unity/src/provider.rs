@@ -308,7 +308,6 @@ impl UnityCatalogProvider {
             database,
             name,
             kind: TableKind::Table {
-                table_type: None,
                 columns,
                 comment,
                 constraints: vec![],

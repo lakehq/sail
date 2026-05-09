@@ -191,7 +191,6 @@ impl GlueCatalogProvider {
             database: database.clone().into(),
             name: table_name,
             kind: TableKind::Table {
-                table_type: None,
                 columns,
                 comment,
                 constraints: vec![],

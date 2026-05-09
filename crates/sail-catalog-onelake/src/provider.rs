@@ -263,7 +263,6 @@ impl OneLakeCatalogProvider {
             database: vec![schema_name],
             name,
             kind: TableKind::Table {
-                table_type: None,
                 columns,
                 comment: info.comment,
                 constraints: vec![],

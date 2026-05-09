@@ -223,7 +223,6 @@ impl CatalogProvider for MemoryCatalogProvider {
             database: database.clone().into(),
             name: table.to_string(),
             kind: TableKind::Table {
-                table_type: None,
                 columns,
                 comment,
                 constraints,

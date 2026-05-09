@@ -392,7 +392,6 @@ impl IcebergRestCatalogProvider {
             database: database.clone().into(),
             name: table_name.to_string(),
             kind: TableKind::Table {
-                table_type: None,
                 columns,
                 comment,
                 constraints,
@@ -908,7 +907,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 database: identifier.namespace,
                 name: identifier.name,
                 kind: TableKind::Table {
-                    table_type: None,
                     columns: Vec::new(),
                     comment: None,
                     constraints: Vec::new(),

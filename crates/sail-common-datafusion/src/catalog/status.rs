@@ -33,25 +33,9 @@ pub struct TableStatus {
     pub kind: TableKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CatalogTableType {
-    Managed,
-    External,
-}
-
-impl CatalogTableType {
-    pub fn type_name(self) -> &'static str {
-        match self {
-            CatalogTableType::Managed => "MANAGED",
-            CatalogTableType::External => "EXTERNAL",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableKind {
     Table {
-        table_type: Option<CatalogTableType>,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         constraints: Vec<CatalogTableConstraint>,
@@ -103,9 +87,7 @@ impl TableKind {
 
     pub fn type_name(&self) -> &str {
         match self {
-            TableKind::Table { table_type, .. } => {
-                table_type.unwrap_or(CatalogTableType::External).type_name()
-            }
+            TableKind::Table { .. } => "EXTERNAL",
             TableKind::View { .. } => "VIEW",
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
@@ -267,45 +249,4 @@ pub fn identity_partition_fields(columns: &[String]) -> Vec<CatalogPartitionFiel
             transform: None,
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{CatalogTableType, TableKind};
-
-    #[test]
-    fn table_kind_defaults_missing_table_type_to_external() {
-        let kind = TableKind::Table {
-            table_type: None,
-            columns: vec![],
-            comment: None,
-            constraints: vec![],
-            location: None,
-            format: "parquet".to_string(),
-            partition_by: vec![],
-            sort_by: vec![],
-            bucket_by: None,
-            properties: vec![],
-        };
-
-        assert_eq!(kind.type_name(), "EXTERNAL");
-    }
-
-    #[test]
-    fn table_kind_uses_typed_table_type_when_present() {
-        let kind = TableKind::Table {
-            table_type: Some(CatalogTableType::Managed),
-            columns: vec![],
-            comment: None,
-            constraints: vec![],
-            location: None,
-            format: "parquet".to_string(),
-            partition_by: vec![],
-            sort_by: vec![],
-            bucket_by: None,
-            properties: vec![],
-        };
-
-        assert_eq!(kind.type_name(), "MANAGED");
-    }
 }

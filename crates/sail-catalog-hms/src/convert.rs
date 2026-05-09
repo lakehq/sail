@@ -12,8 +12,7 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, CatalogTableType, DatabaseStatus, TableColumnStatus, TableKind,
-    TableStatus,
+    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
 
 use crate::data_type::{
@@ -26,7 +25,6 @@ pub(crate) const EXTERNAL_KEY: &str = "EXTERNAL";
 pub(crate) const EXTERNAL_TRUE: &str = "TRUE";
 pub(crate) const SPARK_DATASOURCE_PROVIDER_KEY: &str = "spark.sql.sources.provider";
 pub(crate) const SPARK_SCHEMA_KEY: &str = "spark.sql.sources.schema";
-pub(crate) const MANAGED_TABLE_TYPE: &str = "MANAGED_TABLE";
 pub(crate) const EXTERNAL_TABLE_TYPE: &str = "EXTERNAL_TABLE";
 pub(crate) const VIRTUAL_VIEW_TYPE: &str = "VIRTUAL_VIEW";
 /// Placeholder owner matching Spark/Hive convention for unauthenticated contexts.
@@ -105,18 +103,11 @@ pub(crate) fn table_to_status(
         .as_ref()
         .map(|keys| identity_partition_fields(&field_names(keys)))
         .unwrap_or_default();
-    let table_type = match table.table_type.as_deref() {
-        Some(EXTERNAL_TABLE_TYPE) => Some(CatalogTableType::External),
-        Some(MANAGED_TABLE_TYPE) => Some(CatalogTableType::Managed),
-        _ => Some(CatalogTableType::External),
-    };
-
     Ok(TableStatus {
         catalog: Some(catalog.to_string()),
         database: database.clone().into(),
         name,
         kind: TableKind::Table {
-            table_type,
             columns,
             comment,
             constraints: vec![],
@@ -834,44 +825,6 @@ mod tests {
     }
 
     #[test]
-    fn test_table_to_status_defaults_missing_table_type_to_external() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
-        let mut table = build_generic_table(
-            "default",
-            "items",
-            vec![CreateTableColumnOptions {
-                name: "id".to_string(),
-                data_type: DataType::Int64,
-                nullable: false,
-                comment: None,
-                default: None,
-                generated_always_as: None,
-            }],
-            vec![],
-            Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
-                logical_format: "parquet",
-                storage: &HiveStorageFormat::parquet(),
-            },
-            None,
-            vec![],
-        )
-        .unwrap();
-
-        table.table_type = None;
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
-        match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table { table_type, .. } => {
-                assert_eq!(
-                    table_type,
-                    Some(sail_common_datafusion::catalog::CatalogTableType::External)
-                );
-            }
-            other => panic!("expected table, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn test_table_to_status_converts_partition_columns_to_identity_fields() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let table = build_generic_table(
@@ -1304,52 +1257,6 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Missing split property part spark.sql.sources.schema.part.0"));
-    }
-
-    #[test]
-    fn test_build_generic_table_defaults_to_external_without_location() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
-        let table = build_generic_table(
-            "default",
-            "items",
-            vec![CreateTableColumnOptions {
-                name: "id".to_string(),
-                data_type: DataType::Int64,
-                nullable: false,
-                comment: Some("pk".to_string()),
-                default: None,
-                generated_always_as: None,
-            }],
-            vec![],
-            None,
-            GenericTableFormat {
-                logical_format: "parquet",
-                storage: &HiveStorageFormat::parquet(),
-            },
-            None,
-            vec![("owner".to_string(), "alice".to_string())],
-        )
-        .unwrap();
-
-        assert_eq!(
-            table.table_type.as_deref(),
-            Some(super::EXTERNAL_TABLE_TYPE)
-        );
-        let props = map_to_vec(table.parameters.as_ref());
-        assert!(props
-            .iter()
-            .any(|(k, v)| k == super::EXTERNAL_KEY && v == super::EXTERNAL_TRUE));
-
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
-        match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table { table_type, .. } => {
-                assert_eq!(
-                    table_type,
-                    Some(sail_common_datafusion::catalog::CatalogTableType::External)
-                );
-            }
-            other => panic!("expected table, got {other:?}"),
-        }
     }
 
     #[test]
