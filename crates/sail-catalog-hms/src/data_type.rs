@@ -683,6 +683,15 @@ mod tests {
     }
 
     #[test]
+    fn test_spark_struct_json_rejects_malformed_json() {
+        let error =
+            super::spark_struct_json_to_fields("{\"type\":\"struct\",\"fields\":[").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Failed to parse Spark schema JSON"));
+    }
+
+    #[test]
     fn test_spark_json_preserves_exact_case_and_nullable() {
         let fields = vec![
             Field::new("CustomerID", DataType::Int64, false),

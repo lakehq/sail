@@ -1198,6 +1198,77 @@ mod tests {
     }
 
     #[test]
+    fn test_table_to_status_uses_hms_partition_keys_when_spark_partition_metadata_disagrees() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let schema = serde_json::to_string(
+            &crate::data_type::spark_struct_json_from_fields(&[
+                Field::new("id", DataType::Int64, false),
+                Field::new("day", DataType::Utf8, false),
+                Field::new("region", DataType::Utf8, false),
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        let table = Table {
+            table_name: Some("items".into()),
+            table_type: Some(super::EXTERNAL_TABLE_TYPE.into()),
+            sd: Some(StorageDescriptor::default()),
+            partition_keys: Some(vec![FieldSchema {
+                name: Some("day".into()),
+                r#type: Some("string".into()),
+                ..Default::default()
+            }]),
+            parameters: Some(AHashMap::from_iter([
+                (
+                    FastStr::from_static_str(SPARK_SCHEMA_KEY),
+                    FastStr::from_string(schema),
+                ),
+                (
+                    FastStr::from_static_str("spark.sql.sources.provider"),
+                    FastStr::from_static_str("parquet"),
+                ),
+                (
+                    FastStr::from_static_str("spark.sql.sources.schema.numPartCols"),
+                    FastStr::from_static_str("1"),
+                ),
+                (
+                    FastStr::from_static_str("spark.sql.sources.schema.partCol.0"),
+                    FastStr::from_static_str("region"),
+                ),
+            ])),
+            ..Default::default()
+        };
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table {
+                columns,
+                partition_by,
+                ..
+            } => {
+                assert_eq!(partition_by.len(), 1);
+                assert_eq!(partition_by[0].column, "day");
+                assert_eq!(
+                    columns
+                        .iter()
+                        .map(|column| column.name.as_str())
+                        .collect::<Vec<_>>(),
+                    ["id", "region", "day"]
+                );
+                assert_eq!(
+                    columns
+                        .iter()
+                        .filter(|column| column.is_partition)
+                        .map(|column| column.name.as_str())
+                        .collect::<Vec<_>>(),
+                    ["day"]
+                );
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_table_to_status_rejects_incomplete_split_spark_schema_metadata() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let table = Table {
@@ -1368,6 +1439,23 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_split_large_table_prop_round_trips_empty_value() {
+        let split = super::split_large_table_prop(SPARK_SCHEMA_KEY, "", 13);
+        assert_eq!(split, vec![(SPARK_SCHEMA_KEY.to_string(), String::new())]);
+
+        let parameters = AHashMap::from_iter(
+            split
+                .into_iter()
+                .map(|(k, v)| (FastStr::from_string(k), FastStr::from_string(v))),
+        );
+
+        let decoded = super::read_large_table_prop(Some(&parameters), SPARK_SCHEMA_KEY)
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded, "");
     }
 
     #[test]
