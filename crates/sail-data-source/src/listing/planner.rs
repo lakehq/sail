@@ -215,8 +215,14 @@ fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Option<LexOrd
                         );
                         return None;
                     } else {
-                        let ordering = LexOrdering::new(current.as_ref()[..prefix_len].to_vec())
-                            .expect("prefix_len > 0, so ordering must be valid");
+                        let Some(ordering) =
+                            LexOrdering::new(current.as_ref()[..prefix_len].to_vec())
+                        else {
+                            log::trace!(
+                                "Cannot derive common ordering: common prefix could not be converted into a LexOrdering"
+                            );
+                            return None;
+                        };
                         CurrentOrderingState::SomeOrdering(ordering)
                     }
                 }

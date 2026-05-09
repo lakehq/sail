@@ -75,7 +75,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         }
         let mut extension_planners = new_lakehouse_extension_planners();
         extension_planners.push(Arc::new(SystemTablePhysicalPlanner));
-        extension_planners.push(Arc::new(ListingTableExtensionPlanner::default()));
+        extension_planners.push(Arc::new(ListingTableExtensionPlanner));
         extension_planners.push(Arc::new(ExtensionPhysicalPlanner));
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         planner

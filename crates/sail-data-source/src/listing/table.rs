@@ -53,9 +53,7 @@ pub struct ListingTableSource {
 }
 
 impl ListingTableSource {
-    pub fn try_new(
-        config: ListingTableSourceConfig,
-    ) -> Result<Self> {
+    pub fn try_new(config: ListingTableSourceConfig) -> Result<Self> {
         let mut builder = SchemaBuilder::from(config.file_schema.as_ref().to_owned());
         for (part_col_name, part_col_type) in &config.table_partition_cols {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));

@@ -300,18 +300,22 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             .map(|c| *c.get_variant());
 
         let source = crate::listing::table::ListingTableSource::try_new(
-            config.table_paths,
-            listing_options.file_extension,
-            config.file_schema.ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!("listing file schema should be present")
-            })?,
-            listing_options.table_partition_cols,
-            constraints,
-            listing_options.file_sort_order,
-            listing_options.collect_stat,
-            listing_options.target_partitions,
-            Arc::new(read_format),
-            compression,
+            crate::listing::table::ListingTableSourceConfig {
+                table_paths: config.table_paths,
+                file_extension: listing_options.file_extension,
+                file_schema: config.file_schema.ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "listing file schema should be present"
+                    )
+                })?,
+                table_partition_cols: listing_options.table_partition_cols,
+                constraints,
+                file_sort_order: listing_options.file_sort_order,
+                collect_stat: listing_options.collect_stat,
+                target_partitions: listing_options.target_partitions,
+                read_format: Arc::new(read_format),
+                compression,
+            },
         )?;
         Ok(Arc::new(source))
     }
