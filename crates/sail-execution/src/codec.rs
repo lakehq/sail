@@ -2304,7 +2304,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
-            || node_inner.is::<ArraysZip>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<ConvertTz>()
