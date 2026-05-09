@@ -69,7 +69,9 @@ impl ParseUrl {
                 "PATH" => {
                     let path = url.path().to_string();
                     // Spark: "https://example.com" → empty PATH, "https://example.com/" → "/"
-                    let path = if path == "/" && !value.ends_with('/') {
+                    // The url crate always returns "/" when there is no path, so we use
+                    // has_explicit_path to distinguish "http://ex.com" from "http://ex.com/".
+                    let path = if path == "/" && !has_explicit_path(value) {
                         "".to_string()
                     } else {
                         path
@@ -94,6 +96,11 @@ impl ParseUrl {
                 "PROTOCOL" => Some(url.scheme().to_string()),
                 "FILE" => {
                     let path = url.path();
+                    let path = if path == "/" && !has_explicit_path(value) {
+                        ""
+                    } else {
+                        path
+                    };
                     match url.query() {
                         Some(query) => Some(format!("{path}?{query}")),
                         None => Some(path.to_string()),
@@ -194,13 +201,6 @@ impl ScalarUDFImpl for ParseUrl {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 3 {
-            return plan_err!(
-                "{} expects 2 or 3 arguments, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        }
         // The return type should match the largest size datatype
         match arg_types.len() {
             2 | 3 if arg_types.iter().all(is_string_type) => {
@@ -262,6 +262,21 @@ impl ScalarUDFImpl for ParseUrl {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(move |a| spark_parse_url_impl(a, safe), vec![])(&args)
     }
+}
+
+/// Returns true if the URL has an explicit path segment (a `/` immediately after the authority).
+/// Distinguishes `http://ex.com` (no path, url crate returns "/") from `http://ex.com/`
+/// and `http://ex.com/?` (both have explicit "/").
+fn has_explicit_path(url: &str) -> bool {
+    let after_scheme = match url.find("://") {
+        Some(i) => i + 3,
+        None => return false,
+    };
+    let after_authority = url[after_scheme..]
+        .find(['/', '?', '#'])
+        .map(|i| after_scheme + i)
+        .unwrap_or(url.len());
+    url[after_authority..].starts_with('/')
 }
 
 /// Extract the explicit port string from a raw URL, even if it's a default port.
@@ -577,7 +592,8 @@ fn spark_handled_parse_url(
     } else {
         // The 'key' argument is omitted, assume all values are null
         // Create 'null' string array for 'key' argument
-        let mut builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
+        let mut builder: GenericStringBuilder<i32> =
+            GenericStringBuilder::with_capacity(args[0].len(), 0);
         for _ in 0..args[0].len() {
             builder.append_null();
         }
@@ -747,5 +763,49 @@ mod tests {
         assert_eq!(&expected, result);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_url_file_no_path() -> Result<()> {
+        // Spark returns "" for FILE when URL has no explicit path, "?" when it has trailing "?",
+        // and "/?query" when URL has explicit "/" before "?".
+        let urls = Arc::new(StringArray::from(vec![
+            Some("http://ex.com"),       // no path, no query
+            Some("http://ex.com?foo=1"), // no explicit path, query only
+            Some("http://ex.com/"),      // explicit "/" path, no query
+            Some("http://ex.com/?"),     // explicit "/" path, trailing "?"
+            Some("http://ex.com/?q=1"),  // explicit "/" path, with query
+        ]));
+        let parts = Arc::new(StringArray::from(vec![
+            Some("FILE"),
+            Some("FILE"),
+            Some("FILE"),
+            Some("FILE"),
+            Some("FILE"),
+        ]));
+        let expected = StringArray::from(vec![
+            Some(""),
+            Some("?foo=1"),
+            Some("/"),
+            Some("/?"),
+            Some("/?q=1"),
+        ]);
+
+        let result = spark_parse_url_impl(&[urls, parts], false)?;
+        let result = as_string_array(&result)?;
+        assert_eq!(&expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_has_explicit_path() {
+        assert!(!has_explicit_path("http://ex.com"));
+        assert!(!has_explicit_path("http://ex.com?foo=1"));
+        assert!(!has_explicit_path("http://ex.com#frag"));
+        assert!(has_explicit_path("http://ex.com/"));
+        assert!(has_explicit_path("http://ex.com/?"));
+        assert!(has_explicit_path("http://ex.com/?q=1"));
+        assert!(has_explicit_path("http://ex.com/path"));
     }
 }
