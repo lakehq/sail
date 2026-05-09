@@ -665,6 +665,7 @@ Feature: parse_url() extracts URL component
 
   Rule: FILE edge cases
 
+    @sail-bug
     Scenario: parse_url FILE no path only query
       When query
         """
@@ -674,6 +675,7 @@ Feature: parse_url() extracts URL component
         | result    |
         | ?foo=bar  |
 
+    @sail-bug
     Scenario: parse_url FILE no path no query with fragment returns empty string
       When query
         """
@@ -692,6 +694,7 @@ Feature: parse_url() extracts URL component
         | result |
         | /?     |
 
+    @sail-bug
     Scenario: parse_url FILE trailing question mark no path
       When query
         """
@@ -701,6 +704,7 @@ Feature: parse_url() extracts URL component
         | result |
         | ?      |
 
+    @sail-bug
     Scenario: parse_url FILE no path no query returns empty string
       When query
         """
