@@ -20,7 +20,7 @@ pub mod gen {
 }
 
 pub trait ResolveOptions: Sized {
-    fn resolve_options(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self>;
+    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self>;
 }
 
 /// A trait for partially loaded options.

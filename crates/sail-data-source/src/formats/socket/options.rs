@@ -6,7 +6,7 @@ use crate::options::gen::{SocketReadOptions, SocketReadPartialOptions};
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
 
 impl ResolveOptions for SocketReadOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = SocketReadPartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);

@@ -62,7 +62,7 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = DeltaReadOptions::resolve_options(ctx, options)
+        let options = DeltaReadOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         create_delta_source(ctx, table_url, schema, options).await
     }
@@ -101,7 +101,7 @@ impl TableFormat for DeltaTableFormat {
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let (options, table_properties) = split_delta_write_options_and_table_properties(options);
-        let delta_options = DeltaWriteOptions::resolve_options(ctx, options)
+        let delta_options = DeltaWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let object_store = ctx
@@ -240,7 +240,7 @@ impl TableFormat for DeltaTableFormat {
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
                 })?;
-                let delta_options = DeltaWriteOptions::resolve_options(ctx, info.target.options)?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options)?;
                 let delete_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -255,8 +255,7 @@ impl TableFormat for DeltaTableFormat {
             // ── Merge-on-Read MERGE ──────────────────────────────────────────
             (MergeStrategy::MergeOnRead, RowLevelCommand::Merge) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options =
-                    DeltaWriteOptions::resolve_options(ctx, info.target.options.clone())?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options.clone())?;
                 let merge_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -279,7 +278,7 @@ impl TableFormat for DeltaTableFormat {
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
                 })?;
-                let delta_options = DeltaWriteOptions::resolve_options(ctx, info.target.options)?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options)?;
                 let delete_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -294,8 +293,7 @@ impl TableFormat for DeltaTableFormat {
             // ── Copy-on-Write MERGE ──────────────────────────────────────────
             (MergeStrategy::Eager, RowLevelCommand::Merge) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options =
-                    DeltaWriteOptions::resolve_options(ctx, info.target.options.clone())?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options.clone())?;
                 let merge_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
