@@ -11,7 +11,13 @@ from pysail.testing.spark.utils.sql import format_show_string, parse_show_string
 @pytest.fixture(scope="module")
 def duck():
     conn = duckdb.connect()
-    conn.sql("CALL dbgen(sf = 0.001)")
+    try:
+        conn.sql("CALL dbgen(sf = 0.001)")
+    except duckdb.Error as exc:
+        message = str(exc).lower()
+        if "install the required extension 'tpch'" in message or "failed to download extension" in message:
+            pytest.skip("duckdb `tpch` extension is unavailable (offline environment)")
+        raise
     return conn
 
 
