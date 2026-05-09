@@ -15,6 +15,7 @@ use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
 use crate::options::ResolveOptions;
 
 mod options;
+mod read;
 
 pub type CsvTableFormat = ListingTableFormat<CsvFormatFactory>;
 
@@ -140,28 +141,7 @@ impl FormatFactory for CsvFormatFactory {
     }
 }
 
-impl ReadFormat for CsvReadFormat {
-    fn create_read_format(
-        &self,
-        compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let mut options = self
-            .options
-            .clone()
-            .into_table_options()
-            .map_err(DataFusionError::from)?;
-        if let Some(compression) = compression {
-            options.compression = compression;
-        }
-        Ok(Arc::new(CsvFormat::default().with_options(options)))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(CsvSchemaInfer {
-            infer_schema: self.options.infer_schema,
-        })
-    }
-}
+// ReadFormat impl moved to `read.rs`.
 
 impl WriteFormat for CsvWriteFormat {
     fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {

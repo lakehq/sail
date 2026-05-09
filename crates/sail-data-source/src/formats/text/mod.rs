@@ -18,6 +18,7 @@ pub mod options;
 pub mod reader;
 pub mod source;
 pub mod writer;
+mod read;
 
 pub const DEFAULT_TEXT_EXTENSION: &str = ".txt";
 
@@ -72,26 +73,7 @@ impl FormatFactory for TextFormatFactory {
     }
 }
 
-impl ReadFormat for TextReadFormat {
-    fn create_read_format(
-        &self,
-        compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let mut options = self
-            .options
-            .clone()
-            .into_table_options()
-            .map_err(DataFusionError::from)?;
-        if let Some(compression) = compression {
-            options.compression = compression;
-        }
-        Ok(Arc::new(TextFileFormat::new(options)))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(DefaultSchemaInfer)
-    }
-}
+// ReadFormat impl moved to `read.rs`.
 
 impl WriteFormat for TextWriteFormat {
     fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {

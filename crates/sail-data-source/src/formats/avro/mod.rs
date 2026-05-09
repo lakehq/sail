@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::avro::AvroFormat;
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
@@ -10,6 +9,8 @@ use sail_common_datafusion::datasource::OptionLayer;
 use crate::listing::source::{
     DefaultSchemaInfer, FormatFactory, ListingTableFormat, ReadFormat, SchemaInfer, WriteFormat,
 };
+
+mod read;
 
 pub type AvroTableFormat = ListingTableFormat<AvroFormatFactory>;
 
@@ -39,18 +40,7 @@ impl FormatFactory for AvroFormatFactory {
     }
 }
 
-impl ReadFormat for AvroReadFormat {
-    fn create_read_format(
-        &self,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(AvroFormat))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(DefaultSchemaInfer)
-    }
-}
+// ReadFormat impl moved to `read.rs`.
 
 impl WriteFormat for AvroWriteFormat {
     fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {

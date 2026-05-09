@@ -14,6 +14,7 @@ use crate::options::gen::{JsonReadOptions, JsonWriteOptions};
 use crate::options::ResolveOptions;
 
 mod options;
+mod read;
 
 pub type JsonTableFormat = ListingTableFormat<JsonFormatFactory>;
 
@@ -49,26 +50,7 @@ impl FormatFactory for JsonFormatFactory {
     }
 }
 
-impl ReadFormat for JsonReadFormat {
-    fn create_read_format(
-        &self,
-        compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let mut options = self
-            .options
-            .clone()
-            .into_table_options()
-            .map_err(DataFusionError::from)?;
-        if let Some(compression) = compression {
-            options.compression = compression;
-        }
-        Ok(Arc::new(JsonFormat::default().with_options(options)))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(DefaultSchemaInfer)
-    }
-}
+// ReadFormat impl moved to `read.rs`.
 
 impl WriteFormat for JsonWriteFormat {
     fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {

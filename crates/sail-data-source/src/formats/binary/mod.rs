@@ -3,7 +3,6 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion_common::arrow::datatypes::SchemaRef;
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
@@ -19,6 +18,7 @@ pub mod file_format;
 pub mod options;
 pub mod reader;
 pub mod source;
+mod read;
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct TableBinaryOptions {
@@ -57,19 +57,7 @@ impl FormatFactory for BinaryFormatFactory {
     }
 }
 
-impl ReadFormat for BinaryReadFormat {
-    fn create_read_format(
-        &self,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let options = self.options.clone().into_table_options();
-        Ok(Arc::new(BinaryFileFormat::new(options)))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(DefaultSchemaInfer)
-    }
-}
+// ReadFormat impl moved to `read.rs`.
 
 impl WriteFormat for BinaryWriteFormat {
     fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {

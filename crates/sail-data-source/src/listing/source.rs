@@ -13,7 +13,11 @@ use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
+use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result, Statistics};
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::{
     find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
@@ -75,6 +79,7 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
 }
 
 /// A trait for format-specific logic for reading listing files.
+#[async_trait]
 pub trait ReadFormat: Debug + Send + Sync + 'static {
     fn create_read_format(
         &self,
@@ -89,6 +94,55 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 
     /// Get the schema inferrer for this format
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer>;
+
+    /// Infer file-level metadata needed for planning (statistics + ordering).
+    ///
+    /// This is used by Sail listing scan planning and must not rely on
+    /// DataFusion's `FileFormat::{infer_stats,infer_ordering,infer_stats_and_ordering}`.
+    async fn infer_file_meta(
+        &self,
+        ctx: &dyn Session,
+        store: &Arc<dyn object_store::ObjectStore>,
+        file_schema: datafusion::arrow::datatypes::SchemaRef,
+        object: &object_store::ObjectMeta,
+    ) -> Result<InferredFileMeta> {
+        let _ = (ctx, store, object);
+        Ok(InferredFileMeta {
+            statistics: Statistics::new_unknown(&file_schema),
+            ordering: None,
+        })
+    }
+
+    /// Build a scan configuration (file source + scan config) for listing reads.
+    ///
+    /// This must not rely on DataFusion's `FileFormat::{create_physical_plan,file_source}`.
+    async fn scan(
+        &self,
+        ctx: &dyn Session,
+        input: ListingScanInput,
+    ) -> Result<FileScanConfig>;
+}
+
+#[derive(Debug, Clone)]
+pub struct InferredFileMeta {
+    pub statistics: Statistics,
+    pub ordering: Option<LexOrdering>,
+}
+
+#[derive(Debug)]
+pub struct ListingScanInput {
+    pub object_store_url: ObjectStoreUrl,
+    pub file_groups: Vec<FileGroup>,
+    pub constraints: datafusion_common::Constraints,
+    pub projection: Option<Vec<usize>>,
+    pub limit: Option<usize>,
+    pub preserve_order: bool,
+    pub output_ordering: Vec<LexOrdering>,
+    pub statistics: Statistics,
+    pub partitioned_by_file_group: bool,
+    pub file_schema: datafusion::arrow::datatypes::SchemaRef,
+    pub table_partition_cols: Vec<(String, DataType)>,
+    pub compression: Option<CompressionTypeVariant>,
 }
 
 /// A trait for format-specific logic for writing listing files.
