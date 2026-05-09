@@ -74,9 +74,10 @@ impl WriteFormat for ParquetWriteFormat {
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
+        let compression = options.global.compression.clone();
         Ok((
             Arc::new(ParquetFormat::default().with_options(options)),
-            self.options.compression.clone(),
+            compression,
         ))
     }
 }
