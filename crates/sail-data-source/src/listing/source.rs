@@ -7,9 +7,8 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
-use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
@@ -238,9 +237,36 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
         let config = crate::listing::utils::rewrite_listing_partitions(config)?;
-        Ok(provider_as_source(Arc::new(
-            ListingTable::try_new(config)?.with_constraints(constraints),
-        )))
+
+        let listing_options = config.options.ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "listing options should be present in the config"
+            )
+        })?;
+
+        let compression = listing_options
+            .format
+            .compression_type()
+            .map(|c| *c.get_variant());
+
+        let source = crate::listing::table::ListingTableSource::try_new(
+            config.table_paths,
+            config
+                .file_schema
+                .ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "listing file schema should be present"
+                    )
+                })?,
+            listing_options.table_partition_cols,
+            constraints,
+            listing_options.file_sort_order,
+            listing_options.collect_stat,
+            listing_options.target_partitions,
+            Arc::new(read_format),
+            compression,
+        )?;
+        Ok(Arc::new(source))
     }
 
     async fn create_writer(
