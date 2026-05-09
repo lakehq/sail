@@ -79,37 +79,25 @@ impl ScalarUDFImpl for SparkToNumber {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let func_name = self.name();
         if arg_types.len() != 2 {
             return Err(invalid_arg_count_exec_err(
-                "to_number",
+                func_name,
                 (2, 2),
                 arg_types.len(),
             ));
         }
-        let func_name = self.name();
-        let value_type = match &arg_types[0] {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => arg_types[0].clone(),
-            DataType::Null => DataType::Utf8,
-            _ => {
-                return Err(unsupported_data_type_exec_err(
-                    func_name,
-                    "STRING",
-                    &arg_types[0],
-                ));
+        for arg_type in arg_types {
+            match arg_type {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+                _ => {
+                    return Err(unsupported_data_type_exec_err(
+                        func_name, "STRING", arg_type,
+                    ));
+                }
             }
-        };
-        let format_type = match &arg_types[1] {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => arg_types[1].clone(),
-            DataType::Null => DataType::Utf8,
-            _ => {
-                return Err(unsupported_data_type_exec_err(
-                    func_name,
-                    "STRING",
-                    &arg_types[1],
-                ));
-            }
-        };
-        Ok(vec![value_type, format_type])
+        }
+        Ok(vec![DataType::Utf8, DataType::Utf8])
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -121,7 +109,7 @@ impl ScalarUDFImpl for SparkToNumber {
                 ScalarValue::Utf8(Some(format))
                 | ScalarValue::LargeUtf8(Some(format))
                 | ScalarValue::Utf8View(Some(format)) => Ok(format.deref()),
-                // NULL format scalar: return a generic nullable Decimal256 type
+                // NULL format: safe mode returns all-NULL, strict mode errors at runtime
                 ScalarValue::Utf8(None)
                 | ScalarValue::LargeUtf8(None)
                 | ScalarValue::Utf8View(None)
@@ -134,7 +122,6 @@ impl ScalarUDFImpl for SparkToNumber {
                 }
                 _ => internal_err!("Expected UTF-8 format string"),
             }?,
-            // NULL argument or missing: return nullable Decimal256
             Some(None) | None => {
                 return Ok(Arc::new(Field::new(
                     self.name(),
@@ -162,6 +149,9 @@ impl ScalarUDFImpl for SparkToNumber {
 fn spark_to_number_impl(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
     let format_arr = downcast_arg!(&args[1], StringArray);
     if format_arr.is_null(0) {
+        if !safe {
+            return exec_err!("format argument to to_number must not be NULL");
+        }
         let values = downcast_arg!(&args[0], StringArray);
         let nulls: Vec<ScalarValue> = (0..values.len())
             .map(|_| ScalarValue::Decimal256(None, 38, 18))
@@ -182,11 +172,15 @@ fn spark_to_number_impl(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
         .map(|value| match value {
             None => Ok(ScalarValue::Decimal256(None, precision, scale)),
             Some(value) => {
-                let result =
-                    ParsedNumber::try_from_value(value, &format_spec, &value_regex, &number_components)
-                        .map(|parsed| {
-                            ScalarValue::Decimal256(Some(parsed.value), parsed.precision, parsed.scale)
-                        });
+                let result = ParsedNumber::try_from_value(
+                    value,
+                    &format_spec,
+                    &value_regex,
+                    &number_components,
+                )
+                .map(|parsed| {
+                    ScalarValue::Decimal256(Some(parsed.value), parsed.precision, parsed.scale)
+                });
                 if safe {
                     Ok(result.unwrap_or(ScalarValue::Decimal256(None, precision, scale)))
                 } else {
@@ -579,12 +573,12 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
     // Get the positions of the groupings in the format
     let format_positions = get_grouping_positions(&format_numbers);
 
-    //Check if format has only ',' or 'G' characters
-    let all_character_same = format_positions.iter().all(|(_, d)| *d == ',' || *d == 'G');
-
-    if !all_character_same {
-        return exec_err!("Malformed integer format related groupings: {format_numbers}. Only groupings with ',' or 'G' are allowed.");
-    };
+    // Reject formats that mix ',' and 'G' separators (e.g. "9,9G9" is invalid in Spark)
+    let has_comma = format_positions.iter().any(|(_, d)| *d == ',');
+    let has_g = format_positions.iter().any(|(_, d)| *d == 'G');
+    if has_comma && has_g {
+        return exec_err!("Malformed integer format related groupings: {format_numbers}. Cannot mix ',' and 'G' separators.");
+    }
 
     // Check if the groupings are in the correct order position
     // G in format means ',' in input
