@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from jinja2 import Template
+from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then, when
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal, parse_show_string
@@ -132,8 +133,6 @@ def query_schema(docstring, query, spark):
 @when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
 def dataframe_for(case, spark):
     """Builds a DataFrame for a named BDD case."""
-    from pyspark.sql import functions as F
-
     cases = {
         "null literal": lambda: spark.range(1).select(F.lit(None).alias("result")),
         "null literal alias projection": lambda: (
