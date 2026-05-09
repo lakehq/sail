@@ -157,7 +157,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 // Detect compression from the actual files so e.g.
                 // `data.csv.gz` plus an explicit schema works without
                 // `option("compression", "gzip")`.
-                crate::listing::detect_listing_compression(
+                crate::listing::utils::detect_listing_compression(
                     ctx,
                     &urls,
                     &mut listing_options,
@@ -205,7 +205,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 (Arc::new(schema), partition_by)
             }
             _ => {
-                let schema = crate::listing::resolve_listing_schema(
+                let schema = crate::listing::utils::resolve_listing_schema(
                     ctx,
                     &urls,
                     &mut listing_options,
@@ -247,7 +247,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         };
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
-        let config = crate::listing::rewrite_listing_partitions(config)?;
+        let config = crate::listing::utils::rewrite_listing_partitions(config)?;
         Ok(provider_as_source(Arc::new(
             ListingTable::try_new(config)?.with_constraints(constraints),
         )))

@@ -3,20 +3,21 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::catalog::Session;
-use datafusion::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
+use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::execution::cache::TableScopedPath;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, plan_err, DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::ListingTableUrl;
+use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::listing::{ListingFormat, ListingTableFormat};
+use crate::listing::source::{ListingFormat, ListingTableFormat};
 
 pub async fn resolve_listing_schema<T: ListingFormat>(
     ctx: &dyn Session,
