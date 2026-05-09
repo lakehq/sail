@@ -1,5 +1,7 @@
 """Test partition column mismatch validation for Delta Lake tables"""
 
+import json
+
 import pytest
 from pyspark.sql.types import Row
 from pyspark.sql.utils import AnalysisException
@@ -179,11 +181,24 @@ class TestDeltaPartitionMismatch:
         result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
         result_count = result_df.count()
         assert result_count == 2, f"Expected 2 rows after overwrite, got {result_count}"  # noqa: PLR2004
+        assert [row.asDict() for row in result_df.collect()] == [
+            {"id": 3, "category": "C", "value": 300, "region": "East"},
+            {"id": 4, "category": "D", "value": 400, "region": "West"},
+        ]
 
         # Verify schema contains new partition column
         columns = result_df.columns
         assert "region" in columns, "New partition column 'region' should exist"
         assert "category" in columns, "Column 'category' should still exist in data"
+
+        latest_log = sorted((delta_path / "_delta_log").glob("*.json"))[-1]
+        metadata = None
+        for line in latest_log.read_text(encoding="utf-8").splitlines():
+            action = json.loads(line)
+            if "metaData" in action:
+                metadata = action["metaData"]
+        assert metadata is not None, f"Expected metadata action in {latest_log}"
+        assert metadata["partitionColumns"] == ["region"]
 
     def test_append_to_unpartitioned_table_with_partitioning_raises_error(self, spark, tmp_path):
         """Test that appending with partitioning to an unpartitioned table raises error"""
