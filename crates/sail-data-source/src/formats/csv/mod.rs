@@ -7,8 +7,9 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::csv::options::{resolve_csv_read_options, resolve_csv_write_options};
-use crate::formats::listing::{ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
+use crate::options::ResolveOptions;
 
 mod options;
 
@@ -93,7 +94,7 @@ impl SchemaInfer for CsvSchemaInfer {
             .await?
             .as_ref()
             .clone();
-        let csv_options = resolve_csv_read_options(ctx, options.to_vec())
+        let csv_options = CsvReadOptions::resolve(ctx, options.to_vec())
             .map_err(datafusion_common::DataFusionError::from)?;
         if !csv_options.infer_schema {
             schema = convert_string_columns(schema);
@@ -119,7 +120,7 @@ impl ListingFormat for CsvListingFormat {
         options: Vec<OptionLayer>,
         compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options = resolve_csv_read_options(ctx, options)
+        let mut options = CsvReadOptions::resolve(ctx, options)
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
@@ -134,7 +135,7 @@ impl ListingFormat for CsvListingFormat {
         ctx: &dyn Session,
         options: Vec<OptionLayer>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        let options = resolve_csv_write_options(ctx, options)
+        let options = CsvWriteOptions::resolve(ctx, options)
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;

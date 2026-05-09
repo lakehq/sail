@@ -19,14 +19,10 @@ use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
-    find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatRegistry,
+    find_path_in_options, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
-use sail_data_source::error::DataSourceResult;
-use sail_data_source::options::gen::{
-    IcebergReadOptions, IcebergReadPartialOptions, IcebergWriteOptions, IcebergWritePartialOptions,
-};
-use sail_data_source::options::{BuildPartialOptions, PartialOptions};
+use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
+use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
@@ -89,7 +85,7 @@ impl TableFormat for IcebergTableFormat {
         }
 
         let table_url = Self::parse_table_url(vec![path]).await?;
-        let iceberg_options = resolve_iceberg_write_options(options)
+        let iceberg_options = IcebergWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let store = ctx
@@ -211,7 +207,7 @@ async fn build_iceberg_provider(
     } = info;
 
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
-    let iceberg_options = resolve_iceberg_read_options(options)
+    let iceberg_options = IcebergReadOptions::resolve(ctx, options)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     create_iceberg_provider_concrete(ctx, table_url, iceberg_options).await
 }
@@ -283,22 +279,4 @@ impl IcebergTableFormat {
 
         Ok(columns)
     }
-}
-
-fn resolve_iceberg_read_options(options: Vec<OptionLayer>) -> DataSourceResult<IcebergReadOptions> {
-    let mut partial = IcebergReadPartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
-    }
-    partial.finalize()
-}
-
-fn resolve_iceberg_write_options(
-    options: Vec<OptionLayer>,
-) -> DataSourceResult<IcebergWriteOptions> {
-    let mut partial = IcebergWritePartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
-    }
-    partial.finalize()
 }

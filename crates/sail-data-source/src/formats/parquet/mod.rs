@@ -7,10 +7,9 @@ use datafusion_common::Result;
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
-use crate::formats::parquet::options::{
-    resolve_parquet_read_options, resolve_parquet_write_options,
-};
+use crate::listing::source::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::options::gen::{ParquetReadOptions, ParquetWriteOptions};
+use crate::options::ResolveOptions;
 
 mod options;
 
@@ -30,7 +29,7 @@ impl ListingFormat for ParquetListingFormat {
         options: Vec<OptionLayer>,
         _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
-        let options = resolve_parquet_read_options(ctx, options)
+        let options = ParquetReadOptions::resolve(ctx, options)
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         Ok(Arc::new(ParquetFormat::default().with_options(options)))
@@ -41,7 +40,7 @@ impl ListingFormat for ParquetListingFormat {
         ctx: &dyn Session,
         options: Vec<OptionLayer>,
     ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
-        let options = resolve_parquet_write_options(ctx, options)
+        let options = ParquetWriteOptions::resolve(ctx, options)
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
@@ -57,7 +56,7 @@ impl ListingFormat for ParquetListingFormat {
         ctx: &dyn Session,
         options: &[OptionLayer],
     ) -> Result<Option<String>> {
-        let read_options = resolve_parquet_read_options(ctx, options.to_vec())
+        let read_options = ParquetReadOptions::resolve(ctx, options.to_vec())
             .map_err(datafusion_common::DataFusionError::from)?;
         Ok(Some(read_options.extension))
     }

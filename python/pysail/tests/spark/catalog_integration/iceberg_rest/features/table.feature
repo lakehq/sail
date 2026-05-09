@@ -304,3 +304,169 @@ Feature: Iceberg REST catalog table operations
       """
       DROP TABLE IF EXISTS iceberg_table_test.nonexistent_purge_t PURGE
       """
+
+  Scenario: Create a table with a top-level STRUCT column
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.struct_t (
+        id INT,
+        addr STRUCT<street: STRING, city: STRING, zip: INT>
+      )
+      USING iceberg
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.struct_t
+      """
+    Then query result has row where "col_name" is "id"
+    Then query result has row where "col_name" is "addr"
+    Then query result row where "col_name" is "addr" has "data_type" containing "struct"
+    Then query result row where "col_name" is "addr" has "data_type" containing "street"
+    Then query result row where "col_name" is "addr" has "data_type" containing "city"
+    Then query result row where "col_name" is "addr" has "data_type" containing "zip"
+
+  Scenario: Create a table with an ARRAY of primitives column
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.array_t (
+        id INT,
+        tags ARRAY<STRING>
+      )
+      USING iceberg
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.array_t
+      """
+    Then query result has row where "col_name" is "tags"
+    Then query result row where "col_name" is "tags" has "data_type" containing "array"
+    Then query result row where "col_name" is "tags" has "data_type" containing "string"
+
+  Scenario: Create a table with a MAP column
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.map_t (
+        id INT,
+        attrs MAP<STRING, INT>
+      )
+      USING iceberg
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.map_t
+      """
+    Then query result has row where "col_name" is "attrs"
+    Then query result row where "col_name" is "attrs" has "data_type" containing "map"
+    Then query result row where "col_name" is "attrs" has "data_type" containing "string"
+    Then query result row where "col_name" is "attrs" has "data_type" containing "int"
+
+  Scenario: Create a table with an ARRAY of STRUCT column
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.array_struct_t (
+        id INT,
+        items ARRAY<STRUCT<sku: STRING, qty: INT>>
+      )
+      USING iceberg
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.array_struct_t
+      """
+    Then query result has row where "col_name" is "items"
+    Then query result row where "col_name" is "items" has "data_type" containing "array"
+    Then query result row where "col_name" is "items" has "data_type" containing "struct"
+    Then query result row where "col_name" is "items" has "data_type" containing "sku"
+    Then query result row where "col_name" is "items" has "data_type" containing "qty"
+
+  Scenario: Create a table with deeply nested STRUCT, ARRAY and MAP columns
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.deep_nested_t (
+        id INT,
+        profile STRUCT<
+          name: STRING,
+          contacts: ARRAY<STRUCT<kind: STRING, value: STRING>>,
+          scores: MAP<STRING, ARRAY<INT>>
+        >
+      )
+      USING iceberg
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.deep_nested_t
+      """
+    Then query result has row where "col_name" is "id"
+    Then query result has row where "col_name" is "profile"
+    Then query result row where "col_name" is "profile" has "data_type" containing "struct"
+    Then query result row where "col_name" is "profile" has "data_type" containing "name"
+    Then query result row where "col_name" is "profile" has "data_type" containing "contacts"
+    Then query result row where "col_name" is "profile" has "data_type" containing "array"
+    Then query result row where "col_name" is "profile" has "data_type" containing "kind"
+    Then query result row where "col_name" is "profile" has "data_type" containing "value"
+    Then query result row where "col_name" is "profile" has "data_type" containing "scores"
+    Then query result row where "col_name" is "profile" has "data_type" containing "map"
+
+  Scenario: Create a partitioned table with a nested STRUCT column
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.part_nested_t (
+        id INT,
+        category STRING,
+        meta STRUCT<created_by: STRING, created_at: STRING>
+      )
+      USING iceberg
+      PARTITIONED BY (category)
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.part_nested_t
+      """
+    Then query result has row where "col_name" is "id"
+    Then query result has row where "col_name" is "category"
+    Then query result has row where "col_name" is "meta"
+    Then query result row where "col_name" is "meta" has "data_type" containing "struct"
+    Then query result row where "col_name" is "meta" has "data_type" containing "created_by"
+    Then query result row where "col_name" is "meta" has "data_type" containing "created_at"
+
+  Scenario: Create a table with a NOT NULL column alongside a nested STRUCT column
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.pk_nested_t (
+        id INT NOT NULL,
+        addr STRUCT<street: STRING, city: STRING>
+      )
+      USING iceberg
+      """
+    When query
+      """
+      SHOW TABLES IN iceberg_table_test LIKE 'pk_nested_t'
+      """
+    Then query result
+      | database           | tableName    | isTemporary |
+      | iceberg_table_test | pk_nested_t  | false       |
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.pk_nested_t
+      """
+    Then query result has row where "col_name" is "id"
+    Then query result has row where "col_name" is "addr"
+
+  Scenario: Create a table with multiple STRUCT columns having same nested field names
+    Given statement
+      """
+      CREATE TABLE iceberg_table_test.multi_struct_t (
+        id INT,
+        a STRUCT<x: INT, y: INT>,
+        b STRUCT<x: INT, y: INT>
+      )
+      USING iceberg
+      """
+    When query
+      """
+      DESCRIBE TABLE iceberg_table_test.multi_struct_t
+      """
+    Then query result has row where "col_name" is "a"
+    Then query result has row where "col_name" is "b"
+    Then query result row where "col_name" is "a" has "data_type" containing "struct"
+    Then query result row where "col_name" is "b" has "data_type" containing "struct"
