@@ -7,7 +7,7 @@ use datafusion::datasource::file_format::arrow::ArrowFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{Result, internal_datafusion_err};
+use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::TableSchema;
 use object_store::path::Path;
@@ -72,15 +72,13 @@ impl ReadFormat for ArrowReadFormat {
             .collect::<Vec<_>>();
         let table_schema = TableSchema::new(Arc::clone(&input.file_schema), partition_fields);
 
-        let source = match is_object_in_arrow_ipc_file_format(
-            Arc::clone(&object_store),
-            object_location,
-        )
-        .await?
-        {
-            true => ArrowSource::new_file_source(table_schema),
-            false => ArrowSource::new_stream_file_source(table_schema),
-        };
+        let source =
+            match is_object_in_arrow_ipc_file_format(Arc::clone(&object_store), object_location)
+                .await?
+            {
+                true => ArrowSource::new_file_source(table_schema),
+                false => ArrowSource::new_stream_file_source(table_schema),
+            };
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
             .with_file_groups(input.file_groups)
@@ -96,4 +94,3 @@ impl ReadFormat for ArrowReadFormat {
         Ok(config)
     }
 }
-

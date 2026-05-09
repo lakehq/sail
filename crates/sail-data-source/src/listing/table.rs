@@ -5,13 +5,27 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
-use datafusion_common::{Constraints, Result};
 use datafusion::execution::cache::cache_manager::FileStatisticsCache;
 use datafusion::execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
+use datafusion_common::{Constraints, Result};
 
 use crate::listing::source::ReadFormat;
+
+#[derive(Clone, Debug)]
+pub struct ListingTableSourceConfig {
+    pub table_paths: Vec<datafusion_datasource::ListingTableUrl>,
+    pub file_extension: String,
+    pub file_schema: SchemaRef,
+    pub table_partition_cols: Vec<(String, DataType)>,
+    pub constraints: Constraints,
+    pub file_sort_order: Vec<Vec<Sort>>,
+    pub collect_stat: bool,
+    pub target_partitions: usize,
+    pub read_format: Arc<dyn ReadFormat>,
+    pub compression: Option<datafusion_common::parsers::CompressionTypeVariant>,
+}
 
 /// A [`TableSource`] that represents reading one or more files via listing.
 ///
@@ -40,39 +54,30 @@ pub struct ListingTableSource {
 
 impl ListingTableSource {
     pub fn try_new(
-        table_paths: Vec<datafusion_datasource::ListingTableUrl>,
-        file_extension: String,
-        file_schema: SchemaRef,
-        table_partition_cols: Vec<(String, DataType)>,
-        constraints: Constraints,
-        file_sort_order: Vec<Vec<Sort>>,
-        collect_stat: bool,
-        target_partitions: usize,
-        read_format: Arc<dyn ReadFormat>,
-        compression: Option<datafusion_common::parsers::CompressionTypeVariant>,
+        config: ListingTableSourceConfig,
     ) -> Result<Self> {
-        let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
-        for (part_col_name, part_col_type) in &table_partition_cols {
+        let mut builder = SchemaBuilder::from(config.file_schema.as_ref().to_owned());
+        for (part_col_name, part_col_type) in &config.table_partition_cols {
             builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
         let table_schema = Arc::new(
             builder
                 .finish()
-                .with_metadata(file_schema.metadata().clone()),
+                .with_metadata(config.file_schema.metadata().clone()),
         );
 
         Ok(Self {
-            table_paths,
-            file_extension,
-            file_schema,
+            table_paths: config.table_paths,
+            file_extension: config.file_extension,
+            file_schema: config.file_schema,
             table_schema,
-            table_partition_cols,
-            constraints,
-            file_sort_order,
-            collect_stat,
-            target_partitions,
-            read_format,
-            compression,
+            table_partition_cols: config.table_partition_cols,
+            constraints: config.constraints,
+            file_sort_order: config.file_sort_order,
+            collect_stat: config.collect_stat,
+            target_partitions: config.target_partitions,
+            read_format: config.read_format,
+            compression: config.compression,
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
         })
     }
@@ -140,23 +145,19 @@ impl ListingTableSource {
         for (i, field) in self.file_schema.fields().iter().enumerate() {
             new_file_fields.push(field.as_ref().clone().with_name(names[i].clone()));
         }
-        let new_file_schema = Arc::new(
-            datafusion::arrow::datatypes::Schema::new_with_metadata(
-                new_file_fields,
-                self.file_schema.metadata().clone(),
-            ),
-        );
+        let new_file_schema = Arc::new(datafusion::arrow::datatypes::Schema::new_with_metadata(
+            new_file_fields,
+            self.file_schema.metadata().clone(),
+        ));
 
         let mut new_table_fields = Vec::with_capacity(table_fields.len());
         for (i, field) in table_fields.iter().enumerate() {
             new_table_fields.push(field.as_ref().clone().with_name(names[i].clone()));
         }
-        let new_table_schema = Arc::new(
-            datafusion::arrow::datatypes::Schema::new_with_metadata(
-                new_table_fields,
-                self.table_schema.metadata().clone(),
-            ),
-        );
+        let new_table_schema = Arc::new(datafusion::arrow::datatypes::Schema::new_with_metadata(
+            new_table_fields,
+            self.table_schema.metadata().clone(),
+        ));
 
         Ok(Self {
             file_schema: new_file_schema,

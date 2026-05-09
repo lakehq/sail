@@ -7,7 +7,7 @@ use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::TableSchema;
@@ -89,4 +89,3 @@ impl ReadFormat for CsvReadFormat {
         Ok(config)
     }
 }
-

@@ -9,18 +9,16 @@ use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::parquet::metadata::DFParquetMetadata;
 use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::TableSchema;
+
 use crate::formats::parquet::ParquetReadFormat;
 use crate::listing::source::{InferredFileMeta, ListingScanInput, ReadFormat, SchemaInfer};
 
-pub(super) fn create_read_format(
-    read: &ParquetReadFormat,
-) -> Result<Arc<dyn FileFormat>> {
+pub(super) fn create_read_format(read: &ParquetReadFormat) -> Result<Arc<dyn FileFormat>> {
     let options = read.options.clone().into_table_options();
     Ok(Arc::new(ParquetFormat::default().with_options(options)))
 }
@@ -83,7 +81,10 @@ impl ReadFormat for ParquetReadFormat {
             &metadata,
             &file_schema,
         )?;
-        Ok(InferredFileMeta { statistics, ordering })
+        Ok(InferredFileMeta {
+            statistics,
+            ordering,
+        })
     }
 
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
@@ -101,7 +102,9 @@ impl ReadFormat for ParquetReadFormat {
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
-        let store = ctx.runtime_env().object_store(input.object_store_url.clone())?;
+        let store = ctx
+            .runtime_env()
+            .object_store(input.object_store_url.clone())?;
         let cached_parquet_read_factory =
             Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);

@@ -36,7 +36,11 @@ impl ReadFormat for JsonReadFormat {
         Arc::new(crate::listing::source::DefaultSchemaInfer)
     }
 
-    async fn scan(&self, _ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {
+    async fn scan(
+        &self,
+        _ctx: &dyn Session,
+        mut input: ListingScanInput,
+    ) -> Result<FileScanConfig> {
         let mut options = self
             .options
             .clone()
@@ -59,7 +63,8 @@ impl ReadFormat for JsonReadFormat {
             .collect::<Vec<_>>();
         let table_schema = TableSchema::new(Arc::clone(&input.file_schema), partition_fields);
 
-        let source = JsonSource::new(table_schema).with_newline_delimited(options.newline_delimited);
+        let source =
+            JsonSource::new(table_schema).with_newline_delimited(options.newline_delimited);
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
             .with_file_groups(input.file_groups)
@@ -76,4 +81,3 @@ impl ReadFormat for JsonReadFormat {
         Ok(config)
     }
 }
-

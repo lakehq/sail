@@ -7,18 +7,16 @@ use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::text::file_format::TextFileFormat;
-use crate::listing::source::{
-    DefaultSchemaInfer, FormatFactory, ListingTableFormat, ReadFormat, SchemaInfer, WriteFormat,
-};
+use crate::listing::source::{FormatFactory, ListingTableFormat, WriteFormat};
 use crate::options::gen::{TextReadOptions, TextWriteOptions};
 use crate::options::ResolveOptions;
 
 pub mod file_format;
 pub mod options;
+mod read;
 pub mod reader;
 pub mod source;
 pub mod writer;
-mod read;
 
 pub const DEFAULT_TEXT_EXTENSION: &str = ".txt";
 

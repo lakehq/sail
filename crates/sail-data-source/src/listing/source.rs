@@ -9,16 +9,16 @@ use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::TableSource;
+use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result, Statistics};
+use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::physical_expr_common::sort_expr::LexOrdering;
-use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::{
     find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
     TableFormat,
@@ -116,11 +116,7 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     /// Build a scan configuration (file source + scan config) for listing reads.
     ///
     /// This must not rely on DataFusion's `FileFormat::{create_physical_plan,file_source}`.
-    async fn scan(
-        &self,
-        ctx: &dyn Session,
-        input: ListingScanInput,
-    ) -> Result<FileScanConfig>;
+    async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
 }
 
 #[derive(Debug, Clone)]
@@ -306,13 +302,9 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         let source = crate::listing::table::ListingTableSource::try_new(
             config.table_paths,
             listing_options.file_extension,
-            config
-                .file_schema
-                .ok_or_else(|| {
-                    datafusion_common::internal_datafusion_err!(
-                        "listing file schema should be present"
-                    )
-                })?,
+            config.file_schema.ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!("listing file schema should be present")
+            })?,
             listing_options.table_partition_cols,
             constraints,
             listing_options.file_sort_order,

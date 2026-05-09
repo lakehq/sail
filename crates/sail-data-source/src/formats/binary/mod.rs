@@ -7,18 +7,15 @@ use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::binary::file_format::BinaryFileFormat;
-use crate::listing::source::{
-    DefaultSchemaInfer, FormatFactory, ListingTableFormat, ReadFormat, SchemaInfer, WriteFormat,
-};
+use crate::listing::source::{FormatFactory, ListingTableFormat, WriteFormat};
 use crate::options::gen::BinaryReadOptions;
 use crate::options::ResolveOptions;
 
 pub mod file_format;
 pub mod options;
+mod read;
 pub mod reader;
 pub mod source;
-mod read;
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct TableBinaryOptions {

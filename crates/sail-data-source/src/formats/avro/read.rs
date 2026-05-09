@@ -57,4 +57,3 @@ impl ReadFormat for AvroReadFormat {
         Ok(config)
     }
 }
-

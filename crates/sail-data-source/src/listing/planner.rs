@@ -8,18 +8,17 @@ use datafusion::datasource::listing::helpers::{expr_applicable_for_cols, pruned_
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_expr::create_lex_ordering;
+use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::Statistics;
-use datafusion_common::project_schema;
+use datafusion_common::{project_schema, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion::physical_expr::create_lex_ordering;
-use datafusion::physical_expr_common::sort_expr::LexOrdering;
-use futures::{Stream, StreamExt, future, stream};
+use futures::{future, stream, Stream, StreamExt};
 use object_store::ObjectStore;
 
 use crate::listing::source::ListingScanInput;
@@ -80,11 +79,16 @@ impl ExtensionPlanner for ListingTableExtensionPlanner {
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
         let ListFilesResult {
-            file_groups: mut file_groups,
+            mut file_groups,
             statistics,
             grouped_by_partition: partitioned_by_file_group,
-        } = list_files_for_scan(source, session_state, &partition_filters, statistic_file_limit)
-            .await?;
+        } = list_files_for_scan(
+            source,
+            session_state,
+            &partition_filters,
+            statistic_file_limit,
+        )
+        .await?;
 
         let table_schema = source.table_schema();
         if file_groups.is_empty() {
@@ -92,7 +96,7 @@ impl ExtensionPlanner for ListingTableExtensionPlanner {
             return Ok(Some(Arc::new(EmptyExec::new(projected_schema))));
         }
 
-        let mut output_ordering =
+        let output_ordering =
             try_create_output_ordering(source, session_state.execution_props(), &file_groups)?;
 
         match session_state
@@ -211,9 +215,8 @@ fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Option<LexOrd
                         );
                         return None;
                     } else {
-                        let ordering =
-                            LexOrdering::new(current.as_ref()[..prefix_len].to_vec())
-                                .expect("prefix_len > 0, so ordering must be valid");
+                        let ordering = LexOrdering::new(current.as_ref()[..prefix_len].to_vec())
+                            .expect("prefix_len > 0, so ordering must be valid");
                         CurrentOrderingState::SomeOrdering(ordering)
                     }
                 }
@@ -272,7 +275,10 @@ async fn list_files_for_scan<'a>(
             let (statistics, ordering) = if source.collect_stat() {
                 do_collect_statistics_and_ordering(source, ctx, &store, &part_file).await?
             } else {
-                (Arc::new(Statistics::new_unknown(&source.file_schema())), None)
+                (
+                    Arc::new(Statistics::new_unknown(&source.file_schema())),
+                    None,
+                )
             };
             Ok(part_file
                 .with_statistics(statistics)
@@ -286,22 +292,21 @@ async fn list_files_for_scan<'a>(
 
     let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
-    let (file_groups, grouped_by_partition) = if threshold > 0
-        && !source.table_partition_cols().is_empty()
-    {
-        let grouped = file_group.group_by_partition_values(source.target_partitions());
-        if grouped.len() >= threshold {
-            (grouped, true)
+    let (file_groups, grouped_by_partition) =
+        if threshold > 0 && !source.table_partition_cols().is_empty() {
+            let grouped = file_group.group_by_partition_values(source.target_partitions());
+            if grouped.len() >= threshold {
+                (grouped, true)
+            } else {
+                let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
+                (
+                    FileGroup::new(all_files).split_files(source.target_partitions()),
+                    false,
+                )
+            }
         } else {
-            let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
-            (
-                FileGroup::new(all_files).split_files(source.target_partitions()),
-                false,
-            )
-        }
-    } else {
-        (file_group.split_files(source.target_partitions()), false)
-    };
+            (file_group.split_files(source.target_partitions()), false)
+        };
 
     let (file_groups, stats) = datafusion_datasource::compute_all_files_statistics(
         file_groups,
@@ -343,7 +348,11 @@ async fn do_collect_statistics_and_ordering(
 
     collected_statistics.put(
         path,
-        CachedFileMetadata::new(meta.clone(), Arc::clone(&statistics), file_meta.ordering.clone()),
+        CachedFileMetadata::new(
+            meta.clone(),
+            Arc::clone(&statistics),
+            file_meta.ordering.clone(),
+        ),
     );
 
     Ok((statistics, file_meta.ordering))

@@ -3,14 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{
-    FormatFactory, ListingTableFormat, ReadFormat, SchemaInfer, WriteFormat,
-};
+use crate::listing::source::{FormatFactory, ListingTableFormat, SchemaInfer, WriteFormat};
 use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
 use crate::options::ResolveOptions;
 

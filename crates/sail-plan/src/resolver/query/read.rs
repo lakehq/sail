@@ -519,15 +519,9 @@ impl PlanResolver<'_> {
             if let Some(listing_source) = table_source.as_any().downcast_ref::<ListingTableSource>()
             {
                 let names = state.register_fields(schema.fields());
-                Arc::new(
-                    listing_source
-                        .with_schema_field_names(names)
-                        .map_err(|e| {
-                            PlanError::internal(format!(
-                                "failed to rename listing table source: {e}"
-                            ))
-                        })?,
-                )
+                Arc::new(listing_source.with_schema_field_names(names).map_err(|e| {
+                    PlanError::internal(format!("failed to rename listing table source: {e}"))
+                })?)
             } else {
                 let provider = source_as_provider(&table_source).map_err(|e| {
                     PlanError::unsupported(format!(

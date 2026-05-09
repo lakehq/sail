@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{Result, Statistics};
+use datafusion_common::Result;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::TableSchema;
 
@@ -61,4 +61,3 @@ impl ReadFormat for BinaryReadFormat {
         Ok(config)
     }
 }
-

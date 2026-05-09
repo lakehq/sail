@@ -20,6 +20,7 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
+use sail_data_source::listing::planner::ListingTableExtensionPlanner;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
@@ -54,7 +55,6 @@ use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
 use sail_plan_lakehouse::new_lakehouse_extension_planners;
-use sail_data_source::listing::planner::ListingTableExtensionPlanner;
 
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}

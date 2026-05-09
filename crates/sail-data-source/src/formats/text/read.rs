@@ -34,7 +34,11 @@ impl ReadFormat for TextReadFormat {
         Arc::new(crate::listing::source::DefaultSchemaInfer)
     }
 
-    async fn scan(&self, _ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {
+    async fn scan(
+        &self,
+        _ctx: &dyn Session,
+        mut input: ListingScanInput,
+    ) -> Result<FileScanConfig> {
         let mut options = self
             .options
             .clone()
