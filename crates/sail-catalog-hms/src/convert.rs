@@ -370,10 +370,10 @@ fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Opt
     })
 }
 
-fn reject_spark_properties(properties: &[(String, String)]) -> CatalogResult<()> {
+pub(crate) fn reject_spark_properties(properties: &[(String, String)]) -> CatalogResult<()> {
     let invalid_keys: Vec<&str> = properties
         .iter()
-        .filter(|(key, _)| key.starts_with("spark.sql.") || key == EXTERNAL_KEY)
+        .filter(|(key, _)| is_reserved_spark_property_key(key))
         .map(|(key, _)| key.as_str())
         .collect();
     if !invalid_keys.is_empty() {
@@ -383,6 +383,25 @@ fn reject_spark_properties(properties: &[(String, String)]) -> CatalogResult<()>
         )));
     }
     Ok(())
+}
+
+pub(crate) fn reject_spark_property_keys(keys: &[String]) -> CatalogResult<()> {
+    let invalid_keys: Vec<&str> = keys
+        .iter()
+        .filter(|key| is_reserved_spark_property_key(key))
+        .map(|key| key.as_str())
+        .collect();
+    if !invalid_keys.is_empty() {
+        return Err(CatalogError::InvalidArgument(format!(
+            "Table properties may not contain Spark-internal keys: {}",
+            invalid_keys.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+fn is_reserved_spark_property_key(key: &str) -> bool {
+    key.starts_with("spark.sql.") || key == EXTERNAL_KEY
 }
 
 fn filter_spark_properties(values: Vec<(String, String)>) -> Vec<(String, String)> {
