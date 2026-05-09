@@ -429,10 +429,6 @@ impl CatalogCommand {
                                 .await
                                 .map_err(|e| CatalogError::External(e.to_string()))?;
                         }
-                        AlterTableOptions::SetLocation { .. } => {
-                            // SetLocation is a catalog-level table metadata change only.
-                            // Do not propagate it as table properties into storage backends.
-                        }
                     }
                 }
 

@@ -4,9 +4,7 @@ mod common;
 
 use arrow::datatypes::DataType;
 use sail_catalog::error::{CatalogError, CatalogObject};
-use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateViewColumnOptions, CreateViewOptions,
-};
+use sail_catalog::provider::{CatalogProvider, CreateViewColumnOptions, CreateViewOptions};
 use sail_common_datafusion::catalog::TableKind;
 
 use crate::common::{
@@ -98,44 +96,6 @@ async fn test_supported_formats_round_trip() {
             TableKind::Table { format, .. } => assert_eq!(format, expected_format),
             other => panic!("expected table kind, got {other:?}"),
         }
-    }
-}
-
-#[tokio::test]
-#[ignore]
-async fn test_alter_table_set_location_through_provider() {
-    let test_name = "test_alter_table_set_location_through_provider";
-    let context = setup_with_database(test_name).await;
-    let catalog = &context.catalog;
-    let namespace = &context.namespace;
-
-    catalog
-        .create_table(
-            namespace,
-            "items",
-            simple_table_options(test_name, vec![col("id", DataType::Int64)]),
-        )
-        .await
-        .unwrap();
-
-    let new_location = format!("/tmp/{test_name}_new");
-    catalog
-        .alter_table(
-            namespace,
-            "items",
-            AlterTableOptions::SetLocation {
-                location: new_location.clone(),
-            },
-        )
-        .await
-        .unwrap();
-
-    let fetched = catalog.get_table(namespace, "items").await.unwrap();
-    match fetched.kind {
-        TableKind::Table { location, .. } => {
-            assert_eq!(location, Some(format!("file:{new_location}")))
-        }
-        other => panic!("expected table kind, got {other:?}"),
     }
 }
 

@@ -93,17 +93,6 @@ fn apply_alter_table_options(
     options: AlterTableOptions,
 ) -> CatalogResult<()> {
     match options {
-        AlterTableOptions::SetLocation { location } => {
-            let Some(storage) = hms_table.sd.as_mut() else {
-                return Err(CatalogError::External(format!(
-                    "HMS table '{db_name}.{table_name}' is missing storage descriptor"
-                )));
-            };
-            let serde_info = storage.serde_info.get_or_insert_with(Default::default);
-            let parameters = serde_info.parameters.get_or_insert_with(AHashMap::new);
-            parameters.insert("path".into(), location.clone().into());
-            storage.location = Some(location.into());
-        }
         AlterTableOptions::SetTableProperties { properties } => {
             let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
             for (key, value) in properties {
@@ -1180,55 +1169,14 @@ mod tests {
     use std::time::Duration;
 
     use arrow::datatypes::DataType;
-    use hive_metastore::{SerDeInfo, StorageDescriptor, Table};
-    use pilota::{AHashMap, FastStr};
+    use pilota::FastStr;
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{
-        AlterTableOptions, CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
+        CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
     };
     use sail_common::runtime::RuntimeHandle;
 
     use super::{HmsCatalogConfig, HmsCatalogProvider};
-
-    #[test]
-    fn alter_table_set_location_updates_storage_and_spark_path_metadata() {
-        let mut table = Table {
-            sd: Some(StorageDescriptor {
-                location: Some("s3://warehouse/items_old".into()),
-                serde_info: Some(SerDeInfo {
-                    parameters: Some(AHashMap::from_iter([(
-                        FastStr::from_static_str("path"),
-                        FastStr::from_static_str("s3://warehouse/items_old"),
-                    )])),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        super::apply_alter_table_options(
-            &mut table,
-            "default",
-            "items",
-            AlterTableOptions::SetLocation {
-                location: "s3://warehouse/items_new".to_string(),
-            },
-        )
-        .unwrap();
-
-        let storage = table.sd.unwrap();
-        assert_eq!(
-            storage.location.as_deref(),
-            Some("s3://warehouse/items_new")
-        );
-        let serde = storage.serde_info.unwrap();
-        let parameters = serde.parameters.unwrap();
-        assert_eq!(
-            parameters.get("path").map(ToString::to_string).as_deref(),
-            Some("s3://warehouse/items_new")
-        );
-    }
 
     #[tokio::test]
     async fn test_create_table_rejects_iceberg_format() {
