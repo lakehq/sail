@@ -31,6 +31,10 @@ impl ParseUrl {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
+
+    pub fn safe(&self) -> bool {
+        self.safe
+    }
     /// Parses a URL and extracts the specified component.
     ///
     /// This function takes a URL string and extracts different parts of it based on the
@@ -254,12 +258,9 @@ impl ScalarUDFImpl for ParseUrl {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let safe = self.safe;
         let ScalarFunctionArgs { args, .. } = args;
-        if self.safe {
-            make_scalar_function(spark_try_parse_url, vec![])(&args)
-        } else {
-            make_scalar_function(spark_parse_url, vec![])(&args)
-        }
+        make_scalar_function(move |a| spark_parse_url_impl(a, safe), vec![])(&args)
     }
 }
 
@@ -294,15 +295,15 @@ fn is_string_type(dt: &DataType) -> bool {
     )
 }
 
-fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
-    spark_handled_parse_url(args, |x| x)
-}
-
-fn spark_try_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
-    spark_handled_parse_url(args, |x| match x {
-        Err(_) => Ok(None),
-        result => result,
-    })
+fn spark_parse_url_impl(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
+    if safe {
+        spark_handled_parse_url(args, |x| match x {
+            Err(_) => Ok(None),
+            result => result,
+        })
+    } else {
+        spark_handled_parse_url(args, |x| x)
+    }
 }
 
 fn spark_handled_parse_url(
@@ -740,7 +741,7 @@ mod tests {
             None,
         ]);
 
-        let result = spark_parse_url(&[url.clone(), part.clone()])?;
+        let result = spark_parse_url_impl(&[url.clone(), part.clone()], false)?;
         let result = as_string_array(&result)?;
 
         assert_eq!(&expected, result);

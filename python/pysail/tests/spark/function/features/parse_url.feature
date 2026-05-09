@@ -615,3 +615,129 @@ Feature: parse_url() extracts URL component
         SELECT parse_url('https://example.com', true) AS result
         """
       Then query error .*
+
+  Rule: QUERY key edge cases
+
+    Scenario: parse_url QUERY key-only param without equals returns NULL
+      When query
+        """
+        SELECT parse_url('http://ex.com?keyonly', 'QUERY', 'keyonly') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url QUERY key with empty value returns empty string
+      When query
+        """
+        SELECT parse_url('http://ex.com?key=', 'QUERY', 'key') AS result
+        """
+      Then query result
+        | result |
+        |        |
+
+    Scenario: parse_url QUERY key search is literal not percent-decoded
+      When query
+        """
+        SELECT parse_url('http://ex.com?a%20b=1', 'QUERY', 'a b') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url QUERY key search matches encoded form exactly
+      When query
+        """
+        SELECT parse_url('http://ex.com?a%20b=1', 'QUERY', 'a%20b') AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: parse_url QUERY duplicate keys returns first occurrence
+      When query
+        """
+        SELECT parse_url('http://ex.com?a=1&a=2', 'QUERY', 'a') AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+  Rule: FILE edge cases
+
+    Scenario: parse_url FILE no path only query
+      When query
+        """
+        SELECT parse_url('http://example.com?foo=bar', 'FILE') AS result
+        """
+      Then query result
+        | result    |
+        | ?foo=bar  |
+
+    Scenario: parse_url FILE no path no query with fragment returns empty string
+      When query
+        """
+        SELECT parse_url('http://example.com#frag', 'FILE') AS result
+        """
+      Then query result
+        | result |
+        |        |
+
+    Scenario: parse_url FILE trailing question mark root path
+      When query
+        """
+        SELECT parse_url('http://ex.com/?', 'FILE') AS result
+        """
+      Then query result
+        | result |
+        | /?     |
+
+    Scenario: parse_url FILE trailing question mark no path
+      When query
+        """
+        SELECT parse_url('http://ex.com?', 'FILE') AS result
+        """
+      Then query result
+        | result |
+        | ?      |
+
+    Scenario: parse_url FILE no path no query returns empty string
+      When query
+        """
+        SELECT parse_url('http://example.com', 'FILE') AS result
+        """
+      Then query result
+        | result |
+        |        |
+
+  Rule: PATH percent-encoding preserved
+
+    Scenario: parse_url PATH preserves percent-encoding
+      When query
+        """
+        SELECT parse_url('https://ex.com/dir%20/pa%20th.HTML', 'PATH') AS result
+        """
+      Then query result
+        | result                  |
+        | /dir%20/pa%20th.HTML   |
+
+  Rule: AUTHORITY port handling
+
+    Scenario: parse_url AUTHORITY includes explicit port even if default for scheme
+      When query
+        """
+        SELECT parse_url('https://example.com:443/path', 'AUTHORITY') AS result,
+               parse_url('http://example.com:80/path', 'AUTHORITY') AS result2
+        """
+      Then query result
+        | result              | result2           |
+        | example.com:443     | example.com:80    |
+
+    Scenario: parse_url AUTHORITY includes userinfo and non-default port
+      When query
+        """
+        SELECT parse_url('ftp://user:pwd@ftp.example.com:21/files?x=1#frag', 'AUTHORITY') AS result
+        """
+      Then query result
+        | result                        |
+        | user:pwd@ftp.example.com:21   |

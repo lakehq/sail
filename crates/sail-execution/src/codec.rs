@@ -2115,6 +2115,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
             }
+            UdfKind::ParseUrl(gen::ParseUrlUdf { safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(ParseUrl::new(safe))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -2321,7 +2324,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
             || node_inner.is::<OverlayFunc>()
-            || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
@@ -2506,6 +2508,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkNextDay>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<ParseUrl>() {
+            let safe = func.safe();
+            UdfKind::ParseUrl(gen::ParseUrlUdf { safe })
         } else {
             return Ok(());
         };
