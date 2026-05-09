@@ -26,6 +26,7 @@ use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 
+use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -818,7 +819,13 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_time", F::var_arg(to_time)),
         (
             "to_timestamp",
-            F::custom(|input| to_timestamp(input, false)),
+            F::custom(|input| {
+                let timestamp_ntz = matches!(
+                    input.function_context.plan_config.default_timestamp_type,
+                    DefaultTimestampType::TimestampNtz
+                );
+                to_timestamp(input, timestamp_ntz)
+            }),
         ),
         // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
         //  "Parses the timestamp with the format to a timestamp without time zone. Returns null with invalid input."
@@ -841,7 +848,13 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("try_make_timestamp_ntz", F::custom(try_make_timestamp_ntz)),
         (
             "try_to_timestamp",
-            F::custom(|input| try_to_timestamp(input, false)),
+            F::custom(|input| {
+                let timestamp_ntz = matches!(
+                    input.function_context.plan_config.default_timestamp_type,
+                    DefaultTimestampType::TimestampNtz
+                );
+                try_to_timestamp(input, timestamp_ntz)
+            }),
         ),
         ("time_diff", F::udf(SparkTimeDiff::new())),
         ("time_trunc", F::udf(SparkTimeTrunc::new())),

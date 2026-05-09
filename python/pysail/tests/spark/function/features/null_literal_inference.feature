@@ -241,3 +241,21 @@ Feature: NULL literal and timestamp inference
       root
        |-- result: timestamp (nullable = true)
       """
+
+    Scenario: DataFrame to_timestamp follows configured default timestamp type
+      Given config spark.sql.timestampType = TIMESTAMP_NTZ
+      When dataframe for to_timestamp null literal
+      Then dataframe schema
+      """
+      root
+       |-- result: timestamp_ntz (nullable = true)
+      """
+
+    Scenario: DataFrame try_to_timestamp follows configured default timestamp type
+      Given config spark.sql.timestampType = TIMESTAMP_NTZ
+      When dataframe for try_to_timestamp null literal with format
+      Then dataframe schema
+      """
+      root
+       |-- result: timestamp_ntz (nullable = true)
+      """
