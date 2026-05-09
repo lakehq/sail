@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion_common::arrow::datatypes::SchemaRef;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
@@ -32,7 +32,7 @@ pub struct BinaryFormatFactory;
 
 #[derive(Debug, Clone)]
 pub struct BinaryReadFormat {
-    options: TableBinaryOptions,
+    options: BinaryReadOptions,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -48,9 +48,7 @@ impl FormatFactory for BinaryFormatFactory {
 
     fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
         Ok(BinaryReadFormat {
-            options: BinaryReadOptions::resolve(ctx, options)
-                .map_err(datafusion_common::DataFusionError::from)?
-                .into_table_options(),
+            options: BinaryReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?,
         })
     }
 
@@ -64,7 +62,8 @@ impl ReadFormat for BinaryReadFormat {
         &self,
         _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(BinaryFileFormat::new(self.options.clone())))
+        let options = self.options.clone().into_table_options();
+        Ok(Arc::new(BinaryFileFormat::new(options)))
     }
 
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {

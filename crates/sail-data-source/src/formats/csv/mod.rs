@@ -3,8 +3,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion_common::config::CsvOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
@@ -91,15 +91,13 @@ impl SchemaInfer for CsvSchemaInfer {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &datafusion::datasource::listing::ListingOptions,
-        options: &[OptionLayer],
-    ) -> datafusion_common::Result<Schema> {
+    ) -> Result<Schema> {
         let mut schema = list_options
             .format
             .infer_schema(ctx, store, files)
             .await?
             .as_ref()
             .clone();
-        let _ = options;
         if !self.infer_schema {
             schema = convert_string_columns(schema);
         }
@@ -115,13 +113,12 @@ pub struct CsvFormatFactory;
 
 #[derive(Debug, Clone)]
 pub struct CsvReadFormat {
-    options: CsvOptions,
-    infer_schema: bool,
+    options: CsvReadOptions,
 }
 
 #[derive(Debug, Clone)]
 pub struct CsvWriteFormat {
-    options: CsvOptions,
+    options: CsvWriteOptions,
 }
 
 impl FormatFactory for CsvFormatFactory {
@@ -132,27 +129,13 @@ impl FormatFactory for CsvFormatFactory {
         "csv"
     }
 
-    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> datafusion_common::Result<Self::Read> {
-        let read_options = CsvReadOptions::resolve(ctx, options)
-            .map_err(datafusion_common::DataFusionError::from)?;
-        let infer_schema = read_options.infer_schema;
-        let options = read_options
-            .into_table_options()
-            .map_err(datafusion_common::DataFusionError::from)?;
-        Ok(CsvReadFormat {
-            options,
-            infer_schema,
-        })
+    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
+        let options = CsvReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
+        Ok(CsvReadFormat { options })
     }
 
-    fn write(
-        ctx: &dyn Session,
-        options: Vec<OptionLayer>,
-    ) -> datafusion_common::Result<Self::Write> {
-        let options = CsvWriteOptions::resolve(ctx, options)
-            .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options()
-            .map_err(datafusion_common::DataFusionError::from)?;
+    fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {
+        let options = CsvWriteOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
         Ok(CsvWriteFormat { options })
     }
 }
@@ -161,8 +144,12 @@ impl ReadFormat for CsvReadFormat {
     fn create_read_format(
         &self,
         compression: Option<CompressionTypeVariant>,
-    ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options = self.options.clone();
+    ) -> Result<Arc<dyn FileFormat>> {
+        let mut options = self
+            .options
+            .clone()
+            .into_table_options()
+            .map_err(DataFusionError::from)?;
         if let Some(compression) = compression {
             options.compression = compression;
         }
@@ -171,19 +158,19 @@ impl ReadFormat for CsvReadFormat {
 
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
         Arc::new(CsvSchemaInfer {
-            infer_schema: self.infer_schema,
+            infer_schema: self.options.infer_schema,
         })
     }
 }
 
 impl WriteFormat for CsvWriteFormat {
-    fn create_write_format(
-        &self,
-    ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        Ok((
-            Arc::new(CsvFormat::default().with_options(self.options.clone())),
-            None,
-        ))
+    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
+        let options = self
+            .options
+            .clone()
+            .into_table_options()
+            .map_err(DataFusionError::from)?;
+        Ok((Arc::new(CsvFormat::default().with_options(options)), None))
     }
 }
 

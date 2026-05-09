@@ -35,7 +35,6 @@ pub trait SchemaInfer: Debug + Send + Sync + 'static {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &ListingOptions,
-        options: &[OptionLayer],
     ) -> Result<Schema>;
 }
 
@@ -51,7 +50,6 @@ impl SchemaInfer for DefaultSchemaInfer {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &ListingOptions,
-        _options: &[OptionLayer],
     ) -> Result<Schema> {
         Ok(list_options
             .format
@@ -125,7 +123,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             options,
         } = info;
 
-        let read_format = T::read(ctx, options.clone())?;
+        let read_format = T::read(ctx, options)?;
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
         let file_format = read_format.create_read_format(None)?;
         let extension_with_compression =
@@ -203,7 +201,6 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                     &urls,
                     &mut listing_options,
                     &extension_with_compression,
-                    &options,
                     &read_format,
                 )
                 .await?;

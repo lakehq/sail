@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::avro::AvroFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::Result;
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
@@ -29,17 +30,11 @@ impl FormatFactory for AvroFormatFactory {
         "avro"
     }
 
-    fn read(
-        _ctx: &dyn Session,
-        _options: Vec<OptionLayer>,
-    ) -> datafusion_common::Result<Self::Read> {
+    fn read(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Read> {
         Ok(AvroReadFormat)
     }
 
-    fn write(
-        _ctx: &dyn Session,
-        _options: Vec<OptionLayer>,
-    ) -> datafusion_common::Result<Self::Write> {
+    fn write(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Write> {
         Ok(AvroWriteFormat)
     }
 }
@@ -48,7 +43,7 @@ impl ReadFormat for AvroReadFormat {
     fn create_read_format(
         &self,
         _compression: Option<CompressionTypeVariant>,
-    ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
+    ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
     }
 
@@ -58,9 +53,7 @@ impl ReadFormat for AvroReadFormat {
 }
 
 impl WriteFormat for AvroWriteFormat {
-    fn create_write_format(
-        &self,
-    ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
+    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
         Ok((Arc::new(AvroFormat), None))
     }
 }

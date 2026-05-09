@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
@@ -23,14 +22,12 @@ pub struct ParquetFormatFactory;
 
 #[derive(Debug, Clone)]
 pub struct ParquetReadFormat {
-    options: TableParquetOptions,
-    extension: String,
+    options: ParquetReadOptions,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParquetWriteFormat {
-    options: TableParquetOptions,
-    compression: Option<String>,
+    options: ParquetWriteOptions,
 }
 
 impl FormatFactory for ParquetFormatFactory {
@@ -42,25 +39,13 @@ impl FormatFactory for ParquetFormatFactory {
     }
 
     fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
-        let read_options = ParquetReadOptions::resolve(ctx, options)
-            .map_err(datafusion_common::DataFusionError::from)?;
-        let extension = read_options.extension.clone();
-        Ok(ParquetReadFormat {
-            options: read_options.into_table_options(),
-            extension,
-        })
+        let options = ParquetReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
+        Ok(ParquetReadFormat { options })
     }
 
     fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {
-        let options = ParquetWriteOptions::resolve(ctx, options)
-            .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options()
-            .map_err(datafusion_common::DataFusionError::from)?;
-        let compression = options.global.compression.clone();
-        Ok(ParquetWriteFormat {
-            options,
-            compression,
-        })
+        let options = ParquetWriteOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
+        Ok(ParquetWriteFormat { options })
     }
 }
 
@@ -69,13 +54,12 @@ impl ReadFormat for ParquetReadFormat {
         &self,
         _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(
-            ParquetFormat::default().with_options(self.options.clone()),
-        ))
+        let options = self.options.clone().into_table_options();
+        Ok(Arc::new(ParquetFormat::default().with_options(options)))
     }
 
     fn file_extension_override(&self) -> Result<Option<String>> {
-        Ok(Some(self.extension.clone()))
+        Ok(Some(self.options.extension.clone()))
     }
 
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
@@ -85,9 +69,14 @@ impl ReadFormat for ParquetReadFormat {
 
 impl WriteFormat for ParquetWriteFormat {
     fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
+        let options = self
+            .options
+            .clone()
+            .into_table_options()
+            .map_err(DataFusionError::from)?;
         Ok((
-            Arc::new(ParquetFormat::default().with_options(self.options.clone())),
-            self.compression.clone(),
+            Arc::new(ParquetFormat::default().with_options(options)),
+            self.options.compression.clone(),
         ))
     }
 }

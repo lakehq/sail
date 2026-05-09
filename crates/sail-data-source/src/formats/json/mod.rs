@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::json::JsonFormat;
-use datafusion_common::config::JsonOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
@@ -22,12 +22,12 @@ pub struct JsonFormatFactory;
 
 #[derive(Debug, Clone)]
 pub struct JsonReadFormat {
-    options: JsonOptions,
+    options: JsonReadOptions,
 }
 
 #[derive(Debug, Clone)]
 pub struct JsonWriteFormat {
-    options: JsonOptions,
+    options: JsonWriteOptions,
 }
 
 impl FormatFactory for JsonFormatFactory {
@@ -38,20 +38,13 @@ impl FormatFactory for JsonFormatFactory {
         "json"
     }
 
-    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> datafusion_common::Result<Self::Read> {
-        let options = JsonReadOptions::resolve(ctx, options)
-            .and_then(|o| o.into_table_options())
-            .map_err(datafusion_common::DataFusionError::from)?;
+    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
+        let options = JsonReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
         Ok(JsonReadFormat { options })
     }
 
-    fn write(
-        ctx: &dyn Session,
-        options: Vec<OptionLayer>,
-    ) -> datafusion_common::Result<Self::Write> {
-        let options = JsonWriteOptions::resolve(ctx, options)
-            .and_then(|o| o.into_table_options())
-            .map_err(datafusion_common::DataFusionError::from)?;
+    fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {
+        let options = JsonWriteOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
         Ok(JsonWriteFormat { options })
     }
 }
@@ -60,8 +53,12 @@ impl ReadFormat for JsonReadFormat {
     fn create_read_format(
         &self,
         compression: Option<CompressionTypeVariant>,
-    ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options = self.options.clone();
+    ) -> Result<Arc<dyn FileFormat>> {
+        let mut options = self
+            .options
+            .clone()
+            .into_table_options()
+            .map_err(DataFusionError::from)?;
         if let Some(compression) = compression {
             options.compression = compression;
         }
@@ -74,12 +71,12 @@ impl ReadFormat for JsonReadFormat {
 }
 
 impl WriteFormat for JsonWriteFormat {
-    fn create_write_format(
-        &self,
-    ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        Ok((
-            Arc::new(JsonFormat::default().with_options(self.options.clone())),
-            None,
-        ))
+    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
+        let options = self
+            .options
+            .clone()
+            .into_table_options()
+            .map_err(DataFusionError::from)?;
+        Ok((Arc::new(JsonFormat::default().with_options(options)), None))
     }
 }

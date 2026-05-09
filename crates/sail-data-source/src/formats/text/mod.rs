@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
@@ -44,12 +45,12 @@ pub struct TextFormatFactory;
 
 #[derive(Debug, Clone)]
 pub struct TextReadFormat {
-    options: TableTextOptions,
+    options: TextReadOptions,
 }
 
 #[derive(Debug, Clone)]
 pub struct TextWriteFormat {
-    options: TableTextOptions,
+    options: TextWriteOptions,
 }
 
 impl FormatFactory for TextFormatFactory {
@@ -60,22 +61,13 @@ impl FormatFactory for TextFormatFactory {
         "text"
     }
 
-    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> datafusion_common::Result<Self::Read> {
-        let options = TextReadOptions::resolve(ctx, options)
-            .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options()
-            .map_err(datafusion_common::DataFusionError::from)?;
+    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
+        let options = TextReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
         Ok(TextReadFormat { options })
     }
 
-    fn write(
-        ctx: &dyn Session,
-        options: Vec<OptionLayer>,
-    ) -> datafusion_common::Result<Self::Write> {
-        let options = TextWriteOptions::resolve(ctx, options)
-            .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options()
-            .map_err(datafusion_common::DataFusionError::from)?;
+    fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {
+        let options = TextWriteOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
         Ok(TextWriteFormat { options })
     }
 }
@@ -84,8 +76,12 @@ impl ReadFormat for TextReadFormat {
     fn create_read_format(
         &self,
         compression: Option<CompressionTypeVariant>,
-    ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options = self.options.clone();
+    ) -> Result<Arc<dyn FileFormat>> {
+        let mut options = self
+            .options
+            .clone()
+            .into_table_options()
+            .map_err(DataFusionError::from)?;
         if let Some(compression) = compression {
             options.compression = compression;
         }
@@ -98,9 +94,12 @@ impl ReadFormat for TextReadFormat {
 }
 
 impl WriteFormat for TextWriteFormat {
-    fn create_write_format(
-        &self,
-    ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        Ok((Arc::new(TextFileFormat::new(self.options.clone())), None))
+    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
+        let options = self
+            .options
+            .clone()
+            .into_table_options()
+            .map_err(DataFusionError::from)?;
+        Ok((Arc::new(TextFileFormat::new(options)), None))
     }
 }

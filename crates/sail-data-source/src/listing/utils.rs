@@ -15,7 +15,6 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::listing::source::ReadFormat;
 
@@ -24,7 +23,6 @@ pub async fn resolve_listing_schema<R: ReadFormat>(
     urls: &[ListingTableUrl],
     options: &mut ListingOptions,
     extension_with_compression: &Option<String>,
-    options_vec: &[OptionLayer],
     read_format: &R,
 ) -> Result<Arc<Schema>> {
     let file_groups = list_sample_files(ctx, urls, extension_with_compression.as_deref()).await?;
@@ -49,7 +47,7 @@ pub async fn resolve_listing_schema<R: ReadFormat>(
     for (store, files) in file_groups.iter() {
         let schema_inferrer = read_format.schema_inferrer();
         let schema = schema_inferrer
-            .get_schema(ctx, store, files, options, options_vec)
+            .get_schema(ctx, store, files, options)
             .await?;
         schemas.push(schema);
     }
