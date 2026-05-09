@@ -95,6 +95,7 @@ message ExtendedScalarUdf {
     SparkNextDayUdf spark_next_day = 15;
     SparkTimeUdf spark_time = 16;
     SparkFromJsonUdf spark_from_json = 17;
+    SparkToNumberUdf spark_to_number = 18;
   }
 }
 
@@ -195,6 +196,10 @@ message SparkTimeUdf {
 
 message SparkFromJsonUdf {
   string session_timezone = 1;
+}
+
+message SparkToNumberUdf {
+  bool safe = 1;
 }
 
 message StandardUdaf {}
