@@ -5,9 +5,10 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
 use crate::formats::text::file_format::TextFileFormat;
-use crate::formats::text::options::{resolve_text_read_options, resolve_text_write_options};
+use crate::listing::source::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::options::gen::{TextReadOptions, TextWriteOptions};
+use crate::options::ResolveOptions;
 
 pub mod file_format;
 pub mod options;
@@ -46,11 +47,11 @@ impl ListingFormat for TextListingFormat {
 
     fn create_read_format(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         options: Vec<OptionLayer>,
         compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options = resolve_text_read_options(options)
+        let mut options = TextReadOptions::resolve(ctx, options)
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
@@ -62,10 +63,10 @@ impl ListingFormat for TextListingFormat {
 
     fn create_write_format(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         options: Vec<OptionLayer>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        let options = resolve_text_write_options(options)
+        let options = TextWriteOptions::resolve(ctx, options)
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
