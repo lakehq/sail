@@ -16,13 +16,7 @@ from pysail.testing.spark.utils.sql import (
 @pytest.fixture(scope="module")
 def duck():
     conn = duckdb.connect()
-    try:
-        conn.sql("CALL dsdgen(sf = 0.01)")
-    except duckdb.Error as exc:
-        message = str(exc).lower()
-        if "install the required extension 'tpcds'" in message or "failed to download extension" in message:
-            pytest.skip("duckdb `tpcds` extension is unavailable (offline environment)")
-        raise
+    conn.sql("CALL dsdgen(sf = 0.01)")
     return conn
 
 
