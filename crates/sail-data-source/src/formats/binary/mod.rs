@@ -9,7 +9,7 @@ use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::binary::file_format::BinaryFileFormat;
-use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
 use crate::options::gen::BinaryReadOptions;
 use crate::options::ResolveOptions;
 

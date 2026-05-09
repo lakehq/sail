@@ -7,7 +7,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::listing::{ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{ListingFormat, ListingTableFormat, SchemaInfer};
 use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
 use crate::options::ResolveOptions;
 
