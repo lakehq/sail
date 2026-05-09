@@ -365,3 +365,126 @@ def test_spark_dataframe_writer_creates_table_sail_reads_external_table(
     _assert_sail_describes_spark_table(hms_s3_spark, table_fqn, table_type="EXTERNAL")
     sail_rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in sail_rows] == [(1, "alice"), (2, "bob")]
+
+
+def test_spark_creates_sail_reads_mixed_complex_partitioned_parquet(
+    reference_spark_s3: SparkSession,
+    hms_s3_spark: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Spark writes mixed complex partitioned schema; Sail reads nested values and partitions."""
+    table_fqn = f"{hms_s3_database}.roundtrip_mixed_complex_partitioned"
+    location = f"s3://hms-warehouse/{hms_s3_database}/roundtrip_mixed_complex_partitioned"
+
+    reference_spark_s3.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT,
+          payload STRUCT<
+            items: ARRAY<STRUCT<label: STRING, attrs: MAP<STRING, ARRAY<INT>>>>,
+            active: BOOLEAN
+          >,
+          metrics MAP<STRING, STRUCT<count: INT, weights: ARRAY<DOUBLE>>>,
+          category STRING,
+          event_date DATE
+        )
+        USING PARQUET
+        PARTITIONED BY (category, event_date)
+        LOCATION '{location}'
+        """
+    )
+    reference_spark_s3.sql(
+        f"""
+        INSERT INTO {table_fqn} VALUES
+          (
+            1,
+            named_struct(
+              'items',
+              array(
+                named_struct(
+                  'label', 'l1',
+                  'attrs', map('nums', array(1, 2), 'empty', array())
+                )
+              ),
+              'active',
+              true
+            ),
+            map(
+              'm1', named_struct('count', 3, 'weights', array(1.5D, 2.5D))
+            ),
+            'retail',
+            DATE '2024-01-02'
+          ),
+          (
+            2,
+            named_struct(
+              'items',
+              array(
+                named_struct(
+                  'label', 'l2',
+                  'attrs', map('nums', array(7, 8), 'empty', array())
+                )
+              ),
+              'active',
+              false
+            ),
+            map(
+              'm1', named_struct('count', 5, 'weights', array(3.5D, 4.5D))
+            ),
+            'wholesale',
+            DATE '2024-01-03'
+          )
+        """
+    )
+
+    _assert_sail_describes_spark_table(hms_s3_spark, table_fqn, table_type="EXTERNAL")
+    props = _describe_extended_properties(hms_s3_spark, table_fqn)
+    assert props.get("Type") == "EXTERNAL"
+    assert props.get("Provider", "").lower() == "parquet"
+    assert props.get("Location") == location
+    retail = hms_s3_spark.sql(
+        f"""
+        SELECT
+          id,
+          payload.active AS active,
+          payload.items[0].label AS label,
+          payload.items[0].attrs['nums'][0] AS first_num,
+          metrics['m1'].count AS metric_count,
+          metrics['m1'].weights[1] AS second_weight,
+          category,
+          CAST(event_date AS STRING) AS event_date
+        FROM {table_fqn}
+        WHERE category = 'retail' AND event_date = DATE '2024-01-02'
+        ORDER BY id
+        """
+    ).collect()
+    assert [(r.id, r.active, r.label, r.first_num, r.metric_count, r.second_weight, r.category, r.event_date) for r in retail] == [
+        (1, True, "l1", 1, 3, 2.5, "retail", "2024-01-02")
+    ]
+
+
+def test_spark_creates_sail_reads_date_and_binary_parquet(
+    reference_spark_s3: SparkSession,
+    hms_s3_spark: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Spark writes DATE and BINARY values; Sail restores exact values."""
+    table_fqn = f"{hms_s3_database}.roundtrip_date_binary"
+
+    reference_spark_s3.sql(f"CREATE TABLE {table_fqn} (id INT, day DATE, payload BINARY) USING PARQUET")
+    reference_spark_s3.sql(
+        f"""
+        INSERT INTO {table_fqn} VALUES
+          (1, DATE '2024-01-02', unhex('00FF10')),
+          (2, DATE '2024-01-03', unhex('ABCD'))
+        """
+    )
+
+    _assert_sail_describes_spark_table(hms_s3_spark, table_fqn, table_type="MANAGED")
+    rows = hms_s3_spark.sql(
+        f"SELECT id, CAST(day AS STRING) AS day, hex(payload) AS payload_hex FROM {table_fqn} ORDER BY id"
+    ).collect()
+    assert [(r.id, r.day, r.payload_hex) for r in rows] == [
+        (1, "2024-01-02", "00FF10"),
+        (2, "2024-01-03", "ABCD"),
+    ]

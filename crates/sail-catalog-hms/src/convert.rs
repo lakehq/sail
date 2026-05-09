@@ -648,7 +648,7 @@ mod tests {
     #![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use arrow::datatypes::{DataType, Field, Fields};
-    use hive_metastore::{FieldSchema, StorageDescriptor, Table};
+    use hive_metastore::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
     use pilota::{AHashMap, FastStr};
     use sail_catalog::hive_format::HiveStorageFormat;
     use sail_catalog::provider::{
@@ -1215,6 +1215,361 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Missing split property part spark.sql.sources.schema.part.0"));
+    }
+
+    #[test]
+    fn test_build_generic_table_defaults_to_external_without_location() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: Some("pk".to_string()),
+                default: None,
+                generated_always_as: None,
+            }],
+            vec![],
+            None,
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![("owner".to_string(), "alice".to_string())],
+        )
+        .unwrap();
+
+        assert_eq!(
+            table.table_type.as_deref(),
+            Some(super::EXTERNAL_TABLE_TYPE)
+        );
+        let props = map_to_vec(table.parameters.as_ref());
+        assert!(props
+            .iter()
+            .any(|(k, v)| k == super::EXTERNAL_KEY && v == super::EXTERNAL_TRUE));
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { table_type, .. } => {
+                assert_eq!(
+                    table_type,
+                    Some(sail_common_datafusion::catalog::CatalogTableType::External)
+                );
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_table_to_status_falls_back_to_hms_columns_without_spark_schema() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let table = Table {
+            table_name: Some("events".into()),
+            table_type: Some(super::EXTERNAL_TABLE_TYPE.into()),
+            sd: Some(StorageDescriptor {
+                location: Some("s3://warehouse/events".into()),
+                cols: Some(vec![
+                    FieldSchema {
+                        name: Some("id".into()),
+                        r#type: Some("bigint".into()),
+                        comment: Some("identifier".into()),
+                    },
+                    FieldSchema {
+                        name: Some("tags".into()),
+                        r#type: Some("array<string>".into()),
+                        comment: Some("label tags".into()),
+                    },
+                    FieldSchema {
+                        name: Some("attrs".into()),
+                        r#type: Some("map<string,int>".into()),
+                        comment: None,
+                    },
+                    FieldSchema {
+                        name: Some("payload".into()),
+                        r#type: Some("struct<flag:boolean,score:int>".into()),
+                        comment: Some("nested payload".into()),
+                    },
+                ]),
+                input_format: Some(HiveStorageFormat::parquet().input_format.into()),
+                output_format: Some(HiveStorageFormat::parquet().output_format.into()),
+                serde_info: Some(SerDeInfo {
+                    serialization_lib: Some(HiveStorageFormat::parquet().serde_library.into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            partition_keys: Some(vec![
+                FieldSchema {
+                    name: Some("day".into()),
+                    r#type: Some("string".into()),
+                    comment: Some("partition day".into()),
+                },
+                FieldSchema {
+                    name: Some("event_date".into()),
+                    r#type: Some("date".into()),
+                    comment: Some("partition date".into()),
+                },
+            ]),
+            parameters: Some(AHashMap::from_iter([(
+                FastStr::from_static_str("owner"),
+                FastStr::from_static_str("alice"),
+            )])),
+            ..Default::default()
+        };
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table {
+                columns,
+                partition_by,
+                properties,
+                ..
+            } => {
+                assert_eq!(
+                    columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+                    vec!["id", "tags", "attrs", "payload", "day", "event_date"]
+                );
+                assert_eq!(columns[0].comment.as_deref(), Some("identifier"));
+                assert!(matches!(columns[1].data_type, DataType::List(_)));
+                assert!(matches!(columns[2].data_type, DataType::Map(_, _)));
+                assert!(matches!(columns[3].data_type, DataType::Struct(_)));
+                assert!(columns[4].is_partition);
+                assert!(columns[5].is_partition);
+                assert!(matches!(columns[5].data_type, DataType::Date32));
+                assert_eq!(
+                    partition_by
+                        .iter()
+                        .map(|field| field.column.clone())
+                        .collect::<Vec<_>>(),
+                    vec!["day".to_string(), "event_date".to_string()]
+                );
+                assert_eq!(properties, vec![("owner".to_string(), "alice".to_string())]);
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_split_large_table_prop_round_trips_unicode_value() {
+        let original = "αβγδ😎こんにちは🚀".repeat(40);
+        let split = super::split_large_table_prop(SPARK_SCHEMA_KEY, &original, 13);
+        assert!(split.len() > 2);
+
+        let parameters = AHashMap::from_iter(
+            split
+                .into_iter()
+                .map(|(k, v)| (FastStr::from_string(k), FastStr::from_string(v))),
+        );
+
+        let decoded = super::read_large_table_prop(Some(&parameters), SPARK_SCHEMA_KEY)
+            .unwrap()
+            .unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_injected_spark_metadata_preserves_mixed_complex_columns_and_partitions() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let mut table = build_generic_table(
+            "default",
+            "mixed_events",
+            vec![
+                CreateTableColumnOptions {
+                    name: "id".to_string(),
+                    data_type: DataType::Int64,
+                    nullable: false,
+                    comment: Some("primary key".to_string()),
+                    default: None,
+                    generated_always_as: None,
+                },
+                CreateTableColumnOptions {
+                    name: "payload".to_string(),
+                    data_type: DataType::Struct(Fields::from(vec![
+                        Field::new(
+                            "items",
+                            DataType::List(std::sync::Arc::new(Field::new(
+                                "item",
+                                DataType::Struct(Fields::from(vec![
+                                    Field::new("label", DataType::Utf8, true),
+                                    Field::new(
+                                        "attrs",
+                                        DataType::Map(
+                                            std::sync::Arc::new(Field::new(
+                                                "entries",
+                                                DataType::Struct(Fields::from(vec![
+                                                    Field::new("keys", DataType::Utf8, false),
+                                                    Field::new(
+                                                        "values",
+                                                        DataType::List(std::sync::Arc::new(
+                                                            Field::new_list_field(
+                                                                DataType::Int32,
+                                                                true,
+                                                            ),
+                                                        )),
+                                                        true,
+                                                    ),
+                                                ])),
+                                                false,
+                                            )),
+                                            false,
+                                        ),
+                                        true,
+                                    ),
+                                ])),
+                                true,
+                            ))),
+                            true,
+                        ),
+                        Field::new("active", DataType::Boolean, true),
+                    ])),
+                    nullable: true,
+                    comment: Some("nested payload".to_string()),
+                    default: None,
+                    generated_always_as: None,
+                },
+                CreateTableColumnOptions {
+                    name: "category".to_string(),
+                    data_type: DataType::Utf8,
+                    nullable: false,
+                    comment: Some("category partition".to_string()),
+                    default: None,
+                    generated_always_as: None,
+                },
+                CreateTableColumnOptions {
+                    name: "event_date".to_string(),
+                    data_type: DataType::Date32,
+                    nullable: false,
+                    comment: Some("date partition".to_string()),
+                    default: None,
+                    generated_always_as: None,
+                },
+            ],
+            vec!["category".to_string(), "event_date".to_string()],
+            Some("s3://warehouse/mixed_events".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            Some("mixed events table".to_string()),
+            vec![("owner".to_string(), "alice".to_string())],
+        )
+        .unwrap();
+
+        let all_columns = vec![
+            CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: Some("primary key".to_string()),
+                default: None,
+                generated_always_as: None,
+            },
+            CreateTableColumnOptions {
+                name: "payload".to_string(),
+                data_type: DataType::Struct(Fields::from(vec![
+                    Field::new(
+                        "items",
+                        DataType::List(std::sync::Arc::new(Field::new(
+                            "item",
+                            DataType::Struct(Fields::from(vec![
+                                Field::new("label", DataType::Utf8, true),
+                                Field::new(
+                                    "attrs",
+                                    DataType::Map(
+                                        std::sync::Arc::new(Field::new(
+                                            "entries",
+                                            DataType::Struct(Fields::from(vec![
+                                                Field::new("keys", DataType::Utf8, false),
+                                                Field::new(
+                                                    "values",
+                                                    DataType::List(std::sync::Arc::new(
+                                                        Field::new_list_field(
+                                                            DataType::Int32,
+                                                            true,
+                                                        ),
+                                                    )),
+                                                    true,
+                                                ),
+                                            ])),
+                                            false,
+                                        )),
+                                        false,
+                                    ),
+                                    true,
+                                ),
+                            ])),
+                            true,
+                        ))),
+                        true,
+                    ),
+                    Field::new("active", DataType::Boolean, true),
+                ])),
+                nullable: true,
+                comment: Some("nested payload".to_string()),
+                default: None,
+                generated_always_as: None,
+            },
+            CreateTableColumnOptions {
+                name: "category".to_string(),
+                data_type: DataType::Utf8,
+                nullable: false,
+                comment: Some("category partition".to_string()),
+                default: None,
+                generated_always_as: None,
+            },
+            CreateTableColumnOptions {
+                name: "event_date".to_string(),
+                data_type: DataType::Date32,
+                nullable: false,
+                comment: Some("date partition".to_string()),
+                default: None,
+                generated_always_as: None,
+            },
+        ];
+
+        inject_spark_metadata(
+            &mut table,
+            &all_columns,
+            &["category".to_string(), "event_date".to_string()],
+            "parquet",
+        )
+        .unwrap();
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table {
+                columns,
+                partition_by,
+                properties,
+                ..
+            } => {
+                assert_eq!(
+                    columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+                    vec!["id", "payload", "category", "event_date"]
+                );
+                assert_eq!(columns[0].comment.as_deref(), Some("primary key"));
+                assert!(!columns[0].nullable);
+                assert_eq!(columns[1].comment.as_deref(), Some("nested payload"));
+                assert!(columns[1].nullable);
+                assert!(matches!(columns[1].data_type, DataType::Struct(_)));
+                assert!(columns[2].is_partition);
+                assert!(columns[3].is_partition);
+                assert!(matches!(columns[3].data_type, DataType::Date32));
+                assert_eq!(
+                    partition_by
+                        .iter()
+                        .map(|field| field.column.clone())
+                        .collect::<Vec<_>>(),
+                    vec!["category".to_string(), "event_date".to_string()]
+                );
+                assert!(properties.iter().any(|(k, v)| k == "owner" && v == "alice"));
+                assert!(!properties.iter().any(|(k, _)| k.starts_with("spark.sql.")));
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
     }
 
     #[test]
