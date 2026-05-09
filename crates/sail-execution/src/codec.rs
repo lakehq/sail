@@ -796,9 +796,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let stats_schema = Arc::new(self.try_decode_schema(&stats_schema)?);
                 Ok(Arc::new(DeltaMetadataStatsExec::new(input, stats_schema)))
             }
-            NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input }) => {
+            NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode {
+                input,
+                partition_value_columns_json,
+            }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
-                Ok(Arc::new(DeltaRemoveActionsExec::new(input)?))
+                let partition_value_columns = partition_value_columns_json
+                    .as_deref()
+                    .map(serde_json::from_str::<Vec<(String, String)>>)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
+                Ok(Arc::new(DeltaRemoveActionsExec::try_new(
+                    input,
+                    partition_value_columns,
+                )?))
             }
             NodeKind::DeltaLogReplay(gen::DeltaLogReplayExecNode {
                 input,
@@ -1024,6 +1035,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_schema,
                 version,
                 operation_json,
+                partition_value_columns_json,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
@@ -1043,12 +1055,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     None
                 };
+                let partition_value_columns = partition_value_columns_json
+                    .as_deref()
+                    .map(serde_json::from_str::<Vec<(String, String)>>)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
                 Ok(Arc::new(DeletionVectorWriterExec::new(
                     input,
                     table_url,
                     condition,
                     table_schema,
                     version,
+                    partition_value_columns,
                     operation,
                 )?))
             }
@@ -1060,6 +1078,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 row_index_column,
                 version,
                 operation_json,
+                partition_value_columns_json,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let adds_input = self.try_decode_plan(&adds_input, ctx)?;
@@ -1073,6 +1092,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     None
                 };
+                let partition_value_columns = partition_value_columns_json
+                    .as_deref()
+                    .map(serde_json::from_str::<Vec<(String, String)>>)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
                 Ok(Arc::new(DeletionVectorRowsWriterExec::new(
                     input,
                     adds_input,
@@ -1080,6 +1104,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     path_column,
                     row_index_column,
                     version,
+                    partition_value_columns,
                     operation,
                 )?))
             }
@@ -1629,7 +1654,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             node.as_any().downcast_ref::<DeltaRemoveActionsExec>()
         {
             let input = self.try_encode_plan(delta_remove_actions_exec.children()[0].clone())?;
-            NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input })
+            let partition_value_columns_json = delta_remove_actions_exec
+                .partition_value_columns()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| plan_datafusion_err!("{e}"))?;
+            NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode {
+                input,
+                partition_value_columns_json,
+            })
         } else if let Some(delta_log_replay_exec) =
             node.as_any().downcast_ref::<DeltaLogReplayExec>()
         {
@@ -1823,6 +1856,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_schema,
                 version: dv_writer_exec.version(),
                 operation_json,
+                partition_value_columns_json: dv_writer_exec
+                    .partition_value_columns()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(dv_rows_writer_exec) =
             node.as_any().downcast_ref::<DeletionVectorRowsWriterExec>()
@@ -1842,6 +1880,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 row_index_column: dv_rows_writer_exec.row_index_column().to_string(),
                 version: dv_rows_writer_exec.version(),
                 operation_json,
+                partition_value_columns_json: dv_rows_writer_exec
+                    .partition_value_columns()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {

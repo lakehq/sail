@@ -120,6 +120,7 @@ pub async fn build_delete_plan(
     assemble_commit_plan(
         filter_exec,
         Some(find_files_exec),
+        Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
         DeltaWriterExecOptions::from(ctx.options().clone()),
         ctx.metadata_configuration().clone(),
@@ -217,6 +218,7 @@ pub async fn build_delete_plan_mor(
             physical_condition,
             table_schema.clone(),
             version,
+            Some(snapshot_state.physical_partition_columns()),
             operation,
         )?);
 

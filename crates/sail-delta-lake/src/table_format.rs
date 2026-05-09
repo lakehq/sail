@@ -166,8 +166,9 @@ impl TableFormat for DeltaTableFormat {
         // Validate partition column mismatch for append/overwrite operations
         if let Some(existing_partitions) = &existing_partition_columns {
             if !partition_by.is_empty() && partition_by != *existing_partitions {
-                // Allow partition column changes only when overwriting with schema changes
-                // For append mode, this is always an error
+                // Allow partition column changes only for full-table overwrite with schema changes.
+                // Append and overwrite-if leave some existing files active, so changing table-wide
+                // partition metadata would make those active files inconsistent with the snapshot.
                 match unified_mode {
                     PhysicalSinkMode::Append => {
                         return plan_err!(
@@ -177,7 +178,15 @@ impl TableFormat for DeltaTableFormat {
                             partition_by
                         );
                     }
-                    PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwriteIf { .. }
+                    PhysicalSinkMode::OverwriteIf { .. } => {
+                        return plan_err!(
+                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                            Cannot change partitioning with replaceWhere or conditional overwrite.",
+                            existing_partitions,
+                            partition_by
+                        );
+                    }
+                    PhysicalSinkMode::Overwrite
                         // For overwrite mode, check if schema overwrite is allowed
                         if !delta_options.overwrite_schema => {
                             return plan_err!(
@@ -192,10 +201,17 @@ impl TableFormat for DeltaTableFormat {
             }
         }
 
-        let partition_columns = if !partition_by.is_empty() {
-            partition_by
-        } else {
-            existing_partition_columns.unwrap_or_default()
+        let partition_columns = match (&existing_partition_columns, &unified_mode) {
+            (
+                Some(existing_partitions),
+                PhysicalSinkMode::Append | PhysicalSinkMode::OverwriteIf { .. },
+            ) if partition_by.is_empty() => existing_partitions.clone(),
+            (Some(existing_partitions), PhysicalSinkMode::Overwrite)
+                if partition_by.is_empty() && !delta_options.overwrite_schema =>
+            {
+                existing_partitions.clone()
+            }
+            _ => partition_by,
         };
 
         let table_config = DeltaPlannerConfig::new(

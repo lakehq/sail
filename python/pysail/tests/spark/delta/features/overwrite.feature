@@ -139,3 +139,38 @@ Feature: Delta Lake Overwrite
         | 1  | Alice |
         | 2  | Bob   |
 
+    Scenario: CREATE OR REPLACE TABLE can remove Delta partition columns
+      Given statement template
+        """
+        CREATE TABLE delta_overwrite_partition_schema
+        USING DELTA
+        PARTITIONED BY (name)
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (1, 'Alice'),
+          (2, 'Bob')
+        AS t(id, name)
+        """
+      Given statement template
+        """
+        CREATE OR REPLACE TABLE delta_overwrite_partition_schema
+        USING DELTA
+        OPTIONS (overwriteSchema 'true')
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (3, 'Carol'),
+          (4, 'Dave')
+        AS t(id, name)
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                      | value |
+        | metaData.partitionColumns | []    |
+      When query
+        """
+        SELECT id, name FROM delta_overwrite_partition_schema ORDER BY id
+        """
+      Then query result ordered
+        | id | name  |
+        | 3  | Carol |
+        | 4  | Dave  |
+
