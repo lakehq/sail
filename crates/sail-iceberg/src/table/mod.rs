@@ -16,12 +16,12 @@ use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 pub use metadata_loader::find_latest_metadata_file;
-use sail_data_source::options::gen::IcebergReadOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
 use crate::io::StoreContext;
 use crate::operations::Transaction;
+use crate::options::gen::IcebergReadOptions;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 

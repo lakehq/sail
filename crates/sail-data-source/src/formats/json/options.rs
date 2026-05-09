@@ -67,7 +67,7 @@ impl JsonWriteOptions {
 }
 
 impl ResolveOptions for JsonReadOptions {
-    fn resolve_options(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = JsonReadPartialOptions::initialize();
         partial.merge(ctx.default_table_options().json.build_partial_options()?);
         for layer in options {
@@ -78,7 +78,7 @@ impl ResolveOptions for JsonReadOptions {
 }
 
 impl ResolveOptions for JsonWriteOptions {
-    fn resolve_options(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = JsonWritePartialOptions::initialize();
         partial.merge(ctx.default_table_options().json.build_partial_options()?);
         for layer in options {
@@ -105,7 +105,7 @@ mod tests {
             ("schema_infer_max_records", "100"),
             ("compression", "bzip2"),
         ]);
-        let options = JsonReadOptions::resolve_options(&state, vec![kv])
+        let options = JsonReadOptions::resolve(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(100));
@@ -120,7 +120,7 @@ mod tests {
         let state = ctx.state();
 
         let kv = option_list(&[("compression", "bzip2")]);
-        let options = JsonWriteOptions::resolve_options(&state, vec![kv])
+        let options = JsonWriteOptions::resolve(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);

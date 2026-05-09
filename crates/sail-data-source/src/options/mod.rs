@@ -10,8 +10,6 @@ pub mod gen {
     include!(concat!(env!("OUT_DIR"), "/options/socket.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/rate.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/console.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/delta.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/iceberg.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/parquet.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/csv.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/json.rs"));
@@ -19,8 +17,12 @@ pub mod gen {
     include!(concat!(env!("OUT_DIR"), "/options/binary.rs"));
 }
 
+/// Resolves a concrete options struct from layered configuration.
+///
+/// Implementations typically start from the session's default options (if applicable),
+/// then apply each [`OptionLayer`] in order so later layers override earlier ones.
 pub trait ResolveOptions: Sized {
-    fn resolve_options(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self>;
+    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self>;
 }
 
 /// A trait for partially loaded options.
@@ -44,46 +46,6 @@ pub trait PartialOptions {
 pub trait BuildPartialOptions<T> {
     /// Builds the partial options from data.
     fn build_partial_options(self) -> DataSourceResult<T>;
-}
-
-impl ResolveOptions for gen::DeltaReadOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::DeltaReadPartialOptions::initialize();
-        for layer in options {
-            partial.merge(layer.build_partial_options()?);
-        }
-        partial.finalize()
-    }
-}
-
-impl ResolveOptions for gen::DeltaWriteOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::DeltaWritePartialOptions::initialize();
-        for layer in options {
-            partial.merge(layer.build_partial_options()?);
-        }
-        partial.finalize()
-    }
-}
-
-impl ResolveOptions for gen::IcebergReadOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::IcebergReadPartialOptions::initialize();
-        for layer in options {
-            partial.merge(layer.build_partial_options()?);
-        }
-        partial.finalize()
-    }
-}
-
-impl ResolveOptions for gen::IcebergWriteOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::IcebergWritePartialOptions::initialize();
-        for layer in options {
-            partial.merge(layer.build_partial_options()?);
-        }
-        partial.finalize()
-    }
 }
 
 #[cfg(test)]

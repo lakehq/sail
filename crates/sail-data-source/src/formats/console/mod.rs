@@ -59,7 +59,7 @@ impl TableFormat for ConsoleTableFormat {
         if bucket_by.is_some() || sort_order.is_some() {
             return not_impl_err!("the console table format does not support bucketing");
         }
-        let ConsoleWriteOptions {} = ConsoleWriteOptions::resolve_options(ctx, options)?;
+        let ConsoleWriteOptions {} = ConsoleWriteOptions::resolve(ctx, options)?;
         Ok(Arc::new(ConsoleSinkExec::new(input)))
     }
 }

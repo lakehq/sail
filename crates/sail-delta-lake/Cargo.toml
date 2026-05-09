@@ -57,3 +57,6 @@ crc32fast = { workspace = true }
 
 [lints]
 workspace = true
+
+[build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }

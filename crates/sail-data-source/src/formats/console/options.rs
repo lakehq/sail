@@ -6,7 +6,7 @@ use crate::options::gen::{ConsoleWriteOptions, ConsoleWritePartialOptions};
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
 
 impl ResolveOptions for ConsoleWriteOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = ConsoleWritePartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);

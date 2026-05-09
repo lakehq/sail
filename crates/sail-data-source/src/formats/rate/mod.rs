@@ -75,7 +75,7 @@ impl TableFormat for RateTableFormat {
                 ])
             }
         };
-        let options = RateReadOptions::resolve_options(ctx, options)?;
+        let options = RateReadOptions::resolve(ctx, options)?;
         let source = RateStreamSource::try_new(options, Arc::new(schema))?;
         Ok(provider_as_source(Arc::new(
             StreamSourceTableProvider::new(Arc::new(source)),
