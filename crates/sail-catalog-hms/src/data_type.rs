@@ -146,9 +146,7 @@ pub fn spark_struct_json_from_fields(fields: &[Field]) -> CatalogResult<Value> {
     }))
 }
 
-pub fn spark_struct_json_to_fields(schema: &str) -> CatalogResult<Vec<Field>> {
-    let value: Value = serde_json::from_str(schema)
-        .map_err(|e| CatalogError::External(format!("Failed to parse Spark schema JSON: {e}")))?;
+fn spark_struct_json_value_to_fields(value: &Value) -> CatalogResult<Vec<Field>> {
     let schema_type = value.get("type").and_then(Value::as_str);
     if schema_type != Some("struct") {
         return Err(CatalogError::External(
@@ -189,6 +187,12 @@ pub fn spark_struct_json_to_fields(schema: &str) -> CatalogResult<Vec<Field>> {
             .with_metadata(metadata))
         })
         .collect()
+}
+
+pub fn spark_struct_json_to_fields(schema: &str) -> CatalogResult<Vec<Field>> {
+    let value: Value = serde_json::from_str(schema)
+        .map_err(|e| CatalogError::External(format!("Failed to parse Spark schema JSON: {e}")))?;
+    spark_struct_json_value_to_fields(&value)
 }
 
 fn spark_field_json(field: &Field) -> CatalogResult<Value> {
@@ -336,10 +340,7 @@ fn spark_json_to_arrow_data_type(value: &Value) -> CatalogResult<DataType> {
             ))))
         }
         "struct" => {
-            let text = serde_json::to_string(value).map_err(|e| {
-                CatalogError::External(format!("Failed to serialize Spark struct JSON: {e}"))
-            })?;
-            let fields = spark_struct_json_to_fields(&text)?;
+            let fields = spark_struct_json_value_to_fields(value)?;
             Ok(DataType::Struct(Fields::from(fields)))
         }
         "map" => {

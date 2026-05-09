@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use arrow::datatypes::Field;
+use arrow::datatypes::{DataType, Field};
 use chrono::Utc;
 use hive_metastore::{Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table};
 use pilota::{AHashMap, FastStr};
@@ -194,13 +194,8 @@ pub(crate) fn build_generic_table(
     reject_spark_properties(&properties)?;
     let (regular_columns, partition_keys) = build_columns(columns, &partition_columns)?;
     let mut parameters = vec_to_map(properties);
-    if let Some(comment) = comment {
-        parameters.get_or_insert_with(AHashMap::new).insert(
-            FastStr::from_static_str(COMMENT_KEY),
-            FastStr::from_string(comment),
-        );
-    }
-    if format.logical_format == "delta" {
+    insert_comment(&mut parameters, comment);
+    if format.logical_format.eq_ignore_ascii_case("delta") {
         parameters.get_or_insert_with(AHashMap::new).insert(
             FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
             FastStr::from_static_str("delta"),
@@ -319,12 +314,7 @@ pub(crate) fn build_view(
     } = options;
 
     let mut parameters = vec_to_map(properties);
-    if let Some(comment) = comment {
-        parameters.get_or_insert_with(AHashMap::new).insert(
-            FastStr::from_static_str(COMMENT_KEY),
-            FastStr::from_string(comment),
-        );
-    }
+    insert_comment(&mut parameters, comment);
 
     Ok(Table {
         db_name: Some(database_name.to_string().into()),
@@ -407,12 +397,21 @@ fn split_large_table_prop(key: &str, value: &str, threshold: usize) -> Vec<(Stri
     if value.chars().count() <= threshold {
         return vec![(key.to_string(), value.to_string())];
     }
-    let parts: Vec<String> = value
-        .chars()
-        .collect::<Vec<_>>()
-        .chunks(threshold)
-        .map(|chunk| chunk.iter().collect())
-        .collect();
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut char_count = 0;
+    for c in value.chars() {
+        if char_count >= threshold {
+            parts.push(current);
+            current = String::new();
+            char_count = 0;
+        }
+        current.push(c);
+        char_count += 1;
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
     let mut output = Vec::with_capacity(parts.len() + 1);
     output.push((format!("{key}.numParts"), parts.len().to_string()));
     output.extend(
@@ -443,6 +442,11 @@ fn read_large_table_prop(
             "Invalid split property part count for {key}: {num_parts}"
         ))
     })?;
+    if num_parts == 0 {
+        return Err(CatalogError::External(format!(
+            "Invalid split property part count for {key}: {num_parts}"
+        )));
+    }
 
     let estimated: usize = (0..num_parts)
         .filter_map(|index| parameters.get(format!("{key}.part.{index}").as_str()))
@@ -490,29 +494,32 @@ fn reorder_spark_columns(
         return Ok(columns);
     }
 
-    let mut partition_lookup: HashMap<String, String> = partition_columns
-        .iter()
-        .map(|name| (name.to_ascii_lowercase(), name.clone()))
-        .collect();
+    let mut seen = HashSet::new();
+    for col in &columns {
+        if !seen.insert(col.name.to_ascii_lowercase()) {
+            return Err(CatalogError::External(format!(
+                "Duplicate column name in Spark schema: {}",
+                col.name
+            )));
+        }
+    }
+
+    let mut lookup = build_partition_lookup(partition_columns);
     let mut regular = Vec::new();
     let mut partition = Vec::new();
     for mut col in columns {
-        let key = col.name.to_ascii_lowercase();
-        if partition_lookup.remove(&key).is_some() {
+        if lookup.remove(&col.name.to_ascii_lowercase()).is_some() {
             col.is_partition = true;
             partition.push(col);
         } else {
             regular.push(col);
         }
     }
-    if !partition_lookup.is_empty() {
-        let mut missing: Vec<_> = partition_lookup.into_values().collect();
-        missing.sort();
-        return Err(CatalogError::External(format!(
-            "Partition columns missing in Spark schema metadata: {}",
-            missing.join(", ")
-        )));
-    }
+    check_unmatched_partitions(lookup, |missing| {
+        CatalogError::External(format!(
+            "Partition columns missing in Spark schema metadata: {missing}"
+        ))
+    })?;
     Ok(regular.into_iter().chain(partition).collect())
 }
 
@@ -525,6 +532,34 @@ fn detect_hms_logical_format(
         HiveDetectedFormat::Csv => "csv".to_string(),
         detected => detected.as_str().to_string(),
     }
+}
+
+fn insert_comment(parameters: &mut Option<AHashMap<FastStr, FastStr>>, comment: Option<String>) {
+    if let Some(comment) = comment {
+        parameters.get_or_insert_with(AHashMap::new).insert(
+            FastStr::from_static_str(COMMENT_KEY),
+            FastStr::from_string(comment),
+        );
+    }
+}
+
+fn build_partition_lookup(partition_columns: &[String]) -> HashMap<String, String> {
+    partition_columns
+        .iter()
+        .map(|name| (name.to_ascii_lowercase(), name.clone()))
+        .collect()
+}
+
+fn check_unmatched_partitions(
+    lookup: HashMap<String, String>,
+    make_error: impl FnOnce(String) -> CatalogError,
+) -> CatalogResult<()> {
+    if lookup.is_empty() {
+        return Ok(());
+    }
+    let mut missing: Vec<_> = lookup.into_values().collect();
+    missing.sort();
+    Err(make_error(missing.join(", ")))
 }
 
 pub(crate) fn vec_to_map(values: Vec<(String, String)>) -> Option<AHashMap<FastStr, FastStr>> {
@@ -556,34 +591,23 @@ fn build_columns(
     columns: Vec<CreateTableColumnOptions>,
     partition_columns: &[String],
 ) -> CatalogResult<(Vec<FieldSchema>, Vec<FieldSchema>)> {
-    let mut partition_columns: HashMap<_, _> = partition_columns
-        .iter()
-        .map(|column| (column.to_lowercase(), column.as_str()))
-        .collect();
-
+    let mut lookup = build_partition_lookup(partition_columns);
     let mut regular = Vec::new();
     let mut partition = Vec::new();
     for column in columns {
         let schema = column_to_field_schema(column)?;
-        if partition_columns
-            .remove(&schema.name.as_deref().unwrap_or_default().to_lowercase())
-            .is_some()
-        {
+        let name = schema.name.as_deref().unwrap_or_default();
+        if lookup.remove(&name.to_ascii_lowercase()).is_some() {
             partition.push(schema);
         } else {
             regular.push(schema);
         }
     }
-
-    if !partition_columns.is_empty() {
-        let mut missing: Vec<_> = partition_columns.into_values().collect();
-        missing.sort_unstable();
-        return Err(CatalogError::InvalidArgument(format!(
-            "Partition columns not found in table schema: {}",
-            missing.join(", ")
-        )));
-    }
-
+    check_unmatched_partitions(lookup, |missing| {
+        CatalogError::InvalidArgument(format!(
+            "Partition columns not found in table schema: {missing}"
+        ))
+    })?;
     Ok((regular, partition))
 }
 
@@ -629,20 +653,24 @@ fn field_schema_to_status(
     })
 }
 
-fn column_to_field_schema(column: CreateTableColumnOptions) -> CatalogResult<FieldSchema> {
+fn create_field_schema(
+    name: String,
+    data_type: &DataType,
+    comment: Option<String>,
+) -> CatalogResult<FieldSchema> {
     Ok(FieldSchema {
-        name: Some(column.name.into()),
-        r#type: Some(arrow_to_hive_type(&column.data_type)?.into()),
-        comment: column.comment.map(Into::into),
+        name: Some(name.into()),
+        r#type: Some(arrow_to_hive_type(data_type)?.into()),
+        comment: comment.map(Into::into),
     })
 }
 
+fn column_to_field_schema(column: CreateTableColumnOptions) -> CatalogResult<FieldSchema> {
+    create_field_schema(column.name, &column.data_type, column.comment)
+}
+
 fn view_column_to_field_schema(column: CreateViewColumnOptions) -> CatalogResult<FieldSchema> {
-    Ok(FieldSchema {
-        name: Some(column.name.into()),
-        r#type: Some(arrow_to_hive_type(&column.data_type)?.into()),
-        comment: column.comment.map(Into::into),
-    })
+    create_field_schema(column.name, &column.data_type, column.comment)
 }
 
 fn current_time_secs() -> CatalogResult<i32> {
@@ -1381,6 +1409,16 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(decoded, "");
+    }
+
+    #[test]
+    fn test_read_large_table_prop_rejects_zero_num_parts() {
+        let parameters = AHashMap::from_iter([(
+            FastStr::from_static_str("spark.sql.sources.schema.numParts"),
+            FastStr::from_static_str("0"),
+        )]);
+        let result = super::read_large_table_prop(Some(&parameters), SPARK_SCHEMA_KEY);
+        assert!(result.is_err());
     }
 
     #[test]
