@@ -46,51 +46,9 @@ pub trait BuildPartialOptions<T> {
     fn build_partial_options(self) -> DataSourceResult<T>;
 }
 
-impl ResolveOptions for gen::DeltaReadOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::DeltaReadPartialOptions::initialize();
-        for layer in options {
-            partial.merge(layer.build_partial_options()?);
-        }
-        partial.finalize()
-    }
-}
-
-impl ResolveOptions for gen::DeltaWriteOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::DeltaWritePartialOptions::initialize();
-        for layer in options {
-            partial.merge(layer.build_partial_options()?);
-        }
-        partial.finalize()
-    }
-}
-
-impl ResolveOptions for gen::IcebergReadOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::IcebergReadPartialOptions::initialize();
-        for layer in options {
-            partial.merge(layer.build_partial_options()?);
-        }
-        partial.finalize()
-    }
-}
-
-impl ResolveOptions for gen::IcebergWriteOptions {
-    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::IcebergWritePartialOptions::initialize();
-        for layer in options {
-            partial.merge(layer.build_partial_options()?);
-        }
-        partial.finalize()
-    }
-}
-
 #[cfg(test)]
-pub(crate) fn option_list(
-    items: &[(&str, &str)],
-) -> sail_common_datafusion::datasource::OptionLayer {
-    sail_common_datafusion::datasource::OptionLayer::OptionList {
+pub(crate) fn option_list(items: &[(&str, &str)]) -> OptionLayer {
+    OptionLayer::OptionList {
         items: items
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
