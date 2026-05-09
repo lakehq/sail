@@ -2,6 +2,7 @@ Feature: NULL literal and timestamp inference
 
   Rule: untyped NULL literals
 
+    @spark-4
     Scenario: SQL NULL literal is inferred as void
       When query
       """
@@ -16,6 +17,7 @@ Feature: NULL literal and timestamp inference
       | result |
       | NULL   |
 
+    @spark-4
     Scenario: SQL NULL literal remains void across aliases and projections
       When query
       """
@@ -46,6 +48,7 @@ Feature: NULL literal and timestamp inference
       | result |
       | void   |
 
+    @spark-4
     Scenario: DataFrame NULL literal is inferred as void
       When dataframe for null literal
       Then dataframe schema
@@ -54,6 +57,7 @@ Feature: NULL literal and timestamp inference
        |-- result: void (nullable = true)
       """
 
+    @spark-4
     Scenario: DataFrame NULL literal remains void across aliases and projections
       When dataframe for null literal alias projection
       Then dataframe schema
@@ -62,6 +66,7 @@ Feature: NULL literal and timestamp inference
        |-- result: void (nullable = true)
       """
 
+    @spark-4
     Scenario: DataFrame NULL literal remains void through withColumn and select
       When dataframe for null literal with column
       Then dataframe schema
