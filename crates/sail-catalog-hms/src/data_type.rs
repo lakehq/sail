@@ -772,4 +772,75 @@ mod tests {
         assert!(super::split_top_level("struct<a:int,<<b:int>>").is_err());
         assert!(super::split_top_level("map<string,int").is_err());
     }
+
+    #[test]
+    fn test_timestamp_non_utc_timezone_normalized_to_utc_through_hive_round_trip() {
+        let dt = DataType::Timestamp(
+            arrow::datatypes::TimeUnit::Microsecond,
+            Some(Arc::from("America/New_York")),
+        );
+        let hive = arrow_to_hive_type(&dt).unwrap();
+        assert_eq!(hive, "timestamp");
+        let back = hive_type_to_arrow(&hive).unwrap();
+        assert_eq!(
+            back,
+            DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                Some(Arc::from("UTC")),
+            )
+        );
+    }
+
+    #[test]
+    fn test_timestamp_without_timezone_gains_utc_through_hive_round_trip() {
+        let dt = DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None);
+        let hive = arrow_to_hive_type(&dt).unwrap();
+        assert_eq!(hive, "timestamp");
+        let back = hive_type_to_arrow(&hive).unwrap();
+        assert_eq!(
+            back,
+            DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                Some(Arc::from("UTC")),
+            )
+        );
+    }
+
+    #[test]
+    fn test_decimal256_round_trip() {
+        let dt = DataType::Decimal256(10, 2);
+        let hive = arrow_to_hive_type(&dt).unwrap();
+        assert_eq!(hive, "decimal(10,2)");
+    }
+
+    #[test]
+    fn test_decimal_precision_exceeds_38_is_error() {
+        let dt = DataType::Decimal128(39, 2);
+        let result = arrow_to_hive_type(&dt);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("precision up to 38"),
+            "Expected precision error, got: {err}"
+        );
+
+        let dt256 = DataType::Decimal256(39, 2);
+        let result256 = arrow_to_hive_type(&dt256);
+        assert!(
+            result256.is_err(),
+            "Expected error for Decimal256 with precision > 38"
+        );
+    }
+
+    #[test]
+    fn test_hive_decimal_bare_type_defaults_to_10_0() {
+        let dt = hive_type_to_arrow("decimal").unwrap();
+        assert_eq!(dt, DataType::Decimal128(10, 0));
+    }
+
+    #[test]
+    fn test_hive_decimal_with_precision_only() {
+        let dt = hive_type_to_arrow("decimal(15)").unwrap();
+        assert_eq!(dt, DataType::Decimal128(15, 0));
+    }
 }

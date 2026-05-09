@@ -693,9 +693,9 @@ mod tests {
     };
 
     use super::{
-        build_generic_table, build_view, database_to_status, inject_spark_metadata, is_view_table,
-        map_to_vec, validate_namespace, GenericTableFormat, COMMENT_KEY,
-        SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
+        build_generic_table, build_view, columns_from_spark_properties, database_to_status,
+        inject_spark_metadata, is_view_table, map_to_vec, validate_namespace, GenericTableFormat,
+        COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
     };
 
     #[test]
@@ -1419,6 +1419,104 @@ mod tests {
         )]);
         let result = super::read_large_table_prop(Some(&parameters), SPARK_SCHEMA_KEY);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_split_large_table_prop_does_not_split_at_exact_threshold() {
+        let value = "a".repeat(13);
+        let split = super::split_large_table_prop(SPARK_SCHEMA_KEY, &value, 13);
+        assert_eq!(split, vec![(SPARK_SCHEMA_KEY.to_string(), value)]);
+        let value_unicode = "😎".repeat(5);
+        let split_unicode = super::split_large_table_prop(SPARK_SCHEMA_KEY, &value_unicode, 5);
+        assert_eq!(
+            split_unicode,
+            vec![(SPARK_SCHEMA_KEY.to_string(), value_unicode)]
+        );
+    }
+
+    #[test]
+    fn test_read_large_table_prop_rejects_missing_mid_sequence_part() {
+        let parameters = AHashMap::from_iter([
+            (
+                FastStr::from_static_str("spark.sql.sources.schema.numParts"),
+                FastStr::from_static_str("3"),
+            ),
+            (
+                FastStr::from_static_str("spark.sql.sources.schema.part.0"),
+                FastStr::from_static_str("present"),
+            ),
+            (
+                FastStr::from_static_str("spark.sql.sources.schema.part.2"),
+                FastStr::from_static_str("present"),
+            ),
+        ]);
+        let result = super::read_large_table_prop(Some(&parameters), SPARK_SCHEMA_KEY);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("part.1"),
+            "Expected error mentioning part.1, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_columns_from_spark_properties_rejects_malformed_json() {
+        let parameters = AHashMap::from_iter([(
+            FastStr::from_string(SPARK_SCHEMA_KEY.to_string()),
+            FastStr::from_string("{invalid json}".to_string()),
+        )]);
+        let result = columns_from_spark_properties(Some(&parameters));
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to parse Spark schema JSON"),
+            "Expected parse error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_columns_from_spark_properties_rejects_non_struct_json() {
+        let parameters = AHashMap::from_iter([(
+            FastStr::from_string(SPARK_SCHEMA_KEY.to_string()),
+            FastStr::from_string(r#""just a string""#.to_string()),
+        )]);
+        let result = columns_from_spark_properties(Some(&parameters));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_inject_spark_metadata_with_empty_columns() {
+        let mut table = build_generic_table(
+            "default",
+            "empty_cols",
+            vec![],
+            vec![],
+            Some("s3://warehouse/empty_cols".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        inject_spark_metadata(&mut table, &[], &[], "parquet").unwrap();
+
+        let props = table.parameters.as_ref().unwrap();
+        let schema_json = props.get(SPARK_SCHEMA_KEY).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(schema_json.as_str()).unwrap();
+        assert_eq!(parsed, serde_json::json!({"type": "struct", "fields": []}));
+
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { columns, .. } => {
+                assert!(
+                    columns.is_empty(),
+                    "Expected empty columns, got {columns:?}"
+                );
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
     }
 
     #[test]
