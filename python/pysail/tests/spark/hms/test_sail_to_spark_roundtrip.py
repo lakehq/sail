@@ -513,9 +513,10 @@ def test_sail_creates_spark_reads_mixed_complex_partitioned_parquet(
         ORDER BY id
         """
     ).collect()
-    assert [(r.id, r.active, r.label, r.first_num, r.metric_count, r.second_weight, r.category, r.event_date) for r in retail] == [
-        (1, True, "l1", 1, 3, 2.5, "retail", "2024-01-02")
-    ]
+    assert [
+        (r.id, r.active, r.label, r.first_num, r.metric_count, r.second_weight, r.category, r.event_date)
+        for r in retail
+    ] == [(1, True, "l1", 1, 3, 2.5, "retail", "2024-01-02")]
 
 
 def test_sail_creates_spark_reads_date_and_binary_parquet(

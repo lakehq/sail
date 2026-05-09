@@ -193,7 +193,7 @@ pub async fn find_latest_metadata_file(
 
     match metadata_files {
         Ok(mut files) => {
-            log::trace!("find_latest_metadata_file: found files: {:?}", &files);
+            log::trace!("find_latest_metadata_file: found files: {:?}", files);
             files.sort_by(|left, right| {
                 left.0
                     .cmp(&right.0)
