@@ -3,17 +3,20 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion_common::config::CsvOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{
+    FormatFactory, ListingTableFormat, ReadFormat, SchemaInfer, WriteFormat,
+};
 use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
 use crate::options::ResolveOptions;
 
 mod options;
 
-pub type CsvTableFormat = ListingTableFormat<CsvListingFormat>;
+pub type CsvTableFormat = ListingTableFormat<CsvFormatFactory>;
 
 fn convert_string_columns(schema: Schema) -> Schema {
     let string_fields = schema
@@ -76,7 +79,9 @@ fn rename_default_csv_columns(schema: Schema) -> Schema {
 
 /// Schema inferrer for CSV format
 #[derive(Debug)]
-pub struct CsvSchemaInfer;
+pub struct CsvSchemaInfer {
+    infer_schema: bool,
+}
 
 #[async_trait::async_trait]
 impl SchemaInfer for CsvSchemaInfer {
@@ -94,9 +99,8 @@ impl SchemaInfer for CsvSchemaInfer {
             .await?
             .as_ref()
             .clone();
-        let csv_options = CsvReadOptions::resolve(ctx, options.to_vec())
-            .map_err(datafusion_common::DataFusionError::from)?;
-        if !csv_options.infer_schema {
+        let _ = options;
+        if !self.infer_schema {
             schema = convert_string_columns(schema);
         }
         // Rename default CSV columns (column_1 -> _c0, etc.)
@@ -107,43 +111,79 @@ impl SchemaInfer for CsvSchemaInfer {
 }
 
 #[derive(Debug, Default)]
-pub struct CsvListingFormat;
+pub struct CsvFormatFactory;
 
-impl ListingFormat for CsvListingFormat {
-    fn name(&self) -> &'static str {
+#[derive(Debug, Clone)]
+pub struct CsvReadFormat {
+    options: CsvOptions,
+    infer_schema: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CsvWriteFormat {
+    options: CsvOptions,
+}
+
+impl FormatFactory for CsvFormatFactory {
+    type Read = CsvReadFormat;
+    type Write = CsvWriteFormat;
+
+    fn name() -> &'static str {
         "csv"
     }
 
-    fn create_read_format(
-        &self,
+    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> datafusion_common::Result<Self::Read> {
+        let read_options = CsvReadOptions::resolve(ctx, options)
+            .map_err(datafusion_common::DataFusionError::from)?;
+        let infer_schema = read_options.infer_schema;
+        let options = read_options
+            .into_table_options()
+            .map_err(datafusion_common::DataFusionError::from)?;
+        Ok(CsvReadFormat {
+            options,
+            infer_schema,
+        })
+    }
+
+    fn write(
         ctx: &dyn Session,
         options: Vec<OptionLayer>,
-        compression: Option<CompressionTypeVariant>,
-    ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options = CsvReadOptions::resolve(ctx, options)
+    ) -> datafusion_common::Result<Self::Write> {
+        let options = CsvWriteOptions::resolve(ctx, options)
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
+        Ok(CsvWriteFormat { options })
+    }
+}
+
+impl ReadFormat for CsvReadFormat {
+    fn create_read_format(
+        &self,
+        compression: Option<CompressionTypeVariant>,
+    ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
+        let mut options = self.options.clone();
         if let Some(compression) = compression {
             options.compression = compression;
         }
         Ok(Arc::new(CsvFormat::default().with_options(options)))
     }
 
+    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
+        Arc::new(CsvSchemaInfer {
+            infer_schema: self.infer_schema,
+        })
+    }
+}
+
+impl WriteFormat for CsvWriteFormat {
     fn create_write_format(
         &self,
-        ctx: &dyn Session,
-        options: Vec<OptionLayer>,
     ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        let options = CsvWriteOptions::resolve(ctx, options)
-            .map_err(datafusion_common::DataFusionError::from)?
-            .into_table_options()
-            .map_err(datafusion_common::DataFusionError::from)?;
-        Ok((Arc::new(CsvFormat::default().with_options(options)), None))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(CsvSchemaInfer)
+        Ok((
+            Arc::new(CsvFormat::default().with_options(self.options.clone())),
+            None,
+        ))
     }
 }
 

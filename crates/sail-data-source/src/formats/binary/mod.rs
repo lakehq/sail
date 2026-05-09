@@ -9,7 +9,9 @@ use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::formats::binary::file_format::BinaryFileFormat;
-use crate::listing::source::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{
+    DefaultSchemaInfer, FormatFactory, ListingTableFormat, ReadFormat, SchemaInfer, WriteFormat,
+};
 use crate::options::gen::BinaryReadOptions;
 use crate::options::ResolveOptions;
 
@@ -23,39 +25,56 @@ pub struct TableBinaryOptions {
     pub path_glob_filter: Option<String>,
 }
 
-pub type BinaryTableFormat = ListingTableFormat<BinaryListingFormat>;
+pub type BinaryTableFormat = ListingTableFormat<BinaryFormatFactory>;
 
 #[derive(Debug, Default)]
-pub struct BinaryListingFormat;
+pub struct BinaryFormatFactory;
 
-impl ListingFormat for BinaryListingFormat {
-    fn name(&self) -> &'static str {
+#[derive(Debug, Clone)]
+pub struct BinaryReadFormat {
+    options: TableBinaryOptions,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct BinaryWriteFormat;
+
+impl FormatFactory for BinaryFormatFactory {
+    type Read = BinaryReadFormat;
+    type Write = BinaryWriteFormat;
+
+    fn name() -> &'static str {
         "binaryFile"
     }
 
-    fn create_read_format(
-        &self,
-        ctx: &dyn Session,
-        options: Vec<OptionLayer>,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(BinaryFileFormat::new(
-            BinaryReadOptions::resolve(ctx, options)
+    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
+        Ok(BinaryReadFormat {
+            options: BinaryReadOptions::resolve(ctx, options)
                 .map_err(datafusion_common::DataFusionError::from)?
                 .into_table_options(),
-        )))
+        })
     }
 
-    fn create_write_format(
+    fn write(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Write> {
+        Ok(BinaryWriteFormat)
+    }
+}
+
+impl ReadFormat for BinaryReadFormat {
+    fn create_read_format(
         &self,
-        _ctx: &dyn Session,
-        _options: Vec<OptionLayer>,
-    ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
-        not_impl_err!("Binary file format does not support writing")
+        _compression: Option<CompressionTypeVariant>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        Ok(Arc::new(BinaryFileFormat::new(self.options.clone())))
     }
 
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
         Arc::new(DefaultSchemaInfer)
+    }
+}
+
+impl WriteFormat for BinaryWriteFormat {
+    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
+        not_impl_err!("Binary file format does not support writing")
     }
 }
 

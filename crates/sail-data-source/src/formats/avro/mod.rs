@@ -6,36 +6,61 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{
+    DefaultSchemaInfer, FormatFactory, ListingTableFormat, ReadFormat, SchemaInfer, WriteFormat,
+};
 
-pub type AvroTableFormat = ListingTableFormat<AvroListingFormat>;
+pub type AvroTableFormat = ListingTableFormat<AvroFormatFactory>;
 
 #[derive(Debug, Default)]
-pub struct AvroListingFormat;
+pub struct AvroFormatFactory;
 
-impl ListingFormat for AvroListingFormat {
-    fn name(&self) -> &'static str {
+#[derive(Debug, Default, Clone)]
+pub struct AvroReadFormat;
+
+#[derive(Debug, Default, Clone)]
+pub struct AvroWriteFormat;
+
+impl FormatFactory for AvroFormatFactory {
+    type Read = AvroReadFormat;
+    type Write = AvroWriteFormat;
+
+    fn name() -> &'static str {
         "avro"
     }
 
-    fn create_read_format(
-        &self,
+    fn read(
         _ctx: &dyn Session,
         _options: Vec<OptionLayer>,
+    ) -> datafusion_common::Result<Self::Read> {
+        Ok(AvroReadFormat)
+    }
+
+    fn write(
+        _ctx: &dyn Session,
+        _options: Vec<OptionLayer>,
+    ) -> datafusion_common::Result<Self::Write> {
+        Ok(AvroWriteFormat)
+    }
+}
+
+impl ReadFormat for AvroReadFormat {
+    fn create_read_format(
+        &self,
         _compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
     }
 
-    fn create_write_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<OptionLayer>,
-    ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        Ok((Arc::new(AvroFormat), None))
-    }
-
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
         Arc::new(DefaultSchemaInfer)
+    }
+}
+
+impl WriteFormat for AvroWriteFormat {
+    fn create_write_format(
+        &self,
+    ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
+        Ok((Arc::new(AvroFormat), None))
     }
 }
