@@ -19,7 +19,9 @@ pub mod gen {
     include!(concat!(env!("OUT_DIR"), "/options/binary.rs"));
 }
 
+/// A trait for resolving concrete options.
 pub trait ResolveOptions: Sized {
+    /// Resolves the options from option layers and session configuration.
     fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self>;
 }
 

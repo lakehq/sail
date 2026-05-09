@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::execution::cache::TableScopedPath;
