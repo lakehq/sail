@@ -136,9 +136,7 @@ def dataframe_for(case, spark):
     cases = {
         "null literal": lambda: spark.range(1).select(F.lit(None).alias("result")),
         "null literal alias projection": lambda: (
-            spark.range(1)
-            .select(F.lit(None).alias("value"))
-            .select(F.col("value").alias("result"))
+            spark.range(1).select(F.lit(None).alias("value")).select(F.col("value").alias("result"))
         ),
         "null literal with column": lambda: spark.range(1).withColumn("result", F.lit(None)).select("result"),
         "to_timestamp null literal": lambda: spark.range(1).select(F.to_timestamp(F.lit(None)).alias("result")),
