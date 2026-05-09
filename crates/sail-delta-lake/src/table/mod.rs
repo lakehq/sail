@@ -35,12 +35,12 @@ pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
+use sail_data_source::options::gen::DeltaReadOptions;
 
 use crate::delta_log::resolve_version_timestamp;
 pub use crate::kernel::snapshot::DeltaSnapshot;
 use crate::kernel::DeltaSnapshotConfig;
 use crate::logical::table_source::DeltaTableSource;
-use crate::options::gen::DeltaReadOptions;
 use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 

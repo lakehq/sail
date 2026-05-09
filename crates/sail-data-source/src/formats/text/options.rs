@@ -64,7 +64,7 @@ impl TextWriteOptions {
 }
 
 impl ResolveOptions for TextReadOptions {
-    fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = TextReadPartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);
@@ -74,7 +74,7 @@ impl ResolveOptions for TextReadOptions {
 }
 
 impl ResolveOptions for TextWriteOptions {
-    fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = TextWritePartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);
@@ -97,7 +97,7 @@ mod tests {
         let state = ctx.state();
 
         let kv = option_list(&[]);
-        let options = TextReadOptions::resolve(&state, vec![kv])
+        let options = TextReadOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert!(!options.whole_text);
@@ -105,7 +105,7 @@ mod tests {
         assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
 
         let kv = option_list(&[("whole_text", "true"), ("line_sep", "\r")]);
-        let options = TextReadOptions::resolve(&state, vec![kv])
+        let options = TextReadOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert!(options.whole_text);
@@ -120,14 +120,14 @@ mod tests {
         let state = ctx.state();
 
         let kv = option_list(&[]);
-        let options = TextWriteOptions::resolve(&state, vec![kv])
+        let options = TextWriteOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.line_sep, Some('\n'));
         assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
 
         let kv = option_list(&[("line_sep", "\r"), ("compression", "bzip2")]);
-        let options = TextWriteOptions::resolve(&state, vec![kv])
+        let options = TextWriteOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.line_sep, Some('\r'));

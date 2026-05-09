@@ -256,7 +256,7 @@ impl ParquetWriteOptions {
 }
 
 impl ResolveOptions for ParquetReadOptions {
-    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve_options(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = ParquetReadPartialOptions::initialize();
         partial.merge(
             ctx.default_table_options()
@@ -271,7 +271,7 @@ impl ResolveOptions for ParquetReadOptions {
 }
 
 impl ResolveOptions for ParquetWriteOptions {
-    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve_options(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = ParquetWritePartialOptions::initialize();
         partial.merge(
             ctx.default_table_options()
@@ -313,7 +313,7 @@ mod tests {
             ("bloom_filter_on_read", "true"),
             ("max_predicate_cache_size", "0"),
         ]);
-        let options = ParquetReadOptions::resolve(&state, vec![kv])
+        let options = ParquetReadOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert!(options.global.enable_page_index);
@@ -332,14 +332,14 @@ mod tests {
         // metadata_size_hint = "0": parse_optional_non_zero_usize("0") returns None
         // which explicitly clears the value (overrides session default)
         let kv = option_list(&[("metadata_size_hint", "0")]);
-        let options = ParquetReadOptions::resolve(&state, vec![kv])
+        let options = ParquetReadOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, None);
 
         // metadata_size_hint = "": parse_optional_non_zero_usize("") returns None
         let kv = option_list(&[("metadata_size_hint", "")]);
-        let options = ParquetReadOptions::resolve(&state, vec![kv])
+        let options = ParquetReadOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, None);
@@ -353,25 +353,30 @@ mod tests {
         let state = ctx.state();
 
         // default: no option layer → ".parquet"
-        let opts = ParquetReadOptions::resolve(&state, vec![option_list(&[])])
+        let opts = ParquetReadOptions::resolve_options(&state, vec![option_list(&[])])
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(opts.extension, ".parquet");
 
         // snake_case override
-        let opts =
-            ParquetReadOptions::resolve(&state, vec![option_list(&[("extension", ".hive")])])
-                .map_err(datafusion_common::DataFusionError::from)?;
+        let opts = ParquetReadOptions::resolve_options(
+            &state,
+            vec![option_list(&[("extension", ".hive")])],
+        )
+        .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(opts.extension, ".hive");
 
         // camelCase alias
-        let opts =
-            ParquetReadOptions::resolve(&state, vec![option_list(&[("fileExtension", ".pq")])])
-                .map_err(datafusion_common::DataFusionError::from)?;
+        let opts = ParquetReadOptions::resolve_options(
+            &state,
+            vec![option_list(&[("fileExtension", ".pq")])],
+        )
+        .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(opts.extension, ".pq");
 
         // empty string disables filtering
-        let opts = ParquetReadOptions::resolve(&state, vec![option_list(&[("extension", "")])])
-            .map_err(datafusion_common::DataFusionError::from)?;
+        let opts =
+            ParquetReadOptions::resolve_options(&state, vec![option_list(&[("extension", "")])])
+                .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(opts.extension, "");
 
         Ok(())
@@ -392,14 +397,14 @@ mod tests {
 
         // When metadata_size_hint is not provided, the session value is used
         let kv = option_list(&[]);
-        let options = ParquetReadOptions::resolve(&state, vec![kv])
+        let options = ParquetReadOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
         // When metadata_size_hint = "0" is provided, the value is explicitly cleared
         let kv = option_list(&[("metadata_size_hint", "0")]);
-        let options = ParquetReadOptions::resolve(&state, vec![kv])
+        let options = ParquetReadOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, None);
@@ -433,7 +438,7 @@ mod tests {
             ("maximum_parallel_row_group_writers", "4"),
             ("maximum_buffered_record_batches_per_stream", "10"),
         ]);
-        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+        let options = ParquetWriteOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
@@ -471,7 +476,7 @@ mod tests {
             ("statistics_truncate_length", "0"),
             ("encoding", ""),
         ]);
-        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+        let options = ParquetWriteOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
@@ -517,7 +522,7 @@ mod tests {
         let state = ctx.state();
 
         let kv = option_list(&[]);
-        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+        let options = ParquetWriteOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
@@ -531,7 +536,7 @@ mod tests {
             ("statistics_truncate_length", "0"),
             ("encoding", ""),
         ]);
-        let options = ParquetWriteOptions::resolve(&state, vec![kv])
+        let options = ParquetWriteOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;

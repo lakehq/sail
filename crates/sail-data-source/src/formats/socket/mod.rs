@@ -57,7 +57,7 @@ impl TableFormat for SocketTableFormat {
             Some(schema) if !schema.fields.is_empty() => schema,
             _ => Schema::new(vec![Arc::new(Field::new("value", DataType::Utf8, false))]),
         };
-        let options = SocketReadOptions::resolve(ctx, options)?;
+        let options = SocketReadOptions::resolve_options(ctx, options)?;
         let source = SocketStreamSource::try_new(options, Arc::new(schema))?;
         Ok(provider_as_source(Arc::new(
             StreamSourceTableProvider::new(Arc::new(source)),

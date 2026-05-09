@@ -10,9 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use sail_data_source::options::gen::IcebergWriteOptions;
 use serde::{Deserialize, Serialize};
-
-use crate::options::gen::IcebergWriteOptions;
 
 /// Options for the Iceberg writer execution plan.
 /// This is a subset of `IcebergWriteOptions` containing only the fields used

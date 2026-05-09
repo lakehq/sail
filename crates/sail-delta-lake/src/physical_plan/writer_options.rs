@@ -12,9 +12,8 @@
 
 use std::collections::HashMap;
 
+use sail_data_source::options::gen::DeltaWriteOptions;
 use serde::{Deserialize, Serialize};
-
-use crate::options::gen::DeltaWriteOptions;
 
 /// Options for the Delta Lake writer execution plan.
 ///

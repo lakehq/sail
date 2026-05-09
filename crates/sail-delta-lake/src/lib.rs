@@ -14,7 +14,6 @@ pub mod conversion;
 pub mod datasource;
 pub mod deletion_vector;
 mod delta_log;
-mod error;
 mod kernel;
 pub mod logical;
 pub mod operations;

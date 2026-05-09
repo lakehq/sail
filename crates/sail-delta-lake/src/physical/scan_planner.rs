@@ -14,11 +14,11 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_data_source::options::gen::DeltaWritePartialOptions;
 use sail_data_source::options::PartialOptions;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
-use crate::options::gen::DeltaWritePartialOptions;
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };

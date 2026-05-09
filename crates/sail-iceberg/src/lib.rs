@@ -10,9 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod error;
-pub mod options;
-
 pub mod datasource;
 pub mod io;
 pub mod logical;

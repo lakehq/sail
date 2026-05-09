@@ -17,11 +17,11 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
 use crate::kernel::DeltaSnapshotConfig;
-use crate::options::gen::DeltaWriteOptions;
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store_and_table_config, DeltaTable};
 

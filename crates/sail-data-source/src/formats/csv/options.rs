@@ -209,7 +209,7 @@ impl CsvWriteOptions {
 }
 
 impl ResolveOptions for CsvReadOptions {
-    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve_options(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = CsvReadPartialOptions::initialize();
         partial.merge(ctx.default_table_options().csv.build_partial_options()?);
         for layer in options {
@@ -220,7 +220,7 @@ impl ResolveOptions for CsvReadOptions {
 }
 
 impl ResolveOptions for CsvWriteOptions {
-    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve_options(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = CsvWritePartialOptions::initialize();
         partial.merge(ctx.default_table_options().csv.build_partial_options()?);
         for layer in options {
@@ -255,7 +255,7 @@ mod tests {
             ("multi_line", "true"),
             ("compression", "bzip2"),
         ]);
-        let options = CsvReadOptions::resolve(&state, vec![kv])
+        let options = CsvReadOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.delimiter, b'!');
@@ -274,19 +274,19 @@ mod tests {
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         let kv = option_list(&[("inferSchema", "false")]);
-        let options = CsvReadOptions::resolve(&state, vec![kv])
+        let options = CsvReadOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
         let kv = option_list(&[("inferSchema", "true")]);
-        let options = CsvReadOptions::resolve(&state, vec![kv])
+        let options = CsvReadOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(1000));
 
         let kv = option_list(&[("infer_schema", "false")]);
-        let options = CsvReadOptions::resolve(&state, vec![kv])
+        let options = CsvReadOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
@@ -295,17 +295,18 @@ mod tests {
             ("inferSchema", "false"),
             ("schema_infer_max_records", "500"),
         ]);
-        let options = CsvReadOptions::resolve(&state, vec![kv])
+        let options = CsvReadOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(0));
 
         let kv = option_list(&[("null_value", "MEOW"), ("null_regex", "MEOW")]);
-        let result = CsvReadOptions::resolve(&state, vec![kv]).and_then(|o| o.into_table_options());
+        let result =
+            CsvReadOptions::resolve_options(&state, vec![kv]).and_then(|o| o.into_table_options());
         assert!(result.is_err());
 
         let kv = option_list(&[("null_regex", "MEOW")]);
-        let options = CsvReadOptions::resolve(&state, vec![kv])
+        let options = CsvReadOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.null_value, None);
@@ -328,7 +329,7 @@ mod tests {
             ("null_value", "MEOW"),
             ("compression", "bzip2"),
         ]);
-        let options = CsvWriteOptions::resolve(&state, vec![kv])
+        let options = CsvWriteOptions::resolve_options(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.delimiter, b'!');

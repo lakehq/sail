@@ -14,7 +14,7 @@ impl BinaryReadOptions {
 }
 
 impl ResolveOptions for BinaryReadOptions {
-    fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+    fn resolve_options(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = BinaryReadPartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);
@@ -36,19 +36,19 @@ mod tests {
         let state = ctx.state();
 
         let kv = option_list(&[]);
-        let options = BinaryReadOptions::resolve(&state, vec![kv])
+        let options = BinaryReadOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.path_glob_filter, None);
 
         let kv = option_list(&[("path_glob_filter", "*.png")]);
-        let options = BinaryReadOptions::resolve(&state, vec![kv])
+        let options = BinaryReadOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.path_glob_filter, Some("*.png".to_string()));
 
         let kv = option_list(&[("pathGlobFilter", "*.pdf")]);
-        let options = BinaryReadOptions::resolve(&state, vec![kv])
+        let options = BinaryReadOptions::resolve_options(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.path_glob_filter, Some("*.pdf".to_string()));

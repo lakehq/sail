@@ -40,7 +40,7 @@ impl ListingFormat for BinaryListingFormat {
         _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(BinaryFileFormat::new(
-            BinaryReadOptions::resolve(ctx, options)
+            BinaryReadOptions::resolve_options(ctx, options)
                 .map_err(datafusion_common::DataFusionError::from)?
                 .into_table_options(),
         )))
