@@ -6,6 +6,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion_common::{Constraints, Result};
+use datafusion::execution::cache::cache_manager::FileStatisticsCache;
+use datafusion::execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
 
@@ -18,6 +20,7 @@ use crate::listing::source::ReadFormat;
 #[derive(Clone, Debug)]
 pub struct ListingTableSource {
     table_paths: Vec<datafusion_datasource::ListingTableUrl>,
+    file_extension: String,
     /// Columns physically stored in the data files.
     file_schema: SchemaRef,
     /// `file_schema` + partition columns.
@@ -32,11 +35,13 @@ pub struct ListingTableSource {
     read_format: Arc<dyn ReadFormat>,
     /// Per-scan compression override inferred from file names, if any.
     compression: Option<datafusion_common::parsers::CompressionTypeVariant>,
+    collected_statistics: Arc<dyn FileStatisticsCache>,
 }
 
 impl ListingTableSource {
     pub fn try_new(
         table_paths: Vec<datafusion_datasource::ListingTableUrl>,
+        file_extension: String,
         file_schema: SchemaRef,
         table_partition_cols: Vec<(String, DataType)>,
         constraints: Constraints,
@@ -58,6 +63,7 @@ impl ListingTableSource {
 
         Ok(Self {
             table_paths,
+            file_extension,
             file_schema,
             table_schema,
             table_partition_cols,
@@ -67,6 +73,7 @@ impl ListingTableSource {
             target_partitions,
             read_format,
             compression,
+            collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
         })
     }
 
@@ -78,8 +85,16 @@ impl ListingTableSource {
         Arc::clone(&self.file_schema)
     }
 
+    pub fn file_extension(&self) -> &str {
+        &self.file_extension
+    }
+
     pub fn table_schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+
+    pub fn constraints(&self) -> &Constraints {
+        &self.constraints
     }
 
     pub fn table_partition_cols(&self) -> &[(String, DataType)] {
@@ -104,6 +119,10 @@ impl ListingTableSource {
 
     pub fn compression(&self) -> Option<datafusion_common::parsers::CompressionTypeVariant> {
         self.compression
+    }
+
+    pub fn collected_statistics(&self) -> Arc<dyn FileStatisticsCache> {
+        Arc::clone(&self.collected_statistics)
     }
 
     pub fn with_schema_field_names(&self, names: Vec<String>) -> Result<Self> {

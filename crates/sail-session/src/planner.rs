@@ -54,6 +54,7 @@ use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
 use sail_plan_lakehouse::new_lakehouse_extension_planners;
+use sail_data_source::listing::planner::ListingTableExtensionPlanner;
 
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
@@ -74,6 +75,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         }
         let mut extension_planners = new_lakehouse_extension_planners();
         extension_planners.push(Arc::new(SystemTablePhysicalPlanner));
+        extension_planners.push(Arc::new(ListingTableExtensionPlanner::default()));
         extension_planners.push(Arc::new(ExtensionPhysicalPlanner));
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         planner

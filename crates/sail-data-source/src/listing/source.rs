@@ -305,6 +305,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 
         let source = crate::listing::table::ListingTableSource::try_new(
             config.table_paths,
+            listing_options.file_extension,
             config
                 .file_schema
                 .ok_or_else(|| {
