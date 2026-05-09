@@ -21,7 +21,6 @@ impl CatalogManager {
                 catalog: None,
                 database: database.clone().into(),
                 name,
-                statistics: None,
                 kind: TableKind::GlobalTemporaryView {
                     plan: view.plan().clone(),
                     columns: view.columns().to_vec(),
@@ -45,7 +44,6 @@ impl CatalogManager {
                 catalog: None,
                 database: vec![],
                 name,
-                statistics: None,
                 kind: TableKind::TemporaryView {
                     plan: view.plan().clone(),
                     columns: view.columns().to_vec(),
@@ -170,7 +168,6 @@ impl CatalogManager {
             catalog: None,
             database: database.into(),
             name: name.to_string(),
-            statistics: None,
             kind: TableKind::GlobalTemporaryView {
                 plan: view.plan().clone(),
                 columns: view.columns().to_vec(),
@@ -186,7 +183,6 @@ impl CatalogManager {
             catalog: None,
             database: vec![],
             name: name.to_string(),
-            statistics: None,
             kind: TableKind::TemporaryView {
                 plan: view.plan().clone(),
                 columns: view.columns().to_vec(),

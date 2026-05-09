@@ -395,7 +395,7 @@ impl CatalogCommand {
                 // update the catalog metadata, so we never end up with the two layers
                 // out of sync.
                 if let (Some(location), Some(format)) = (location, format) {
-                    if !storage_table_properties_are_authoritative(&format) {
+                    if !format_owns_property_storage(&format) {
                         manager.alter_table(&table, options).await?;
                         return Ok(display.bools().to_record_batch(vec![true])?);
                     }
@@ -619,7 +619,18 @@ impl CatalogCommand {
     }
 }
 
-fn storage_table_properties_are_authoritative(format: &str) -> bool {
+/// Returns true for table formats that durably store table properties in their
+/// own metadata layer (Delta transaction log, Iceberg metadata files). For these
+/// formats, ALTER TABLE SET/UNSET TBLPROPERTIES changes are propagated to the
+/// storage backend so the metadata stays consistent. For HMS-backed formats
+/// (parquet, csv, textfile, etc.), the HMS catalog IS the authority and storage
+/// propagation is skipped — the catalog-level alter is sufficient.
+///
+/// Note: ALTER TABLE SET LOCATION is always catalog-only and is not propagated
+/// to storage backends. Delta/Iceberg store file paths relative to the table
+/// root (which comes from the catalog location), so the transaction log does
+/// not need updating when the table location changes.
+fn format_owns_property_storage(format: &str) -> bool {
     format.eq_ignore_ascii_case("delta") || format.eq_ignore_ascii_case("iceberg")
 }
 

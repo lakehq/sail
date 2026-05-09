@@ -115,7 +115,6 @@ pub(crate) fn table_to_status(
         catalog: Some(catalog.to_string()),
         database: database.clone().into(),
         name,
-        statistics: None,
         kind: TableKind::Table {
             table_type,
             columns,
@@ -158,7 +157,6 @@ pub(crate) fn view_to_status(
         catalog: Some(catalog.to_string()),
         database: database.clone().into(),
         name,
-        statistics: None,
         kind: TableKind::View {
             definition,
             columns: columns_from_hms(table.sd.as_ref(), None)?,
@@ -202,6 +200,7 @@ pub(crate) fn build_generic_table(
     comment: Option<String>,
     properties: Vec<(String, String)>,
 ) -> CatalogResult<Table> {
+    reject_spark_properties(&properties)?;
     let (regular_columns, partition_keys) = build_columns(columns, &partition_columns)?;
     let mut parameters = vec_to_map(properties);
     if let Some(comment) = comment {
@@ -390,6 +389,21 @@ fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Opt
     })
 }
 
+fn reject_spark_properties(properties: &[(String, String)]) -> CatalogResult<()> {
+    let invalid_keys: Vec<&str> = properties
+        .iter()
+        .filter(|(key, _)| key.starts_with("spark.sql.") || key == EXTERNAL_KEY)
+        .map(|(key, _)| key.as_str())
+        .collect();
+    if !invalid_keys.is_empty() {
+        return Err(CatalogError::InvalidArgument(format!(
+            "Table properties may not contain Spark-internal keys: {}",
+            invalid_keys.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 fn filter_spark_properties(values: Vec<(String, String)>) -> Vec<(String, String)> {
     values
         .into_iter()
@@ -439,7 +453,11 @@ fn read_large_table_prop(
         ))
     })?;
 
-    let mut output = String::new();
+    let estimated: usize = (0..num_parts)
+        .filter_map(|index| parameters.get(format!("{key}.part.{index}").as_str()))
+        .map(|part| part.len())
+        .sum();
+    let mut output = String::with_capacity(estimated);
     for index in 0..num_parts {
         let part_key = format!("{key}.part.{index}");
         let part = parameters.get(part_key.as_str()).ok_or_else(|| {
@@ -1698,5 +1716,62 @@ mod tests {
             Some("org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe")
         );
         assert_eq!(serde.name.as_deref(), Some("default.v"));
+    }
+
+    #[test]
+    fn test_build_generic_table_rejects_spark_sql_properties() {
+        let error = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+            }],
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![
+                ("spark.sql.foo".to_string(), "bar".to_string()),
+                ("owner".to_string(), "alice".to_string()),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("spark.sql.foo"));
+        assert!(error.to_string().contains("Spark-internal"));
+    }
+
+    #[test]
+    fn test_build_generic_table_rejects_external_key() {
+        let error = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+            }],
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![("EXTERNAL".to_string(), "TRUE".to_string())],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("EXTERNAL"));
+        assert!(error.to_string().contains("Spark-internal"));
     }
 }

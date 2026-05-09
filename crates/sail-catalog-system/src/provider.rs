@@ -55,7 +55,6 @@ impl SystemCatalogProvider {
             catalog: Some(SYSTEM_CATALOG_NAME.to_string()),
             database: database.clone().into(),
             name: table.to_string(),
-            statistics: None,
             kind: TableKind::TemporaryView {
                 plan: Arc::new(LogicalPlan::TableScan(TableScan {
                     table_name: TableReference::Full {

@@ -498,3 +498,89 @@ def hms_s3_database(
         reference_spark_s3.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
     except Exception:  # noqa: BLE001
         hms_s3_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+# ---------------------------------------------------------------------------
+# Shared test helpers
+# ---------------------------------------------------------------------------
+
+
+def _describe_extended_properties(spark: SparkSession, table_fqn: str) -> dict[str, str]:
+    """Return DESCRIBE EXTENDED output as a dict, handling None values."""
+    rows = spark.sql(f"DESCRIBE EXTENDED {table_fqn}").collect()
+    props: dict[str, str] = {}
+    for row in rows:
+        key = (row.col_name or "").strip()
+        value = (row.data_type or "").strip()
+        if key:
+            props[key] = value
+    return props
+
+
+def _describe_column_comments(spark: SparkSession, table_fqn: str) -> dict[str, str | None]:
+    """Return column name -> comment mapping from DESCRIBE TABLE output."""
+    rows = spark.sql(f"DESCRIBE TABLE {table_fqn}").collect()
+    return {row.col_name: row.comment for row in rows if row.col_name and not row.col_name.startswith("#")}
+
+
+def _assert_schema_matrix_shape(spark: SparkSession, table_fqn: str) -> None:
+    """Assert the schema of the known schema_matrix table shape."""
+    schema = spark.table(table_fqn).schema
+    fields = {field.name: field for field in schema.fields}
+    assert fields["amount"].dataType.simpleString() == "decimal(10,2)"
+    assert fields["payload"].dataType.simpleString() == "struct<flag:boolean,score:int>"
+    assert fields["tags"].dataType.simpleString() == "array<string>"
+    assert fields["events"].dataType.simpleString() == "array<struct<kind:string,score:int>>"
+    assert (
+        fields["nested_combo"].dataType.simpleString()
+        == "struct<items:array<struct<label:string,weight:decimal(5,2)>>,attrs:map<string,array<int>>>"
+    )
+    assert fields["attrs"].dataType.simpleString() == "map<string,int>"
+    assert fields["nullable_note"].nullable
+
+
+def _assert_schema_matrix_rows(rows) -> None:
+    """Assert row values for the known schema_matrix INSERT."""
+    from decimal import Decimal
+
+    assert len(rows) == 2  # noqa: PLR2004
+    assert rows[0].id == 1
+    assert rows[0].amount == Decimal("12.34")
+    assert rows[0].payload.flag is True
+    assert rows[0].payload.score == 7  # noqa: PLR2004
+    assert rows[0].tags == ["red", "blue"]
+    assert [(e.kind, e.score) for e in rows[0].events] == [("click", 3), ("view", 5)]
+    assert [(i.label, i.weight) for i in rows[0].nested_combo.items] == [
+        ("first", Decimal("1.25")),
+        ("second", Decimal("2.50")),
+    ]
+    assert rows[0].nested_combo.attrs == {"empty": [], "nums": [1, 2]}
+    assert rows[0].attrs == {"x": 1, "y": 2}
+    assert rows[0].nullable_note is None
+    assert rows[1].id == 2  # noqa: PLR2004
+    assert rows[1].amount == Decimal("0.10")
+    assert rows[1].payload.flag is False
+    assert rows[1].tags == []
+    assert rows[1].events == []
+    assert rows[1].nested_combo.items == []
+    assert rows[1].nested_combo.attrs == {}
+    assert rows[1].attrs == {}
+    assert rows[1].nullable_note == "present"
+
+
+def _reference_catalog_table(reference_spark: SparkSession, database: str, table: str):
+    """Return Spark's CatalogTable from the reference external catalog (JVM path)."""
+    return (
+        reference_spark._jsparkSession.sessionState()  # noqa: SLF001
+        .catalog()
+        .externalCatalog()
+        .getTable(database, table)
+    )
+
+
+def _scala_option_to_string(option) -> str | None:
+    """Convert a Scala Option to a Python string or None."""
+    if option.isDefined():
+        value = option.get()
+        return value.toString() if hasattr(value, "toString") else str(value)
+    return None

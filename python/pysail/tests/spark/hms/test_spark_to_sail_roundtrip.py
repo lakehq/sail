@@ -7,23 +7,18 @@ permission issues on CI.
 
 from __future__ import annotations
 
-from decimal import Decimal
-
 import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
+from pysail.tests.spark.hms.conftest import (
+    _assert_schema_matrix_rows,
+    _assert_schema_matrix_shape,
+    _describe_column_comments,
+    _describe_extended_properties,
+)
+
 pytestmark = pytest.mark.catalog_integration
-
-
-def _describe_extended_properties(spark: SparkSession, table_fqn: str) -> dict[str, str]:
-    rows = spark.sql(f"DESCRIBE EXTENDED {table_fqn}").collect()
-    return {row.col_name: row.data_type for row in rows if row.col_name}
-
-
-def _describe_column_comments(spark: SparkSession, table_fqn: str) -> dict[str, str | None]:
-    rows = spark.sql(f"DESCRIBE TABLE {table_fqn}").collect()
-    return {row.col_name: row.comment for row in rows if row.col_name and not row.col_name.startswith("#")}
 
 
 def _assert_sail_describes_spark_table(
@@ -37,51 +32,6 @@ def _assert_sail_describes_spark_table(
     assert properties.get("Type") == table_type
     assert properties.get("Provider", "").lower() == "parquet"
     assert properties.get("Location")
-
-
-def _assert_schema_matrix_shape(spark: SparkSession, table_fqn: str) -> None:
-    schema = spark.table(table_fqn).schema
-    fields = {field.name: field for field in schema.fields}
-
-    assert fields["amount"].dataType.simpleString() == "decimal(10,2)"
-    assert fields["payload"].dataType.simpleString() == "struct<flag:boolean,score:int>"
-    assert fields["tags"].dataType.simpleString() == "array<string>"
-    assert fields["events"].dataType.simpleString() == "array<struct<kind:string,score:int>>"
-    assert (
-        fields["nested_combo"].dataType.simpleString()
-        == "struct<items:array<struct<label:string,weight:decimal(5,2)>>,attrs:map<string,array<int>>>"
-    )
-    assert fields["attrs"].dataType.simpleString() == "map<string,int>"
-    assert fields["nullable_note"].nullable
-
-
-def _assert_schema_matrix_rows(rows) -> None:
-    assert len(rows) == 2
-    assert rows[0].id == 1
-    assert rows[0].amount == Decimal("12.34")
-    assert rows[0].payload.flag is True
-    assert rows[0].payload.score == 7
-    assert rows[0].tags == ["red", "blue"]
-    assert [(event.kind, event.score) for event in rows[0].events] == [
-        ("click", 3),
-        ("view", 5),
-    ]
-    assert [(item.label, item.weight) for item in rows[0].nested_combo.items] == [
-        ("first", Decimal("1.25")),
-        ("second", Decimal("2.50")),
-    ]
-    assert rows[0].nested_combo.attrs == {"empty": [], "nums": [1, 2]}
-    assert rows[0].attrs == {"x": 1, "y": 2}
-    assert rows[0].nullable_note is None
-    assert rows[1].id == 2
-    assert rows[1].amount == Decimal("0.10")
-    assert rows[1].payload.flag is False
-    assert rows[1].tags == []
-    assert rows[1].events == []
-    assert rows[1].nested_combo.items == []
-    assert rows[1].nested_combo.attrs == {}
-    assert rows[1].attrs == {}
-    assert rows[1].nullable_note == "present"
 
 
 def test_spark_creates_sail_reads_parquet(

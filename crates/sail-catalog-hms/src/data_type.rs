@@ -212,6 +212,10 @@ fn spark_data_type_json(data_type: &DataType) -> CatalogResult<Value> {
         DataType::Int16 => json!("short"),
         DataType::Int32 => json!("integer"),
         DataType::Int64 => json!("long"),
+        // Note: Spark has no unsigned integer types. Unsigned Arrow types map
+        // to the equivalent signed Spark JSON type. Values exceeding the signed
+        // range will be misinterpreted. This matches Spark's behavior — Spark
+        // reads unsigned Parquet columns as signed types (bug-for-bug parity).
         DataType::UInt8 => json!("byte"),
         DataType::UInt16 => json!("short"),
         DataType::UInt32 => json!("integer"),
@@ -442,7 +446,7 @@ fn parse_struct_type(type_str: &str) -> CatalogResult<DataType> {
         .ok_or_else(|| CatalogError::InvalidArgument(format!("Invalid struct type: {type_str}")))?;
 
     let mut fields = Vec::new();
-    for field_str in split_top_level(inner) {
+    for field_str in split_top_level(inner)? {
         let (name, field_type) = field_str.split_once(':').ok_or_else(|| {
             CatalogError::InvalidArgument(format!("Invalid struct field: {field_str}"))
         })?;
@@ -452,7 +456,7 @@ fn parse_struct_type(type_str: &str) -> CatalogResult<DataType> {
 }
 
 fn split_top_level_two(input: &str) -> CatalogResult<(&str, &str)> {
-    let parts = split_top_level(input);
+    let parts = split_top_level(input)?;
     if parts.len() != 2 {
         return Err(CatalogError::InvalidArgument(format!(
             "Expected exactly two type parameters: {input}"
@@ -461,7 +465,7 @@ fn split_top_level_two(input: &str) -> CatalogResult<(&str, &str)> {
     Ok((parts[0], parts[1]))
 }
 
-fn split_top_level(input: &str) -> Vec<&str> {
+fn split_top_level(input: &str) -> CatalogResult<Vec<&str>> {
     let mut angle_depth = 0;
     let mut paren_depth = 0;
     let mut start = 0;
@@ -470,9 +474,23 @@ fn split_top_level(input: &str) -> Vec<&str> {
     for (idx, ch) in input.char_indices() {
         match ch {
             '<' => angle_depth += 1,
-            '>' => angle_depth -= 1,
+            '>' => {
+                if angle_depth == 0 {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "Unbalanced brackets in type string (negative depth): {input}"
+                    )));
+                }
+                angle_depth -= 1;
+            }
             '(' => paren_depth += 1,
-            ')' => paren_depth -= 1,
+            ')' => {
+                if paren_depth == 0 {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "Unbalanced brackets in type string (negative depth): {input}"
+                    )));
+                }
+                paren_depth -= 1;
+            }
             ',' if angle_depth == 0 && paren_depth == 0 => {
                 parts.push(input[start..idx].trim());
                 start = idx + 1;
@@ -481,11 +499,17 @@ fn split_top_level(input: &str) -> Vec<&str> {
         }
     }
 
+    if angle_depth != 0 || paren_depth != 0 {
+        return Err(CatalogError::InvalidArgument(format!(
+            "Unbalanced brackets in type string (non-zero final depth: angle={angle_depth}, paren={paren_depth}): {input}"
+        )));
+    }
+
     if start < input.len() {
         parts.push(input[start..].trim());
     }
 
-    parts
+    Ok(parts)
 }
 
 #[cfg(test)]
@@ -739,5 +763,12 @@ mod tests {
         let json_str = serde_json::to_string(&schema).unwrap();
         let parsed = super::spark_struct_json_to_fields(&json_str).unwrap();
         assert_eq!(parsed[0].data_type(), &DataType::Decimal128(10, 2));
+    }
+
+    #[test]
+    fn test_split_top_level_rejects_unbalanced_brackets() {
+        assert!(super::split_top_level("struct<a:int>>").is_err());
+        assert!(super::split_top_level("struct<a:int,<<b:int>>").is_err());
+        assert!(super::split_top_level("map<string,int").is_err());
     }
 }

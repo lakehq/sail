@@ -1,4 +1,4 @@
-# ruff: noqa: S608, SLF001, TC002
+# ruff: noqa: S608, TC002
 """HMS interop tests for managed tables under S3 database locations."""
 
 from __future__ import annotations
@@ -6,20 +6,15 @@ from __future__ import annotations
 import pytest
 from pyspark.sql import SparkSession
 
+from pysail.tests.spark.hms.conftest import (
+    _describe_extended_properties,
+    _reference_catalog_table,
+    _scala_option_to_string,
+)
+
 pytestmark = pytest.mark.catalog_integration
 
 _S3_WAREHOUSE_PREFIX = "s3://hms-warehouse"
-
-
-def _describe_extended_properties(spark: SparkSession, table_fqn: str) -> dict[str, str]:
-    rows = spark.sql(f"DESCRIBE EXTENDED {table_fqn}").collect()
-    props: dict[str, str] = {}
-    for row in rows:
-        key = (row.col_name or "").strip()
-        value = (row.data_type or "").strip()
-        if key:
-            props[key] = value
-    return props
 
 
 def _assert_sail_describes_s3_managed_table(
@@ -31,17 +26,6 @@ def _assert_sail_describes_s3_managed_table(
     assert props["Type"] == "MANAGED"
     assert props["Provider"].lower() == "parquet"
     assert props["Location"].startswith(location_prefix)
-
-
-def _reference_catalog_table(reference_spark_s3: SparkSession, database: str, table: str):
-    return reference_spark_s3._jsparkSession.sessionState().catalog().externalCatalog().getTable(database, table)
-
-
-def _scala_option_to_string(option) -> str | None:
-    if option.isDefined():
-        value = option.get()
-        return value.toString() if hasattr(value, "toString") else str(value)
-    return None
 
 
 def _assert_reference_describes_s3_table(
