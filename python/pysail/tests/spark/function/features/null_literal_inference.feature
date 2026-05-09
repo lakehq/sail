@@ -2,7 +2,7 @@ Feature: NULL literal and timestamp inference
 
   Rule: untyped NULL literals
 
-    Scenario: SQL NULL literal is inferred as string
+    Scenario: SQL NULL literal is inferred as void
       When query
       """
       SELECT NULL AS result
@@ -10,13 +10,13 @@ Feature: NULL literal and timestamp inference
       Then query schema
       """
       root
-       |-- result: string (nullable = true)
+       |-- result: void (nullable = true)
       """
       Then query result
       | result |
       | NULL   |
 
-    Scenario: SQL NULL literal remains string across aliases and projections
+    Scenario: SQL NULL literal remains void across aliases and projections
       When query
       """
       SELECT result
@@ -25,7 +25,7 @@ Feature: NULL literal and timestamp inference
       Then query schema
       """
       root
-       |-- result: string (nullable = true)
+       |-- result: void (nullable = true)
       """
       Then query result
       | result |
@@ -44,30 +44,30 @@ Feature: NULL literal and timestamp inference
       """
       Then query result
       | result |
-      | string |
+      | void   |
 
-    Scenario: DataFrame NULL literal is inferred as string
+    Scenario: DataFrame NULL literal is inferred as void
       When dataframe for null literal
       Then dataframe schema
       """
       root
-       |-- result: string (nullable = true)
+       |-- result: void (nullable = true)
       """
 
-    Scenario: DataFrame NULL literal remains string across aliases and projections
+    Scenario: DataFrame NULL literal remains void across aliases and projections
       When dataframe for null literal alias projection
       Then dataframe schema
       """
       root
-       |-- result: string (nullable = true)
+       |-- result: void (nullable = true)
       """
 
-    Scenario: DataFrame NULL literal remains string through withColumn and select
+    Scenario: DataFrame NULL literal remains void through withColumn and select
       When dataframe for null literal with column
       Then dataframe schema
       """
       root
-       |-- result: string (nullable = true)
+       |-- result: void (nullable = true)
       """
 
   Rule: timestamp conversion of untyped NULL literals
