@@ -149,9 +149,6 @@ impl ScalarUDFImpl for SparkToNumber {
 fn spark_to_number_impl(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
     let format_arr = downcast_arg!(&args[1], StringArray);
     if format_arr.is_null(0) {
-        if !safe {
-            return exec_err!("format argument to to_number must not be NULL");
-        }
         let values = downcast_arg!(&args[0], StringArray);
         let nulls: Vec<ScalarValue> = (0..values.len())
             .map(|_| ScalarValue::Decimal256(None, 38, 18))

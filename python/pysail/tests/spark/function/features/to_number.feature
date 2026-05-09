@@ -35,7 +35,7 @@ Feature: to_number comprehensive tests
         | result |
         | NULL   |
 
-    Scenario: to_number NULL format
+    Scenario: to_number NULL format returns NULL
       When query
         """
         SELECT to_number('123', CAST(NULL AS STRING)) AS result
@@ -44,7 +44,7 @@ Feature: to_number comprehensive tests
         | result |
         | NULL   |
 
-    Scenario: to_number both NULL
+    Scenario: to_number both NULL returns NULL
       When query
         """
         SELECT to_number(CAST(NULL AS STRING), CAST(NULL AS STRING)) AS result
