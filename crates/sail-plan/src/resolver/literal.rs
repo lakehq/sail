@@ -24,7 +24,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<ScalarValue> {
         match literal {
-            Literal::Null => Ok(ScalarValue::Null),
+            Literal::Null => Ok(ScalarValue::Utf8(None)),
             Literal::Boolean { value } => Ok(ScalarValue::Boolean(value)),
             Literal::Int8 { value } => Ok(ScalarValue::Int8(value)),
             Literal::Int16 { value } => Ok(ScalarValue::Int16(value)),
