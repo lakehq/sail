@@ -136,9 +136,14 @@ impl HllSketch {
     }
 
     /// Returns a sketch downsampled to the given (smaller or equal)
-    /// `lgConfigK`. Each output register takes the maximum of the merged
-    /// input registers; this is a coarse approximation but preserves the
-    /// monotonicity needed for cardinality estimation.
+    /// `lgConfigK`. When reducing the bucket width from `lgConfigK = K` to
+    /// `K' < K`, each hash's bucket index changes from
+    /// `hash & ((1<<K)-1)` to `hash & ((1<<K')-1)`; we therefore group old
+    /// registers by their low `K'` bits and take the maximum to form each
+    /// new register. This preserves the leading-zero rank of the hash
+    /// (which is computed from the most significant bits and is unchanged
+    /// by reducing the bucket width), which is what matters for cardinality
+    /// estimation.
     fn downsample(&self, target_lg: u8) -> Result<HllSketch> {
         if target_lg > self.lg_config_k {
             return exec_err!(
@@ -150,18 +155,17 @@ impl HllSketch {
         if target_lg == self.lg_config_k {
             return Ok(self.clone());
         }
-        let group = 1usize << (self.lg_config_k - target_lg);
+        let new_size = 1usize << target_lg;
+        let mask = new_size - 1;
         let mut out = HllSketch::new(target_lg)?;
-        for (i, dst) in out.registers.iter_mut().enumerate() {
-            let start = i * group;
-            let end = start + group;
-            let mut max = 0u8;
-            for r in &self.registers[start..end] {
-                if *r > max {
-                    max = *r;
-                }
+        for (old_idx, &old_val) in self.registers.iter().enumerate() {
+            if old_val == 0 {
+                continue;
             }
-            *dst = max;
+            let new_idx = old_idx & mask;
+            if old_val > out.registers[new_idx] {
+                out.registers[new_idx] = old_val;
+            }
         }
         Ok(out)
     }
@@ -306,6 +310,7 @@ pub fn scalar_to_allow_diff(scalar: &ScalarValue) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
 
     #[test]

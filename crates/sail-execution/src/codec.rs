@@ -2544,9 +2544,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
                     HistogramNumericFunction::new(),
                 ))),
-                "hll_sketch_agg" => {
-                    Ok(Arc::new(AggregateUDF::from(HllSketchAggFunction::new())))
-                }
+                "hll_sketch_agg" => Ok(Arc::new(AggregateUDF::from(HllSketchAggFunction::new()))),
                 "hll_union_agg" => Ok(Arc::new(AggregateUDF::from(HllUnionAggFunction::new()))),
                 "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),

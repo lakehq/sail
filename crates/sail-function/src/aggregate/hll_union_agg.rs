@@ -102,9 +102,12 @@ impl HllUnionAccumulator {
     }
 
     fn add_binary_array(&mut self, array: &ArrayRef) -> Result<()> {
-        let binary_array = array.as_any().downcast_ref::<BinaryArray>().ok_or_else(|| {
-            DataFusionError::Internal("hll_union_agg expected binary array".to_string())
-        })?;
+        let binary_array = array
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| {
+                DataFusionError::Internal("hll_union_agg expected binary array".to_string())
+            })?;
         for i in 0..binary_array.len() {
             if binary_array.is_null(i) {
                 continue;

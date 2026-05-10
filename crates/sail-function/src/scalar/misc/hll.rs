@@ -31,7 +31,11 @@ impl HllSketchEstimate {
         Self {
             signature: Signature::uniform(
                 1,
-                vec![DataType::Binary, DataType::LargeBinary, DataType::BinaryView],
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -68,10 +72,7 @@ impl ScalarUDFImpl for HllSketchEstimate {
             DataType::LargeBinary => binary_from_large(array)?,
             DataType::BinaryView => binary_from_view(array)?,
             other => {
-                return exec_err!(
-                    "hll_sketch_estimate expects a binary input, got {}",
-                    other
-                );
+                return exec_err!("hll_sketch_estimate expects a binary input, got {}", other);
             }
         };
         for i in 0..len {
@@ -166,7 +167,10 @@ impl ScalarUDFImpl for HllUnion {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 2 && args.args.len() != 3 {
-            return exec_err!("hll_union expects 2 or 3 arguments, got {}", args.args.len());
+            return exec_err!(
+                "hll_union expects 2 or 3 arguments, got {}",
+                args.args.len()
+            );
         }
         let allow_different = if args.args.len() == 3 {
             match &args.args[2] {
@@ -214,7 +218,12 @@ impl ScalarUDFImpl for HllUnion {
                     a
                 }
                 (Some(a), None) | (None, Some(a)) => a,
-                (None, None) => unreachable!(),
+                (None, None) => {
+                    // Already handled above by the `lhs_null && rhs_null`
+                    // early-continue, but be defensive.
+                    builder.append_null();
+                    continue;
+                }
             };
             builder.append_value(merged.to_bytes());
         }
