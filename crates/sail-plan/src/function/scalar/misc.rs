@@ -9,6 +9,7 @@ use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::hll::{HllSketchEstimate, HllUnion};
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
@@ -140,8 +141,8 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("from_avro", F::unknown("from_avro")),
         ("from_protobuf", F::unknown("from_protobuf")),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
-        ("hll_sketch_estimate", F::unknown("hll_sketch_estimate")),
-        ("hll_union", F::unknown("hll_union")),
+        ("hll_sketch_estimate", F::udf(HllSketchEstimate::new())),
+        ("hll_union", F::udf(HllUnion::new())),
         (
             "input_file_block_length",
             F::unknown("input_file_block_length"),

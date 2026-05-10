@@ -25,6 +25,8 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::hll_sketch_agg::HllSketchAggFunction;
+use sail_function::aggregate::hll_union_agg::HllUnionAggFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -547,8 +549,14 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             "histogram_numeric",
             F::aggregate(|| Arc::new(AggregateUDF::from(HistogramNumericFunction::new()))),
         ),
-        ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
-        ("hll_union_agg", F::unknown("hll_union_agg")),
+        (
+            "hll_sketch_agg",
+            F::aggregate(|| Arc::new(AggregateUDF::from(HllSketchAggFunction::new()))),
+        ),
+        (
+            "hll_union_agg",
+            F::aggregate(|| Arc::new(AggregateUDF::from(HllUnionAggFunction::new()))),
+        ),
         ("kurtosis", F::custom(kurtosis)),
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),

@@ -151,14 +151,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "hll_sketch_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "hll_union_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
