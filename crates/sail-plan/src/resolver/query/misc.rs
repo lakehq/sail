@@ -5,6 +5,7 @@ use datafusion::catalog::MemTable;
 use datafusion_common::{DFSchema, DFSchemaRef, ParamValues};
 use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
 use log::warn;
+use sail_catalog::error::{CatalogError, CatalogObject};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
@@ -143,19 +144,27 @@ impl PlanResolver<'_> {
 
     /// Resolves a [`spec::QueryNode::CachedRemoteRelation`] by looking up the
     /// previously checkpointed logical plan from the catalog manager. The cached
-    /// plan was stored with user-facing field names, so we register fresh field
-    /// IDs in the current resolver state and rename the plan accordingly.
+    /// plan was stored with internal field IDs and its user-facing field names,
+    /// so we register fresh field IDs in the current resolver state and rename
+    /// the plan accordingly. This preserves duplicate user-facing names without
+    /// relying on them as `Expr::Column` references inside the cached plan.
     pub(super) async fn resolve_query_cached_remote_relation(
         &self,
         relation_id: String,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let manager = self.ctx.extension::<CatalogManager>()?;
-        let plan = manager.get_cached_relation(&relation_id).map_err(|_| {
-            PlanError::invalid(format!("cached remote relation not found: {relation_id}"))
-        })?;
-        let names = state.register_fields(plan.schema().inner().fields());
-        let plan = rename_logical_plan((*plan).clone(), &names)?;
+        let relation = match manager.get_cached_relation(&relation_id) {
+            Ok(relation) => relation,
+            Err(CatalogError::NotFound(CatalogObject::LogicalPlan, _)) => {
+                return Err(PlanError::AnalysisError(format!(
+                    "cached remote relation not found: {relation_id}"
+                )));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let names = state.register_field_names(relation.fields.clone());
+        let plan = rename_logical_plan((*relation.plan).clone(), &names)?;
         Ok(plan)
     }
 

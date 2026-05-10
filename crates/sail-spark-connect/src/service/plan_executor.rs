@@ -12,10 +12,10 @@ use fastrace::future::FutureExt;
 use fastrace::Span;
 use futures::stream;
 use log::{debug, warn};
+use sail_catalog::manager::tracker::CatalogCachedRelation;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
 use sail_plan::resolver::plan::NamedPlan;
@@ -544,11 +544,14 @@ pub(crate) async fn handle_execute_checkpoint_command(
         plan: logical_plan,
         fields,
     } = resolver.resolve_named_plan(plan).await?;
-    let logical_plan = if let Some(fields) = fields {
-        rename_logical_plan(logical_plan, &fields)?
-    } else {
+    let fields = fields.unwrap_or_else(|| {
         logical_plan
-    };
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().to_string())
+            .collect()
+    });
 
     let cached_plan = if eager {
         materialize_logical_plan(ctx, logical_plan).await?
@@ -559,7 +562,13 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let relation_id = uuid::Uuid::new_v4().to_string();
     let manager = ctx.extension::<CatalogManager>()?;
     manager
-        .track_cached_relation(relation_id.clone(), Arc::new(cached_plan))
+        .track_cached_relation(
+            relation_id.clone(),
+            CatalogCachedRelation {
+                plan: Arc::new(cached_plan),
+                fields,
+            },
+        )
         .map_err(|e| SparkError::internal(format!("failed to track cached relation: {e}")))?;
 
     let result = CheckpointCommandResult {

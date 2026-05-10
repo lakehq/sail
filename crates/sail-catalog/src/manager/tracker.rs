@@ -12,6 +12,12 @@ pub struct CatalogFunctionId(u64);
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CatalogLogicalPlanId(u64);
 
+#[derive(Debug, Clone)]
+pub struct CatalogCachedRelation {
+    pub plan: Arc<LogicalPlan>,
+    pub fields: Vec<String>,
+}
+
 #[derive(Default)]
 struct CatalogObjectTrackerState {
     next_function_id: u64,
@@ -19,9 +25,10 @@ struct CatalogObjectTrackerState {
     functions: HashMap<u64, ScalarUDF>,
     logical_plans: HashMap<u64, Arc<LogicalPlan>>,
     /// Maps relation IDs from `CachedRemoteRelation` to their checkpointed
-    /// logical plans. Populated when the server handles a `CheckpointCommand`,
-    /// and queried when resolving a `CachedRemoteRelation` query node.
-    cached_relations: HashMap<String, Arc<LogicalPlan>>,
+    /// logical plans and user-facing field names. Populated when the server
+    /// handles a `CheckpointCommand`, and queried when resolving a
+    /// `CachedRemoteRelation` query node.
+    cached_relations: HashMap<String, CatalogCachedRelation>,
 }
 
 /// Tracks in-memory objects (UDFs and logical plans) that cannot be serialized directly,
@@ -86,14 +93,14 @@ impl CatalogObjectTracker {
     pub fn track_cached_relation(
         &self,
         relation_id: String,
-        plan: Arc<LogicalPlan>,
+        relation: CatalogCachedRelation,
     ) -> CatalogResult<()> {
         let mut state = self.state()?;
-        state.cached_relations.insert(relation_id, plan);
+        state.cached_relations.insert(relation_id, relation);
         Ok(())
     }
 
-    pub fn get_cached_relation(&self, relation_id: &str) -> CatalogResult<Arc<LogicalPlan>> {
+    pub fn get_cached_relation(&self, relation_id: &str) -> CatalogResult<CatalogCachedRelation> {
         let state = self.state()?;
         state
             .cached_relations

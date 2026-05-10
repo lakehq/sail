@@ -61,6 +61,18 @@ def test_dataframe_local_checkpoint_with_storage_level(spark):
     )
 
 
+@pytest.mark.parametrize("method", ["checkpoint", "localCheckpoint"])
+@pytest.mark.parametrize("eager", [True, False])
+def test_dataframe_checkpoint_with_duplicate_columns(spark, method, eager):
+    df = spark.createDataFrame([(1, 2), (3, 4)], ["left", "right"]).selectExpr("left as id", "right as id")
+    checkpointed = getattr(df, method)(eager)
+    pdf = checkpointed.toPandas()
+
+    assert checkpointed.columns == ["id", "id"]
+    assert pdf.columns.tolist() == ["id", "id"]
+    assert pdf.values.tolist() == [[1, 2], [3, 4]]
+
+
 def test_dataframe_checkpoint_after_transformation(spark):
     df = spark.createDataFrame([(14, "Tom"), (23, "Alice"), (16, "Bob")], ["age", "name"])
     transformed = df.filter(col("age") > lit(15)).withColumn("country", lit("US"))
@@ -83,11 +95,12 @@ def test_dataframe_checkpoint_after_transformation(spark):
 
 
 def test_dataframe_local_checkpoint_with_nulls(spark):
+    expected_rows = 3
     df = spark.createDataFrame([Row(a=1, b="x"), Row(a=None, b="y"), Row(a=3, b=None)])
     checkpointed = df.localCheckpoint()
     pdf = checkpointed.toPandas()
     # Null values are preserved through the checkpoint.
-    assert len(pdf) == 3
+    assert len(pdf) == expected_rows
     assert pdf["a"].isna().sum() == 1
     assert pdf["b"].isna().sum() == 1
 
