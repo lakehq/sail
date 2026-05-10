@@ -7666,6 +7666,7 @@ dependencies = [
  "quote",
  "regex",
  "sail-cache",
+ "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",

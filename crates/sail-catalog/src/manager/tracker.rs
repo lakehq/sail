@@ -18,6 +18,7 @@ struct CatalogObjectTrackerState {
     next_logical_plan_id: u64,
     functions: HashMap<u64, ScalarUDF>,
     logical_plans: HashMap<u64, Arc<LogicalPlan>>,
+    cached_relations: HashMap<String, Arc<LogicalPlan>>,
 }
 
 /// Tracks in-memory objects (UDFs and logical plans) that cannot be serialized directly,
@@ -74,5 +75,34 @@ impl CatalogObjectTracker {
             .get(&id.0)
             .cloned()
             .ok_or_else(|| CatalogError::NotFound(CatalogObject::LogicalPlan, id.0.to_string()))
+    }
+
+    /// Stores a logical plan keyed by an opaque relation ID.
+    /// This is used to back checkpointed DataFrames referenced via
+    /// `CachedRemoteRelation` in subsequent Spark Connect requests.
+    pub fn track_cached_relation(
+        &self,
+        relation_id: String,
+        plan: Arc<LogicalPlan>,
+    ) -> CatalogResult<()> {
+        let mut state = self.state()?;
+        state.cached_relations.insert(relation_id, plan);
+        Ok(())
+    }
+
+    pub fn get_cached_relation(&self, relation_id: &str) -> CatalogResult<Arc<LogicalPlan>> {
+        let state = self.state()?;
+        state
+            .cached_relations
+            .get(relation_id)
+            .cloned()
+            .ok_or_else(|| {
+                CatalogError::NotFound(CatalogObject::LogicalPlan, relation_id.to_string())
+            })
+    }
+
+    pub fn remove_cached_relation(&self, relation_id: &str) -> CatalogResult<bool> {
+        let mut state = self.state()?;
+        Ok(state.cached_relations.remove(relation_id).is_some())
     }
 }

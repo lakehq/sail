@@ -147,6 +147,22 @@ impl CatalogManager {
     ) -> CatalogResult<Arc<LogicalPlan>> {
         self.tracker.get_tracked_logical_plan(id)
     }
+
+    pub fn track_cached_relation(
+        &self,
+        relation_id: String,
+        plan: Arc<LogicalPlan>,
+    ) -> CatalogResult<()> {
+        self.tracker.track_cached_relation(relation_id, plan)
+    }
+
+    pub fn get_cached_relation(&self, relation_id: &str) -> CatalogResult<Arc<LogicalPlan>> {
+        self.tracker.get_cached_relation(relation_id)
+    }
+
+    pub fn remove_cached_relation(&self, relation_id: &str) -> CatalogResult<bool> {
+        self.tracker.remove_cached_relation(relation_id)
+    }
 }
 
 impl CatalogManagerState {

@@ -1,17 +1,25 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
+use datafusion::catalog::MemTable;
+use datafusion::datasource::provider_as_source;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use datafusion::prelude::SessionContext;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use fastrace::Span;
 use futures::stream;
 use log::{debug, warn};
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
+use sail_plan::resolver::plan::NamedPlan;
+use sail_plan::resolver::PlanResolver;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -26,10 +34,11 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
-    MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
+    relation, CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
+    CommonInlineUserDefinedDataSource, CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
+    GetResourcesCommand, LocalRelation, MergeIntoTableCommand, Relation,
+    RemoveCachedRemoteRelationCommand, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
@@ -515,16 +524,93 @@ pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
 
 pub(crate) async fn handle_execute_checkpoint_command(
     ctx: &SessionContext,
-    _checkpoint: CheckpointCommand,
+    checkpoint: CheckpointCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    // TODO: Implement
-    warn!("Checkpoint operation is not yet supported and is a no-op");
+    let CheckpointCommand {
+        relation,
+        local: _,
+        eager,
+        // Sail uses an in-memory store for both local and reliable checkpoints,
+        // so the storage level is currently informational only.
+        storage_level: _,
+    } = checkpoint;
+    let relation = relation.required("checkpoint relation")?;
+    let plan = spec::Plan::Query((relation).try_into()?);
+
     let spark = ctx.extension::<SparkSession>()?;
-    let result = CheckpointCommandResult { relation: None };
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let NamedPlan {
+        plan: logical_plan,
+        fields,
+    } = resolver.resolve_named_plan(plan).await?;
+    let logical_plan = if let Some(fields) = fields {
+        rename_logical_plan(logical_plan, &fields)?
+    } else {
+        logical_plan
+    };
+
+    let cached_plan = if eager {
+        materialize_logical_plan(ctx, logical_plan).await?
+    } else {
+        logical_plan
+    };
+
+    let relation_id = uuid::Uuid::new_v4().to_string();
+    let manager = ctx.extension::<CatalogManager>()?;
+    manager
+        .track_cached_relation(relation_id.clone(), Arc::new(cached_plan))
+        .map_err(|e| SparkError::internal(format!("failed to track cached relation: {e}")))?;
+
+    let result = CheckpointCommandResult {
+        relation: Some(CachedRemoteRelation { relation_id }),
+    };
     let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
         Box::new(result),
     ))];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
+    ))
+}
+
+/// Eagerly executes the resolved logical plan, collects all batches, and returns
+/// a new logical plan that scans the materialized data from an in-memory table.
+async fn materialize_logical_plan(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+) -> SparkResult<LogicalPlan> {
+    let arrow_schema = Arc::new(plan.schema().inner().as_ref().clone());
+    let df = ctx.execute_logical_plan(plan).await?;
+    let batches = df.collect().await?;
+    let table = Arc::new(MemTable::try_new(arrow_schema, vec![batches])?);
+    let scan = LogicalPlanBuilder::scan(
+        datafusion::common::TableReference::bare(UNNAMED_TABLE),
+        provider_as_source(table),
+        None,
+    )?
+    .build()?;
+    Ok(scan)
+}
+
+pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
+    ctx: &SessionContext,
+    command: RemoveCachedRemoteRelationCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let RemoveCachedRemoteRelationCommand { relation } = command;
+    let relation = relation.required("remove cached remote relation")?;
+    let manager = ctx.extension::<CatalogManager>()?;
+    let _ = manager
+        .remove_cached_relation(&relation.relation_id)
+        .map_err(|e| SparkError::internal(format!("failed to remove cached relation: {e}")))?;
+
+    let spark = ctx.extension::<SparkSession>()?;
+    let mut output = Vec::new();
     if metadata.reattachable {
         output.push(ExecutorOutput::complete());
     }
