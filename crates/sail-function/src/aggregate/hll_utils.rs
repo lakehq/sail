@@ -236,9 +236,11 @@ impl HllSketch {
         })
     }
 
-    /// Returns the in-memory size of the sketch in bytes.
-    pub fn allocated_size(&self) -> usize {
-        std::mem::size_of::<Self>() + self.registers.capacity()
+    /// Returns the heap-allocated size of the sketch in bytes (excludes the
+    /// inline struct size so that callers can combine it with
+    /// `std::mem::size_of_val` without double-counting).
+    pub fn heap_size(&self) -> usize {
+        self.registers.capacity()
     }
 }
 

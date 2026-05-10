@@ -187,7 +187,10 @@ impl ScalarUDFImpl for HllUnion {
         let lhs = arrays[0].as_binary::<i32>();
         let rhs = arrays[1].as_binary::<i32>();
         let len = lhs.len();
-        let mut builder = BinaryBuilder::with_capacity(len, 5 + 4096);
+        // Default sketch size (lgConfigK=12) is 5 header + 4096 registers.
+        // Estimate total data capacity per row to avoid repeated reallocations.
+        let per_sketch_size = 5 + 4096;
+        let mut builder = BinaryBuilder::with_capacity(len, len * per_sketch_size);
         for i in 0..len {
             let lhs_null = lhs.is_null(i);
             let rhs_null = rhs.is_null(i);

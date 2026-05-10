@@ -5,7 +5,9 @@ use datafusion::arrow::array::{Array, ArrayRef, BinaryArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
+};
 
 use crate::aggregate::hll_utils::{scalar_to_allow_diff, HllSketch, HLL_MAGIC};
 use crate::aggregate::utils::get_scalar_value;
@@ -34,7 +36,14 @@ impl HllUnionAggFunction {
     pub fn new() -> Self {
         Self {
             // Two arguments: input binary sketch and allowDifferentLgConfigK boolean literal.
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Exact(vec![DataType::Binary, DataType::Boolean]),
+                    TypeSignature::Exact(vec![DataType::LargeBinary, DataType::Boolean]),
+                    TypeSignature::Exact(vec![DataType::BinaryView, DataType::Boolean]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -139,12 +148,7 @@ impl Accumulator for HllUnionAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self
-                .sketch
-                .as_ref()
-                .map(|s| s.allocated_size())
-                .unwrap_or(0)
+        std::mem::size_of_val(self) + self.sketch.as_ref().map(|s| s.heap_size()).unwrap_or(0)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {

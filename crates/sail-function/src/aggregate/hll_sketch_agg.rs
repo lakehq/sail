@@ -2,7 +2,10 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hasher;
 
-use datafusion::arrow::array::{Array, ArrayRef, BinaryArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -87,6 +90,11 @@ impl HllSketchAccumulator {
         })
     }
 
+    fn hash_and_update(&mut self, hasher: XxHash64) {
+        self.sketch.update_hash(hasher.finish());
+    }
+
+    /// Falls back to `ScalarValue` conversion for types without a fast path.
     fn update_scalar_at(&mut self, array: &ArrayRef, index: usize) -> Result<()> {
         if array.is_null(index) {
             return Ok(());
@@ -94,8 +102,169 @@ impl HllSketchAccumulator {
         let scalar = ScalarValue::try_from_array(array, index)?;
         let mut hasher = XxHash64::with_seed(HLL_HASH_SEED);
         hash_scalar(&scalar, &mut hasher)?;
-        self.sketch.update_hash(hasher.finish());
+        self.hash_and_update(hasher);
         Ok(())
+    }
+}
+
+/// Macro to generate a typed fast-path loop that hashes primitive values
+/// directly from Arrow arrays without going through `ScalarValue`.
+macro_rules! hash_primitive_array {
+    ($self:expr, $array:expr, $array_type:ty, |$val:ident| $hash_expr:expr) => {{
+        let typed = $array
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "hll_sketch_agg: expected {} array",
+                    stringify!($array_type)
+                ))
+            })?;
+        for i in 0..typed.len() {
+            if typed.is_null(i) {
+                continue;
+            }
+            let $val = typed.value(i);
+            let mut hasher = XxHash64::with_seed(HLL_HASH_SEED);
+            hasher.write(&$hash_expr);
+            $self.hash_and_update(hasher);
+        }
+        Ok(())
+    }};
+}
+
+/// Fast-path batch update: hashes directly from typed Arrow arrays for common
+/// primitive/string/binary types, falling back to per-row `ScalarValue`
+/// conversion only for uncommon types (timestamps, decimals, etc.).
+fn update_batch_typed(acc: &mut HllSketchAccumulator, array: &ArrayRef) -> Result<()> {
+    match array.data_type() {
+        DataType::Boolean => {
+            let typed = array
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal("hll_sketch_agg: expected BooleanArray".to_string())
+                })?;
+            for i in 0..typed.len() {
+                if typed.is_null(i) {
+                    continue;
+                }
+                let mut hasher = XxHash64::with_seed(HLL_HASH_SEED);
+                hasher.write_u8(u8::from(typed.value(i)));
+                acc.hash_and_update(hasher);
+            }
+            Ok(())
+        }
+        DataType::Int8 => {
+            hash_primitive_array!(acc, array, Int8Array, |v| i64::from(v).to_le_bytes())
+        }
+        DataType::Int16 => {
+            hash_primitive_array!(acc, array, Int16Array, |v| i64::from(v).to_le_bytes())
+        }
+        DataType::Int32 => {
+            hash_primitive_array!(acc, array, Int32Array, |v| i64::from(v).to_le_bytes())
+        }
+        DataType::Int64 => {
+            hash_primitive_array!(acc, array, Int64Array, |v| v.to_le_bytes())
+        }
+        DataType::UInt8 => {
+            hash_primitive_array!(acc, array, UInt8Array, |v| u64::from(v).to_le_bytes())
+        }
+        DataType::UInt16 => {
+            hash_primitive_array!(acc, array, UInt16Array, |v| u64::from(v).to_le_bytes())
+        }
+        DataType::UInt32 => {
+            hash_primitive_array!(acc, array, UInt32Array, |v| u64::from(v).to_le_bytes())
+        }
+        DataType::UInt64 => {
+            hash_primitive_array!(acc, array, UInt64Array, |v| v.to_le_bytes())
+        }
+        DataType::Float32 => {
+            hash_primitive_array!(acc, array, Float32Array, |v| v.to_bits().to_le_bytes())
+        }
+        DataType::Float64 => {
+            hash_primitive_array!(acc, array, Float64Array, |v| v.to_bits().to_le_bytes())
+        }
+        DataType::Utf8 => {
+            let typed = array.as_string::<i32>();
+            for i in 0..typed.len() {
+                if typed.is_null(i) {
+                    continue;
+                }
+                let mut hasher = XxHash64::with_seed(HLL_HASH_SEED);
+                hasher.write(typed.value(i).as_bytes());
+                acc.hash_and_update(hasher);
+            }
+            Ok(())
+        }
+        DataType::LargeUtf8 => {
+            let typed = array.as_string::<i64>();
+            for i in 0..typed.len() {
+                if typed.is_null(i) {
+                    continue;
+                }
+                let mut hasher = XxHash64::with_seed(HLL_HASH_SEED);
+                hasher.write(typed.value(i).as_bytes());
+                acc.hash_and_update(hasher);
+            }
+            Ok(())
+        }
+        DataType::Utf8View => {
+            let typed = array.as_string_view();
+            for i in 0..typed.len() {
+                if typed.is_null(i) {
+                    continue;
+                }
+                let mut hasher = XxHash64::with_seed(HLL_HASH_SEED);
+                hasher.write(typed.value(i).as_bytes());
+                acc.hash_and_update(hasher);
+            }
+            Ok(())
+        }
+        DataType::Binary => {
+            let typed = array.as_binary::<i32>();
+            for i in 0..typed.len() {
+                if typed.is_null(i) {
+                    continue;
+                }
+                let mut hasher = XxHash64::with_seed(HLL_HASH_SEED);
+                hasher.write(typed.value(i));
+                acc.hash_and_update(hasher);
+            }
+            Ok(())
+        }
+        DataType::LargeBinary => {
+            let typed = array.as_binary::<i64>();
+            for i in 0..typed.len() {
+                if typed.is_null(i) {
+                    continue;
+                }
+                let mut hasher = XxHash64::with_seed(HLL_HASH_SEED);
+                hasher.write(typed.value(i));
+                acc.hash_and_update(hasher);
+            }
+            Ok(())
+        }
+        DataType::BinaryView => {
+            let typed = array.as_binary_view();
+            for i in 0..typed.len() {
+                if typed.is_null(i) {
+                    continue;
+                }
+                let mut hasher = XxHash64::with_seed(HLL_HASH_SEED);
+                hasher.write(typed.value(i));
+                acc.hash_and_update(hasher);
+            }
+            Ok(())
+        }
+        // Fall back to ScalarValue for less common types (timestamps,
+        // decimals, fixed-size binary, etc.).
+        _ => {
+            for i in 0..array.len() {
+                acc.update_scalar_at(array, i)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -167,11 +336,7 @@ impl Accumulator for HllSketchAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-        let array = &values[0];
-        for i in 0..array.len() {
-            self.update_scalar_at(array, i)?;
-        }
-        Ok(())
+        update_batch_typed(self, &values[0])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -179,7 +344,7 @@ impl Accumulator for HllSketchAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.sketch.allocated_size()
+        std::mem::size_of_val(self) + self.sketch.heap_size()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
