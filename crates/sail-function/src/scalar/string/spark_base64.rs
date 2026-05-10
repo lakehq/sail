@@ -1,10 +1,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use base64::alphabet;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, STANDARD};
 use base64::engine::DecodePaddingMode;
-use base64::Engine as _;
+use base64::{alphabet, Engine as _};
 use datafusion::arrow::array::{
     Array, BinaryArray, BinaryBuilder, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray,
     LargeBinaryBuilder, LargeStringArray, StringArray, StringViewArray,
@@ -67,6 +66,7 @@ impl ScalarUDFImpl for SparkBase64 {
             | DataType::FixedSizeBinary(_)
             | DataType::BinaryView => Ok(DataType::Utf8),
             DataType::LargeUtf8 | DataType::LargeBinary => Ok(DataType::LargeUtf8),
+            DataType::Null => Ok(DataType::Utf8),
             _ => plan_err!(
                 "1st argument should be String or Binary, got {}",
                 arg_types[0]
@@ -90,7 +90,8 @@ impl ScalarUDFImpl for SparkBase64 {
             | ColumnarValue::Scalar(ScalarValue::LargeBinary(None))
             | ColumnarValue::Scalar(ScalarValue::Utf8(None))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => Ok(vec![None]),
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
+            | ColumnarValue::Scalar(ScalarValue::Null) => Ok(vec![None]),
             ColumnarValue::Scalar(ScalarValue::Binary(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::BinaryView(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, Some(expr)))
@@ -169,6 +170,7 @@ impl ScalarUDFImpl for SparkBase64 {
             DataType::LargeUtf8 | DataType::LargeBinary => Ok(ColumnarValue::Array(Arc::new(
                 LargeStringArray::from(results),
             ))),
+            DataType::Null => Ok(ColumnarValue::Array(Arc::new(StringArray::from(results)))),
             _ => plan_err!(
                 "1st argument should be String or Binary, got {}",
                 args[0].data_type()
@@ -192,7 +194,12 @@ impl SparkUnbase64 {
     pub fn new() -> Self {
         Self {
             signature: Signature::variadic(
-                vec![DataType::Utf8View, DataType::Utf8, DataType::LargeUtf8],
+                vec![
+                    DataType::Null,
+                    DataType::Utf8View,
+                    DataType::Utf8,
+                    DataType::LargeUtf8,
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -231,6 +238,7 @@ impl ScalarUDFImpl for SparkUnbase64 {
         match arg_type {
             DataType::Utf8 | DataType::Utf8View => Ok(DataType::Binary),
             DataType::LargeUtf8 => Ok(DataType::LargeBinary),
+            DataType::Null => Ok(DataType::Binary),
             _ => plan_err!("1st argument should be String, got {}", arg_types[0]),
         }
     }
@@ -247,7 +255,8 @@ impl ScalarUDFImpl for SparkUnbase64 {
         let results = match arg {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => Ok(vec![None]),
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
+            | ColumnarValue::Scalar(ScalarValue::Null) => Ok(vec![None]),
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => {
@@ -310,7 +319,7 @@ impl ScalarUDFImpl for SparkUnbase64 {
         }?;
 
         match args[0].data_type() {
-            DataType::Utf8 | DataType::Utf8View => {
+            DataType::Null | DataType::Utf8 | DataType::Utf8View => {
                 let mut builder = BinaryBuilder::new();
                 for value in results {
                     match value {

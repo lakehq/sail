@@ -11,6 +11,15 @@ Feature: base64 functions encode and decode binary strings
       | result |
       | NULL   |
 
+    Scenario: base64 returns null for an untyped null literal
+      When query
+      """
+      SELECT base64(NULL) AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
     Scenario: base64 preserves nulls in column values
       When query
       """
@@ -29,6 +38,15 @@ Feature: base64 functions encode and decode binary strings
       When query
       """
       SELECT unbase64(CAST(NULL AS STRING)) AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+    Scenario: unbase64 returns null for an untyped null literal
+      When query
+      """
+      SELECT unbase64(NULL) AS result
       """
       Then query result
       | result |
