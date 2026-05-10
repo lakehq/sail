@@ -2,9 +2,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, Int64Array, Int64Builder,
-};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, BinaryBuilder, Int64Array, Int64Builder};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -67,56 +65,54 @@ impl ScalarUDFImpl for HllSketchEstimate {
         let array = &arrays[0];
         let len = array.len();
         let mut builder = Int64Builder::with_capacity(len);
-        let bin: BinaryArray = match array.data_type() {
-            DataType::Binary => array.as_binary::<i32>().clone(),
-            DataType::LargeBinary => binary_from_large(array)?,
-            DataType::BinaryView => binary_from_view(array)?,
+        match array.data_type() {
+            DataType::Binary => {
+                let bin = array.as_binary::<i32>();
+                for i in 0..len {
+                    if bin.is_null(i) {
+                        builder.append_null();
+                    } else {
+                        append_estimate(bin.value(i), &mut builder)?;
+                    }
+                }
+            }
+            DataType::LargeBinary => {
+                let bin = array.as_binary::<i64>();
+                for i in 0..len {
+                    if bin.is_null(i) {
+                        builder.append_null();
+                    } else {
+                        append_estimate(bin.value(i), &mut builder)?;
+                    }
+                }
+            }
+            DataType::BinaryView => {
+                let bin = array.as_binary_view();
+                for i in 0..len {
+                    if bin.is_null(i) {
+                        builder.append_null();
+                    } else {
+                        append_estimate(bin.value(i), &mut builder)?;
+                    }
+                }
+            }
             other => {
                 return exec_err!("hll_sketch_estimate expects a binary input, got {}", other);
             }
         };
-        for i in 0..len {
-            if bin.is_null(i) {
-                builder.append_null();
-                continue;
-            }
-            let bytes = bin.value(i);
-            if bytes.len() < 5 || &bytes[..4] != HLL_MAGIC {
-                return exec_err!("hll_sketch_estimate received an invalid sketch");
-            }
-            let sketch = HllSketch::from_bytes(bytes)?;
-            let estimate = sketch.estimate().min(i64::MAX as u64) as i64;
-            builder.append_value(estimate);
-        }
         let result: Int64Array = builder.finish();
         Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
     }
 }
 
-fn binary_from_large(array: &ArrayRef) -> Result<BinaryArray> {
-    let large = array.as_binary::<i64>();
-    let mut builder = BinaryBuilder::with_capacity(large.len(), large.value_data().len());
-    for i in 0..large.len() {
-        if large.is_null(i) {
-            builder.append_null();
-        } else {
-            builder.append_value(large.value(i));
-        }
+fn append_estimate(bytes: &[u8], builder: &mut Int64Builder) -> Result<()> {
+    if bytes.len() < 5 || &bytes[..4] != HLL_MAGIC {
+        return exec_err!("hll_sketch_estimate received an invalid sketch");
     }
-    Ok(builder.finish())
-}
-
-fn binary_from_view(array: &ArrayRef) -> Result<BinaryArray> {
-    let view = array.as_binary_view();
-    let mut builder = BinaryBuilder::with_capacity(view.len(), view.len() * 8);
-    for i in 0..view.len() {
-        if view.is_null(i) {
-            builder.append_null();
-        } else {
-            builder.append_value(view.value(i));
-        }
-    }
-    Ok(builder.finish())
+    let sketch = HllSketch::from_bytes(bytes)?;
+    let estimate = sketch.estimate().min(i64::MAX as u64) as i64;
+    builder.append_value(estimate);
+    Ok(())
 }
 
 /// Scalar function: merges two HyperLogLog sketches into one.

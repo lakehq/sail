@@ -53,6 +53,7 @@ Feature: hll_sketch_agg builds an HLL sketch and supports cardinality estimation
           ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
         )) AS result
         FROM VALUES (1, 1), (2, 1), (3, 2), (4, 3) AS tab(id, col)
+        ORDER BY id
         """
       Then query result
         | id | result |

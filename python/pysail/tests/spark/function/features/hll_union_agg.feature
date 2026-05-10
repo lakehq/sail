@@ -43,6 +43,7 @@ Feature: hll_union_agg merges binary HLL sketches across rows
           UNION ALL
           SELECT 3 AS id, hll_sketch_agg(col) AS sketch FROM VALUES (4) AS t(col)
         )
+        ORDER BY id
         """
       Then query result
         | id | result |
