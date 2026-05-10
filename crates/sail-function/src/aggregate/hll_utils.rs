@@ -33,7 +33,8 @@ pub const MIN_LG_CONFIG_K: u8 = 4;
 /// Maximum supported `lgConfigK`.
 pub const MAX_LG_CONFIG_K: u8 = 21;
 
-/// Seed used for HLL value hashing.
+/// Fixed seed used for deterministic Sail HLL value hashing. The seed has no
+/// compatibility significance because Sail's sketch format is internal.
 pub const HLL_HASH_SEED: u64 = 9001;
 
 /// A HyperLogLog sketch.
