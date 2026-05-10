@@ -6,7 +6,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, FieldRef, Fields, Schema};
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::future::FutureExt;
@@ -194,7 +195,7 @@ impl Executor {
 
         let mut empty = true;
         while let Some(batch) = context.next().await? {
-            let batch = to_arrow_batch(&batch)?;
+            let batch = to_spark_execute_arrow_batch(&batch)?;
             let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
             context.save_output(&out)?;
             tx.send(out).await?;
@@ -202,7 +203,7 @@ impl Executor {
         }
         if empty {
             let batch = RecordBatch::new_empty(context.stream.schema());
-            let batch = to_arrow_batch(&batch)?;
+            let batch = to_spark_execute_arrow_batch(&batch)?;
             let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
             context.save_output(&out)?;
             tx.send(out).await?;
@@ -318,13 +319,110 @@ pub(crate) async fn read_stream(
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
+    to_arrow_batch_with_schema(batch, batch.schema().as_ref())
+}
+
+fn to_spark_execute_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
+    let schema = to_spark_execute_arrow_schema(batch.schema().as_ref());
+    let batch = RecordBatch::try_new_with_options(
+        schema.into(),
+        batch.columns().to_vec(),
+        &RecordBatchOptions::new().with_match_field_names(false),
+    )?;
+    to_arrow_batch_with_schema(&batch, batch.schema().as_ref())
+}
+
+fn to_arrow_batch_with_schema(batch: &RecordBatch, schema: &Schema) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
-        let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
+        let mut writer = StreamWriter::try_new(cursor, schema)?;
         writer.write(batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;
     }
     Ok(output)
+}
+
+fn to_spark_execute_arrow_schema(schema: &Schema) -> Schema {
+    let fields = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, field)| sanitize_arrow_field(field, format!("col_{i}")))
+        .collect::<Vec<_>>();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
+fn sanitize_arrow_fields(fields: &Fields) -> Fields {
+    let names = deduplicate_arrow_field_names(fields.iter().map(|field| field.name()));
+    fields
+        .iter()
+        .zip(names)
+        .map(|(field, name)| sanitize_arrow_field(field, name))
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn sanitize_arrow_field(field: &FieldRef, name: String) -> FieldRef {
+    Field::new(name, sanitize_arrow_data_type(field.data_type()), field.is_nullable())
+        .with_metadata(field.metadata().clone())
+        .into()
+}
+
+fn sanitize_arrow_data_type(data_type: &ArrowDataType) -> ArrowDataType {
+    match data_type {
+        ArrowDataType::Struct(fields) => ArrowDataType::Struct(sanitize_arrow_fields(fields)),
+        ArrowDataType::List(field) => ArrowDataType::List(sanitize_arrow_field(field, field.name().clone())),
+        ArrowDataType::LargeList(field) => {
+            ArrowDataType::LargeList(sanitize_arrow_field(field, field.name().clone()))
+        }
+        ArrowDataType::FixedSizeList(field, size) => {
+            ArrowDataType::FixedSizeList(sanitize_arrow_field(field, field.name().clone()), *size)
+        }
+        ArrowDataType::ListView(field) => {
+            ArrowDataType::ListView(sanitize_arrow_field(field, field.name().clone()))
+        }
+        ArrowDataType::LargeListView(field) => {
+            ArrowDataType::LargeListView(sanitize_arrow_field(field, field.name().clone()))
+        }
+        ArrowDataType::Map(field, keys_sorted) => {
+            ArrowDataType::Map(sanitize_arrow_field(field, field.name().clone()), *keys_sorted)
+        }
+        ArrowDataType::Dictionary(key_type, value_type) => ArrowDataType::Dictionary(
+            key_type.clone(),
+            Box::new(sanitize_arrow_data_type(value_type.as_ref())),
+        ),
+        ArrowDataType::RunEndEncoded(run_ends, values) => ArrowDataType::RunEndEncoded(
+            sanitize_arrow_field(run_ends, run_ends.name().clone()),
+            sanitize_arrow_field(values, values.name().clone()),
+        ),
+        ArrowDataType::Union(fields, mode) => {
+            let sanitized = fields
+                .iter()
+                .map(|(type_id, field)| (type_id, sanitize_arrow_field(field, field.name().clone())))
+                .collect();
+            ArrowDataType::Union(sanitized, *mode)
+        }
+        _ => data_type.clone(),
+    }
+}
+
+fn deduplicate_arrow_field_names<'a>(names: impl IntoIterator<Item = &'a String>) -> Vec<String> {
+    let names = names.into_iter().collect::<Vec<_>>();
+    names.iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let count = names.iter().filter(|x| x.as_str() == name.as_str()).count();
+            if count > 1 {
+                let index = names[..i]
+                    .iter()
+                    .filter(|x| x.as_str() == name.as_str())
+                    .count();
+                format!("{name}_{index}")
+            } else {
+                (*name).clone()
+            }
+        })
+        .collect()
 }

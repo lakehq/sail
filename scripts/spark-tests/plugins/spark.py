@@ -111,8 +111,14 @@ def spark_doctest_session(doctest_namespace, request):
 def normalize_pandas_data_frame(df):
     from pandas.api.types import is_hashable
 
-    columns = [col for col in df.columns if all(is_hashable(v) for v in df[col])]
-    return df.sort_values(by=columns, ignore_index=True)
+    columns = [i for i in range(len(df.columns)) if all(is_hashable(v) for v in df.iloc[:, i])]
+    if not columns:
+        return df.reset_index(drop=True)
+    result = df.copy()
+    result.columns = range(len(result.columns))
+    result = result.sort_values(by=columns, ignore_index=True)
+    result.columns = df.columns
+    return result
 
 
 def normalize_datetime_dtypes(df):

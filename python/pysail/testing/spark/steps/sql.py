@@ -7,8 +7,10 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
+from pyspark.sql import Row
 from jinja2 import Template
 from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql.types import IntegerType, StringType, StructType
 from pytest_bdd import given, parsers, then, when
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal, parse_show_string
@@ -133,6 +135,23 @@ def query_schema(docstring, query, spark):
 @when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
 def dataframe_for(case, spark):
     """Builds a DataFrame for a named BDD case."""
+    duplicate_struct_data = [
+        Row(Row("a", 1), Row(2, 3, "b", 4, "c")),
+        Row(Row("x", 6), Row(7, 8, "y", 9, "z")),
+    ]
+    duplicate_struct_schema = (
+        StructType()
+        .add("struct", StructType().add("x", StringType()).add("x", IntegerType()))
+        .add(
+            "struct",
+            StructType()
+            .add("a", IntegerType())
+            .add("x", IntegerType())
+            .add("x", StringType())
+            .add("y", IntegerType())
+            .add("y", StringType()),
+        )
+    )
     cases = {
         "null literal": lambda: spark.range(1).select(F.lit(None).alias("result")),
         "null literal alias projection": lambda: (
@@ -161,6 +180,11 @@ def dataframe_for(case, spark):
         "to_timestamp_ntz value with null format": lambda: spark.range(1).select(
             F.to_timestamp_ntz(F.lit("2024-01-02"), F.lit(None)).alias("result")
         ),
+        "duplicate top-level columns": lambda: spark.range(3).select("id", "id", "id"),
+        "duplicate struct fields": lambda: spark.createDataFrame(
+            duplicate_struct_data,
+            schema=duplicate_struct_schema,
+        ),
     }
     try:
         return cases[case]()
@@ -172,6 +196,36 @@ def dataframe_for(case, spark):
 def dataframe_schema(docstring, dataframe):
     """Compare a DataFrame schema with expected schema tree string."""
     assert_schema_tree(dataframe, docstring)
+
+
+@then("dataframe pandas columns")
+def dataframe_pandas_columns(docstring, dataframe):
+    """Compare Pandas column labels produced by DataFrame.toPandas()."""
+    assert list(dataframe.toPandas().columns) == json.loads(docstring)
+
+
+@then(parsers.parse("dataframe pandas row count is {count:d}"))
+def dataframe_pandas_row_count(count, dataframe):
+    """Assert DataFrame.toPandas() succeeds and has the expected number of rows."""
+    assert len(dataframe.toPandas()) == count
+
+
+@then("dataframe collect matches duplicate struct rows")
+def dataframe_collect_matches_duplicate_struct_rows(dataframe):
+    """Assert duplicate nested struct field names do not break Spark Connect collection."""
+    expected = [
+        Row(Row("a", 1), Row(2, 3, "b", 4, "c")),
+        Row(Row("x", 6), Row(7, 8, "y", 9, "z")),
+    ]
+    assert dataframe.collect() == expected
+
+
+@then("dataframe pandas dict structs have deduplicated field names")
+def dataframe_pandas_dict_structs_have_deduplicated_field_names(dataframe):
+    """Assert duplicate nested struct fields are deduplicated using Spark-compatible suffixes."""
+    pdf = dataframe.toPandas()
+    assert pdf.iloc[0, 0] == {"x_0": "a", "x_1": 1}
+    assert pdf.iloc[0, 1] == {"a": 2, "x_0": 3, "x_1": "b", "y_0": 4, "y_1": "c"}
 
 
 def assert_schema_tree(df, docstring):
