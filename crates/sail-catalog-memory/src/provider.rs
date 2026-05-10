@@ -309,9 +309,16 @@ impl CatalogProvider for MemoryCatalogProvider {
             .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.to_string()))?;
         match &mut status.kind {
             TableKind::Table {
+                columns: _,
+                comment: _,
+                constraints: _,
                 location: _,
+                format: _,
+                partition_by: _,
+                sort_by: _,
+                bucket_by: _,
                 properties,
-                ..
+                is_external: _,
             } => match options {
                 AlterTableOptions::SetTableProperties {
                     properties: new_props,
