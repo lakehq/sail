@@ -29,7 +29,8 @@ struct CatalogObjectTrackerState {
     /// Maps relation IDs from `CachedRemoteRelation` to their checkpointed
     /// logical plans and user-facing field names. Populated when the server
     /// handles a `CheckpointCommand`, and queried when resolving a
-    /// `CachedRemoteRelation` query node.
+    /// `CachedRemoteRelation` query node. Entries are removed when the server
+    /// handles a `RemoveCachedRemoteRelationCommand`.
     cached_relations: HashMap<String, CatalogCachedRelation>,
 }
 

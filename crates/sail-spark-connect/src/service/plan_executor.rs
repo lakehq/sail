@@ -544,14 +544,7 @@ pub(crate) async fn handle_execute_checkpoint_command(
         plan: logical_plan,
         fields,
     } = resolver.resolve_named_plan(plan).await?;
-    let fields = fields.unwrap_or_else(|| {
-        logical_plan
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| field.name().to_string())
-            .collect()
-    });
+    let fields = named_plan_fields(&logical_plan, fields);
 
     let use_disk = checkpoint_uses_disk(local, storage_level.as_ref());
     let (cached_plan, storage_path) = if eager && use_disk {
@@ -599,6 +592,16 @@ pub(crate) async fn handle_execute_checkpoint_command(
     ))
 }
 
+fn named_plan_fields(plan: &LogicalPlan, fields: Option<Vec<String>>) -> Vec<String> {
+    fields.unwrap_or_else(|| {
+        plan.schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().to_string())
+            .collect()
+    })
+}
+
 fn checkpoint_uses_disk(
     local: bool,
     storage_level: Option<&crate::spark::connect::StorageLevel>,
@@ -634,6 +637,9 @@ async fn materialize_logical_plan_to_disk(
     ctx: &SessionContext,
     plan: LogicalPlan,
 ) -> SparkResult<(LogicalPlan, Option<PathBuf>)> {
+    // Spark Connect does not send a user checkpoint directory with this command,
+    // so Sail stores reliable checkpoint files in a per-server temporary area
+    // and deletes them when the client releases the cached remote relation.
     let checkpoint_root = std::env::temp_dir().join("sail-checkpoints");
     tokio::fs::create_dir_all(&checkpoint_root)
         .await
