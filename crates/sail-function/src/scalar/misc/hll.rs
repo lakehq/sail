@@ -7,17 +7,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-use crate::aggregate::hll_utils::{HllSketch, HLL_MAGIC};
-
-fn is_binary_type(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Binary
-            | DataType::LargeBinary
-            | DataType::BinaryView
-            | DataType::FixedSizeBinary(_)
-    )
-}
+use crate::aggregate::hll_utils::{is_binary_type, HllSketch, HLL_MAGIC};
 
 /// Scalar function: returns the estimated number of unique values represented
 /// by a HyperLogLog sketch.

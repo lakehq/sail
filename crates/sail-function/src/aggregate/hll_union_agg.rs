@@ -6,8 +6,9 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_common::cast::as_fixed_size_binary_array;
 
-use crate::aggregate::hll_utils::{scalar_to_allow_diff, HllSketch, HLL_MAGIC};
+use crate::aggregate::hll_utils::{is_binary_type, scalar_to_allow_diff, HllSketch, HLL_MAGIC};
 use crate::aggregate::utils::get_scalar_value;
 
 /// Aggregate function that merges HyperLogLog sketches via union.
@@ -38,16 +39,6 @@ impl HllUnionAggFunction {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
-}
-
-fn is_binary_type(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Binary
-            | DataType::LargeBinary
-            | DataType::BinaryView
-            | DataType::FixedSizeBinary(_)
-    )
 }
 
 impl AggregateUDFImpl for HllUnionAggFunction {
@@ -135,7 +126,7 @@ impl HllUnionAccumulator {
         }
     }
 
-    fn ingest_binary_bytes(&mut self, array: &ArrayRef) -> Result<()> {
+    fn ingest_binary_array(&mut self, array: &ArrayRef) -> Result<()> {
         match array.data_type() {
             DataType::Binary => {
                 let bin = array.as_binary::<i32>();
@@ -165,14 +156,7 @@ impl HllUnionAccumulator {
                 }
             }
             DataType::FixedSizeBinary(_) => {
-                let bin = array
-                    .as_any()
-                    .downcast_ref::<datafusion::arrow::array::FixedSizeBinaryArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "hll_union_agg: expected FixedSizeBinaryArray".to_string(),
-                        )
-                    })?;
+                let bin = as_fixed_size_binary_array(array)?;
                 for i in 0..bin.len() {
                     if bin.is_null(i) {
                         continue;
@@ -203,7 +187,7 @@ impl Accumulator for HllUnionAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-        self.ingest_binary_bytes(&values[0])
+        self.ingest_binary_array(&values[0])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {

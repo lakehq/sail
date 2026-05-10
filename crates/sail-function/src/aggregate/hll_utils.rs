@@ -18,6 +18,7 @@
 
 use std::hash::Hasher;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
 use twox_hash::XxHash64;
 
@@ -36,6 +37,18 @@ pub const MAX_LG_CONFIG_K: u8 = 21;
 /// Fixed seed used for deterministic Sail HLL value hashing. The seed has no
 /// compatibility significance because Sail's sketch format is internal.
 pub const HLL_HASH_SEED: u64 = 9001;
+
+/// Returns `true` if the given [`DataType`] is a binary variant
+/// (`Binary`, `LargeBinary`, `BinaryView`, or `FixedSizeBinary`).
+pub fn is_binary_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+    )
+}
 
 /// A HyperLogLog sketch.
 #[derive(Debug, Clone)]
