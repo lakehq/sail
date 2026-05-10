@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::{expr_applicable_for_cols, pruned_partition_list};
 use datafusion::execution::SessionState;
@@ -66,9 +67,10 @@ impl ExtensionPlanner for ListingTableExtensionPlanner {
         let limit = scan.fetch;
 
         let partition_column_names = source
+            .schema()
             .table_partition_cols()
             .iter()
-            .map(|(col, _)| col.as_str())
+            .map(|col| col.name().as_str())
             .collect::<Vec<_>>();
 
         let (partition_filters, filters): (Vec<_>, Vec<_>) =
@@ -259,6 +261,13 @@ async fn list_files_for_scan<'a>(
         });
     };
 
+    let partition_cols: Vec<(String, DataType)> = source
+        .schema()
+        .table_partition_cols()
+        .iter()
+        .map(|field| (field.name().clone(), field.data_type().clone()))
+        .collect();
+
     let file_list = future::try_join_all(source.table_paths().iter().map(|table_path| {
         pruned_partition_list(
             ctx,
@@ -266,7 +275,7 @@ async fn list_files_for_scan<'a>(
             table_path,
             filters,
             source.file_extension(),
-            source.table_partition_cols(),
+            &partition_cols,
         )
     }))
     .await?;
@@ -298,7 +307,7 @@ async fn list_files_for_scan<'a>(
     let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
     let (file_groups, grouped_by_partition) =
-        if threshold > 0 && !source.table_partition_cols().is_empty() {
+        if threshold > 0 && !partition_cols.is_empty() {
             let grouped = file_group.group_by_partition_values(source.target_partitions());
             if grouped.len() >= threshold {
                 (grouped, true)

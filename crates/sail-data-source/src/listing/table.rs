@@ -3,7 +3,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion::execution::cache::cache_manager::FileStatisticsCache;
 use datafusion::execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -19,7 +19,6 @@ pub struct ListingTableSourceConfig {
     pub table_paths: Vec<datafusion_datasource::ListingTableUrl>,
     pub file_extension: String,
     pub schema: TableSchema,
-    pub table_partition_cols: Vec<(String, DataType)>,
     pub constraints: Constraints,
     pub file_sort_order: Vec<Vec<Sort>>,
     pub collect_stat: bool,
@@ -37,8 +36,6 @@ pub struct ListingTableSource {
     table_paths: Vec<datafusion_datasource::ListingTableUrl>,
     file_extension: String,
     schema: TableSchema,
-    /// Partition columns derived from hive-style paths (names are *path keys*).
-    table_partition_cols: Vec<(String, DataType)>,
     constraints: Constraints,
     /// Equivalent sort orderings declared by the caller (logical).
     file_sort_order: Vec<Vec<Sort>>,
@@ -56,7 +53,6 @@ impl ListingTableSource {
             table_paths: config.table_paths,
             file_extension: config.file_extension,
             schema: config.schema,
-            table_partition_cols: config.table_partition_cols,
             constraints: config.constraints,
             file_sort_order: config.file_sort_order,
             collect_stat: config.collect_stat,
@@ -91,8 +87,8 @@ impl ListingTableSource {
         &self.constraints
     }
 
-    pub fn table_partition_cols(&self) -> &[(String, DataType)] {
-        &self.table_partition_cols
+    pub fn table_partition_cols(&self) -> &Vec<FieldRef> {
+        self.schema.table_partition_cols()
     }
 
     pub fn file_sort_order(&self) -> &[Vec<Sort>] {
@@ -139,28 +135,17 @@ impl ListingTableSource {
             self.schema.file_schema().metadata().clone(),
         ));
 
-        let mut new_partition_cols = Vec::with_capacity(self.table_partition_cols.len());
-        for (idx, (_name, data_type)) in self.table_partition_cols.iter().enumerate() {
+        let mut new_partition_cols = Vec::with_capacity(self.schema.table_partition_cols().len());
+        for (idx, field) in self.schema.table_partition_cols().iter().enumerate() {
             let name_idx = file_field_count + idx;
-            new_partition_cols.push(Arc::new(Field::new(
-                names[name_idx].clone(),
-                data_type.clone(),
-                false,
-            )));
+            new_partition_cols.push(Arc::new(
+                field.as_ref().clone().with_name(names[name_idx].clone()),
+            ));
         }
         let new_schema = TableSchema::new(new_file_schema, new_partition_cols);
 
         Ok(Self {
             schema: new_schema,
-            table_partition_cols: self
-                .table_partition_cols
-                .iter()
-                .enumerate()
-                .map(|(idx, (_name, data_type))| {
-                    let name_idx = file_field_count + idx;
-                    (names[name_idx].clone(), data_type.clone())
-                })
-                .collect(),
             ..self.clone()
         })
     }
@@ -190,9 +175,10 @@ impl TableSource for ListingTableSource {
         // Expressions can be used for partition pruning if they can be evaluated
         // using only the partition columns and there are partition columns.
         let partition_column_names = self
-            .table_partition_cols
+            .schema
+            .table_partition_cols()
             .iter()
-            .map(|(name, _data_type)| name.as_str())
+            .map(|field| field.name().as_str())
             .collect::<Vec<_>>();
 
         filters

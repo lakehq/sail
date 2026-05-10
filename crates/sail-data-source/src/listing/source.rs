@@ -313,7 +313,6 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 table_paths: config.table_paths,
                 file_extension: listing_options.file_extension,
                 schema: TableSchema::new(file_schema, partition_fields),
-                table_partition_cols: listing_options.table_partition_cols,
                 constraints,
                 file_sort_order: listing_options.file_sort_order,
                 collect_stat: listing_options.collect_stat,
