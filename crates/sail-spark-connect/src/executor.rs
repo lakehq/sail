@@ -365,15 +365,21 @@ fn sanitize_arrow_fields(fields: &Fields) -> Fields {
 }
 
 fn sanitize_arrow_field(field: &FieldRef, name: String) -> FieldRef {
-    Field::new(name, sanitize_arrow_data_type(field.data_type()), field.is_nullable())
-        .with_metadata(field.metadata().clone())
-        .into()
+    Field::new(
+        name,
+        sanitize_arrow_data_type(field.data_type()),
+        field.is_nullable(),
+    )
+    .with_metadata(field.metadata().clone())
+    .into()
 }
 
 fn sanitize_arrow_data_type(data_type: &ArrowDataType) -> ArrowDataType {
     match data_type {
         ArrowDataType::Struct(fields) => ArrowDataType::Struct(sanitize_arrow_fields(fields)),
-        ArrowDataType::List(field) => ArrowDataType::List(sanitize_arrow_field(field, field.name().clone())),
+        ArrowDataType::List(field) => {
+            ArrowDataType::List(sanitize_arrow_field(field, field.name().clone()))
+        }
         ArrowDataType::LargeList(field) => {
             ArrowDataType::LargeList(sanitize_arrow_field(field, field.name().clone()))
         }
@@ -386,9 +392,10 @@ fn sanitize_arrow_data_type(data_type: &ArrowDataType) -> ArrowDataType {
         ArrowDataType::LargeListView(field) => {
             ArrowDataType::LargeListView(sanitize_arrow_field(field, field.name().clone()))
         }
-        ArrowDataType::Map(field, keys_sorted) => {
-            ArrowDataType::Map(sanitize_arrow_field(field, field.name().clone()), *keys_sorted)
-        }
+        ArrowDataType::Map(field, keys_sorted) => ArrowDataType::Map(
+            sanitize_arrow_field(field, field.name().clone()),
+            *keys_sorted,
+        ),
         ArrowDataType::Dictionary(key_type, value_type) => ArrowDataType::Dictionary(
             key_type.clone(),
             Box::new(sanitize_arrow_data_type(value_type.as_ref())),
@@ -400,7 +407,9 @@ fn sanitize_arrow_data_type(data_type: &ArrowDataType) -> ArrowDataType {
         ArrowDataType::Union(fields, mode) => {
             let sanitized = fields
                 .iter()
-                .map(|(type_id, field)| (type_id, sanitize_arrow_field(field, field.name().clone())))
+                .map(|(type_id, field)| {
+                    (type_id, sanitize_arrow_field(field, field.name().clone()))
+                })
                 .collect();
             ArrowDataType::Union(sanitized, *mode)
         }
@@ -410,7 +419,8 @@ fn sanitize_arrow_data_type(data_type: &ArrowDataType) -> ArrowDataType {
 
 fn deduplicate_arrow_field_names<'a>(names: impl IntoIterator<Item = &'a String>) -> Vec<String> {
     let names = names.into_iter().collect::<Vec<_>>();
-    names.iter()
+    names
+        .iter()
         .enumerate()
         .map(|(i, name)| {
             let count = names.iter().filter(|x| x.as_str() == name.as_str()).count();

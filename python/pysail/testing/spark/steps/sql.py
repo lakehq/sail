@@ -7,8 +7,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
-from pyspark.sql import Row
 from jinja2 import Template
+from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import IntegerType, StringType, StructType
 from pytest_bdd import given, parsers, then, when

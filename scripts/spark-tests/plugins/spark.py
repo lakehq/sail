@@ -131,9 +131,9 @@ def normalize_datetime_dtypes(df):
     ``assert_frame_equal`` do not fail due to this precision difference.
     """
     result = df.copy()
-    for col in result.columns:
-        if str(result[col].dtype) == "datetime64[ns]":
-            result[col] = result[col].astype("datetime64[us]")
+    for i in range(len(result.columns)):
+        if str(result.iloc[:, i].dtype) == "datetime64[ns]":
+            result.iloc[:, i] = result.iloc[:, i].astype("datetime64[us]")
     return result
 
 
