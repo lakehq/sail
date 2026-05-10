@@ -190,8 +190,6 @@ use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
 use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
-use sail_function::scalar::url::parse_url::ParseUrl;
-use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
@@ -2122,10 +2120,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
             }
-            UdfKind::ParseUrl(gen::ParseUrlUdf { safe }) => {
-                let _ = safe;
-                return Ok(Arc::new(ScalarUDF::from(ParseUrl::new())));
-            }
         };
         match name {
             "array_item_with_position" => {
@@ -2287,10 +2281,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
             "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
-            "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
-            "try_parse_url" | "spark_try_parse_url" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
-            }
             "try_url_decode" => Ok(Arc::new(ScalarUDF::from(TryUrlDecode::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
@@ -2324,7 +2314,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
             || node_inner.is::<OverlayFunc>()
-            || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
@@ -2394,7 +2383,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryDiv>()
             || node_inner.is::<SparkTryMod>()
             || node_inner.is::<SparkTryMult>()
-            || node_inner.is::<SparkTryParseUrl>()
             || node_inner.is::<SparkTrySubtract>()
             || node_inner.is::<SparkTryToBinary>()
             || node_inner.is::<SparkTryToNumber>()
