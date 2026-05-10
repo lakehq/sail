@@ -1,13 +1,11 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-use datafusion::arrow::array::{Array, ArrayRef, BinaryArray};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, BinaryArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion::logical_expr::{
-    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
-};
+use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
 use crate::aggregate::hll_utils::{scalar_to_allow_diff, HllSketch, HLL_MAGIC};
 use crate::aggregate::utils::get_scalar_value;
@@ -36,16 +34,20 @@ impl HllUnionAggFunction {
     pub fn new() -> Self {
         Self {
             // Two arguments: input binary sketch and allowDifferentLgConfigK boolean literal.
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![DataType::Binary, DataType::Boolean]),
-                    TypeSignature::Exact(vec![DataType::LargeBinary, DataType::Boolean]),
-                    TypeSignature::Exact(vec![DataType::BinaryView, DataType::Boolean]),
-                ],
-                Volatility::Immutable,
-            ),
+            // Actual type validation happens in `coerce_types`.
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
+}
+
+fn is_binary_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+    )
 }
 
 impl AggregateUDFImpl for HllUnionAggFunction {
@@ -77,6 +79,29 @@ impl AggregateUDFImpl for HllUnionAggFunction {
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![Field::new("sketch", DataType::Binary, true).into()])
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return Err(DataFusionError::Plan(format!(
+                "hll_union_agg expects 2 arguments, got {}",
+                arg_types.len()
+            )));
+        }
+        if !is_binary_type(&arg_types[0]) {
+            return Err(DataFusionError::Plan(format!(
+                "hll_union_agg expects a binary sketch as the first argument, got {}",
+                arg_types[0]
+            )));
+        }
+        if arg_types[1] != DataType::Boolean {
+            return Err(DataFusionError::Plan(format!(
+                "hll_union_agg expects a boolean as the second argument, got {}",
+                arg_types[1]
+            )));
+        }
+        // Coerce all binary variants to Binary for uniform downstream handling.
+        Ok(vec![DataType::Binary, DataType::Boolean])
     }
 }
 
@@ -110,25 +135,66 @@ impl HllUnionAccumulator {
         }
     }
 
-    fn add_binary_array(&mut self, array: &ArrayRef) -> Result<()> {
-        let binary_array = array
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("hll_union_agg expected binary array".to_string())
-            })?;
-        for i in 0..binary_array.len() {
-            if binary_array.is_null(i) {
-                continue;
+    fn ingest_binary_bytes(&mut self, array: &ArrayRef) -> Result<()> {
+        match array.data_type() {
+            DataType::Binary => {
+                let bin = array.as_binary::<i32>();
+                for i in 0..bin.len() {
+                    if bin.is_null(i) {
+                        continue;
+                    }
+                    self.ingest_sketch_bytes(bin.value(i))?;
+                }
             }
-            let bytes = binary_array.value(i);
-            if bytes.len() < 5 || &bytes[..4] != HLL_MAGIC {
-                return exec_err!("hll_union_agg received an invalid sketch");
+            DataType::LargeBinary => {
+                let bin = array.as_binary::<i64>();
+                for i in 0..bin.len() {
+                    if bin.is_null(i) {
+                        continue;
+                    }
+                    self.ingest_sketch_bytes(bin.value(i))?;
+                }
             }
-            let other = HllSketch::from_bytes(bytes)?;
-            self.merge_sketch(other)?;
+            DataType::BinaryView => {
+                let bin = array.as_binary_view();
+                for i in 0..bin.len() {
+                    if bin.is_null(i) {
+                        continue;
+                    }
+                    self.ingest_sketch_bytes(bin.value(i))?;
+                }
+            }
+            DataType::FixedSizeBinary(_) => {
+                let bin = array
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::FixedSizeBinaryArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "hll_union_agg: expected FixedSizeBinaryArray".to_string(),
+                        )
+                    })?;
+                for i in 0..bin.len() {
+                    if bin.is_null(i) {
+                        continue;
+                    }
+                    self.ingest_sketch_bytes(bin.value(i))?;
+                }
+            }
+            other => {
+                return Err(DataFusionError::Internal(format!(
+                    "hll_union_agg expected a binary array, got {other}"
+                )));
+            }
         }
         Ok(())
+    }
+
+    fn ingest_sketch_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        if bytes.len() < 5 || &bytes[..4] != HLL_MAGIC {
+            return exec_err!("hll_union_agg received an invalid sketch");
+        }
+        let other = HllSketch::from_bytes(bytes)?;
+        self.merge_sketch(other)
     }
 }
 
@@ -137,7 +203,7 @@ impl Accumulator for HllUnionAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-        self.add_binary_array(&values[0])
+        self.ingest_binary_bytes(&values[0])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -159,6 +225,21 @@ impl Accumulator for HllUnionAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.add_binary_array(&states[0])
+        // State is always serialized as Binary.
+        let binary_array = states[0]
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "hll_union_agg expected binary array for state".to_string(),
+                )
+            })?;
+        for i in 0..binary_array.len() {
+            if binary_array.is_null(i) {
+                continue;
+            }
+            self.ingest_sketch_bytes(binary_array.value(i))?;
+        }
+        Ok(())
     }
 }

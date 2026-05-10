@@ -4,12 +4,20 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, BinaryBuilder, Int64Array, Int64Builder};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
-};
+use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::aggregate::hll_utils::{HllSketch, HLL_MAGIC};
+
+fn is_binary_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+    )
+}
 
 /// Scalar function: returns the estimated number of unique values represented
 /// by a HyperLogLog sketch.
@@ -27,15 +35,7 @@ impl Default for HllSketchEstimate {
 impl HllSketchEstimate {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![
-                    DataType::Binary,
-                    DataType::LargeBinary,
-                    DataType::BinaryView,
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -57,6 +57,22 @@ impl ScalarUDFImpl for HllSketchEstimate {
         Ok(DataType::Int64)
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return Err(DataFusionError::Plan(format!(
+                "hll_sketch_estimate expects 1 argument, got {}",
+                arg_types.len()
+            )));
+        }
+        if !is_binary_type(&arg_types[0]) {
+            return Err(DataFusionError::Plan(format!(
+                "hll_sketch_estimate expects a binary input, got {}",
+                arg_types[0]
+            )));
+        }
+        Ok(vec![DataType::Binary])
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         if arrays.len() != 1 {
@@ -65,41 +81,14 @@ impl ScalarUDFImpl for HllSketchEstimate {
         let array = &arrays[0];
         let len = array.len();
         let mut builder = Int64Builder::with_capacity(len);
-        match array.data_type() {
-            DataType::Binary => {
-                let bin = array.as_binary::<i32>();
-                for i in 0..len {
-                    if bin.is_null(i) {
-                        builder.append_null();
-                    } else {
-                        append_estimate(bin.value(i), &mut builder)?;
-                    }
-                }
+        let bin = array.as_binary::<i32>();
+        for i in 0..len {
+            if bin.is_null(i) {
+                builder.append_null();
+            } else {
+                append_estimate(bin.value(i), &mut builder)?;
             }
-            DataType::LargeBinary => {
-                let bin = array.as_binary::<i64>();
-                for i in 0..len {
-                    if bin.is_null(i) {
-                        builder.append_null();
-                    } else {
-                        append_estimate(bin.value(i), &mut builder)?;
-                    }
-                }
-            }
-            DataType::BinaryView => {
-                let bin = array.as_binary_view();
-                for i in 0..len {
-                    if bin.is_null(i) {
-                        builder.append_null();
-                    } else {
-                        append_estimate(bin.value(i), &mut builder)?;
-                    }
-                }
-            }
-            other => {
-                return exec_err!("hll_sketch_estimate expects a binary input, got {}", other);
-            }
-        };
+        }
         let result: Int64Array = builder.finish();
         Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
     }
@@ -130,17 +119,7 @@ impl Default for HllUnion {
 impl HllUnion {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![DataType::Binary, DataType::Binary]),
-                    TypeSignature::Exact(vec![
-                        DataType::Binary,
-                        DataType::Binary,
-                        DataType::Boolean,
-                    ]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -160,6 +139,38 @@ impl ScalarUDFImpl for HllUnion {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Binary)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 && arg_types.len() != 3 {
+            return Err(DataFusionError::Plan(format!(
+                "hll_union expects 2 or 3 arguments, got {}",
+                arg_types.len()
+            )));
+        }
+        if !is_binary_type(&arg_types[0]) {
+            return Err(DataFusionError::Plan(format!(
+                "hll_union expects a binary sketch as the first argument, got {}",
+                arg_types[0]
+            )));
+        }
+        if !is_binary_type(&arg_types[1]) {
+            return Err(DataFusionError::Plan(format!(
+                "hll_union expects a binary sketch as the second argument, got {}",
+                arg_types[1]
+            )));
+        }
+        if arg_types.len() == 3 && arg_types[2] != DataType::Boolean {
+            return Err(DataFusionError::Plan(format!(
+                "hll_union expects a boolean as the third argument, got {}",
+                arg_types[2]
+            )));
+        }
+        let mut coerced = vec![DataType::Binary, DataType::Binary];
+        if arg_types.len() == 3 {
+            coerced.push(DataType::Boolean);
+        }
+        Ok(coerced)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
