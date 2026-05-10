@@ -83,27 +83,40 @@ impl ScalarUDFImpl for SparkBase64 {
             );
         };
 
-        let results = match arg {
-            ColumnarValue::Scalar(ScalarValue::Binary(None))
-            | ColumnarValue::Scalar(ScalarValue::BinaryView(None))
-            | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, None))
-            | ColumnarValue::Scalar(ScalarValue::LargeBinary(None))
-            | ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-            | ColumnarValue::Scalar(ScalarValue::Null) => Ok(vec![None]),
-            ColumnarValue::Scalar(ScalarValue::Binary(Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::BinaryView(Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(expr))) => {
-                let results = vec![Some(STANDARD.encode(expr.as_slice()))];
-                Ok(results)
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::LargeBinary(value)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(
+                    value
+                        .as_ref()
+                        .map(|value| STANDARD.encode(value.as_slice())),
+                )))
             }
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => {
-                let results = vec![Some(STANDARD.encode(expr.as_bytes()))];
-                Ok(results)
+            ColumnarValue::Scalar(ScalarValue::LargeUtf8(value)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(
+                    value
+                        .as_ref()
+                        .map(|value| STANDARD.encode(value.as_bytes())),
+                )))
+            }
+            ColumnarValue::Scalar(ScalarValue::Binary(value))
+            | ColumnarValue::Scalar(ScalarValue::BinaryView(value))
+            | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, value)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                    value
+                        .as_ref()
+                        .map(|value| STANDARD.encode(value.as_slice())),
+                )))
+            }
+            ColumnarValue::Scalar(ScalarValue::Utf8(value))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(value)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                    value
+                        .as_ref()
+                        .map(|value| STANDARD.encode(value.as_bytes())),
+                )))
+            }
+            ColumnarValue::Scalar(ScalarValue::Null) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
             }
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Binary => {
@@ -211,29 +224,24 @@ impl ScalarUDFImpl for SparkBase64 {
                         |i| array.value(i).as_bytes(),
                     ))
                 }
+                DataType::Null => Ok(vec![None; array.len()]),
                 other => {
                     exec_err!("Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}")
                 }
-            },
-            other => exec_err!("Spark `base64`: Expr must be BINARY or STRING, got {other:?}"),
-        }?;
-
-        match args[0].data_type() {
-            DataType::Utf8
-            | DataType::Utf8View
-            | DataType::Binary
-            | DataType::FixedSizeBinary(_)
-            | DataType::BinaryView => {
-                Ok(ColumnarValue::Array(Arc::new(StringArray::from(results))))
             }
-            DataType::LargeUtf8 | DataType::LargeBinary => Ok(ColumnarValue::Array(Arc::new(
-                LargeStringArray::from(results),
-            ))),
-            DataType::Null => Ok(ColumnarValue::Array(Arc::new(StringArray::from(results)))),
-            _ => plan_err!(
-                "1st argument should be String or Binary, got {}",
-                args[0].data_type()
-            ),
+            .map(|results| match args[0].data_type() {
+                DataType::Utf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::FixedSizeBinary(_)
+                | DataType::BinaryView => ColumnarValue::Array(Arc::new(StringArray::from(results))),
+                DataType::LargeUtf8 | DataType::LargeBinary => {
+                    ColumnarValue::Array(Arc::new(LargeStringArray::from(results)))
+                }
+                DataType::Null => ColumnarValue::Array(Arc::new(StringArray::from(results))),
+                _ => unreachable!(),
+            }),
+            other => exec_err!("Spark `base64`: Expr must be BINARY or STRING, got {other:?}"),
         }
     }
 }
@@ -354,16 +362,18 @@ impl ScalarUDFImpl for SparkUnbase64 {
             );
         };
 
-        let results = match arg {
-            ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-            | ColumnarValue::Scalar(ScalarValue::Null) => Ok(vec![None]),
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => {
-                let results = vec![decode_spark_base64(expr.as_str())];
-                Ok(results)
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Utf8(value))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(value)) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Binary(value.as_ref().and_then(|value| decode_spark_base64(value))),
+            )),
+            ColumnarValue::Scalar(ScalarValue::LargeUtf8(value)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::LargeBinary(
+                    value.as_ref().and_then(|value| decode_spark_base64(value)),
+                )))
+            }
+            ColumnarValue::Scalar(ScalarValue::Null) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)))
             }
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Utf8 => {
@@ -411,35 +421,35 @@ impl ScalarUDFImpl for SparkUnbase64 {
                         |i| array.value(i),
                     ))
                 }
+                DataType::Null => Ok(vec![None; array.len()]),
                 other => exec_err!(
                     "Spark `unbase64`: Expr array must be STRING, got array of type {other}"
                 ),
-            },
+            }
+            .and_then(|results| match args[0].data_type() {
+                DataType::Null | DataType::Utf8 | DataType::Utf8View => {
+                    let mut builder = BinaryBuilder::new();
+                    for value in results {
+                        match value {
+                            Some(value) => builder.append_value(value.as_slice()),
+                            None => builder.append_null(),
+                        }
+                    }
+                    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+                }
+                DataType::LargeUtf8 => {
+                    let mut builder = LargeBinaryBuilder::new();
+                    for value in results {
+                        match value {
+                            Some(value) => builder.append_value(value.as_slice()),
+                            None => builder.append_null(),
+                        }
+                    }
+                    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+                }
+                _ => plan_err!("1st argument should be String, got {}", args[0].data_type()),
+            }),
             other => exec_err!("Spark `unbase64`: Expr must be STRING, got {other:?}"),
-        }?;
-
-        match args[0].data_type() {
-            DataType::Null | DataType::Utf8 | DataType::Utf8View => {
-                let mut builder = BinaryBuilder::new();
-                for value in results {
-                    match value {
-                        Some(value) => builder.append_value(value.as_slice()),
-                        None => builder.append_null(),
-                    }
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-            }
-            DataType::LargeUtf8 => {
-                let mut builder = LargeBinaryBuilder::new();
-                for value in results {
-                    match value {
-                        Some(value) => builder.append_value(value.as_slice()),
-                        None => builder.append_null(),
-                    }
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-            }
-            _ => plan_err!("1st argument should be String, got {}", args[0].data_type()),
         }
     }
 }
