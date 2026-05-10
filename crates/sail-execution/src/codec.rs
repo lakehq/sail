@@ -56,7 +56,6 @@ use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
 use datafusion_spark::function::bitwise::bitwise_not::SparkBitwiseNot;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
-use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
@@ -125,6 +124,7 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_interval::SparkMakeInterval;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
@@ -135,7 +135,6 @@ use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
-use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
@@ -191,8 +190,6 @@ use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
 use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
-use sail_function::scalar::url::parse_url::ParseUrl;
-use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
@@ -2096,12 +2093,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = TimestampNow::new(Arc::from(timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try }) => {
-                let udf = SparkTimestamp::try_new(timezone.map(Arc::from), is_try)?;
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, safe }) => {
+                let udf = SparkTimestamp::try_new(timezone.map(Arc::from), safe)?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
-                return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
+            UdfKind::SparkDate(gen::SparkDateUdf { safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkDate::new(safe))));
             }
             UdfKind::SparkTime(gen::SparkTimeUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkTime::new(is_try))));
@@ -2116,6 +2113,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkVariantGet::new(safe))));
+            }
+            UdfKind::SparkMakeInterval(gen::SparkMakeIntervalUdf { safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new(safe))));
             }
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
@@ -2228,9 +2228,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
             }
-            "spark_make_interval" | "make_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new())))
-            }
             "spark_make_ym_interval" | "make_ym_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
@@ -2261,9 +2258,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
             }
             "spark_to_chrono_fmt" => Ok(Arc::new(ScalarUDF::from(SparkToChronoFmt::new()))),
-            "spark_try_to_timestamp" | "try_to_timestamp" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
-            }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
@@ -2287,10 +2281,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
             "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
-            "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
-            "try_parse_url" | "spark_try_parse_url" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
-            }
             "try_url_decode" => Ok(Arc::new(ScalarUDF::from(TryUrlDecode::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
@@ -2324,7 +2314,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
             || node_inner.is::<OverlayFunc>()
-            || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
@@ -2362,7 +2351,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkYear>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
-            || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
             || node_inner.is::<SparkTryMakeTimestampNtz>()
             || node_inner.is::<SparkMakeTime>()
@@ -2395,11 +2383,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryDiv>()
             || node_inner.is::<SparkTryMod>()
             || node_inner.is::<SparkTryMult>()
-            || node_inner.is::<SparkTryParseUrl>()
             || node_inner.is::<SparkTrySubtract>()
             || node_inner.is::<SparkTryToBinary>()
             || node_inner.is::<SparkTryToNumber>()
-            || node_inner.is::<SparkTryToTimestamp>()
             || node_inner.is::<SparkUnbase64>()
             || node_inner.is::<SparkUniform>()
             || node_inner.is::<SparkUnHex>()
@@ -2493,17 +2479,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTimestamp>() {
             let timezone = func.timezone().map(|x| x.to_string());
-            let is_try = func.is_try();
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try })
+            let safe = func.safe();
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, safe })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkDate>() {
-            let is_try = func.is_try();
-            UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+            let safe = func.safe();
+            UdfKind::SparkDate(gen::SparkDateUdf { safe })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTime>() {
             let is_try = func.is_try();
             UdfKind::SparkTime(gen::SparkTimeUdf { is_try })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkVariantGet>() {
             let safe = func.safe();
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkMakeInterval>() {
+            let safe = func.safe();
+            UdfKind::SparkMakeInterval(gen::SparkMakeIntervalUdf { safe })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })

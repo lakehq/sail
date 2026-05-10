@@ -7336,6 +7336,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-nested",
  "datafusion-physical-expr",
+ "datafusion-spark",
  "half",
  "jiter",
  "lazy_static",

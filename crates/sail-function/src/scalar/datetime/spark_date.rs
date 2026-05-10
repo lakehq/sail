@@ -1,48 +1,143 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::Date32Array;
+use chrono::NaiveDate;
+use datafusion::arrow::array::{Array, ArrayRef, Date32Array};
+use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::types::logical_string;
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
-use sail_common_datafusion::utils::items::ItemTaker;
+use datafusion_functions::utils::make_scalar_function;
 use sail_sql_analyzer::parser::parse_date;
 
+use crate::error::invalid_arg_count_exec_err;
+
+/// Spark-compatible `to_date` / `try_to_date` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#to_date>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDate {
     signature: Signature,
-    is_try: bool,
+    safe: bool,
 }
 
 impl SparkDate {
     /// Creates a SparkDate.
     ///
-    /// When `is_try` is true, returns NULL on invalid input (for try_cast).
-    /// When `is_try` is false, throws an error on invalid input (for cast).
-    pub fn new(is_try: bool) -> Self {
+    /// Handles `to_date` / `try_to_date` / date casts for all input types.
+    /// Accepts 1 or 2 arguments:
+    /// - `(expr)` — parses strings with default formats, or casts other types to Date32.
+    /// - `(expr, format)` — parses strings with the given chrono format. The format
+    ///   may be a scalar string (broadcast) or a string column (per-row).
+    ///
+    /// When `safe` is true, returns NULL on parse/cast failure. When false, errors.
+    pub fn new(safe: bool) -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
-                Volatility::Immutable,
-            ),
-            is_try,
+            signature: Signature::user_defined(Volatility::Immutable),
+            safe,
         }
     }
 
-    pub fn is_try(&self) -> bool {
-        self.is_try
+    pub fn safe(&self) -> bool {
+        self.safe
     }
 
-    fn string_to_date32(value: &str, is_try: bool) -> Result<Option<i32>> {
-        match parse_date(value).and_then(|date| Ok(Date32Type::from_naive_date(date.try_into()?))) {
+    fn string_to_date32_default(value: &str, safe: bool) -> Result<Option<i32>> {
+        match parse_date(value).and_then(|d| Ok(Date32Type::from_naive_date(d.try_into()?))) {
             Ok(v) => Ok(Some(v)),
-            Err(_e) if is_try => Ok(None),
+            Err(_) if safe => Ok(None),
             Err(e) => Err(exec_datafusion_err!("{e}")),
+        }
+    }
+
+    fn string_to_date32_with_format(value: &str, format: &str, safe: bool) -> Result<Option<i32>> {
+        match NaiveDate::parse_from_str(value, format) {
+            Ok(d) => Ok(Some(Date32Type::from_naive_date(d))),
+            Err(_) if safe => Ok(None),
+            Err(e) => Err(exec_datafusion_err!("{e}")),
+        }
+    }
+
+    /// Borrowed view over a string array as `Iterator<Item = Option<&str>>`.
+    fn string_array_iter(array: &ArrayRef) -> Result<Box<dyn Iterator<Item = Option<&str>> + '_>> {
+        match array.data_type() {
+            DataType::Utf8 => Ok(Box::new(as_string_array(array)?.iter())),
+            DataType::LargeUtf8 => Ok(Box::new(as_large_string_array(array)?.iter())),
+            DataType::Utf8View => Ok(Box::new(as_string_view_array(array)?.iter())),
+            other => exec_err!("expected string array, got {other}"),
+        }
+    }
+
+    fn parse_value_array(value_arr: &ArrayRef, safe: bool) -> Result<ArrayRef> {
+        let out: Date32Array = Self::string_array_iter(value_arr)?
+            .map(|v| match v {
+                Some(s) => Self::string_to_date32_default(s, safe),
+                None => Ok(None),
+            })
+            .collect::<Result<_>>()?;
+        Ok(Arc::new(out) as ArrayRef)
+    }
+
+    fn parse_value_with_format_array(
+        value_arr: &ArrayRef,
+        format_arr: &ArrayRef,
+        safe: bool,
+    ) -> Result<ArrayRef> {
+        if value_arr.len() != format_arr.len() {
+            return exec_err!(
+                "to_date: value array length ({}) does not match format array length ({})",
+                value_arr.len(),
+                format_arr.len()
+            );
+        }
+        let values = Self::string_array_iter(value_arr)?;
+        let formats = Self::string_array_iter(format_arr)?;
+        let out: Date32Array = values
+            .zip(formats)
+            .map(|(v, f)| match (v, f) {
+                (Some(s), Some(fmt)) => Self::string_to_date32_with_format(s, fmt, safe),
+                _ => Ok(None),
+            })
+            .collect::<Result<_>>()?;
+        Ok(Arc::new(out) as ArrayRef)
+    }
+
+    fn cast_nonstring_to_date32(array: &ArrayRef, safe: bool) -> Result<ArrayRef> {
+        Ok(cast_with_options(
+            array,
+            &DataType::Date32,
+            &CastOptions {
+                safe,
+                ..Default::default()
+            },
+        )?)
+    }
+
+    /// Inner per-batch kernel. After `make_scalar_function` broadcasting, scalar
+    /// inputs are already expanded to arrays of the batch length, so we never
+    /// need to special-case scalar vs array here.
+    fn kernel(safe: bool, args: &[ArrayRef]) -> Result<ArrayRef> {
+        let value_arr = &args[0];
+        let format_arr = args.get(1);
+        let is_string = matches!(
+            value_arr.data_type(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        );
+        match (is_string, format_arr) {
+            (true, Some(fmt)) => {
+                if !matches!(
+                    fmt.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) {
+                    return exec_err!(
+                        "to_date format argument must be a string, got {}",
+                        fmt.data_type()
+                    );
+                }
+                Self::parse_value_with_format_array(value_arr, fmt, safe)
+            }
+            (true, None) => Self::parse_value_array(value_arr, safe),
+            (false, _) => Self::cast_nonstring_to_date32(value_arr, safe),
         }
     }
 }
@@ -53,7 +148,11 @@ impl ScalarUDFImpl for SparkDate {
     }
 
     fn name(&self) -> &str {
-        "spark_date"
+        if self.safe {
+            "try_to_date"
+        } else {
+            "to_date"
+        }
     }
 
     fn signature(&self) -> &Signature {
@@ -64,53 +163,44 @@ impl ScalarUDFImpl for SparkDate {
         Ok(DataType::Date32)
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-        let arg = args.one()?;
-        let is_try = self.is_try;
-        match arg {
-            ColumnarValue::Array(array) => {
-                let array = match array.data_type() {
-                    DataType::Utf8 => as_string_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| Self::string_to_date32(v, is_try))
-                                .transpose()
-                                .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<Date32Array>>()?,
-                    DataType::LargeUtf8 => as_large_string_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| Self::string_to_date32(v, is_try))
-                                .transpose()
-                                .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<Date32Array>>()?,
-                    DataType::Utf8View => as_string_view_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| Self::string_to_date32(v, is_try))
-                                .transpose()
-                                .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<Date32Array>>()?,
-                    _ => return exec_err!("expected string array for `date`"),
-                };
-                Ok(ColumnarValue::Array(Arc::new(array)))
-            }
-            ColumnarValue::Scalar(scalar) => {
-                let value = match scalar.try_as_str() {
-                    Some(x) => x
-                        .map(|v| Self::string_to_date32(v, is_try))
-                        .transpose()?
-                        .flatten(),
-                    _ => {
-                        return exec_err!("expected string scalar for `date`");
-                    }
-                };
-                Ok(ColumnarValue::Scalar(ScalarValue::Date32(value)))
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if !matches!(arg_types.len(), 1 | 2) {
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (1, 2),
+                arg_types.len(),
+            ));
+        }
+        match &arg_types[0] {
+            DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::Date32
+            | DataType::Timestamp(_, _)
+            | DataType::Null => {}
+            other => {
+                return plan_err!(
+                    "{}: value argument must be string, date, timestamp or null, got {other}",
+                    self.name()
+                );
             }
         }
+        if let Some(format) = arg_types.get(1) {
+            match format {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+                other => {
+                    return plan_err!(
+                        "{}: format argument must be a string, got {other}",
+                        self.name()
+                    );
+                }
+            }
+        }
+        Ok(arg_types.to_vec())
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let safe = self.safe;
+        make_scalar_function(move |a: &[ArrayRef]| Self::kernel(safe, a), vec![])(&args.args)
     }
 }

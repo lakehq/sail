@@ -200,6 +200,24 @@ DOCTEST_MARKERS = [
         keywords=["test_arrow_udtf.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
     ),
+    DoctestMarker(
+        keywords=["pyspark.sql.functions.builtin.to_time"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="to_time / TIME type requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["pyspark.sql.functions.builtin.try_to_time"],
+        markers=[
+            pytest.mark.skipif(pyspark_version() < (4, 1), reason="try_to_time / TIME type requires PySpark 4.1+")
+        ],
+    ),
+    DoctestMarker(
+        keywords=["pyspark.sql.functions.builtin.try_to_date"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="try_to_date requires PySpark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["pyspark.sql.functions.builtin.try_make_interval"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="try_make_interval requires PySpark 4+")],
+    ),
 ]
 
 
@@ -225,6 +243,13 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
         for item in items:
             if item.get_closest_marker("spark-4"):
                 item.add_marker(skip_spark4)
+
+    # Skip @spark-4.1 scenarios on PySpark < 4.1 (e.g., TIME type is a preview feature)
+    if pyspark_version() < (4, 1):
+        skip_spark41 = pytest.mark.skip(reason="Requires PySpark 4.1+ (e.g., TIME type)")
+        for item in items:
+            if item.get_closest_marker("spark-4.1"):
+                item.add_marker(skip_spark41)
 
     if is_jvm_spark():
         skip_sail_only = pytest.mark.skip(reason="Sail-only feature, not supported by Spark")

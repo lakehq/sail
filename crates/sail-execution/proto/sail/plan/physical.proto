@@ -96,6 +96,7 @@ message ExtendedScalarUdf {
     SparkTimeUdf spark_time = 16;
     SparkFromJsonUdf spark_from_json = 17;
     ArraysZipUdf arrays_zip = 18;
+    SparkMakeIntervalUdf spark_make_interval = 19;
   }
 }
 
@@ -175,11 +176,11 @@ message TimestampNowUdf {
 
 message SparkTimestampUdf {
   optional string timezone = 1;
-  bool is_try = 2;
+  bool safe = 2;
 }
 
 message SparkDateUdf {
-  bool is_try = 1;
+  bool safe = 1;
 }
 
 message SparkVariantGetUdf {
@@ -188,6 +189,10 @@ message SparkVariantGetUdf {
 
 message SparkNextDayUdf {
   bool ansi_mode = 1;
+}
+
+message SparkMakeIntervalUdf {
+  bool safe = 1;
 }
 
 message SparkFromCsvUdf {

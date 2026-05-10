@@ -4,24 +4,25 @@ use datafusion::arrow::datatypes::{
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
-use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
-use datafusion_functions::expr_fn::to_time;
+use datafusion_expr::{cast, lit, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
-use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
+use sail_function::scalar::datetime::spark_make_interval::SparkMakeInterval;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
-use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
@@ -252,21 +253,7 @@ fn to_chrono_fmt(format: Expr) -> Expr {
 }
 
 fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 1 {
-        // If format is not supplied, the function is a synonym for cast(expr AS DATE).
-        crate::function::scalar::conversion::cast_to_date(input)
-    } else if input.arguments.len() == 2 {
-        let (expr, format) = input.arguments.two()?;
-        let expr = match expr.get_type(input.function_context.schema) {
-            Ok(DataType::Timestamp(_time_unit, _tz)) => cast(expr, DataType::Utf8),
-            Ok(_other) => expr,
-            Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
-        };
-        let format = to_chrono_fmt(format);
-        Ok(expr_fn::to_date(vec![expr, format]))
-    } else {
-        Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
-    }
+    date_with_try(input, false)
 }
 
 fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -368,10 +355,54 @@ fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<E
     }
 }
 
+fn try_to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    date_with_try(input, true)
+}
+
+fn try_to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    time_with_try(input, true)
+}
+
+fn date_with_try(input: ScalarFunctionInput, safe: bool) -> PlanResult<Expr> {
+    let udf = ScalarUDF::from(SparkDate::new(safe));
+    let fn_name = if safe { "try_to_date" } else { "to_date" };
+    if input.arguments.len() == 1 {
+        Ok(udf.call(input.arguments))
+    } else if input.arguments.len() == 2 {
+        let (expr, format) = input.arguments.two()?;
+        let expr = cast(expr, DataType::Utf8);
+        let format = to_chrono_fmt(format);
+        Ok(udf.call(vec![expr, format]))
+    } else {
+        Err(PlanError::invalid(format!(
+            "{fn_name} requires 1 or 2 arguments"
+        )))
+    }
+}
+
+fn time_with_try(input: ScalarFunctionInput, safe: bool) -> PlanResult<Expr> {
+    let udf = ScalarUDF::from(SparkTime::new(safe));
+    let fn_name = if safe { "try_to_time" } else { "to_time" };
+    if input.arguments.len() == 1 {
+        Ok(udf.call(input.arguments))
+    } else if input.arguments.len() == 2 {
+        let (expr, format) = input.arguments.two()?;
+        let expr = cast(expr, DataType::Utf8);
+        let format = to_chrono_fmt(format);
+        Ok(udf.call(vec![expr, format]))
+    } else {
+        Err(PlanError::invalid(format!(
+            "{fn_name} requires 1 or 2 arguments"
+        )))
+    }
+}
+
 fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
     let data_type = timestamp_data_type(&input, timestamp_ntz);
+    let timezone = input.function_context.plan_config.session_timezone.clone();
+    let udf = ScalarUDF::from(SparkTimestamp::try_new(Some(timezone), true)?);
     if input.arguments.len() == 1 {
-        Ok(try_cast(input.arguments.one()?, data_type))
+        Ok(cast(udf.call(input.arguments), data_type))
     } else if input.arguments.len() == 2 {
         let null = timestamp_null(&input, timestamp_ntz);
         let (expr, format) = input.arguments.two()?;
@@ -379,10 +410,7 @@ fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResu
             return Ok(null);
         }
         let format = to_chrono_fmt(format);
-        Ok(cast(
-            ScalarUDF::from(SparkTryToTimestamp::new()).call(vec![expr, format]),
-            data_type,
-        ))
+        Ok(cast(udf.call(vec![expr, format]), data_type))
     } else {
         Err(PlanError::invalid(
             "try_to_timestamp requires 1 or 2 arguments",
@@ -772,7 +800,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("make_date", F::ternary(make_date)),
         ("make_dt_interval", F::udf(SparkMakeDtInterval::new())),
-        ("make_interval", F::udf(SparkMakeInterval::new())),
+        ("make_interval", F::udf(SparkMakeInterval::new(false))),
         ("make_time", F::udf(SparkMakeTime::new())),
         ("make_timestamp", F::custom(make_timestamp)),
         ("make_timestamp_ltz", F::custom(make_timestamp_ltz)),
@@ -816,7 +844,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             }),
         ),
         ("to_date", F::custom(to_date)),
-        ("to_time", F::var_arg(to_time)),
+        ("to_time", F::custom(|input| time_with_try(input, false))),
         (
             "to_timestamp",
             F::custom(|input| {
@@ -842,10 +870,12 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
         ("trunc", F::binary(trunc)),
-        ("try_make_interval", F::unknown("try_make_interval")),
+        ("try_make_interval", F::udf(SparkMakeInterval::new(true))),
         ("try_make_timestamp", F::custom(try_make_timestamp)),
         ("try_make_timestamp_ltz", F::custom(try_make_timestamp_ltz)),
         ("try_make_timestamp_ntz", F::custom(try_make_timestamp_ntz)),
+        ("try_to_date", F::custom(try_to_date)),
+        ("try_to_time", F::custom(try_to_time)),
         (
             "try_to_timestamp",
             F::custom(|input| {
