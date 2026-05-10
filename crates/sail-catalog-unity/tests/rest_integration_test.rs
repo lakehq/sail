@@ -686,6 +686,7 @@ async fn test_create_table() {
         sort_by,
         bucket_by,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");
@@ -892,6 +893,7 @@ async fn test_create_table() {
         sort_by,
         bucket_by,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");

@@ -82,7 +82,9 @@ fn build_drop_table_request(purge: bool) -> DropTableRequest {
     });
 
     DropTableRequest {
-        delete_data: true,
+        // Sail treats HMS DROP TABLE as metadata-only and never requests
+        // physical data deletion via the HMS delete_data flag.
+        delete_data: false,
         environment_context,
     }
 }
@@ -1234,10 +1236,10 @@ mod tests {
     }
 
     #[test]
-    fn test_build_drop_table_request_without_purge_keeps_delete_data_enabled() {
+    fn test_build_drop_table_request_without_purge_preserves_data() {
         let request = super::build_drop_table_request(false);
 
-        assert!(request.delete_data);
+        assert!(!request.delete_data);
         assert!(request.environment_context.is_none());
     }
 
@@ -1245,7 +1247,7 @@ mod tests {
     fn test_build_drop_table_request_with_purge_sets_if_purge_context() {
         let request = super::build_drop_table_request(true);
 
-        assert!(request.delete_data);
+        assert!(!request.delete_data);
         let properties = request
             .environment_context
             .and_then(|context| context.properties)

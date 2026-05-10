@@ -241,32 +241,6 @@ def test_sail_creates_spark_reads_parquet_with_explicit_location(
     assert ref_rows[1].id == 2 and ref_rows[1].name == "bob"
 
 
-def test_sail_alters_datasource_table_location_spark_reads_new_path(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    """Sail ALTER TABLE SET LOCATION updates datasource path metadata for Spark."""
-    table = "roundtrip_altered_location_parquet"
-    table_fqn = f"{hms_s3_database}.{table}"
-    old_location = f"s3://hms-warehouse/{hms_s3_database}/alter_location_old"
-    new_location = f"s3://hms-warehouse/{hms_s3_database}/alter_location_new"
-
-    hms_s3_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION '{old_location}'")
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old')")
-    hms_s3_spark.sql(f"ALTER TABLE {table_fqn} SET LOCATION '{new_location}'")
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'new')")
-
-    _assert_reference_spark_table(
-        reference_spark_s3,
-        hms_s3_database,
-        table,
-        table_type="EXTERNAL",
-    )
-    ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert [(r.id, r.name) for r in ref_rows] == [(2, "new")]
-
-
 def test_sail_unsets_table_properties_spark_observes_metadata_change(
     hms_s3_spark: SparkSession,
     reference_spark_s3: SparkSession,

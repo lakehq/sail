@@ -401,6 +401,7 @@ impl IcebergRestCatalogProvider {
                 sort_by,
                 bucket_by: None,
                 properties,
+                is_external: true,
             },
         })
     }
@@ -916,6 +917,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     sort_by: Vec::new(),
                     bucket_by: None,
                     properties: Vec::new(),
+                    is_external: true,
                 },
             })
             .collect())

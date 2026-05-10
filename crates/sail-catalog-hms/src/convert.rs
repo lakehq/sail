@@ -103,6 +103,7 @@ pub(crate) fn table_to_status(
         .as_ref()
         .map(|keys| identity_partition_fields(&field_names(keys)))
         .unwrap_or_default();
+    let is_external = table.table_type.as_deref() == Some(EXTERNAL_TABLE_TYPE);
     Ok(TableStatus {
         catalog: Some(catalog.to_string()),
         database: database.clone().into(),
@@ -117,6 +118,7 @@ pub(crate) fn table_to_status(
             sort_by: vec![],
             bucket_by: None,
             properties,
+            is_external,
         },
     })
 }
