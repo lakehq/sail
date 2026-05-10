@@ -9,12 +9,13 @@ use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::TableSchema;
 use object_store::path::Path;
 use object_store::{GetOptions, GetRange, ObjectStore};
 
-use crate::formats::arrow::ArrowReadFormat;
 use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+
+#[derive(Debug, Default, Clone)]
+pub struct ArrowReadFormat;
 
 const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
 
@@ -59,24 +60,12 @@ impl ReadFormat for ArrowReadFormat {
             .object_meta
             .location;
 
-        let partition_fields = input
-            .table_partition_cols
-            .iter()
-            .map(|(col, data_type)| {
-                Arc::new(datafusion::arrow::datatypes::Field::new(
-                    col,
-                    data_type.clone(),
-                    false,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let table_schema = TableSchema::new(Arc::clone(&input.file_schema), partition_fields);
-
+        let table_schema = input.schema;
         let source =
             match is_object_in_arrow_ipc_file_format(Arc::clone(&object_store), object_location)
                 .await?
             {
-                true => ArrowSource::new_file_source(table_schema),
+                true => ArrowSource::new_file_source(table_schema.clone()),
                 false => ArrowSource::new_stream_file_source(table_schema),
             };
 

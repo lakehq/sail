@@ -2,17 +2,19 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{FormatFactory, ListingTableFormat, SchemaInfer, WriteFormat};
+use crate::listing::source::{FormatFactory, ListingTableFormat, SchemaInfer};
 use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
 use crate::options::ResolveOptions;
 
 mod options;
 mod read;
+mod write;
+
+pub use read::CsvReadFormat;
+pub use write::CsvWriteFormat;
 
 pub type CsvTableFormat = ListingTableFormat<CsvFormatFactory>;
 
@@ -109,16 +111,6 @@ impl SchemaInfer for CsvSchemaInfer {
 #[derive(Debug, Default)]
 pub struct CsvFormatFactory;
 
-#[derive(Debug, Clone)]
-pub struct CsvReadFormat {
-    options: CsvReadOptions,
-}
-
-#[derive(Debug, Clone)]
-pub struct CsvWriteFormat {
-    options: CsvWriteOptions,
-}
-
 impl FormatFactory for CsvFormatFactory {
     type Read = CsvReadFormat;
     type Write = CsvWriteFormat;
@@ -135,19 +127,6 @@ impl FormatFactory for CsvFormatFactory {
     fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {
         let options = CsvWriteOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
         Ok(CsvWriteFormat { options })
-    }
-}
-
-// ReadFormat impl moved to `read.rs`.
-
-impl WriteFormat for CsvWriteFormat {
-    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
-        let options = self
-            .options
-            .clone()
-            .into_table_options()
-            .map_err(DataFusionError::from)?;
-        Ok((Arc::new(CsvFormat::default().with_options(options)), None))
     }
 }
 

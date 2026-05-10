@@ -10,10 +10,15 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::TableSchema;
 
-use crate::formats::csv::{CsvReadFormat, CsvSchemaInfer};
+use crate::formats::csv::CsvSchemaInfer;
 use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+use crate::options::gen::CsvReadOptions;
+
+#[derive(Debug, Clone)]
+pub struct CsvReadFormat {
+    pub(super) options: CsvReadOptions,
+}
 
 #[async_trait::async_trait]
 impl ReadFormat for CsvReadFormat {
@@ -59,20 +64,7 @@ impl ReadFormat for CsvReadFormat {
         options.has_header = Some(has_header);
         options.newlines_in_values = Some(newlines_in_values);
 
-        let partition_fields = input
-            .table_partition_cols
-            .iter()
-            .map(|(col, data_type)| {
-                Arc::new(datafusion::arrow::datatypes::Field::new(
-                    col,
-                    data_type.clone(),
-                    false,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let table_schema = TableSchema::new(Arc::clone(&input.file_schema), partition_fields);
-
-        let source = CsvSource::new(table_schema).with_csv_options(options.clone());
+        let source = CsvSource::new(input.schema).with_csv_options(options.clone());
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
             .with_file_groups(input.file_groups)

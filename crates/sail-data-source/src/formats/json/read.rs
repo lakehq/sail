@@ -10,10 +10,14 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::TableSchema;
 
-use crate::formats::json::JsonReadFormat;
 use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+use crate::options::gen::JsonReadOptions;
+
+#[derive(Debug, Clone)]
+pub struct JsonReadFormat {
+    pub(super) options: JsonReadOptions,
+}
 
 #[async_trait::async_trait]
 impl ReadFormat for JsonReadFormat {
@@ -50,21 +54,8 @@ impl ReadFormat for JsonReadFormat {
             options.compression = compression;
         }
 
-        let partition_fields = input
-            .table_partition_cols
-            .iter()
-            .map(|(col, data_type)| {
-                Arc::new(datafusion::arrow::datatypes::Field::new(
-                    col,
-                    data_type.clone(),
-                    false,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let table_schema = TableSchema::new(Arc::clone(&input.file_schema), partition_fields);
-
         let source =
-            JsonSource::new(table_schema).with_newline_delimited(options.newline_delimited);
+            JsonSource::new(input.schema).with_newline_delimited(options.newline_delimited);
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
             .with_file_groups(input.file_groups)

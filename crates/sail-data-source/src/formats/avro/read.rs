@@ -9,10 +9,11 @@ use datafusion::datasource::physical_plan::AvroSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::TableSchema;
 
-use crate::formats::avro::AvroReadFormat;
 use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+
+#[derive(Debug, Default, Clone)]
+pub struct AvroReadFormat;
 
 #[async_trait::async_trait]
 impl ReadFormat for AvroReadFormat {
@@ -28,20 +29,7 @@ impl ReadFormat for AvroReadFormat {
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
-        let partition_fields = input
-            .table_partition_cols
-            .iter()
-            .map(|(col, data_type)| {
-                Arc::new(datafusion::arrow::datatypes::Field::new(
-                    col,
-                    data_type.clone(),
-                    false,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let table_schema = TableSchema::new(Arc::clone(&input.file_schema), partition_fields);
-
-        let source = AvroSource::new(table_schema);
+        let source = AvroSource::new(input.schema);
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
             .with_file_groups(input.file_groups)

@@ -154,8 +154,7 @@ impl ExtensionPlanner for ListingTableExtensionPlanner {
                     output_ordering,
                     statistics,
                     partitioned_by_file_group,
-                    file_schema: source.file_schema(),
-                    table_partition_cols: source.table_partition_cols().to_vec(),
+                    schema: source.schema().clone(),
                     compression: source.compression(),
                 },
             )

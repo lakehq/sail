@@ -6,12 +6,16 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::TableSchema;
 
 use crate::formats::text::file_format::TextFileFormat;
 use crate::formats::text::source::TextSource;
-use crate::formats::text::TextReadFormat;
 use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+use crate::options::gen::TextReadOptions;
+
+#[derive(Debug, Clone)]
+pub struct TextReadFormat {
+    pub(super) options: TextReadOptions,
+}
 
 #[async_trait::async_trait]
 impl ReadFormat for TextReadFormat {
@@ -48,21 +52,8 @@ impl ReadFormat for TextReadFormat {
             options.compression = compression;
         }
 
-        let partition_fields = input
-            .table_partition_cols
-            .iter()
-            .map(|(col, data_type)| {
-                Arc::new(datafusion::arrow::datatypes::Field::new(
-                    col,
-                    data_type.clone(),
-                    false,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let table_schema = TableSchema::new(Arc::clone(&input.file_schema), partition_fields);
-
         let line_sep = options.line_sep.map(|c| c as u8);
-        let file_source = Arc::new(TextSource::new(table_schema, options.whole_text, line_sep));
+        let file_source = Arc::new(TextSource::new(input.schema, options.whole_text, line_sep));
 
         let config = FileScanConfigBuilder::new(input.object_store_url, file_source)
             .with_file_groups(input.file_groups)

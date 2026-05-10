@@ -1,25 +1,19 @@
-use std::sync::Arc;
-
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::arrow::ArrowFormat;
 use datafusion_common::Result;
-use datafusion_datasource::file_format::FileFormat;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{FormatFactory, ListingTableFormat, WriteFormat};
+use crate::listing::source::{FormatFactory, ListingTableFormat};
 
 mod read;
+mod write;
+
+pub use read::ArrowReadFormat;
+pub use write::ArrowWriteFormat;
 
 pub type ArrowTableFormat = ListingTableFormat<ArrowFormatFactory>;
 
 #[derive(Debug, Default)]
 pub struct ArrowFormatFactory;
-
-#[derive(Debug, Default, Clone)]
-pub struct ArrowReadFormat;
-
-#[derive(Debug, Default, Clone)]
-pub struct ArrowWriteFormat;
 
 impl FormatFactory for ArrowFormatFactory {
     type Read = ArrowReadFormat;
@@ -35,13 +29,5 @@ impl FormatFactory for ArrowFormatFactory {
 
     fn write(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Write> {
         Ok(ArrowWriteFormat)
-    }
-}
-
-// ReadFormat impl moved to `read.rs`.
-
-impl WriteFormat for ArrowWriteFormat {
-    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
-        Ok((Arc::new(ArrowFormat), None))
     }
 }

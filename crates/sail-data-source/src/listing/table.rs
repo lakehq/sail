@@ -3,13 +3,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion::execution::cache::cache_manager::FileStatisticsCache;
 use datafusion::execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
 use datafusion_common::{Constraints, Result};
+use datafusion_datasource::TableSchema;
 
 use crate::listing::source::ReadFormat;
 
@@ -17,7 +18,7 @@ use crate::listing::source::ReadFormat;
 pub struct ListingTableSourceConfig {
     pub table_paths: Vec<datafusion_datasource::ListingTableUrl>,
     pub file_extension: String,
-    pub file_schema: SchemaRef,
+    pub schema: TableSchema,
     pub table_partition_cols: Vec<(String, DataType)>,
     pub constraints: Constraints,
     pub file_sort_order: Vec<Vec<Sort>>,
@@ -35,10 +36,7 @@ pub struct ListingTableSourceConfig {
 pub struct ListingTableSource {
     table_paths: Vec<datafusion_datasource::ListingTableUrl>,
     file_extension: String,
-    /// Columns physically stored in the data files.
-    file_schema: SchemaRef,
-    /// `file_schema` + partition columns.
-    table_schema: SchemaRef,
+    schema: TableSchema,
     /// Partition columns derived from hive-style paths (names are *path keys*).
     table_partition_cols: Vec<(String, DataType)>,
     constraints: Constraints,
@@ -54,21 +52,10 @@ pub struct ListingTableSource {
 
 impl ListingTableSource {
     pub fn try_new(config: ListingTableSourceConfig) -> Result<Self> {
-        let mut builder = SchemaBuilder::from(config.file_schema.as_ref().to_owned());
-        for (part_col_name, part_col_type) in &config.table_partition_cols {
-            builder.push(Field::new(part_col_name, part_col_type.clone(), false));
-        }
-        let table_schema = Arc::new(
-            builder
-                .finish()
-                .with_metadata(config.file_schema.metadata().clone()),
-        );
-
         Ok(Self {
             table_paths: config.table_paths,
             file_extension: config.file_extension,
-            file_schema: config.file_schema,
-            table_schema,
+            schema: config.schema,
             table_partition_cols: config.table_partition_cols,
             constraints: config.constraints,
             file_sort_order: config.file_sort_order,
@@ -85,15 +72,19 @@ impl ListingTableSource {
     }
 
     pub fn file_schema(&self) -> SchemaRef {
-        Arc::clone(&self.file_schema)
+        Arc::clone(self.schema.file_schema())
     }
 
     pub fn file_extension(&self) -> &str {
         &self.file_extension
     }
 
+    pub fn schema(&self) -> &TableSchema {
+        &self.schema
+    }
+
     pub fn table_schema(&self) -> SchemaRef {
-        Arc::clone(&self.table_schema)
+        Arc::clone(self.schema.table_schema())
     }
 
     pub fn constraints(&self) -> &Constraints {
@@ -129,7 +120,7 @@ impl ListingTableSource {
     }
 
     pub fn with_schema_field_names(&self, names: Vec<String>) -> Result<Self> {
-        let table_fields = self.table_schema.fields();
+        let table_fields = self.schema.table_schema().fields();
         if names.len() != table_fields.len() {
             return datafusion_common::internal_err!(
                 "expected {} field names, got {}",
@@ -138,28 +129,38 @@ impl ListingTableSource {
             );
         }
 
-        let file_field_count = self.file_schema.fields().len();
+        let file_field_count = self.schema.file_schema().fields().len();
         let mut new_file_fields = Vec::with_capacity(file_field_count);
-        for (i, field) in self.file_schema.fields().iter().enumerate() {
+        for (i, field) in self.schema.file_schema().fields().iter().enumerate() {
             new_file_fields.push(field.as_ref().clone().with_name(names[i].clone()));
         }
-        let new_file_schema = Arc::new(datafusion::arrow::datatypes::Schema::new_with_metadata(
+        let new_file_schema = Arc::new(Schema::new_with_metadata(
             new_file_fields,
-            self.file_schema.metadata().clone(),
+            self.schema.file_schema().metadata().clone(),
         ));
 
-        let mut new_table_fields = Vec::with_capacity(table_fields.len());
-        for (i, field) in table_fields.iter().enumerate() {
-            new_table_fields.push(field.as_ref().clone().with_name(names[i].clone()));
+        let mut new_partition_cols = Vec::with_capacity(self.table_partition_cols.len());
+        for (idx, (_name, data_type)) in self.table_partition_cols.iter().enumerate() {
+            let name_idx = file_field_count + idx;
+            new_partition_cols.push(Arc::new(Field::new(
+                names[name_idx].clone(),
+                data_type.clone(),
+                false,
+            )));
         }
-        let new_table_schema = Arc::new(datafusion::arrow::datatypes::Schema::new_with_metadata(
-            new_table_fields,
-            self.table_schema.metadata().clone(),
-        ));
+        let new_schema = TableSchema::new(new_file_schema, new_partition_cols);
 
         Ok(Self {
-            file_schema: new_file_schema,
-            table_schema: new_table_schema,
+            schema: new_schema,
+            table_partition_cols: self
+                .table_partition_cols
+                .iter()
+                .enumerate()
+                .map(|(idx, (_name, data_type))| {
+                    let name_idx = file_field_count + idx;
+                    (names[name_idx].clone(), data_type.clone())
+                })
+                .collect(),
             ..self.clone()
         })
     }
@@ -191,7 +192,7 @@ impl TableSource for ListingTableSource {
         let partition_column_names = self
             .table_partition_cols
             .iter()
-            .map(|col| col.0.as_str())
+            .map(|(name, _data_type)| name.as_str())
             .collect::<Vec<_>>();
 
         filters

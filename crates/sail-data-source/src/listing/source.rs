@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
@@ -19,6 +19,7 @@ use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result, St
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::TableSchema;
 use sail_common_datafusion::datasource::{
     find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
     TableFormat,
@@ -105,9 +106,9 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         store: &Arc<dyn object_store::ObjectStore>,
         file_schema: datafusion::arrow::datatypes::SchemaRef,
         object: &object_store::ObjectMeta,
-    ) -> Result<InferredFileMeta> {
+    ) -> Result<ListingFileMeta> {
         let _ = (ctx, store, object);
-        Ok(InferredFileMeta {
+        Ok(ListingFileMeta {
             statistics: Statistics::new_unknown(&file_schema),
             ordering: None,
         })
@@ -120,7 +121,7 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug, Clone)]
-pub struct InferredFileMeta {
+pub struct ListingFileMeta {
     pub statistics: Statistics,
     pub ordering: Option<LexOrdering>,
 }
@@ -136,8 +137,7 @@ pub struct ListingScanInput {
     pub output_ordering: Vec<LexOrdering>,
     pub statistics: Statistics,
     pub partitioned_by_file_group: bool,
-    pub file_schema: datafusion::arrow::datatypes::SchemaRef,
-    pub table_partition_cols: Vec<(String, DataType)>,
+    pub schema: TableSchema,
     pub compression: Option<CompressionTypeVariant>,
 }
 
@@ -299,15 +299,20 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             .compression_type()
             .map(|c| *c.get_variant());
 
+        let file_schema = config.file_schema.ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!("listing file schema should be present")
+        })?;
+        let partition_fields = listing_options
+            .table_partition_cols
+            .iter()
+            .map(|(col, data_type)| Arc::new(Field::new(col, data_type.clone(), false)))
+            .collect::<Vec<_>>();
+
         let source = crate::listing::table::ListingTableSource::try_new(
             crate::listing::table::ListingTableSourceConfig {
                 table_paths: config.table_paths,
                 file_extension: listing_options.file_extension,
-                file_schema: config.file_schema.ok_or_else(|| {
-                    datafusion_common::internal_datafusion_err!(
-                        "listing file schema should be present"
-                    )
-                })?,
+                schema: TableSchema::new(file_schema, partition_fields),
                 table_partition_cols: listing_options.table_partition_cols,
                 constraints,
                 file_sort_order: listing_options.file_sort_order,

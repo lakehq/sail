@@ -3,11 +3,10 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion_common::arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_datasource::file_format::FileFormat;
+use datafusion_common::{internal_err, DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{FormatFactory, ListingTableFormat, WriteFormat};
+use crate::listing::source::{FormatFactory, ListingTableFormat};
 use crate::options::gen::BinaryReadOptions;
 use crate::options::ResolveOptions;
 
@@ -16,6 +15,10 @@ pub mod options;
 mod read;
 pub mod reader;
 pub mod source;
+mod write;
+
+pub use read::BinaryReadFormat;
+pub use write::BinaryWriteFormat;
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct TableBinaryOptions {
@@ -26,14 +29,6 @@ pub type BinaryTableFormat = ListingTableFormat<BinaryFormatFactory>;
 
 #[derive(Debug, Default)]
 pub struct BinaryFormatFactory;
-
-#[derive(Debug, Clone)]
-pub struct BinaryReadFormat {
-    options: BinaryReadOptions,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct BinaryWriteFormat;
 
 impl FormatFactory for BinaryFormatFactory {
     type Read = BinaryReadFormat;
@@ -51,14 +46,6 @@ impl FormatFactory for BinaryFormatFactory {
 
     fn write(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Write> {
         Ok(BinaryWriteFormat)
-    }
-}
-
-// ReadFormat impl moved to `read.rs`.
-
-impl WriteFormat for BinaryWriteFormat {
-    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
-        not_impl_err!("Binary file format does not support writing")
     }
 }
 

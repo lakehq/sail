@@ -5,12 +5,16 @@ use datafusion::datasource::file_format::FileFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::TableSchema;
 
 use crate::formats::binary::file_format::BinaryFileFormat;
 use crate::formats::binary::source::BinarySource;
-use crate::formats::binary::BinaryReadFormat;
 use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+use crate::options::gen::BinaryReadOptions;
+
+#[derive(Debug, Clone)]
+pub struct BinaryReadFormat {
+    pub(super) options: BinaryReadOptions,
+}
 
 #[async_trait::async_trait]
 impl ReadFormat for BinaryReadFormat {
@@ -29,21 +33,8 @@ impl ReadFormat for BinaryReadFormat {
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let options = self.options.clone().into_table_options();
 
-        let partition_fields = input
-            .table_partition_cols
-            .iter()
-            .map(|(col, data_type)| {
-                Arc::new(datafusion::arrow::datatypes::Field::new(
-                    col,
-                    data_type.clone(),
-                    false,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let table_schema = TableSchema::new(Arc::clone(&input.file_schema), partition_fields);
-
         let file_source = Arc::new(BinarySource::new(
-            table_schema,
+            input.schema,
             options.path_glob_filter.clone(),
         ));
 
