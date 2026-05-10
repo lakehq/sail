@@ -107,7 +107,10 @@ impl CatalogObjectTracker {
             .get(relation_id)
             .cloned()
             .ok_or_else(|| {
-                CatalogError::NotFound(CatalogObject::LogicalPlan, relation_id.to_string())
+                CatalogError::Internal(format!(
+                    "Cached relation not found: {}",
+                    relation_id
+                ))
             })
     }
 
