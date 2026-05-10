@@ -122,7 +122,46 @@ impl ScalarUDFImpl for SparkBin {
 }
 
 fn bin_string(value: &str) -> Option<String> {
-    value.trim().parse::<i64>().ok().map(bin)
+    parse_spark_string_i64(value).map(bin)
+}
+
+fn parse_spark_string_i64(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(value) = value.parse::<i64>() {
+        return Some(value);
+    }
+
+    let (negative, value) = match value.as_bytes()[0] {
+        b'+' => (false, &value[1..]),
+        b'-' => (true, &value[1..]),
+        _ => (false, value),
+    };
+    let (integer, fraction) = value.split_once('.')?;
+    if fraction.contains('.') || (integer.is_empty() && fraction.is_empty()) {
+        return None;
+    }
+    if !integer.bytes().all(|b| b.is_ascii_digit()) || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let magnitude = integer.bytes().try_fold(0_u128, |acc, b| {
+        acc.checked_mul(10)?.checked_add((b - b'0') as u128)
+    })?;
+    if negative {
+        match magnitude {
+            0..=9223372036854775807 => Some(-(magnitude as i64)),
+            9223372036854775808 => Some(i64::MIN),
+            _ => None,
+        }
+    } else if magnitude <= i64::MAX as u128 {
+        Some(magnitude as i64)
+    } else {
+        None
+    }
 }
 
 fn bin(value: i64) -> String {

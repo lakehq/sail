@@ -25,3 +25,16 @@ Feature: bin converts integral values to binary strings
       | result                                                           |
       | 1111111111111111111111111111111111111111111111111111111111110011 |
       | 1101                                                             |
+
+    Scenario: bin truncates decimal strings before converting to binary
+      When query
+      """
+      SELECT bin(value) AS result
+      FROM VALUES (0, '13.9'), (1, '-13.9'), (2, '.3') AS data(id, value)
+      ORDER BY id
+      """
+      Then query result
+      | result                                                           |
+      | 1101                                                             |
+      | 1111111111111111111111111111111111111111111111111111111111110011 |
+      | 0                                                                |

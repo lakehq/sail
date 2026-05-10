@@ -61,11 +61,11 @@ Feature: base64 functions encode and decode binary strings
       | result |
       | [69]   |
 
-    Scenario: unbase64 returns null for invalid input
+    Scenario: unbase64 ignores non-base64 characters
       When query
       """
       SELECT unbase64('%') AS result
       """
       Then query result
       | result |
-      | NULL   |
+      | []     |
