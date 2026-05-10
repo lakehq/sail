@@ -593,7 +593,7 @@ async fn materialize_logical_plan(
     ctx: &SessionContext,
     plan: LogicalPlan,
 ) -> SparkResult<LogicalPlan> {
-    let arrow_schema = Arc::new(plan.schema().inner().as_ref().clone());
+    let arrow_schema = plan.schema().inner().clone();
     let df = ctx.execute_logical_plan(plan).await?;
     let batches = df.collect().await?;
     let table = Arc::new(MemTable::try_new(arrow_schema, vec![batches])?);
