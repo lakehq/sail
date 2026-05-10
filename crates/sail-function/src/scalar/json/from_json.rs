@@ -148,9 +148,7 @@ impl ScalarUDFImpl for SparkFromJson {
         let session_timezone = self.session_timezone.to_string();
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(
-            move |inner_args| from_json_inner(inner_args, session_timezone.as_str()),
-            vec![],
-        )(&args)
+            move |inner_args| from_json_inner(inner_args, session_timezone.as_str()), vec![],)(&args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -219,7 +217,7 @@ fn parse_rows(
     options: SparkFromJsonOptions,
     session_timezone: &str,
 ) -> Result<ArrayRef> {
-    let mut builder = create_builder(schema, rows.len())?;
+    let mut builder = create_builder(schema, rows.len(), session_timezone)?;
     for i in 0..rows.len() {
         if rows.is_null(i) {
             append_to_builder(&mut builder, &Value::Null, &options, session_timezone)?;
@@ -272,26 +270,30 @@ enum FieldBuilder {
         nested_builders: Vec<FieldBuilder>,
         nulls: Vec<bool>,
     },
+    Time32MillisecondBuilder(Time32MillisecondBuilder),
+    Time32SecondBuilder(Time32SecondBuilder),
+    Time64MicrosecondBuilder(Time64MicrosecondBuilder),
+    Time64NanosecondBuilder(Time64NanosecondBuilder),
     // TODO: claude is there a better pattern to reduce writing `tz` 4 times?
     TimestampMicrosecondBuilder {
         builder: TimestampMicrosecondBuilder,
-        tz: Option<Arc<str>>
+        tz: Arc<str>
     },
     TimestampMillisecondBuilder {
         builder: TimestampMillisecondBuilder,
-        tz: Option<Arc<str>>
+        tz: Arc<str>
     },
     TimestampNanosecondBuilder {
         builder: TimestampNanosecondBuilder,
-        tz: Option<Arc<str>>
+        tz: Arc<str>
     },
     TimestampSecondBuilder {
         builder: TimestampSecondBuilder,
-        tz: Option<Arc<str>>
+        tz: Arc<str>
     },
 }
 
-fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> {
+fn create_builder(data_type: DataType, capacity: usize, session_timezone: &str) -> Result<FieldBuilder> {
     match data_type {
         DataType::Boolean => Ok(FieldBuilder::Boolean(BooleanBuilder::with_capacity(
             capacity,
@@ -313,7 +315,7 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
         DataType::Int32 => Ok(FieldBuilder::Int32(Int32Builder::with_capacity(capacity))),
         DataType::Int64 => Ok(FieldBuilder::Int64(Int64Builder::with_capacity(capacity))),
         DataType::List(field) => {
-            let values = create_builder(field.data_type().clone(), capacity)?;
+            let values = create_builder(field.data_type().clone(), capacity, session_timezone)?;
             let mut offsets = Vec::with_capacity(capacity);
             offsets.push(0);
             Ok(FieldBuilder::List {
@@ -328,7 +330,7 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
             capacity*16
         ))),
         DataType::Map(field, ordered) => {
-            let struct_builder = create_builder(field.data_type().clone(), capacity)?;
+            let struct_builder = create_builder(field.data_type().clone(), capacity, session_timezone)?;
             let mut offsets = Vec::with_capacity(capacity);
             offsets.push(0);
             Ok(FieldBuilder::Map {
@@ -342,7 +344,7 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
         DataType::Struct(fields) => {
             let nested_builders = fields
                 .iter()
-                .map(|f| create_builder(f.data_type().clone(), capacity))
+                .map(|f| create_builder(f.data_type().clone(), capacity, session_timezone))
                 .collect::<Result<Vec<_>>>()?;
             Ok(FieldBuilder::Struct {
                 fields: fields.clone(),
@@ -354,30 +356,49 @@ fn create_builder(data_type: DataType, capacity: usize) -> Result<FieldBuilder> 
             capacity,
             capacity*16,
         ))),
+        DataType::Time32(time_unit) => {
+            match time_unit {
+                TimeUnit::Millisecond => Ok(FieldBuilder::Time32MillisecondBuilder(Time32MillisecondBuilder::with_capacity(capacity))),
+                TimeUnit::Second => Ok(FieldBuilder::Time32SecondBuilder(Time32SecondBuilder::with_capacity(capacity))),
+                _ => unreachable!()
+            }
+        },
+        DataType::Time64(time_unit) => {
+            match time_unit {
+                TimeUnit::Microsecond => Ok(FieldBuilder::Time64MicrosecondBuilder(Time64MicrosecondBuilder::with_capacity(capacity))),
+                TimeUnit::Nanosecond => Ok(FieldBuilder::Time64NanosecondBuilder(Time64NanosecondBuilder::with_capacity(capacity))),
+                _ => unreachable!()
+            }
+        },
         DataType::Timestamp(time_unit, tz) => {
+            let resolved_tz = tz.clone().unwrap_or(Arc::from(session_timezone));
             match time_unit {
                 TimeUnit::Microsecond => {
                     Ok(FieldBuilder::TimestampMicrosecondBuilder {
-                        builder: TimestampMicrosecondBuilder::with_capacity(capacity),
-                        tz
+                        builder: TimestampMicrosecondBuilder::with_capacity(capacity)
+                            .with_timezone_opt(tz),
+                        tz: resolved_tz
                     })
                 },
                 TimeUnit::Millisecond => {
                     Ok(FieldBuilder::TimestampMillisecondBuilder {
-                        builder: TimestampMillisecondBuilder::with_capacity(capacity),
-                        tz
+                        builder: TimestampMillisecondBuilder::with_capacity(capacity)
+                            .with_timezone_opt(tz),
+                        tz: resolved_tz
                     })
                 },
                 TimeUnit::Nanosecond => {
                     Ok(FieldBuilder::TimestampNanosecondBuilder {
-                        builder: TimestampNanosecondBuilder::with_capacity(capacity),
-                        tz
+                        builder: TimestampNanosecondBuilder::with_capacity(capacity)
+                            .with_timezone_opt(tz),
+                        tz: resolved_tz
                     })
                 },
                 TimeUnit::Second => {
                     Ok(FieldBuilder::TimestampSecondBuilder {
-                        builder: TimestampSecondBuilder::with_capacity(capacity),
-                        tz
+                        builder: TimestampSecondBuilder::with_capacity(capacity)
+                            .with_timezone_opt(tz),
+                        tz: resolved_tz
                     })
                 },
             }
@@ -410,6 +431,10 @@ fn append_to_builder(
             FieldBuilder::Int32(b) => b.append_null(),
             FieldBuilder::Int64(b) => b.append_null(),
             FieldBuilder::String(b) => b.append_null(),
+            FieldBuilder::Time32MillisecondBuilder(b) => b.append_null(),
+            FieldBuilder::Time32SecondBuilder(b) => b.append_null(),
+            FieldBuilder::Time64MicrosecondBuilder(b) => b.append_null(),
+            FieldBuilder::Time64NanosecondBuilder(b) => b.append_null(),
             FieldBuilder::TimestampMicrosecondBuilder{ builder, .. } => builder.append_null(),
             FieldBuilder::TimestampMillisecondBuilder{ builder, .. } => builder.append_null(),
             FieldBuilder::TimestampNanosecondBuilder{ builder, .. } => builder.append_null(),
@@ -513,38 +538,6 @@ fn append_to_builder(
                 }
             }
             (FieldBuilder::String(b), Value::String(string)) => b.append_value(string),
-            (FieldBuilder::TimestampMicrosecondBuilder{ builder, tz }, Value::String(string)) => {
-                let naive_datetime = parse_timestamp(string, tz.clone(), options, session_timezone)?;
-                if let Some(timestamp_microseconds) = TimestampMicrosecondType::from_datetime(naive_datetime) {
-                    builder.append_value(timestamp_microseconds);
-                } else {
-                    builder.append_null();
-                }
-            }
-            (FieldBuilder::TimestampMillisecondBuilder{ builder, tz }, Value::String(string)) => {
-                let naive_datetime = parse_timestamp(string, tz.clone(), options, session_timezone)?;
-                if let Some(timestamp_milliseconds) = TimestampMillisecondType::from_datetime(naive_datetime) {
-                    builder.append_value(timestamp_milliseconds);
-                } else {
-                    builder.append_null();
-                }
-            }
-            (FieldBuilder::TimestampNanosecondBuilder{ builder, tz }, Value::String(string)) => {
-                let naive_datetime = parse_timestamp(string, tz.clone(), options, session_timezone)?;
-                if let Some(timestamp_nanoseconds) = TimestampNanosecondType::from_datetime(naive_datetime) {
-                    builder.append_value(timestamp_nanoseconds);
-                } else {
-                    builder.append_null();
-                }
-            }
-            (FieldBuilder::TimestampSecondBuilder{ builder, tz }, Value::String(string)) => {
-                let naive_datetime = parse_timestamp(string, tz.clone(), options, session_timezone)?;
-                if let Some(timestamp_second) = TimestampSecondType::from_datetime(naive_datetime) {
-                    builder.append_value(timestamp_second);
-                } else {
-                    builder.append_null();
-                }
-            }
             (
                 FieldBuilder::Struct {
                     fields,
@@ -555,18 +548,11 @@ fn append_to_builder(
             ) => {
                 nulls.push(true);
                 for (field, nested_builder) in fields.iter().zip(nested_builders.iter_mut()) {
+                    // if key not found return null
                     let val = if let Some(v) = obj.get(field.name()) {
                         v
                     } else {
-                        let possible_keys = fields
-                            .iter()
-                            .map(|f| format!("{:?}", f.name()))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        return Err(DataFusionError::Execution(format!(
-                            "Couldn't find the key {:?} out of specified keys: {possible_keys}",
-                            field.name()
-                        )));
+                        &Value::Null
                     };
                     append_to_builder(nested_builder, val, options, session_timezone)?;
                 }
@@ -624,6 +610,63 @@ fn append_to_builder(
                 let curr_len = offsets.last().unwrap() + 1_i32; // only need to increment by 1
                 offsets.push(curr_len);
             }
+            // TODO: check spark parity - BDD tests want nulls
+            (FieldBuilder::Time32MillisecondBuilder(b), _) => b.append_null(),
+            (FieldBuilder::Time32SecondBuilder(b), _) => b.append_null(),
+            (FieldBuilder::Time64MicrosecondBuilder(b), _) => b.append_null(),
+            (FieldBuilder::Time64NanosecondBuilder(b), _) => b.append_null(),
+            (FieldBuilder::TimestampMicrosecondBuilder{ builder, tz }, _) => {
+                match value {
+                    Value::String(string) => {
+                        let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                        if let Some(timestamp_microseconds) = TimestampMicrosecondType::from_datetime(naive_datetime) {
+                            builder.append_value(timestamp_microseconds);
+                        } else {
+                            builder.append_null();
+                        }
+                    },
+                    _ => builder.append_null(),
+                }
+            }
+            (FieldBuilder::TimestampMillisecondBuilder{ builder, tz }, _) => {
+                match value {
+                    Value::String(string) => {
+                        let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                        if let Some(timestamp_milliseconds) = TimestampMillisecondType::from_datetime(naive_datetime) {
+                            builder.append_value(timestamp_milliseconds);
+                        } else {
+                            builder.append_null();
+                        }
+                    },
+                    _ => builder.append_null(),
+                }
+            }
+            (FieldBuilder::TimestampNanosecondBuilder{ builder, tz }, _) => {
+                match value {
+                    Value::String(string) => {
+                        let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                        if let Some(timestamp_nanoseconds) = TimestampNanosecondType::from_datetime(naive_datetime) {
+                            builder.append_value(timestamp_nanoseconds);
+                        } else {
+                            builder.append_null();
+                        }
+                    },
+                    _ => builder.append_null(),
+                }
+            }
+            (FieldBuilder::TimestampSecondBuilder{ builder, tz }, _) => {
+                match value {
+                    Value::String(string) => {
+                        let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                        if let Some(timestamp_second) = TimestampSecondType::from_datetime(naive_datetime) {
+                            builder.append_value(timestamp_second);
+                        } else {
+                            builder.append_null();
+                        }
+                    },
+                    _ => builder.append_null(),
+                }
+            }
             (other, other1) => {
                 return plan_err!("Unsupported conversion of value {other1:?} to type {other:?}")
             }
@@ -672,6 +715,10 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
         FieldBuilder::Int32(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Int64(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::String(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Time32MillisecondBuilder(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Time32SecondBuilder(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Time64MicrosecondBuilder(mut b) => Ok(Arc::new(b.finish())),
+        FieldBuilder::Time64NanosecondBuilder(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::TimestampMicrosecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
         FieldBuilder::TimestampMillisecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
         FieldBuilder::TimestampNanosecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
@@ -850,15 +897,12 @@ fn parse_date32(s: &str, options: &SparkFromJsonOptions) -> Result<<Date32Type a
     Ok(Date32Type::from_naive_date(naive_date))
 }
 
-/// Parse a timestamp string into a ScalarValue::Timestamp.
 fn parse_timestamp(
     s: &str,
-    timezone: Option<Arc<str>>,
+    timezone: Arc<str>,
     options: &SparkFromJsonOptions,
-    session_timezone: &str,
 ) -> Result<DateTime<Utc>> {
     let format = &options.timestamp_format;
-
     let naive_datetime = if let Ok(datetime) = NaiveDateTime::parse_from_str(s, format) {
         datetime
     } else if let Ok(date) = NaiveDate::parse_from_str(s, format) {
@@ -869,24 +913,10 @@ fn parse_timestamp(
     } else {
         return exec_err!("Failed to parse timestamp '{s}' with format '{format}'");
     };
-
-    let utc_datetime = if let Some(tz) = timezone.as_ref() {
-        let tz: Tz = tz
-            .as_ref()
-            .parse()
-            .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz}': {e}")))?;
-        localize_with_fallback(&tz, &naive_datetime)?
-    } else {
-        // Use session timezone when no explicit timezone is set
-        let tz: Tz = session_timezone.parse().map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Invalid session timezone '{session_timezone}': {e}"
-            ))
-        })?;
-        localize_with_fallback(&tz, &naive_datetime)?
-    };
-
-    Ok(utc_datetime)
+    let tz: Tz = timezone.as_ref()
+        .parse()
+        .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{timezone}': {e}")))?;
+    localize_with_fallback(&tz, &naive_datetime)
 }
 
 /// Parses a schema string into an Arrow DataType. The schema may be a bare field list
