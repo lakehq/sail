@@ -197,7 +197,7 @@ impl HllSketch {
         } else {
             raw_estimate
         };
-        estimate.round() as u64
+        estimate.round().min(u64::MAX as f64) as u64
     }
 
     /// Serializes the sketch to the Sail HLL binary format.
