@@ -8,7 +8,7 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, exec_err, internal_err, not_impl_err, plan_err};
+use datafusion_common::{ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -270,10 +270,6 @@ enum FieldBuilder {
         nested_builders: Vec<FieldBuilder>,
         nulls: Vec<bool>,
     },
-    Time32MillisecondBuilder(Time32MillisecondBuilder),
-    Time32SecondBuilder(Time32SecondBuilder),
-    Time64MicrosecondBuilder(Time64MicrosecondBuilder),
-    Time64NanosecondBuilder(Time64NanosecondBuilder),
     // TODO: claude is there a better pattern to reduce writing `tz` 4 times?
     TimestampMicrosecondBuilder {
         builder: TimestampMicrosecondBuilder,
@@ -291,6 +287,10 @@ enum FieldBuilder {
         builder: TimestampSecondBuilder,
         tz: Arc<str>
     },
+    UnsupportedBuilder {
+        data_type: DataType,
+        count: usize
+    }
 }
 
 fn create_builder(data_type: DataType, capacity: usize, session_timezone: &str) -> Result<FieldBuilder> {
@@ -356,20 +356,6 @@ fn create_builder(data_type: DataType, capacity: usize, session_timezone: &str) 
             capacity,
             capacity*16,
         ))),
-        DataType::Time32(time_unit) => {
-            match time_unit {
-                TimeUnit::Millisecond => Ok(FieldBuilder::Time32MillisecondBuilder(Time32MillisecondBuilder::with_capacity(capacity))),
-                TimeUnit::Second => Ok(FieldBuilder::Time32SecondBuilder(Time32SecondBuilder::with_capacity(capacity))),
-                _ => unreachable!()
-            }
-        },
-        DataType::Time64(time_unit) => {
-            match time_unit {
-                TimeUnit::Microsecond => Ok(FieldBuilder::Time64MicrosecondBuilder(Time64MicrosecondBuilder::with_capacity(capacity))),
-                TimeUnit::Nanosecond => Ok(FieldBuilder::Time64NanosecondBuilder(Time64NanosecondBuilder::with_capacity(capacity))),
-                _ => unreachable!()
-            }
-        },
         DataType::Timestamp(time_unit, tz) => {
             let resolved_tz = tz.clone().unwrap_or(Arc::from(session_timezone));
             match time_unit {
@@ -403,10 +389,7 @@ fn create_builder(data_type: DataType, capacity: usize, session_timezone: &str) 
                 },
             }
         },
-        other => not_impl_err!(
-            "`{}` function has unimplemented builder for data type {other:?}",
-            SparkFromJson::FROM_JSON_NAME
-        ),
+        _ => Ok(FieldBuilder::UnsupportedBuilder { data_type, count: 0 }),
     }
 }
 
@@ -426,19 +409,21 @@ fn append_to_builder(
             FieldBuilder::Float32(b) => b.append_null(),
             FieldBuilder::Float64(b) => b.append_null(),
             FieldBuilder::LargeString(b) => b.append_null(),
+            FieldBuilder::List { nulls, offsets, .. } => {
+                nulls.push(false);
+                let curr = *offsets.last().unwrap();
+                offsets.push(curr);
+            }
             FieldBuilder::Int8(b) => b.append_null(),
             FieldBuilder::Int16(b) => b.append_null(),
             FieldBuilder::Int32(b) => b.append_null(),
             FieldBuilder::Int64(b) => b.append_null(),
+            FieldBuilder::Map { nulls, offsets, .. } => {
+                nulls.push(false);
+                let curr = *offsets.last().unwrap();
+                offsets.push(curr);
+            }
             FieldBuilder::String(b) => b.append_null(),
-            FieldBuilder::Time32MillisecondBuilder(b) => b.append_null(),
-            FieldBuilder::Time32SecondBuilder(b) => b.append_null(),
-            FieldBuilder::Time64MicrosecondBuilder(b) => b.append_null(),
-            FieldBuilder::Time64NanosecondBuilder(b) => b.append_null(),
-            FieldBuilder::TimestampMicrosecondBuilder{ builder, .. } => builder.append_null(),
-            FieldBuilder::TimestampMillisecondBuilder{ builder, .. } => builder.append_null(),
-            FieldBuilder::TimestampNanosecondBuilder{ builder, .. } => builder.append_null(),
-            FieldBuilder::TimestampSecondBuilder{ builder, .. } => builder.append_null(),
             FieldBuilder::Struct {
                 nested_builders,
                 nulls,
@@ -449,24 +434,45 @@ fn append_to_builder(
                     append_to_builder(nested_builder, value, options, session_timezone)?;
                 }
             }
-            FieldBuilder::Map { nulls, offsets, .. } => {
-                nulls.push(false);
-                let curr = *offsets.last().unwrap();
-                offsets.push(curr);
-            }
-            FieldBuilder::List { nulls, offsets, .. } => {
-                nulls.push(false);
-                let curr = *offsets.last().unwrap();
-                offsets.push(curr);
-            }
+            FieldBuilder::TimestampMicrosecondBuilder{ builder, .. } => builder.append_null(),
+            FieldBuilder::TimestampMillisecondBuilder{ builder, .. } => builder.append_null(),
+            FieldBuilder::TimestampNanosecondBuilder{ builder, .. } => builder.append_null(),
+            FieldBuilder::TimestampSecondBuilder{ builder, .. } => builder.append_null(),
+            FieldBuilder::UnsupportedBuilder { count, .. } => *count += 1
         }
     // not null value
     } else {
         match (builder, value) {
-            (FieldBuilder::Boolean(b), Value::Bool(bool)) => b.append_value(*bool),
-            (FieldBuilder::Date32(b), Value::String(string)) => {
-                let date32 = parse_date32(string, options)?;
-                b.append_value(date32);
+            (FieldBuilder::Boolean(b), _) => {
+                match value {
+                    Value::Bool(bool) => Ok(b.append_value(bool.clone())),
+                    Value::Null => Ok(b.append_null()),
+                    Value::Number(_) => Ok(b.append_null()),
+                    other => {
+                        exec_err!(
+                            "`{}` function either can't or hasn't implemented casting {} to a boolean",
+                            SparkFromJson::FROM_JSON_NAME,
+                            other
+                        )
+                    }
+                }?
+            },
+            (FieldBuilder::Date32(b), _) => {
+                match value {
+                    Value::String(string) => {
+                        let date32 = parse_date32(string, options)?;
+                        b.append_value(date32);
+                        Ok(())
+                    },
+                    Value::Number(_) => Ok(b.append_null()),
+                    other => {
+                        exec_err!(
+                            "`{}` function either can't or hasn't implemented casting {} to a boolean",
+                            SparkFromJson::FROM_JSON_NAME,
+                            other
+                        )
+                    }
+                }?
             }
             (FieldBuilder::Decimal128 { builder, precision, scale }, _) => {
                 match value {
@@ -481,80 +487,182 @@ fn append_to_builder(
                     _ => builder.append_null(),
                 };
             }
-            (FieldBuilder::Float32(b), Value::Number(num)) => {
-                if let Some(float) = num.as_f64() {
-                    if float >= f32::MIN as f64 && float <= f32::MAX as f64 {
-                        b.append_value(float as f32);
-                    } else {
-                        b.append_null();
+            (FieldBuilder::Float32(b), _) => {
+                match value {
+                    Value::Number(num) => {
+                        if let Some(float) = num.as_f64() {
+                            if float >= f32::MIN as f64 && float <= f32::MAX as f64 {
+                                b.append_value(float as f32);
+                            } else {
+                                b.append_null();
+                            }
+                        } else {
+                            b.append_null();
+                        }
+                        Ok(())
+                    },
+                    Value::String(_) => Ok(b.append_null()),
+                    other => {
+                        exec_err!(
+                            "`{}` function either can't or hasn't implemented casting {} to a float",
+                            SparkFromJson::FROM_JSON_NAME,
+                            other
+                        )
                     }
-                } else {
-                    b.append_null();
-                }
+                }?
             }
-            (FieldBuilder::Float64(b), Value::Number(num)) => {
-                if let Some(float) = num.as_f64() {
-                    b.append_value(float);
-                } else {
-                    b.append_null();
-                }
+            (FieldBuilder::Float64(b), _) => {
+                match value {
+                    Value::Number(num) => {
+                        if let Some(float) = num.as_f64() {
+                            b.append_value(float);
+                        } else {
+                            b.append_null();
+                        }
+                        Ok(())
+                    },
+                    Value::String(_) => Ok(b.append_null()),
+                    other => {
+                        exec_err!(
+                            "`{}` function either can't or hasn't implemented casting {} to a float",
+                            SparkFromJson::FROM_JSON_NAME,
+                            other
+                        )
+                    }
+                }?
+            }
+            (FieldBuilder::Int8(b), _) => {
+                match value {
+                    Value::Number(num) => {
+                        if let Some(n) = num.as_i64() {
+                            if n >= i8::MIN as i64 && n <= i8::MAX as i64 {
+                                b.append_value(n as i8);
+                            } else {
+                                b.append_null();
+                            }
+                        }
+                        Ok(())
+                    },
+                    Value::String(_) => Ok(b.append_null()),
+                    other => {
+                        exec_err!(
+                            "`{}` function either can't or hasn't implemented casting {} to a number",
+                            SparkFromJson::FROM_JSON_NAME,
+                            other
+                        )
+                    }
+                }?
+            }
+            (FieldBuilder::Int16(b), _) => {
+                match value {
+                    Value::Number(num) => {
+                        if let Some(n) = num.as_i64() {
+                            if n >= i16::MIN as i64 && n <= i16::MAX as i64 {
+                                b.append_value(n as i16);
+                            } else {
+                                b.append_null();
+                            }
+                        }
+                        Ok(())
+                    },
+                    Value::String(_) => Ok(b.append_null()),
+                    other => {
+                        exec_err!(
+                            "`{}` function either can't or hasn't implemented casting {} to a number",
+                            SparkFromJson::FROM_JSON_NAME,
+                            other
+                        )
+                    }
+                }?
+            }
+            (FieldBuilder::Int32(b), _) => {
+                match value {
+                    Value::Number(num) => {
+                        if let Some(n) = num.as_i64() {
+                            if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
+                                b.append_value(n as i32);
+                            } else {
+                                b.append_null();
+                            }
+                        } else {
+                            b.append_null();
+                        }
+                        Ok(())
+                    },
+                    Value::String(_) => Ok(b.append_null()),
+                    other => {
+                        exec_err!(
+                            "`{}` function either can't or hasn't implemented casting {} to a number",
+                            SparkFromJson::FROM_JSON_NAME,
+                            other
+                        )
+                    }
+                }?
+            }
+            (FieldBuilder::Int64(b), _) => {
+                match value {
+                    Value::Number(num) => {
+                        if let Some(n) = num.as_i64() {
+                            b.append_value(n);
+                        } else {
+                            b.append_null();
+                        }
+                        Ok(())
+                    },
+                    Value::String(_) => Ok(b.append_null()),
+                    other => {
+                        exec_err!(
+                            "`{}` function either can't or hasn't implemented casting {} to a number",
+                            SparkFromJson::FROM_JSON_NAME,
+                            other
+                        )
+                    }
+                }?
             }
             // TODO: 1) verify string size 2) other Values can be converted to strings
-            (FieldBuilder::LargeString(b), Value::String(string)) => b.append_value(string),
-            (FieldBuilder::Int8(b), Value::Number(num)) => {
-                if let Some(n) = num.as_i64() {
-                    if n >= i8::MIN as i64 && n <= i8::MAX as i64 {
-                        b.append_value(n as i8);
-                    } else {
-                        b.append_null();
+            (FieldBuilder::LargeString(b), _) => {
+                match value {
+                    Value::String(string) => Ok(b.append_value(string)),
+                    Value::Number(num) => Ok(b.append_value(num.to_string())),
+                    Value::Bool(bool) => Ok(b.append_value(bool.to_string())),
+                    other => {
+                        exec_err!(
+                            "`{}` function either can't or hasn't implemented casting {} to a string",
+                            SparkFromJson::FROM_JSON_NAME,
+                            other
+                        )
                     }
-                }
+                }?
             }
-            (FieldBuilder::Int16(b), Value::Number(num)) => {
-                if let Some(n) = num.as_i64() {
-                    if n >= i16::MIN as i64 && n <= i16::MAX as i64 {
-                        b.append_value(n as i16);
-                    } else {
-                        b.append_null();
-                    }
-                }
-            }
-            (FieldBuilder::Int32(b), Value::Number(num)) => {
-                if let Some(n) = num.as_i64() {
-                    if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
-                        b.append_value(n as i32);
-                    } else {
-                        b.append_null();
-                    }
-                } else {
-                    b.append_null();
-                }
-            }
-            (FieldBuilder::Int64(b), Value::Number(num)) => {
-                if let Some(n) = num.as_i64() {
-                    b.append_value(n);
-                } else {
-                    b.append_null();
-                }
-            }
-            (FieldBuilder::String(b), Value::String(string)) => b.append_value(string),
             (
-                FieldBuilder::Struct {
-                    fields,
-                    nested_builders,
+                FieldBuilder::List {
+                    offsets,
+                    values,
                     nulls,
+                    ..
                 },
-                Value::Object(obj),
+                _,
             ) => {
-                nulls.push(true);
-                for (field, nested_builder) in fields.iter().zip(nested_builders.iter_mut()) {
-                    // if key not found return null
-                    let val = if let Some(v) = obj.get(field.name()) {
-                        v
-                    } else {
-                        &Value::Null
-                    };
-                    append_to_builder(nested_builder, val, options, session_timezone)?;
+                match value {
+                    Value::Array(arr) => {
+                        nulls.push(true);
+                        for val in arr.iter() {
+                            append_to_builder(values, val, options, session_timezone)?;
+                        }
+                        let curr_len = offsets.last().unwrap() + arr.len() as i32;
+                        offsets.push(curr_len);
+                    },
+                    Value::Object(_) => {
+                        nulls.push(true);
+                        append_to_builder(values, value, options, session_timezone)?;
+                        let curr_len = offsets.last().unwrap() + 1_i32; // only need to increment by 1
+                        offsets.push(curr_len);
+                    },
+                    _ => {
+                        nulls.push(false);
+                        let curr = *offsets.last().unwrap();
+                        offsets.push(curr);
+                    }
                 }
             }
             (
@@ -564,57 +672,70 @@ fn append_to_builder(
                     offsets,
                     ..
                 },
-                Value::Object(obj),
+                _,
             ) => {
-                // just push to struct builder
-                nulls.push(true);
-                for (k, v) in obj.iter() {
-                    // map each pair to "key" and "value" - default field names
-                    let entry = serde_json::json!({
-                        "key": k,
-                        "value": v
-                    });
-                    append_to_builder(struct_builder, &entry, options, session_timezone)?;
+                match value {
+                    Value::Object(obj) => {
+                        // just push to struct builder
+                        nulls.push(true);
+                        for (k, v) in obj.iter() {
+                            // map each pair to "key" and "value" - default field names
+                            let entry = serde_json::json!({
+                            "key": k,
+                            "value": v
+                            });
+                            append_to_builder(struct_builder, &entry, options, session_timezone)?;
+                        }
+                        let curr_len = offsets.last().unwrap() + obj.len() as i32;
+                        offsets.push(curr_len);
+                    },
+                    _ => {
+                        nulls.push(false);
+                        let curr = *offsets.last().unwrap();
+                        offsets.push(curr);
+                    }
                 }
-                let curr_len = offsets.last().unwrap() + obj.len() as i32;
-                offsets.push(curr_len);
             }
-            (
-                FieldBuilder::List {
-                    offsets,
-                    values,
-                    nulls,
-                    ..
-                },
-                Value::Array(arr),
-            ) => {
-                nulls.push(true);
-                for val in arr.iter() {
-                    append_to_builder(values, val, options, session_timezone)?;
+            (FieldBuilder::String(b), _) => {
+                match value {
+                    Value::String(string) => b.append_value(string),
+                    Value::Number(num) => b.append_value(num.to_string()),
+                    Value::Bool(bool) => b.append_value(bool.to_string()),
+                    Value::Object(_) => b.append_value(value.to_string()),
+                    Value::Array(_) => b.append_value(value.to_string()),
+                    _ => b.append_null(),
                 }
-                let curr_len = offsets.last().unwrap() + arr.len() as i32;
-                offsets.push(curr_len);
-            }
-            // it's valid to cast structs into a struct array
+            },
             (
-                FieldBuilder::List {
-                    offsets,
-                    values: nested_builder,
+                FieldBuilder::Struct {
+                    fields,
+                    nested_builders,
                     nulls,
-                    ..
                 },
-                Value::Object(_),
+                _,
             ) => {
-                nulls.push(true);
-                append_to_builder(nested_builder, value, options, session_timezone)?;
-                let curr_len = offsets.last().unwrap() + 1_i32; // only need to increment by 1
-                offsets.push(curr_len);
+                match value {
+                    Value::Object(obj) => {
+                        nulls.push(true);
+                        for (field, nested_builder) in fields.iter().zip(nested_builders.iter_mut()) {
+                            // if key not found return null
+                            let val = if let Some(v) = obj.get(field.name()) {
+                                v
+                            } else {
+                                &Value::Null
+                            };
+                            append_to_builder(nested_builder, val, options, session_timezone)?;
+                        }
+                    },
+                    _ => {
+                        nulls.push(false);
+                        for nested_builder in nested_builders.iter_mut() {
+                            append_to_builder(nested_builder, value, options, session_timezone)?;
+                        }
+                    }
+                }
             }
             // TODO: check spark parity - BDD tests want nulls
-            (FieldBuilder::Time32MillisecondBuilder(b), _) => b.append_null(),
-            (FieldBuilder::Time32SecondBuilder(b), _) => b.append_null(),
-            (FieldBuilder::Time64MicrosecondBuilder(b), _) => b.append_null(),
-            (FieldBuilder::Time64NanosecondBuilder(b), _) => b.append_null(),
             (FieldBuilder::TimestampMicrosecondBuilder{ builder, tz }, _) => {
                 match value {
                     Value::String(string) => {
@@ -666,10 +787,8 @@ fn append_to_builder(
                     },
                     _ => builder.append_null(),
                 }
-            }
-            (other, other1) => {
-                return plan_err!("Unsupported conversion of value {other1:?} to type {other:?}")
-            }
+            },
+            (FieldBuilder::UnsupportedBuilder { count, .. }, _) => *count += 1,
         };
     }
     Ok(())
@@ -715,10 +834,6 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
         FieldBuilder::Int32(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::Int64(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::String(mut b) => Ok(Arc::new(b.finish())),
-        FieldBuilder::Time32MillisecondBuilder(mut b) => Ok(Arc::new(b.finish())),
-        FieldBuilder::Time32SecondBuilder(mut b) => Ok(Arc::new(b.finish())),
-        FieldBuilder::Time64MicrosecondBuilder(mut b) => Ok(Arc::new(b.finish())),
-        FieldBuilder::Time64NanosecondBuilder(mut b) => Ok(Arc::new(b.finish())),
         FieldBuilder::TimestampMicrosecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
         FieldBuilder::TimestampMillisecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
         FieldBuilder::TimestampNanosecondBuilder { mut builder, .. } => Ok(Arc::new(builder.finish())),
@@ -770,7 +885,8 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
                 array_ref,
                 Some(NullBuffer::from(nulls)),
             )))
-        }
+        },
+        FieldBuilder::UnsupportedBuilder { data_type, count } => Ok(new_null_array(&data_type, count))
     }
 }
 
