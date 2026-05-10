@@ -52,7 +52,8 @@ impl ScalarUDFImpl for SparkBase64 {
             );
         }
         match arg_types[0] {
-            DataType::Utf8
+            DataType::Null
+            | DataType::Utf8
             | DataType::Utf8View
             | DataType::Binary
             | DataType::FixedSizeBinary(_)
@@ -134,6 +135,13 @@ impl ScalarUDFImpl for SparkBase64 {
                     results.push(STANDARD.encode(value));
                 }
                 Ok(results)
+            }
+            ColumnarValue::Scalar(s) if s.is_null() => {
+                let null_scalar = match s.data_type() {
+                    DataType::LargeUtf8 | DataType::LargeBinary => ScalarValue::LargeUtf8(None),
+                    _ => ScalarValue::Utf8(None),
+                };
+                return Ok(ColumnarValue::Scalar(null_scalar));
             }
             other => exec_err!("Spark `base64`: Expr must be BINARY or STRING, got {other:?}"),
         }?;

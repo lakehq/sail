@@ -186,6 +186,7 @@ use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractAll;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
+use sail_function::scalar::string::spark_substr_binary::SparkSubstrBinary;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
@@ -2205,6 +2206,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_aes_decrypt" | "try_aes_decrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryAESDecrypt::new())))
             }
+            "spark_substr_binary" => Ok(Arc::new(ScalarUDF::from(SparkSubstrBinary::new()))),
             "spark_to_binary" | "to_binary" => Ok(Arc::new(ScalarUDF::from(SparkToBinary::new()))),
             "spark_try_to_binary" | "try_to_binary" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
@@ -2383,6 +2385,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkSignum>()
             || node_inner.is::<SparkSentences>()
             || node_inner.is::<SparkSplit>()
+            || node_inner.is::<SparkSubstrBinary>()
             || node_inner.is::<SparkToBinary>()
             || node_inner.is::<SparkToChronoFmt>()
             || node_inner.is::<SparkToLargeUtf8>()
