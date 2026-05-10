@@ -150,6 +150,9 @@ fn parse_spark_string_i64(value: &str) -> Option<i64> {
     {
         return None;
     }
+    if integer.trim_start_matches('0').len() > 19 {
+        return None;
+    }
 
     let magnitude = integer.bytes().try_fold(0_u128, |acc, b| {
         acc.checked_mul(10)?.checked_add((b - b'0') as u128)
