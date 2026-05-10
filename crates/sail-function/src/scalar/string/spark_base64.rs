@@ -283,15 +283,20 @@ fn encode_spark_base64_array<'a>(
 
 fn decode_spark_base64(value: &str) -> Option<Vec<u8>> {
     let bytes = value.as_bytes();
-    if bytes.iter().any(|byte| byte.is_ascii_whitespace()) {
-        let filtered_bytes: Vec<u8> = bytes
-            .iter()
-            .copied()
-            .filter(|byte| !byte.is_ascii_whitespace())
-            .collect();
-        SPARK_BASE64_DECODE.decode(filtered_bytes.as_slice()).ok()
-    } else {
-        SPARK_BASE64_DECODE.decode(bytes).ok()
+    match SPARK_BASE64_DECODE.decode(bytes) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            if bytes.iter().any(|byte| byte.is_ascii_whitespace()) {
+                let filtered_bytes: Vec<u8> = bytes
+                    .iter()
+                    .copied()
+                    .filter(|byte| !byte.is_ascii_whitespace())
+                    .collect();
+                SPARK_BASE64_DECODE.decode(filtered_bytes.as_slice()).ok()
+            } else {
+                None
+            }
+        }
     }
 }
 
