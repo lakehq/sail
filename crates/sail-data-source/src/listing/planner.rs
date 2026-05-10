@@ -37,10 +37,10 @@ struct ListFilesResult {
 ///
 /// Plans `ListingTableSource` table scans directly without an intermediate `TableProvider`.
 #[derive(Debug, Default)]
-pub struct ListingTableExtensionPlanner;
+pub struct ListingTablePhysicalPlanner;
 
 #[async_trait]
-impl ExtensionPlanner for ListingTableExtensionPlanner {
+impl ExtensionPlanner for ListingTablePhysicalPlanner {
     async fn plan_extension(
         &self,
         _planner: &dyn PhysicalPlanner,
