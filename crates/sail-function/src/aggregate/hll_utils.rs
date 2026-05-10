@@ -50,6 +50,17 @@ pub fn is_binary_type(dt: &DataType) -> bool {
     )
 }
 
+/// Returns `true` if the given [`DataType`] can be coerced to `Binary`.
+/// This includes all binary variants, all string variants (Spark allows
+/// implicit `String -> Binary` cast), and `Null`.
+pub fn is_coercible_to_binary(dt: &DataType) -> bool {
+    is_binary_type(dt)
+        || matches!(
+            dt,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null
+        )
+}
+
 /// A HyperLogLog sketch.
 #[derive(Debug, Clone)]
 pub struct HllSketch {

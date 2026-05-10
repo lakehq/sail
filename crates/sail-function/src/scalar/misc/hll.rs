@@ -7,7 +7,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-use crate::aggregate::hll_utils::{is_binary_type, HllSketch, HLL_MAGIC};
+use crate::aggregate::hll_utils::{is_coercible_to_binary, HllSketch, HLL_MAGIC};
 
 /// Scalar function: returns the estimated number of unique values represented
 /// by a HyperLogLog sketch.
@@ -54,7 +54,7 @@ impl ScalarUDFImpl for HllSketchEstimate {
                 arg_types.len()
             )));
         }
-        if !is_binary_type(&arg_types[0]) {
+        if !is_coercible_to_binary(&arg_types[0]) {
             return Err(DataFusionError::Plan(format!(
                 "hll_sketch_estimate expects a binary input, got {}",
                 arg_types[0]
@@ -138,13 +138,13 @@ impl ScalarUDFImpl for HllUnion {
                 arg_types.len()
             )));
         }
-        if !is_binary_type(&arg_types[0]) {
+        if !is_coercible_to_binary(&arg_types[0]) {
             return Err(DataFusionError::Plan(format!(
                 "hll_union expects a binary sketch as the first argument, got {}",
                 arg_types[0]
             )));
         }
-        if !is_binary_type(&arg_types[1]) {
+        if !is_coercible_to_binary(&arg_types[1]) {
             return Err(DataFusionError::Plan(format!(
                 "hll_union expects a binary sketch as the second argument, got {}",
                 arg_types[1]

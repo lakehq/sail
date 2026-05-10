@@ -8,7 +8,9 @@ use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_common::cast::as_fixed_size_binary_array;
 
-use crate::aggregate::hll_utils::{is_binary_type, scalar_to_allow_diff, HllSketch, HLL_MAGIC};
+use crate::aggregate::hll_utils::{
+    is_coercible_to_binary, scalar_to_allow_diff, HllSketch, HLL_MAGIC,
+};
 use crate::aggregate::utils::get_scalar_value;
 
 /// Aggregate function that merges HyperLogLog sketches via union.
@@ -79,7 +81,7 @@ impl AggregateUDFImpl for HllUnionAggFunction {
                 arg_types.len()
             )));
         }
-        if !is_binary_type(&arg_types[0]) {
+        if !is_coercible_to_binary(&arg_types[0]) {
             return Err(DataFusionError::Plan(format!(
                 "hll_union_agg expects a binary sketch as the first argument, got {}",
                 arg_types[0]
