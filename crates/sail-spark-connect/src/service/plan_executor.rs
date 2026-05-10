@@ -667,9 +667,16 @@ async fn materialize_logical_plan_to_disk(
     // the DataFrame is empty (zero rows).  In that case we fall back to an
     // in-memory table so that downstream scans see the correct (empty) schema
     // instead of failing with a "path does not exist" error.
-    let path_exists = tokio::fs::try_exists(&checkpoint_path)
-        .await
-        .unwrap_or(false);
+    let path_exists = match tokio::fs::try_exists(&checkpoint_path).await {
+        Ok(exists) => exists,
+        Err(e) => {
+            warn!(
+                "failed to check checkpoint path {}: {e}; assuming it exists",
+                checkpoint_path.display()
+            );
+            true
+        }
+    };
     if !path_exists {
         let table = Arc::new(MemTable::try_new(arrow_schema, vec![vec![]])?);
         let scan = LogicalPlanBuilder::scan(
