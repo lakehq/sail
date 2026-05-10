@@ -4,8 +4,7 @@ use datafusion::arrow::datatypes::{
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
-use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
-use datafusion_functions::expr_fn::to_time;
+use datafusion_expr::{cast, lit, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -398,8 +397,10 @@ fn time_with_try(input: ScalarFunctionInput, safe: bool) -> PlanResult<Expr> {
 
 fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
     let data_type = timestamp_data_type(&input, timestamp_ntz);
+    let timezone = input.function_context.plan_config.session_timezone.clone();
+    let udf = ScalarUDF::from(SparkTimestamp::try_new(Some(timezone), true)?);
     if input.arguments.len() == 1 {
-        Ok(try_cast(input.arguments.one()?, data_type))
+        Ok(cast(udf.call(input.arguments), data_type))
     } else if input.arguments.len() == 2 {
         let null = timestamp_null(&input, timestamp_ntz);
         let (expr, format) = input.arguments.two()?;
@@ -407,8 +408,6 @@ fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResu
             return Ok(null);
         }
         let format = to_chrono_fmt(format);
-        let timezone = input.function_context.plan_config.session_timezone.clone();
-        let udf = ScalarUDF::from(SparkTimestamp::try_new(Some(timezone), true)?);
         Ok(cast(udf.call(vec![expr, format]), data_type))
     } else {
         Err(PlanError::invalid(
@@ -843,7 +842,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             }),
         ),
         ("to_date", F::custom(to_date)),
-        ("to_time", F::var_arg(to_time)),
+        ("to_time", F::custom(|input| time_with_try(input, false))),
         (
             "to_timestamp",
             F::custom(|input| {
