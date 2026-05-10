@@ -259,8 +259,9 @@ impl ScalarUDFImpl for ParseUrl {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let safe = self.safe;
+        let name = self.name().to_string();
         let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(move |a| spark_parse_url_impl(a, safe), vec![])(&args)
+        make_scalar_function(move |a| spark_parse_url_impl(a, safe, &name), vec![])(&args)
     }
 }
 
@@ -310,25 +311,26 @@ fn is_string_type(dt: &DataType) -> bool {
     )
 }
 
-fn spark_parse_url_impl(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
+fn spark_parse_url_impl(args: &[ArrayRef], safe: bool, name: &str) -> Result<ArrayRef> {
     if safe {
-        spark_handled_parse_url(args, |x| match x {
+        spark_handled_parse_url(name, args, |x| match x {
             Err(_) => Ok(None),
             result => result,
         })
     } else {
-        spark_handled_parse_url(args, |x| x)
+        spark_handled_parse_url(name, args, |x| x)
     }
 }
 
 fn spark_handled_parse_url(
+    name: &str,
     args: &[ArrayRef],
     handler_err: impl Fn(Result<Option<String>>) -> Result<Option<String>>,
 ) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!(
-            "{} expects 2 or 3 arguments, but got {}",
-            "`parse_url`",
+            "`{}` expects 2 or 3 arguments, but got {}",
+            name,
             args.len()
         );
     }
@@ -587,7 +589,7 @@ fn spark_handled_parse_url(
                     true,
                 )
             }
-            _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
+            _ => exec_err!("`{}` expects STRING arguments, got {:?}", name, args),
         }
     } else {
         // The 'key' argument is omitted, assume all values are null
@@ -676,7 +678,7 @@ fn spark_handled_parse_url(
                     false,
                 )
             }
-            _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
+            _ => exec_err!("`{}` expects STRING arguments, got {:?}", name, args),
         }
     };
     result
@@ -757,7 +759,7 @@ mod tests {
             None,
         ]);
 
-        let result = spark_parse_url_impl(&[url.clone(), part.clone()], false)?;
+        let result = spark_parse_url_impl(&[url.clone(), part.clone()], false, "parse_url")?;
         let result = as_string_array(&result)?;
 
         assert_eq!(&expected, result);
@@ -791,7 +793,7 @@ mod tests {
             Some("/?q=1"),
         ]);
 
-        let result = spark_parse_url_impl(&[urls, parts], false)?;
+        let result = spark_parse_url_impl(&[urls, parts], false, "parse_url")?;
         let result = as_string_array(&result)?;
         assert_eq!(&expected, result);
 
