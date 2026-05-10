@@ -16,9 +16,11 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use futures::TryStreamExt;
+use object_store::ObjectStoreExt;
 use sail_common_datafusion::datasource::{
-    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
-    TableFormat,
+    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, PhysicalSinkMode,
+    SinkInfo, SourceInfo, TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
@@ -253,8 +255,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         };
         let SinkInfo {
             input,
-            // TODO: sink mode is ignored since the file formats only support append operation
-            mode: _,
+            mode,
             partition_by,
             bucket_by,
             sort_order,
@@ -320,6 +321,20 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 ext
             }
         };
+        if matches!(
+            mode,
+            PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwriteIf { .. }
+        ) {
+            for table_url in &table_paths {
+                let store = ctx.runtime_env().object_store(table_url)?;
+                let mut files =
+                    crate::listing::utils::list_all_files(table_url, ctx, store.as_ref(), "", None)
+                        .await?;
+                while let Some(file) = files.try_next().await? {
+                    store.delete(&file.location).await?;
+                }
+            }
+        }
         let conf = FileSinkConfig {
             original_url: path,
             object_store_url,

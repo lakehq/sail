@@ -8,6 +8,7 @@ use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
 use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::range::RangeNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -141,14 +142,26 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_query_hint(
         &self,
         input: spec::QueryPlan,
-        _name: String,
+        name: String,
         _parameters: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        // TODO: Implement
-        warn!("Hint operation is not yet supported and is a no-op");
-        self.resolve_query_plan_with_hidden_fields(input, state)
-            .await
+        let plan = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        // Use an empty Barrier node as a marker for broadcast hints.
+        // A dedicated physical optimizer rule rewrites downstream HashJoinExec
+        // to CollectLeft mode when it detects this marker.
+        if matches!(
+            name.to_ascii_lowercase().as_str(),
+            "broadcast" | "broadcastjoin" | "mapjoin"
+        ) {
+            return Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(BarrierNode::new(vec![], Arc::new(plan))),
+            }));
+        }
+        warn!("Hint operation {name} is not yet supported and is a no-op");
+        Ok(plan)
     }
 
     pub(super) async fn resolve_query_collect_metrics(

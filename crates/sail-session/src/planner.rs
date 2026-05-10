@@ -320,11 +320,7 @@ Ensure expand_row_level_op is enabled; MERGE is currently only supported for lak
                     BarrierExec::static_name()
                 ))
             })?;
-            if preconditions.is_empty() {
-                plan.clone()
-            } else {
-                Arc::new(BarrierExec::new(preconditions.to_vec(), plan.clone()))
-            }
+            Arc::new(BarrierExec::new(preconditions.to_vec(), plan.clone()))
         } else {
             return internal_err!("unsupported logical extension node: {:?}", node);
         };

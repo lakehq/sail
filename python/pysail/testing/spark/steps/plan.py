@@ -4,7 +4,7 @@ import re
 import textwrap
 from typing import TYPE_CHECKING
 
-from pytest_bdd import then
+from pytest_bdd import parsers, then
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -203,3 +203,10 @@ def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and only asserts against the stored snapshot."""
     plan = _collect_plan(query, spark)
     assert snapshot == normalize_plan_text(plan)
+
+
+@then(parsers.parse('query plan contains "{substring}"'))
+def query_plan_contains(query: str, spark, substring: str):
+    """Executes the SQL query and asserts that the plan contains a substring."""
+    plan = normalize_plan_text(_collect_plan(query, spark))
+    assert substring in plan
