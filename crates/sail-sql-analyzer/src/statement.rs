@@ -1920,8 +1920,8 @@ fn from_ast_alter_table_operation(
                 if_exists: if_exists.is_some(),
             })
         }
-        AlterTableOperation::SetLocation { .. } => Ok(spec::AlterTableOperation::Unknown),
-        AlterTableOperation::RenameTable { .. }
+        AlterTableOperation::SetLocation { .. }
+        | AlterTableOperation::RenameTable { .. }
         | AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::DropColumns { .. }
         | AlterTableOperation::RenameColumn { .. }
