@@ -18,6 +18,9 @@ struct CatalogObjectTrackerState {
     next_logical_plan_id: u64,
     functions: HashMap<u64, ScalarUDF>,
     logical_plans: HashMap<u64, Arc<LogicalPlan>>,
+    /// Maps relation IDs from `CachedRemoteRelation` to their checkpointed
+    /// logical plans. Populated when the server handles a `CheckpointCommand`,
+    /// and queried when resolving a `CachedRemoteRelation` query node.
     cached_relations: HashMap<String, Arc<LogicalPlan>>,
 }
 

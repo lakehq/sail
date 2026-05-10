@@ -605,7 +605,9 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
     let RemoveCachedRemoteRelationCommand { relation } = command;
     let relation = relation.required("remove cached remote relation")?;
     let manager = ctx.extension::<CatalogManager>()?;
-    let _ = manager
+    // Removing a relation that does not exist is treated as a no-op to match
+    // Spark Connect, which tolerates duplicate or out-of-order cleanup calls.
+    let _existed = manager
         .remove_cached_relation(&relation.relation_id)
         .map_err(|e| SparkError::internal(format!("failed to remove cached relation: {e}")))?;
 

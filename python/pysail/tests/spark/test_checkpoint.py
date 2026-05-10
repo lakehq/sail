@@ -85,9 +85,10 @@ def test_dataframe_checkpoint_after_transformation(spark):
 def test_dataframe_local_checkpoint_with_nulls(spark):
     df = spark.createDataFrame([Row(a=1, b="x"), Row(a=None, b="y"), Row(a=3, b=None)])
     checkpointed = df.localCheckpoint()
-    pdf = checkpointed.sort("b").toPandas()
+    pdf = checkpointed.toPandas()
     # Null values are preserved through the checkpoint.
-    assert pdf["a"].tolist()[:2] == [1, None] or pdf["a"].isna().sum() == 1
+    assert len(pdf) == 3
+    assert pdf["a"].isna().sum() == 1
     assert pdf["b"].isna().sum() == 1
 
 
