@@ -105,57 +105,116 @@ impl ScalarUDFImpl for SparkBase64 {
                 let results = vec![Some(STANDARD.encode(expr.as_bytes()))];
                 Ok(results)
             }
-            ColumnarValue::Array(array) => {
-                let len = array.len();
-                let mut results = Vec::with_capacity(len);
-
-                for i in 0..len {
-                    if array.is_null(i) {
-                        results.push(None);
-                        continue;
-                    }
-                    let value = match array.data_type() {
-                        DataType::Binary => {
-                            let array = array.as_any().downcast_ref::<BinaryArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to BinaryArray"))?;
-                            Ok(array.value(i))
-                        },
-                        DataType::BinaryView => {
-                            let array = array.as_any().downcast_ref::<BinaryViewArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to LargeBinaryArray"))?;
-                            Ok(array.value(i))
-                        },
-                        DataType::FixedSizeBinary(_) => {
-                            let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to FixedSizeBinaryArray"))?;
-                            Ok(array.value(i))
-                        },
-                        DataType::LargeBinary => {
-                            let array = array.as_any().downcast_ref::<LargeBinaryArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to LargeBinaryArray"))?;
-                            Ok(array.value(i))
-                        },
-                        DataType::Utf8 => {
-                            let array = array.as_any().downcast_ref::<StringArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to StringArray"))?;
-                            Ok(array.value(i).as_bytes())
-                        },
-                        DataType::LargeUtf8 => {
-                            let array = array.as_any().downcast_ref::<LargeStringArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to LargeStringArray"))?;
-                            Ok(array.value(i).as_bytes())
-                        },
-                        DataType::Utf8View => {
-                            let array = array.as_any().downcast_ref::<StringViewArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to StringViewArray"))?;
-                            Ok(array.value(i).as_bytes())
-                        },
-                        other => exec_err!("Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}")
-                    }?;
-                    results.push(Some(STANDARD.encode(value)));
+            ColumnarValue::Array(array) => match array.data_type() {
+                DataType::Binary => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<BinaryArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `base64`: Failed to downcast Expr to BinaryArray"
+                            )
+                        })?;
+                    Ok(encode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i),
+                    ))
                 }
-                Ok(results)
-            }
+                DataType::BinaryView => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<BinaryViewArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `base64`: Failed to downcast Expr to BinaryViewArray"
+                            )
+                        })?;
+                    Ok(encode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i),
+                    ))
+                }
+                DataType::FixedSizeBinary(_) => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<FixedSizeBinaryArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `base64`: Failed to downcast Expr to FixedSizeBinaryArray"
+                            )
+                        })?;
+                    Ok(encode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i),
+                    ))
+                }
+                DataType::LargeBinary => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<LargeBinaryArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `base64`: Failed to downcast Expr to LargeBinaryArray"
+                            )
+                        })?;
+                    Ok(encode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i),
+                    ))
+                }
+                DataType::Utf8 => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `base64`: Failed to downcast Expr to StringArray"
+                            )
+                        })?;
+                    Ok(encode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i).as_bytes(),
+                    ))
+                }
+                DataType::LargeUtf8 => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<LargeStringArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `base64`: Failed to downcast Expr to LargeStringArray"
+                            )
+                        })?;
+                    Ok(encode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i).as_bytes(),
+                    ))
+                }
+                DataType::Utf8View => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `base64`: Failed to downcast Expr to StringViewArray"
+                            )
+                        })?;
+                    Ok(encode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i).as_bytes(),
+                    ))
+                }
+                other => {
+                    exec_err!("Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}")
+                }
+            },
             other => exec_err!("Spark `base64`: Expr must be BINARY or STRING, got {other:?}"),
         }?;
 
@@ -206,12 +265,50 @@ impl SparkUnbase64 {
     }
 }
 
+fn encode_spark_base64_array<'a>(
+    len: usize,
+    is_null: impl Fn(usize) -> bool,
+    value: impl Fn(usize) -> &'a [u8],
+) -> Vec<Option<String>> {
+    let mut results = Vec::with_capacity(len);
+    for i in 0..len {
+        if is_null(i) {
+            results.push(None);
+        } else {
+            results.push(Some(STANDARD.encode(value(i))));
+        }
+    }
+    results
+}
+
 fn decode_spark_base64(value: &str) -> Option<Vec<u8>> {
-    let filtered_bytes: Vec<u8> = value
-        .bytes()
-        .filter(|byte| !byte.is_ascii_whitespace())
-        .collect();
-    SPARK_BASE64_DECODE.decode(filtered_bytes.as_slice()).ok()
+    let bytes = value.as_bytes();
+    if bytes.iter().any(|byte| byte.is_ascii_whitespace()) {
+        let filtered_bytes: Vec<u8> = bytes
+            .iter()
+            .copied()
+            .filter(|byte| !byte.is_ascii_whitespace())
+            .collect();
+        SPARK_BASE64_DECODE.decode(filtered_bytes.as_slice()).ok()
+    } else {
+        SPARK_BASE64_DECODE.decode(bytes).ok()
+    }
+}
+
+fn decode_spark_base64_array<'a>(
+    len: usize,
+    is_null: impl Fn(usize) -> bool,
+    value: impl Fn(usize) -> &'a str,
+) -> Vec<Option<Vec<u8>>> {
+    let mut results = Vec::with_capacity(len);
+    for i in 0..len {
+        if is_null(i) {
+            results.push(None);
+        } else {
+            results.push(decode_spark_base64(value(i)));
+        }
+    }
+    results
 }
 
 impl ScalarUDFImpl for SparkUnbase64 {
@@ -263,58 +360,56 @@ impl ScalarUDFImpl for SparkUnbase64 {
                 let results = vec![decode_spark_base64(expr.as_str())];
                 Ok(results)
             }
-            ColumnarValue::Array(array) => {
-                let len = array.len();
-                let mut results = Vec::with_capacity(len);
-
-                for i in 0..len {
-                    if array.is_null(i) {
-                        results.push(None);
-                        continue;
-                    }
-                    let value = match array.data_type() {
-                        DataType::Utf8 => {
-                            let array =
-                                array
-                                    .as_any()
-                                    .downcast_ref::<StringArray>()
-                                    .ok_or_else(|| {
-                                        exec_datafusion_err!(
-                                        "Spark `unbase64`: Failed to downcast Expr to StringArray"
-                                    )
-                                    })?;
-                            Ok(array.value(i))
-                        }
-                        DataType::LargeUtf8 => {
-                            let array = array
-                                .as_any()
-                                .downcast_ref::<LargeStringArray>()
-                                .ok_or_else(|| {
-                                    exec_datafusion_err!(
-                                        "Spark `unbase64`: Failed to downcast Expr to LargeStringArray"
-                                    )
-                                })?;
-                            Ok(array.value(i))
-                        }
-                        DataType::Utf8View => {
-                            let array = array
-                                .as_any()
-                                .downcast_ref::<StringViewArray>()
-                                .ok_or_else(|| {
-                                    exec_datafusion_err!(
-                                        "Spark `unbase64`: Failed to downcast Expr to StringViewArray"
-                                    )
-                                })?;
-                            Ok(array.value(i))
-                        }
-                        other => exec_err!(
-                            "Spark `unbase64`: Expr array must be STRING, got array of type {other}"
-                        ),
-                    }?;
-                    results.push(decode_spark_base64(value));
+            ColumnarValue::Array(array) => match array.data_type() {
+                DataType::Utf8 => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `unbase64`: Failed to downcast Expr to StringArray"
+                            )
+                        })?;
+                    Ok(decode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i),
+                    ))
                 }
-                Ok(results)
-            }
+                DataType::LargeUtf8 => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<LargeStringArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `unbase64`: Failed to downcast Expr to LargeStringArray"
+                            )
+                        })?;
+                    Ok(decode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i),
+                    ))
+                }
+                DataType::Utf8View => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .ok_or_else(|| {
+                            exec_datafusion_err!(
+                                "Spark `unbase64`: Failed to downcast Expr to StringViewArray"
+                            )
+                        })?;
+                    Ok(decode_spark_base64_array(
+                        array.len(),
+                        |i| array.is_null(i),
+                        |i| array.value(i),
+                    ))
+                }
+                other => exec_err!(
+                    "Spark `unbase64`: Expr array must be STRING, got array of type {other}"
+                ),
+            },
             other => exec_err!("Spark `unbase64`: Expr must be STRING, got {other:?}"),
         }?;
 
