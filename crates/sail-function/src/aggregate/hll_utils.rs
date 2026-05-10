@@ -77,13 +77,19 @@ impl HllSketch {
         let m = self.registers.len();
         let bucket = (hash & ((m as u64) - 1)) as usize;
         let remaining = hash >> bucket_bits;
-        // Use the remaining bits to compute leading-zero count + 1.
-        // We have 64 - bucket_bits useful bits.
+        // Compute the leading-zero count + 1 over the useful (non-bucket)
+        // bits of the hash. We have `useful_bits = 64 - bucket_bits` of
+        // useful information. Because we right-shift `hash` by
+        // `bucket_bits`, the top `bucket_bits` of `remaining` are always
+        // zero; those are *not* real leading zeros of the useful region,
+        // so we subtract `bucket_bits` from `remaining.leading_zeros()`
+        // to get the leading-zero count within the useful bits, then
+        // add 1.
         let useful_bits = 64 - bucket_bits;
         let lz = if remaining == 0 {
             useful_bits + 1
         } else {
-            (remaining.leading_zeros()).saturating_sub(bucket_bits) + 1
+            remaining.leading_zeros().saturating_sub(bucket_bits) + 1
         };
         let lz = u8::try_from(lz).unwrap_or(u8::MAX);
         if lz > self.registers[bucket] {
@@ -136,14 +142,16 @@ impl HllSketch {
     }
 
     /// Returns a sketch downsampled to the given (smaller or equal)
-    /// `lgConfigK`. When reducing the bucket width from `lgConfigK = K` to
-    /// `K' < K`, each hash's bucket index changes from
-    /// `hash & ((1<<K)-1)` to `hash & ((1<<K')-1)`; we therefore group old
-    /// registers by their low `K'` bits and take the maximum to form each
-    /// new register. This preserves the leading-zero rank of the hash
-    /// (which is computed from the most significant bits and is unchanged
-    /// by reducing the bucket width), which is what matters for cardinality
-    /// estimation.
+    /// `lgConfigK`. In HLL, each hash's bucket index is the *low*
+    /// `lgConfigK` bits of the hash. When reducing the bucket width from
+    /// `K = lg_config_k` to `K' = target_lg < K`, every old bucket index
+    /// `idx` collapses into the new bucket `idx & ((1 << K') - 1)`, i.e.
+    /// `2^(K - K')` old buckets feed into each new bucket. We take the
+    /// maximum register value of each such group as the new register
+    /// value. The leading-zero rank stored in each register is computed
+    /// from the most significant bits of the hash and is unchanged by
+    /// reducing the bucket width, so taking the max preserves the
+    /// cardinality estimate.
     fn downsample(&self, target_lg: u8) -> Result<HllSketch> {
         if target_lg > self.lg_config_k {
             return exec_err!(
