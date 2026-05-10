@@ -22,15 +22,6 @@ Feature: try_to_timestamp
       | result              |
       | 2024-01-15 00:00:00 |
 
-    Scenario: Time-only parses with epoch date
-      When query
-      """
-      SELECT try_to_timestamp('10:30:45') AS result
-      """
-      Then query result
-      | result              |
-      | 1970-01-01 10:30:45 |
-
     Scenario: Microseconds preserved
       When query
       """

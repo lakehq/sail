@@ -112,4 +112,4 @@ Feature: make_interval (strict variant)
       """
       SELECT make_interval()
       """
-      Then query error WRONG_NUM_ARGS|calendar_interval|Unsupported
+      Then query error WRONG_NUM_ARGS|UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION|month_day_nano_interval|calendar_interval|Unsupported

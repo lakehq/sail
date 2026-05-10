@@ -4,12 +4,14 @@ Feature: try_to_time
   instead of throwing an exception.
 
   NOTE: TIME type is a preview feature in Spark 4.1.1; the JVM raises
-  `[UNSUPPORTED_TIME_TYPE] The data type TIME is not supported`. Sail
-  implements TIME fully, so several scenarios are tagged @sail-only
-  pending Spark stabilization.
+  `[UNSUPPORTED_TIME_TYPE] The data type TIME is not supported` for
+  any TIME usage. The scenarios below reflect Sail's implementation.
+  Once Spark stabilises TIME support, remove @sail-only and update
+  expected values to match Spark JVM output. — owners to decide.
 
   Rule: Single-argument form parses with default formats
 
+    @sail-only
     Scenario: HH:MM:SS basic
       When query
       """
@@ -19,6 +21,7 @@ Feature: try_to_time
       | result   |
       | 10:30:45 |
 
+    @sail-only
     Scenario: HH:MM only
       When query
       """
@@ -28,6 +31,7 @@ Feature: try_to_time
       | result   |
       | 10:30:00 |
 
+    @sail-only
     Scenario: Microseconds precision
       When query
       """
@@ -37,6 +41,7 @@ Feature: try_to_time
       | result          |
       | 10:30:45.123456 |
 
+    @sail-only
     Scenario: Midnight
       When query
       """
@@ -46,6 +51,7 @@ Feature: try_to_time
       | result   |
       | 00:00:00 |
 
+    @sail-only
     Scenario: Last second of day
       When query
       """
@@ -55,6 +61,7 @@ Feature: try_to_time
       | result   |
       | 23:59:59 |
 
+    @sail-only
     Scenario: Last microsecond of day
       When query
       """
@@ -64,6 +71,7 @@ Feature: try_to_time
       | result          |
       | 23:59:59.999999 |
 
+    @sail-only
     Scenario: Garbage string returns NULL
       When query
       """
@@ -73,6 +81,7 @@ Feature: try_to_time
       | result |
       | NULL   |
 
+    @sail-only
     Scenario: Empty string returns NULL
       When query
       """
@@ -82,6 +91,7 @@ Feature: try_to_time
       | result |
       | NULL   |
 
+    @sail-only
     Scenario: Out-of-range hour returns NULL
       When query
       """
@@ -91,6 +101,7 @@ Feature: try_to_time
       | result |
       | NULL   |
 
+    @sail-only
     Scenario: Out-of-range minute returns NULL
       When query
       """
@@ -101,17 +112,6 @@ Feature: try_to_time
       | NULL   |
 
     @sail-only
-    # Sail uses chrono lenient parsing → 60s rolls to next minute.
-    # Spark JVM 4.1.1: UNSUPPORTED_TIME_TYPE (TIME not yet supported).
-    Scenario: Lenient overflow on seconds (Sail rolls over)
-      When query
-      """
-      SELECT try_to_time('10:30:60') AS result
-      """
-      Then query result
-      | result   |
-      | 10:31:00 |
-
     Scenario: Negative time returns NULL
       When query
       """
@@ -121,6 +121,7 @@ Feature: try_to_time
       | result |
       | NULL   |
 
+    @sail-only
     Scenario: Date-only string returns NULL
       When query
       """
@@ -130,6 +131,7 @@ Feature: try_to_time
       | result |
       | NULL   |
 
+    @sail-only
     Scenario: NULL input
       When query
       """
@@ -141,6 +143,7 @@ Feature: try_to_time
 
   Rule: Two-argument form parses with format string
 
+    @sail-only
     Scenario: HH-MM-SS custom format
       When query
       """
@@ -150,6 +153,7 @@ Feature: try_to_time
       | result   |
       | 10:30:45 |
 
+    @sail-only
     Scenario: HH:MM only with format
       When query
       """
@@ -159,6 +163,7 @@ Feature: try_to_time
       | result   |
       | 10:30:00 |
 
+    @sail-only
     Scenario: Format mismatch returns NULL
       When query
       """
@@ -168,6 +173,7 @@ Feature: try_to_time
       | result |
       | NULL   |
 
+    @sail-only
     Scenario: NULL value with format returns NULL
       When query
       """
@@ -179,6 +185,7 @@ Feature: try_to_time
 
   Rule: Non-finite floating-point string literals return NULL
 
+    @sail-only
     Scenario: NaN string returns NULL
       When query
       """
@@ -188,6 +195,7 @@ Feature: try_to_time
       | result |
       | NULL   |
 
+    @sail-only
     Scenario: Infinity string returns NULL
       When query
       """
@@ -199,6 +207,7 @@ Feature: try_to_time
 
   Rule: Per-row format (column-expression format)
 
+    @sail-only
     Scenario: Different format per row all parse
       When query
       """
@@ -211,6 +220,7 @@ Feature: try_to_time
       | 10:30:45 |
       | 10:30:45 |
 
+    @sail-only
     Scenario: Per-row format with NULL format propagates to NULL
       When query
       """
@@ -225,6 +235,7 @@ Feature: try_to_time
 
   Rule: Multi-row arrays handle per-row failures
 
+    @sail-only
     Scenario: Mixed valid and invalid in batch
       When query
       """

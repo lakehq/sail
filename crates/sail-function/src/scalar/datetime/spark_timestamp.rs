@@ -2,7 +2,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+use chrono::{Local, NaiveDateTime, NaiveTime, TimeZone};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{Array, ArrayRef, PrimitiveArray};
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
@@ -16,16 +16,14 @@ use sail_sql_analyzer::parser::parse_timestamp;
 
 use crate::error::invalid_arg_count_exec_err;
 
-/// Parse a time-only string as a NaiveDateTime at epoch (1970-01-01).
+/// Parse a time-only string as a NaiveDateTime at the current local date.
 ///
-/// Spark's `CAST('HH:MM:SS' AS TIMESTAMP)` accepts time-only strings by
-/// composing with the epoch date. Sail's `parse_timestamp` doesn't handle
-/// time-only input, so we fall back to this helper when it fails.
+/// Spark composes time-only strings with today's date, not the epoch.
 fn try_time_only_naive(value: &str) -> Option<NaiveDateTime> {
     const TIME_FORMATS: &[&str] = &["%H:%M:%S%.f", "%H:%M:%S", "%H:%M"];
     for fmt in TIME_FORMATS {
         if let Ok(t) = NaiveTime::parse_from_str(value, fmt) {
-            return NaiveDate::from_ymd_opt(1970, 1, 1).map(|d| d.and_time(t));
+            return Some(Local::now().date_naive().and_time(t));
         }
     }
     None

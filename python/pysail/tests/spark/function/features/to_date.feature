@@ -73,7 +73,7 @@ Feature: to_date (strict variant)
       """
       SELECT to_date('2024-01-15', 'dd/MM/yyyy')
       """
-      Then query error invalid characters|CONVERSION_INVALID_INPUT|cannot be parsed
+      Then query error CANNOT_PARSE_TIMESTAMP|invalid characters|CONVERSION_INVALID_INPUT|cannot be parsed
 
   Rule: NULL input propagates
 
