@@ -1062,7 +1062,7 @@ async fn test_get_table() {
         sort_by,
         bucket_by,
         properties,
-        ..
+        is_external: _,
     } = table_ns.kind
     else {
         panic!("Expected TableKind::Table");
