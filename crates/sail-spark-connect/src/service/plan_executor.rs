@@ -654,6 +654,7 @@ async fn materialize_logical_plan_to_disk(
         .map_err(|e| SparkError::internal(format!("failed to create checkpoint directory: {e}")))?;
     let checkpoint_path = checkpoint_root.join(uuid::Uuid::new_v4().to_string());
     let checkpoint_path_string = checkpoint_path.to_string_lossy().into_owned();
+    let arrow_schema = plan.schema().inner().clone();
     let df = ctx.execute_logical_plan(plan).await?;
     if let Err(error) = df
         .write_parquet(&checkpoint_path_string, DataFrameWriteOptions::new(), None)
@@ -661,6 +662,23 @@ async fn materialize_logical_plan_to_disk(
     {
         cleanup_checkpoint_path(&checkpoint_path).await;
         return Err(error.into());
+    }
+    // DataFusion's `write_parquet` may not create the checkpoint directory when
+    // the DataFrame is empty (zero rows).  In that case we fall back to an
+    // in-memory table so that downstream scans see the correct (empty) schema
+    // instead of failing with a "path does not exist" error.
+    let path_exists = tokio::fs::try_exists(&checkpoint_path)
+        .await
+        .unwrap_or(false);
+    if !path_exists {
+        let table = Arc::new(MemTable::try_new(arrow_schema, vec![vec![]])?);
+        let scan = LogicalPlanBuilder::scan(
+            datafusion::common::TableReference::bare(UNNAMED_TABLE),
+            provider_as_source(table),
+            None,
+        )?
+        .build()?;
+        return Ok((scan, None));
     }
     let df = match ctx
         .read_parquet(&checkpoint_path_string, ParquetReadOptions::default())
