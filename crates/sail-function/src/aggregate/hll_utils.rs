@@ -197,6 +197,8 @@ impl HllSketch {
         } else {
             raw_estimate
         };
+        // The floating-point boundary is not exact; this is only a defensive
+        // saturation guard for non-finite or extreme estimates.
         estimate.round().min(u64::MAX as f64) as u64
     }
 
