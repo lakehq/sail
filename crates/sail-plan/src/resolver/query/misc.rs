@@ -142,12 +142,13 @@ impl PlanResolver<'_> {
         )
     }
 
-    /// Resolves a [`spec::QueryNode::CachedRemoteRelation`] by looking up the
-    /// previously checkpointed logical plan from the catalog manager. The cached
-    /// plan was stored with internal field IDs and its user-facing field names,
-    /// so we register fresh field IDs in the current resolver state and rename
-    /// the plan accordingly. This preserves duplicate user-facing names without
-    /// relying on them as `Expr::Column` references inside the cached plan.
+    /// Resolves a query that refers to a cached remote relation by looking up
+    /// the previously checkpointed logical plan from the catalog manager. The
+    /// cached plan was stored with internal field IDs and its user-facing field
+    /// names, so we register fresh field IDs in the current resolver state and
+    /// rename the plan accordingly. This preserves duplicate user-facing names
+    /// without relying on them as `Expr::Column` references inside the cached
+    /// plan.
     pub(super) async fn resolve_query_cached_remote_relation(
         &self,
         relation_id: String,

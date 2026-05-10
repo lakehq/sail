@@ -626,9 +626,10 @@ async fn materialize_logical_plan_to_disk(
     ctx: &SessionContext,
     plan: LogicalPlan,
 ) -> SparkResult<LogicalPlan> {
-    let checkpoint_path = std::env::temp_dir()
-        .join("sail-checkpoints")
-        .join(uuid::Uuid::new_v4().to_string());
+    let checkpoint_root = std::env::temp_dir().join("sail-checkpoints");
+    std::fs::create_dir_all(&checkpoint_root)
+        .map_err(|e| SparkError::internal(format!("failed to create checkpoint directory: {e}")))?;
+    let checkpoint_path = checkpoint_root.join(uuid::Uuid::new_v4().to_string());
     let checkpoint_path = checkpoint_path.to_string_lossy().into_owned();
     let df = ctx.execute_logical_plan(plan).await?;
     df.write_parquet(&checkpoint_path, DataFrameWriteOptions::new(), None)
