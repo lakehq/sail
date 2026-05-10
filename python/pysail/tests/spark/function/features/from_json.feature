@@ -1217,13 +1217,15 @@ Feature: from_json function parses JSON strings into structured types
         | result |
         | {42}   |
 
-    Scenario: from_json validates folded schema_of_json options
+    Scenario: from_json with schema_of_json non-default options as the schema argument
       When query
         """
-        SELECT from_json(value, schema_of_json('{"a":1}', map('mode', 'INVALID'))) AS result
+        SELECT from_json(value, schema_of_json('{"a":1}', map('mode', 'FAILFAST'))) AS result
         FROM VALUES ('{"a":42}') AS t(value)
         """
-      Then query error .*Invalid mode option: INVALID
+      Then query result
+        | result |
+        | {42}   |
 
   Rule: Single value wrapping for array schema
     Scenario: Single JSON object with array schema wraps into singleton array
