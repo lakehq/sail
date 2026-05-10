@@ -1,15 +1,24 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use base64::engine::general_purpose::STANDARD;
+use base64::alphabet;
+use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, STANDARD};
+use base64::engine::DecodePaddingMode;
 use base64::Engine as _;
 use datafusion::arrow::array::{
-    BinaryArray, BinaryBuilder, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray,
+    Array, BinaryArray, BinaryBuilder, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray,
     LargeBinaryBuilder, LargeStringArray, StringArray, StringViewArray,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+
+const SPARK_BASE64_DECODE: GeneralPurpose = GeneralPurpose::new(
+    &alphabet::STANDARD,
+    GeneralPurposeConfig::new()
+        .with_decode_allow_trailing_bits(true)
+        .with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBase64 {
@@ -75,17 +84,24 @@ impl ScalarUDFImpl for SparkBase64 {
         };
 
         let results = match arg {
+            ColumnarValue::Scalar(ScalarValue::Binary(None))
+            | ColumnarValue::Scalar(ScalarValue::BinaryView(None))
+            | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, None))
+            | ColumnarValue::Scalar(ScalarValue::LargeBinary(None))
+            | ColumnarValue::Scalar(ScalarValue::Utf8(None))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => Ok(vec![None]),
             ColumnarValue::Scalar(ScalarValue::Binary(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::BinaryView(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(expr))) => {
-                let results = vec![STANDARD.encode(expr.as_slice())];
+                let results = vec![Some(STANDARD.encode(expr.as_slice()))];
                 Ok(results)
             }
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => {
-                let results = vec![STANDARD.encode(expr.as_bytes())];
+                let results = vec![Some(STANDARD.encode(expr.as_bytes()))];
                 Ok(results)
             }
             ColumnarValue::Array(array) => {
@@ -93,7 +109,11 @@ impl ScalarUDFImpl for SparkBase64 {
                 let mut results = Vec::with_capacity(len);
 
                 for i in 0..len {
-                    let value =  match array.data_type() {
+                    if array.is_null(i) {
+                        results.push(None);
+                        continue;
+                    }
+                    let value = match array.data_type() {
                         DataType::Binary => {
                             let array = array.as_any().downcast_ref::<BinaryArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `base64`: Failed to downcast Expr to BinaryArray"))?;
@@ -131,7 +151,7 @@ impl ScalarUDFImpl for SparkBase64 {
                         },
                         other => exec_err!("Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}")
                     }?;
-                    results.push(STANDARD.encode(value));
+                    results.push(Some(STANDARD.encode(value)));
                 }
                 Ok(results)
             }
@@ -179,6 +199,14 @@ impl SparkUnbase64 {
     }
 }
 
+fn decode_spark_base64(value: &str) -> Option<Vec<u8>> {
+    let filtered_bytes: Vec<u8> = value
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
+    SPARK_BASE64_DECODE.decode(filtered_bytes.as_slice()).ok()
+}
+
 impl ScalarUDFImpl for SparkUnbase64 {
     fn as_any(&self) -> &dyn Any {
         self
@@ -217,12 +245,13 @@ impl ScalarUDFImpl for SparkUnbase64 {
         };
 
         let results = match arg {
+            ColumnarValue::Scalar(ScalarValue::Utf8(None))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => Ok(vec![None]),
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => {
-                let results = vec![STANDARD.decode(expr.as_str()).map_err(|e| {
-                    exec_datafusion_err!("Spark `unbase64`: to decode base64 string: {e}")
-                })?];
+                let results = vec![decode_spark_base64(expr.as_str())];
                 Ok(results)
             }
             ColumnarValue::Array(array) => {
@@ -230,6 +259,10 @@ impl ScalarUDFImpl for SparkUnbase64 {
                 let mut results = Vec::with_capacity(len);
 
                 for i in 0..len {
+                    if array.is_null(i) {
+                        results.push(None);
+                        continue;
+                    }
                     let value = match array.data_type() {
                         DataType::Utf8 => {
                             let array =
@@ -269,9 +302,7 @@ impl ScalarUDFImpl for SparkUnbase64 {
                             "Spark `unbase64`: Expr array must be STRING, got array of type {other}"
                         ),
                     }?;
-                    results.push(STANDARD.decode(value).map_err(|e| {
-                        exec_datafusion_err!("Spark `unbase64`: to decode base64 string: {e}")
-                    })?);
+                    results.push(decode_spark_base64(value));
                 }
                 Ok(results)
             }
@@ -282,14 +313,20 @@ impl ScalarUDFImpl for SparkUnbase64 {
             DataType::Utf8 | DataType::Utf8View => {
                 let mut builder = BinaryBuilder::new();
                 for value in results {
-                    builder.append_value(value.as_slice());
+                    match value {
+                        Some(value) => builder.append_value(value.as_slice()),
+                        None => builder.append_null(),
+                    }
                 }
                 Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             }
             DataType::LargeUtf8 => {
                 let mut builder = LargeBinaryBuilder::new();
                 for value in results {
-                    builder.append_value(value.as_slice());
+                    match value {
+                        Some(value) => builder.append_value(value.as_slice()),
+                        None => builder.append_null(),
+                    }
                 }
                 Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             }
