@@ -1,4 +1,4 @@
-@to_time @spark-4
+@to_time @spark-4.1
 Feature: to_time (strict variant)
   Strict to_time that throws an error on invalid input.
 

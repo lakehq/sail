@@ -1,4 +1,4 @@
-@try_make_interval
+@try_make_interval @spark-4
 Feature: try_make_interval
   Safe variant of make_interval that returns NULL on overflow or
   argument-type errors instead of throwing.

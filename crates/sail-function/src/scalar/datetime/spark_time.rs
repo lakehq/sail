@@ -21,6 +21,8 @@ const DEFAULT_TIME_FORMATS: &[&str] = &[
     "%H:%M %p",
 ];
 
+/// Spark-compatible `to_time` / `try_to_time` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#to_time>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTime {
     signature: Signature,

@@ -117,6 +117,8 @@ impl TimestampParser {
     }
 }
 
+/// Spark-compatible `to_timestamp` / `try_to_timestamp` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#to_timestamp>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimestamp {
     timezone: Option<Arc<str>>,

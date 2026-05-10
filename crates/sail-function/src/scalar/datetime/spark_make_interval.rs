@@ -5,11 +5,11 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval as UpstreamMakeInterval;
 
+/// Spark-compatible `make_interval` / `try_make_interval` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#make_interval>
+///
 /// Thin wrapper around `datafusion_spark::SparkMakeInterval` that adds a
 /// `safe` flag for the `try_make_interval` variant.
-///
-/// All UDF behavior — signature, type coercion, return type, kernel —
-/// is delegated to the upstream impl. The only difference is:
 /// - `safe = false` → strict `make_interval`: errors propagate (default upstream behavior).
 /// - `safe = true`  → `try_make_interval`: errors are caught and turned into NULL.
 #[derive(Debug, PartialEq, Eq, Hash)]

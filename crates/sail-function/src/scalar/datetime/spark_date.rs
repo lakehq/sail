@@ -13,6 +13,8 @@ use sail_sql_analyzer::parser::parse_date;
 
 use crate::error::invalid_arg_count_exec_err;
 
+/// Spark-compatible `to_date` / `try_to_date` function.
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#to_date>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDate {
     signature: Signature,

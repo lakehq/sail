@@ -1,4 +1,4 @@
-@try_to_time @spark-4
+@try_to_time @spark-4.1
 Feature: try_to_time
   Safe variant of to_time that returns NULL on parse failure
   instead of throwing an exception.

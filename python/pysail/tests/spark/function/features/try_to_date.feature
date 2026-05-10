@@ -1,4 +1,4 @@
-@try_to_date
+@try_to_date @spark-4
 Feature: try_to_date
   Safe variant of to_date that returns NULL on parse failure
   instead of throwing an exception. Strict to_date throws.

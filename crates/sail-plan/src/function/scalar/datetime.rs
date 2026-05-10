@@ -370,6 +370,7 @@ fn date_with_try(input: ScalarFunctionInput, safe: bool) -> PlanResult<Expr> {
         Ok(udf.call(input.arguments))
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
+        let expr = cast(expr, DataType::Utf8);
         let format = to_chrono_fmt(format);
         Ok(udf.call(vec![expr, format]))
     } else {
@@ -386,6 +387,7 @@ fn time_with_try(input: ScalarFunctionInput, safe: bool) -> PlanResult<Expr> {
         Ok(udf.call(input.arguments))
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
+        let expr = cast(expr, DataType::Utf8);
         let format = to_chrono_fmt(format);
         Ok(udf.call(vec![expr, format]))
     } else {

@@ -244,6 +244,13 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
             if item.get_closest_marker("spark-4"):
                 item.add_marker(skip_spark4)
 
+    # Skip @spark-4.1 scenarios on PySpark < 4.1 (e.g., TIME type is a preview feature)
+    if pyspark_version() < (4, 1):
+        skip_spark41 = pytest.mark.skip(reason="Requires PySpark 4.1+ (e.g., TIME type)")
+        for item in items:
+            if item.get_closest_marker("spark-4.1"):
+                item.add_marker(skip_spark41)
+
     if is_jvm_spark():
         skip_sail_only = pytest.mark.skip(reason="Sail-only feature, not supported by Spark")
         for item in items:
