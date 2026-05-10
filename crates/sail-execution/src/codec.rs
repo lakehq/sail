@@ -2077,6 +2077,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = StructFunction::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::ArraysZip(gen::ArraysZipUdf { field_names }) => {
+                let udf = ArraysZip::new(field_names);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names }) => {
                 let udf = UpdateStructField::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2125,7 +2129,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
-            "arrays_zip" => Ok(Arc::new(ScalarUDF::from(ArraysZip::new()))),
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "convert_tz" => Ok(Arc::new(ScalarUDF::from(ConvertTz::new()))),
@@ -2303,7 +2306,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
-            || node_inner.is::<ArraysZip>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<ConvertTz>()
@@ -2475,6 +2477,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<StructFunction>() {
             let field_names = func.field_names().to_vec();
             UdfKind::StructFunction(gen::StructFunctionUdf { field_names })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<ArraysZip>() {
+            let field_names = func.field_names().to_vec();
+            UdfKind::ArraysZip(gen::ArraysZipUdf { field_names })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<UpdateStructField>() {
             let field_names = func.field_names().to_vec();
             UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names })
