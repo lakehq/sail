@@ -269,6 +269,11 @@ impl PlanResolver<'_> {
                 };
                 self.resolve_command_delete(delete, state).await
             }
+            CommandNode::TruncateTable { table } => {
+                self.resolve_catalog_command(CatalogCommand::TruncateTable {
+                    table: table.into(),
+                })
+            }
             CommandNode::AlterTable {
                 table,
                 if_exists,

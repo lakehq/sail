@@ -16,8 +16,8 @@ use crate::ast::keywords::{
     Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
     Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
     Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary,
-    Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View,
-    Views, When, With, Zone,
+    Terminated, Then, Time, To, Truncate, Type, Uncache, Unset, Update, Use, Using, Values,
+    Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -125,6 +125,11 @@ pub enum Statement {
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
         purge: Option<Purge>,
+    },
+    TruncateTable {
+        truncate: Truncate,
+        table: Table,
+        name: ObjectName,
     },
     ShowTables {
         show: Show,

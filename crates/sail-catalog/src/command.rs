@@ -1,6 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
+use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::TableFormatRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -10,9 +11,9 @@ use crate::error::{CatalogError, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    AlterTableOptions, CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
-    DropViewOptions,
+    AlterTableOptions, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
+    CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropTemporaryViewOptions, DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
@@ -131,6 +132,9 @@ pub enum CatalogCommand {
         table: Vec<String>,
         extended: bool,
     },
+    TruncateTable {
+        table: Vec<String>,
+    },
     DescribeDatabase {
         database: Vec<String>,
         extended: bool,
@@ -177,6 +181,7 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
+            CatalogCommand::TruncateTable { .. } => "TruncateTable",
             CatalogCommand::DescribeDatabase { .. } => "DescribeDatabase",
         }
     }
@@ -227,7 +232,8 @@ impl CatalogCommand {
             | CatalogCommand::AlterTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
-            | CatalogCommand::DropView { .. } => display.bools().schema()?,
+            | CatalogCommand::DropView { .. }
+            | CatalogCommand::TruncateTable { .. } => display.bools().schema()?,
         };
         Ok(schema)
     }
@@ -562,6 +568,120 @@ impl CatalogCommand {
             }
             CatalogCommand::CreateView { view, options } => {
                 manager.create_view(&view, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::TruncateTable { table } => {
+                let status = manager.get_table(&table).await?;
+                let TableKind::Table {
+                    columns,
+                    comment,
+                    constraints,
+                    location,
+                    format,
+                    partition_by,
+                    sort_by,
+                    bucket_by,
+                    properties,
+                } = status.kind
+                else {
+                    return Err(CatalogError::NotSupported(
+                        "TRUNCATE TABLE is only supported on tables, not views".to_string(),
+                    ));
+                };
+                if let Some(ref loc) = location {
+                    let local_path = loc
+                        .strip_prefix("file://")
+                        .or_else(|| loc.strip_prefix("file:"))
+                        .or_else(|| {
+                            if loc.starts_with('/') {
+                                Some(loc.as_str())
+                            } else {
+                                None
+                            }
+                        });
+                    match local_path {
+                        Some(path) => {
+                            let dir = std::path::Path::new(path);
+                            if !dir.is_absolute() || path.is_empty() {
+                                return Err(CatalogError::External(format!(
+                                    "TRUNCATE TABLE requires an absolute local path, got: {path}"
+                                )));
+                            }
+                            if dir.parent().is_none() {
+                                return Err(CatalogError::External(format!(
+                                    "TRUNCATE TABLE on filesystem root is not allowed: {path}"
+                                )));
+                            }
+                            if dir.exists() {
+                                let dir = dir.to_path_buf();
+                                let path = path.to_string();
+                                tokio::task::spawn_blocking(move || -> CatalogResult<()> {
+                                    let has_delta = dir.join("_delta_log").exists();
+                                    // Iceberg tables have a `metadata/version-hint.text` file
+                                    // (or `.iceberg` marker). A plain `metadata/` subdirectory
+                                    // is not sufficient — it could be user data.
+                                    let has_iceberg_meta =
+                                        dir.join("metadata").join("version-hint.text").exists();
+                                    let has_iceberg_dot = dir.join(".iceberg").exists();
+                                    if has_delta || has_iceberg_meta || has_iceberg_dot {
+                                        return Err(CatalogError::NotSupported(
+                                            "TRUNCATE TABLE is not supported for tables with \
+                                             transaction logs (Delta Lake, Iceberg). \
+                                             Use format-specific overwrite operations instead."
+                                                .to_string(),
+                                        ));
+                                    }
+                                    std::fs::remove_dir_all(&dir).map_err(|e| {
+                                        CatalogError::External(format!(
+                                            "failed to remove table directory at {path}: {e}"
+                                        ))
+                                    })?;
+                                    std::fs::create_dir_all(&dir).map_err(|e| {
+                                        CatalogError::External(format!(
+                                            "failed to recreate table directory at {path}: {e}"
+                                        ))
+                                    })?;
+                                    Ok(())
+                                })
+                                .await
+                                .map_err(|e| {
+                                    CatalogError::External(format!(
+                                        "TRUNCATE TABLE task failed: {e}"
+                                    ))
+                                })??;
+                            }
+                        }
+                        None => {
+                            return Err(CatalogError::NotSupported(format!(
+                                "TRUNCATE TABLE for non-local table location: {loc}"
+                            )));
+                        }
+                    }
+                }
+                let create_options = CreateTableOptions {
+                    columns: columns
+                        .into_iter()
+                        .map(|c| CreateTableColumnOptions {
+                            name: c.name,
+                            data_type: c.data_type,
+                            nullable: c.nullable,
+                            comment: c.comment,
+                            default: c.default,
+                            generated_always_as: c.generated_always_as,
+                        })
+                        .collect(),
+                    comment,
+                    constraints,
+                    location,
+                    format,
+                    partition_by,
+                    sort_by,
+                    bucket_by,
+                    if_not_exists: false,
+                    replace: true,
+                    properties,
+                };
+                manager.create_table(&table, create_options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::DescribeDatabase { database, extended } => {

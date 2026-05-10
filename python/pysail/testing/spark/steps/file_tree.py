@@ -285,6 +285,14 @@ def csv_files_first_line_is(location_var: str, expected_line: str, variables: di
     )
 
 
+@given(parsers.parse("subdirectory {dirname} in {location_var} exists"))
+def subdirectory_in_location_exists(dirname: str, location_var: str, variables: dict) -> None:
+    """Creates a subdirectory inside the given location directory."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    (Path(location.path) / dirname).mkdir(parents=True, exist_ok=True)
+
+
 @then(parsers.parse("subdirectories in {location_var} count is {n:d}"))
 def subdirectories_count_is(location_var: str, n: int, variables: dict) -> None:
     """Verify that the location has exactly n subdirectories."""
