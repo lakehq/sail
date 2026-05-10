@@ -157,7 +157,7 @@ impl PlanResolver<'_> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         let relation = match manager.get_cached_relation(&relation_id) {
             Ok(relation) => relation,
-            Err(CatalogError::NotFound(CatalogObject::LogicalPlan, _)) => {
+            Err(CatalogError::NotFound(CatalogObject::CachedRelation, _)) => {
                 return Err(PlanError::AnalysisError(format!(
                     "cached remote relation not found: {relation_id}"
                 )));

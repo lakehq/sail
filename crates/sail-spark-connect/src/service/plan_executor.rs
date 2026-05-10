@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -553,25 +554,34 @@ pub(crate) async fn handle_execute_checkpoint_command(
     });
 
     let use_disk = checkpoint_uses_disk(local, storage_level.as_ref());
-    let cached_plan = if eager && use_disk {
+    let (cached_plan, storage_path) = if eager && use_disk {
         materialize_logical_plan_to_disk(ctx, logical_plan).await?
     } else if eager {
-        materialize_logical_plan_to_memory(ctx, logical_plan).await?
+        (
+            materialize_logical_plan_to_memory(ctx, logical_plan).await?,
+            None,
+        )
     } else {
-        logical_plan
+        (logical_plan, None)
     };
 
     let relation_id = uuid::Uuid::new_v4().to_string();
     let manager = ctx.extension::<CatalogManager>()?;
-    manager
-        .track_cached_relation(
-            relation_id.clone(),
-            CatalogCachedRelation {
-                plan: Arc::new(cached_plan),
-                fields,
-            },
-        )
-        .map_err(|e| SparkError::internal(format!("failed to track cached relation: {e}")))?;
+    if let Err(error) = manager.track_cached_relation(
+        relation_id.clone(),
+        CatalogCachedRelation {
+            plan: Arc::new(cached_plan),
+            fields,
+            storage_path: storage_path.clone(),
+        },
+    ) {
+        if let Some(path) = storage_path {
+            cleanup_checkpoint_path(&path).await;
+        }
+        return Err(SparkError::internal(format!(
+            "failed to track cached relation: {error}"
+        )));
+    }
 
     let result = CheckpointCommandResult {
         relation: Some(CachedRemoteRelation { relation_id }),
@@ -596,9 +606,7 @@ fn checkpoint_uses_disk(
     if !local {
         return true;
     }
-    storage_level
-        .map(|level| level.use_disk && !level.use_memory)
-        .unwrap_or(false)
+    storage_level.map(|level| level.use_disk).unwrap_or(false)
 }
 
 /// Eagerly executes the resolved logical plan, collects all batches, and returns
@@ -625,19 +633,45 @@ async fn materialize_logical_plan_to_memory(
 async fn materialize_logical_plan_to_disk(
     ctx: &SessionContext,
     plan: LogicalPlan,
-) -> SparkResult<LogicalPlan> {
+) -> SparkResult<(LogicalPlan, Option<PathBuf>)> {
     let checkpoint_root = std::env::temp_dir().join("sail-checkpoints");
-    std::fs::create_dir_all(&checkpoint_root)
+    tokio::fs::create_dir_all(&checkpoint_root)
+        .await
         .map_err(|e| SparkError::internal(format!("failed to create checkpoint directory: {e}")))?;
     let checkpoint_path = checkpoint_root.join(uuid::Uuid::new_v4().to_string());
-    let checkpoint_path = checkpoint_path.to_string_lossy().into_owned();
+    let checkpoint_path_string = checkpoint_path.to_string_lossy().into_owned();
     let df = ctx.execute_logical_plan(plan).await?;
-    df.write_parquet(&checkpoint_path, DataFrameWriteOptions::new(), None)
-        .await?;
-    let df = ctx
-        .read_parquet(&checkpoint_path, ParquetReadOptions::default())
-        .await?;
-    Ok(df.into_unoptimized_plan())
+    if let Err(error) = df
+        .write_parquet(&checkpoint_path_string, DataFrameWriteOptions::new(), None)
+        .await
+    {
+        cleanup_checkpoint_path(&checkpoint_path).await;
+        return Err(error.into());
+    }
+    let df = match ctx
+        .read_parquet(&checkpoint_path_string, ParquetReadOptions::default())
+        .await
+    {
+        Ok(df) => df,
+        Err(error) => {
+            cleanup_checkpoint_path(&checkpoint_path).await;
+            return Err(error.into());
+        }
+    };
+    Ok((df.into_unoptimized_plan(), Some(checkpoint_path)))
+}
+
+async fn cleanup_checkpoint_path(path: &Path) {
+    match tokio::fs::remove_dir_all(path).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            warn!(
+                "failed to remove checkpoint directory {}: {e}",
+                path.display()
+            );
+        }
+    }
 }
 
 pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
@@ -650,9 +684,12 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
     let manager = ctx.extension::<CatalogManager>()?;
     // Removing a relation that does not exist is treated as a no-op to match
     // Spark Connect, which tolerates duplicate or out-of-order cleanup calls.
-    let _existed = manager
+    let removed = manager
         .remove_cached_relation(&relation.relation_id)
         .map_err(|e| SparkError::internal(format!("failed to remove cached relation: {e}")))?;
+    if let Some(path) = removed.and_then(|relation| relation.storage_path) {
+        cleanup_checkpoint_path(&path).await;
+    }
 
     let spark = ctx.extension::<SparkSession>()?;
     let mut output = Vec::new();

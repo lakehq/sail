@@ -162,7 +162,10 @@ impl CatalogManager {
         self.tracker.get_cached_relation(relation_id)
     }
 
-    pub fn remove_cached_relation(&self, relation_id: &str) -> CatalogResult<bool> {
+    pub fn remove_cached_relation(
+        &self,
+        relation_id: &str,
+    ) -> CatalogResult<Option<CatalogCachedRelation>> {
         self.tracker.remove_cached_relation(relation_id)
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use datafusion_expr::{LogicalPlan, ScalarUDF};
@@ -16,6 +17,7 @@ pub struct CatalogLogicalPlanId(u64);
 pub struct CatalogCachedRelation {
     pub plan: Arc<LogicalPlan>,
     pub fields: Vec<String>,
+    pub storage_path: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -107,12 +109,15 @@ impl CatalogObjectTracker {
             .get(relation_id)
             .cloned()
             .ok_or_else(|| {
-                CatalogError::NotFound(CatalogObject::LogicalPlan, relation_id.to_string())
+                CatalogError::NotFound(CatalogObject::CachedRelation, relation_id.to_string())
             })
     }
 
-    pub fn remove_cached_relation(&self, relation_id: &str) -> CatalogResult<bool> {
+    pub fn remove_cached_relation(
+        &self,
+        relation_id: &str,
+    ) -> CatalogResult<Option<CatalogCachedRelation>> {
         let mut state = self.state()?;
-        Ok(state.cached_relations.remove(relation_id).is_some())
+        Ok(state.cached_relations.remove(relation_id))
     }
 }
