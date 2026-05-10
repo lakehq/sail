@@ -602,6 +602,14 @@ fn named_plan_fields(plan: &LogicalPlan, fields: Option<Vec<String>>) -> Vec<Str
     })
 }
 
+/// Determines whether a checkpoint should be materialized to disk.
+///
+/// Non-local (reliable) checkpoints always use disk.  For local checkpoints
+/// the decision follows the explicit `StorageLevel` when provided.  When the
+/// client omits the storage level (which is the common case – PySpark's
+/// `localCheckpoint()` defaults to `MEMORY_AND_DISK` but does **not** send the
+/// level over the wire), we default to **disk** to avoid collecting the entire
+/// DataFrame into server memory, which could easily OOM for large datasets.
 fn checkpoint_uses_disk(
     local: bool,
     storage_level: Option<&crate::spark::connect::StorageLevel>,
@@ -609,7 +617,7 @@ fn checkpoint_uses_disk(
     if !local {
         return true;
     }
-    storage_level.map(|level| level.use_disk).unwrap_or(false)
+    storage_level.map(|level| level.use_disk).unwrap_or(true)
 }
 
 /// Eagerly executes the resolved logical plan, collects all batches, and returns
