@@ -21,7 +21,9 @@ use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
-use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
+use datafusion::logical_expr::{
+    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
+};
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
@@ -202,6 +204,7 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
+use sail_function::window::SparkNtile;
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec, IcebergManifestScanExec,
     IcebergScanByDataFilesExec, IcebergWriterExec,
@@ -237,9 +240,10 @@ use crate::plan::gen::extended_physical_expr_node::ExprKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
+use crate::plan::gen::extended_window_udf::UdwfKind;
 use crate::plan::gen::{
     DeltaCastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode,
-    ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
+    ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf,
 };
 use crate::plan::{gen, StageInputExec};
 
@@ -2717,6 +2721,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e}"))
+    }
+
+    fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
+        let udwf = ExtendedWindowUdf::decode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to decode udwf: {e}"))?;
+        let ExtendedWindowUdf { udwf_kind } = udwf;
+        match udwf_kind {
+            Some(UdwfKind::Standard(gen::StandardUdwf {})) => match name {
+                "ntile" => Ok(Arc::new(WindowUDF::from(SparkNtile::new()))),
+                _ => plan_err!("Could not find Window Function: {name}"),
+            },
+            None => plan_err!("ExtendedWindowUdf: no UDWF found for {name}"),
+        }
+    }
+
+    fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
+        if !node.inner().as_any().is::<SparkNtile>() {
+            return Ok(());
+        }
+        let node = ExtendedWindowUdf {
+            udwf_kind: Some(UdwfKind::Standard(gen::StandardUdwf {})),
+        };
+        node.encode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to encode udwf: {e}"))
     }
 
     fn try_decode_expr(
