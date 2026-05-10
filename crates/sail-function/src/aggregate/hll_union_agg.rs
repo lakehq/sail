@@ -83,7 +83,7 @@ impl AggregateUDFImpl for HllUnionAggFunction {
         }
         if !is_coercible_to_binary(&arg_types[0]) {
             return Err(DataFusionError::Plan(format!(
-                "hll_union_agg expects a binary sketch as the first argument, got {}",
+                "hll_union_agg expects a binary or string sketch as the first argument, got {}",
                 arg_types[0]
             )));
         }

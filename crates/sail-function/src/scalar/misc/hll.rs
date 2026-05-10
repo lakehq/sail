@@ -56,7 +56,7 @@ impl ScalarUDFImpl for HllSketchEstimate {
         }
         if !is_coercible_to_binary(&arg_types[0]) {
             return Err(DataFusionError::Plan(format!(
-                "hll_sketch_estimate expects a binary input, got {}",
+                "hll_sketch_estimate expects a binary or string input, got {}",
                 arg_types[0]
             )));
         }
@@ -140,13 +140,13 @@ impl ScalarUDFImpl for HllUnion {
         }
         if !is_coercible_to_binary(&arg_types[0]) {
             return Err(DataFusionError::Plan(format!(
-                "hll_union expects a binary sketch as the first argument, got {}",
+                "hll_union expects a binary or string sketch as the first argument, got {}",
                 arg_types[0]
             )));
         }
         if !is_coercible_to_binary(&arg_types[1]) {
             return Err(DataFusionError::Plan(format!(
-                "hll_union expects a binary sketch as the second argument, got {}",
+                "hll_union expects a binary or string sketch as the second argument, got {}",
                 arg_types[1]
             )));
         }
