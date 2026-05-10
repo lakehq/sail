@@ -306,21 +306,20 @@ async fn list_files_for_scan<'a>(
 
     let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
-    let (file_groups, grouped_by_partition) =
-        if threshold > 0 && !partition_cols.is_empty() {
-            let grouped = file_group.group_by_partition_values(source.target_partitions());
-            if grouped.len() >= threshold {
-                (grouped, true)
-            } else {
-                let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
-                (
-                    FileGroup::new(all_files).split_files(source.target_partitions()),
-                    false,
-                )
-            }
+    let (file_groups, grouped_by_partition) = if threshold > 0 && !partition_cols.is_empty() {
+        let grouped = file_group.group_by_partition_values(source.target_partitions());
+        if grouped.len() >= threshold {
+            (grouped, true)
         } else {
-            (file_group.split_files(source.target_partitions()), false)
-        };
+            let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
+            (
+                FileGroup::new(all_files).split_files(source.target_partitions()),
+                false,
+            )
+        }
+    } else {
+        (file_group.split_files(source.target_partitions()), false)
+    };
 
     let (file_groups, stats) = datafusion_datasource::compute_all_files_statistics(
         file_groups,
