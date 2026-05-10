@@ -5,6 +5,13 @@ from pyspark import StorageLevel
 from pyspark.sql import Row
 from pyspark.sql.functions import col, lit
 
+from pysail.testing.spark.utils.common import pyspark_version
+
+pytestmark = pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="DataFrame checkpoint APIs require PySpark 4+ in Spark Connect",
+)
+
 
 def _roundtrip(df):
     return df.sort(*df.columns).toPandas()

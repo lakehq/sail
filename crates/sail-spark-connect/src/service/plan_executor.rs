@@ -4,9 +4,10 @@ use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
 use datafusion::catalog::MemTable;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use fastrace::Span;
@@ -529,11 +530,9 @@ pub(crate) async fn handle_execute_checkpoint_command(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let CheckpointCommand {
         relation,
-        local: _,
+        local,
         eager,
-        // Sail uses an in-memory store for both local and reliable checkpoints,
-        // so the storage level is currently informational only.
-        storage_level: _,
+        storage_level,
     } = checkpoint;
     let relation = relation.required("checkpoint relation")?;
     let plan = spec::Plan::Query((relation).try_into()?);
@@ -553,8 +552,11 @@ pub(crate) async fn handle_execute_checkpoint_command(
             .collect()
     });
 
-    let cached_plan = if eager {
-        materialize_logical_plan(ctx, logical_plan).await?
+    let use_disk = checkpoint_uses_disk(local, storage_level.as_ref());
+    let cached_plan = if eager && use_disk {
+        materialize_logical_plan_to_disk(ctx, logical_plan).await?
+    } else if eager {
+        materialize_logical_plan_to_memory(ctx, logical_plan).await?
     } else {
         logical_plan
     };
@@ -587,9 +589,21 @@ pub(crate) async fn handle_execute_checkpoint_command(
     ))
 }
 
+fn checkpoint_uses_disk(
+    local: bool,
+    storage_level: Option<&crate::spark::connect::StorageLevel>,
+) -> bool {
+    if !local {
+        return true;
+    }
+    storage_level
+        .map(|level| level.use_disk && !level.use_memory)
+        .unwrap_or(false)
+}
+
 /// Eagerly executes the resolved logical plan, collects all batches, and returns
 /// a new logical plan that scans the materialized data from an in-memory table.
-async fn materialize_logical_plan(
+async fn materialize_logical_plan_to_memory(
     ctx: &SessionContext,
     plan: LogicalPlan,
 ) -> SparkResult<LogicalPlan> {
@@ -604,6 +618,25 @@ async fn materialize_logical_plan(
     )?
     .build()?;
     Ok(scan)
+}
+
+/// Eagerly executes the resolved logical plan, writes the result to local
+/// checkpoint files, and returns a new logical plan that scans those files.
+async fn materialize_logical_plan_to_disk(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+) -> SparkResult<LogicalPlan> {
+    let checkpoint_path = std::env::temp_dir()
+        .join("sail-checkpoints")
+        .join(uuid::Uuid::new_v4().to_string());
+    let checkpoint_path = checkpoint_path.to_string_lossy().into_owned();
+    let df = ctx.execute_logical_plan(plan).await?;
+    df.write_parquet(&checkpoint_path, DataFrameWriteOptions::new(), None)
+        .await?;
+    let df = ctx
+        .read_parquet(&checkpoint_path, ParquetReadOptions::default())
+        .await?;
+    Ok(df.into_unoptimized_plan())
 }
 
 pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
