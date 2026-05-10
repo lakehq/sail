@@ -73,6 +73,7 @@ macro_rules! duration_none {
     };
 }
 
+pub mod bitmap_and_agg;
 pub mod bitmap_construct_agg;
 pub mod bitmap_or_agg;
 pub mod histogram_numeric;
@@ -82,6 +83,8 @@ pub mod mode;
 pub mod percentile;
 pub mod percentile_disc;
 pub mod percentile_disc_groups;
+pub mod product;
+pub mod schema_of_variant_agg;
 pub mod skewness;
 pub mod try_avg;
 pub mod utils;

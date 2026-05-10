@@ -19,6 +19,7 @@ either = { workspace = true }
 lexical-core = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 async-trait = { workspace = true }
 prost = { workspace = true }
 tonic = { workspace = true }

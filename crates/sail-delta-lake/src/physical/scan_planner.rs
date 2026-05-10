@@ -23,7 +23,7 @@ use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
 use crate::physical_plan::planner::utils::LogReplayOptions;
-use crate::physical_plan::planner::{DeltaTableConfig as PlannerTableConfig, PlannerContext};
+use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
@@ -54,6 +54,7 @@ pub(crate) async fn plan_delta_scan(
     let full_logical_schema = df_logical_schema(
         snapshot,
         &config.file_column_name,
+        &config.row_index_column_name,
         &config.commit_version_column_name,
         &config.commit_timestamp_column_name,
         Some(schema.clone()),
@@ -211,6 +212,23 @@ pub(crate) async fn plan_delta_scan(
         None
     };
 
+    // When the table protocol declares the deletionVectors feature, always use the
+    // metadata-as-data path (DeltaScanByAddsExec) which loads a fresh snapshot and
+    // applies per-file DV filtering. The pre-populated files may come from a stale
+    // catalog entry.
+    let has_dvs = snapshot
+        .protocol()
+        .has_reader_feature(&crate::spec::TableFeature::DeletionVectors);
+    let row_index_projected = config
+        .row_index_column_name
+        .as_ref()
+        .is_some_and(|name| logical_schema.field_with_name(name).is_ok());
+    let files = if has_dvs || row_index_projected {
+        None
+    } else {
+        files
+    };
+
     if let Some(files) = files {
         let file_scan_config = build_file_scan_config(
             snapshot,
@@ -287,7 +305,7 @@ pub(crate) async fn plan_delta_scan(
 
     let planner_ctx = PlannerContext::new(
         session,
-        PlannerTableConfig::new(
+        DeltaPlannerConfig::new(
             table_url.clone(),
             planner_options,
             HashMap::new(),

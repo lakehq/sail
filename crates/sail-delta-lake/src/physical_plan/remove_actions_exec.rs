@@ -33,7 +33,7 @@ use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
     meta_adds, ExecCommitMeta, COL_ACTION,
 };
-use crate::spec::{Action, Add, Remove, RemoveOptions};
+use crate::spec::{Action, Add, Remove, RemoveOptions, Stats};
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
 #[derive(Debug)]
@@ -147,27 +147,27 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
             let exec_start = Instant::now();
             let mut adds_to_remove = vec![];
             let mut num_removed_bytes: u64 = 0;
+            // `None` once any removed Add lacks stats, so downstream doesn't under-count.
+            let mut num_touched_rows_accum: Option<u64> = Some(0);
 
             while let Some(batch_result) = stream.next().await {
                 let batch = batch_result?;
 
-                // Arrow-native action rows only.
-                if batch.column_by_name(COL_ACTION).is_some() {
-                    let adds = decode_adds_from_batch(&batch)?;
-                    for add in adds {
-                        num_removed_bytes = num_removed_bytes
-                            .saturating_add(u64::try_from(add.size).unwrap_or_default());
-                        adds_to_remove.push(add);
-                    }
+                let adds = if batch.column_by_name(COL_ACTION).is_some() {
+                    decode_adds_from_batch(&batch)?
                 } else {
-                    let adds = meta_adds::decode_adds_from_meta_batch(&batch, None)?;
-                    for add in adds {
-                        num_removed_bytes = num_removed_bytes
-                            .saturating_add(u64::try_from(add.size).unwrap_or_default());
-                        adds_to_remove.push(add);
-                    }
+                    meta_adds::decode_adds_from_meta_batch(&batch, None)?
+                };
+                for add in adds {
+                    num_removed_bytes = num_removed_bytes
+                        .saturating_add(u64::try_from(add.size).unwrap_or_default());
+                    accumulate_touched_rows(&mut num_touched_rows_accum, add.stats.as_deref());
+                    adds_to_remove.push(add);
                 }
             }
+            // This node only reads metadata (Add actions) to determine which files to
+            // remove, so scan time == total input consumption time.
+            let scan_time_ms = exec_start.elapsed().as_millis() as u64;
 
             let num_removed_files: u64 = adds_to_remove.len() as u64;
             let remove_actions = Self::create_remove_actions(adds_to_remove).await?;
@@ -178,8 +178,10 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
 
             let operation_metrics = OperationMetrics {
                 execution_time_ms: Some(exec_start.elapsed().as_millis() as u64),
+                scan_time_ms: Some(scan_time_ms),
                 num_removed_files: Some(num_removed_files),
                 num_removed_bytes: Some(num_removed_bytes),
+                num_touched_rows: num_touched_rows_accum,
                 ..Default::default()
             };
 
@@ -200,5 +202,28 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
             self.schema(),
             stream,
         )))
+    }
+}
+
+/// Sum `stats.numRecords` into `accum`, poisoning to `None` if stats are missing or invalid.
+fn accumulate_touched_rows(accum: &mut Option<u64>, stats_json: Option<&str>) {
+    let Some(current) = *accum else {
+        return;
+    };
+    let Some(json) = stats_json else {
+        *accum = None;
+        return;
+    };
+    match Stats::from_json_str(json) {
+        Ok(stats) => {
+            if let Ok(n) = u64::try_from(stats.num_records) {
+                *accum = Some(current.saturating_add(n));
+            } else {
+                *accum = None;
+            }
+        }
+        Err(_) => {
+            *accum = None;
+        }
     }
 }

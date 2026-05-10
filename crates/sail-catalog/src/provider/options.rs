@@ -35,7 +35,6 @@ pub struct CreateTableOptions {
     pub bucket_by: Option<CatalogTableBucketBy>,
     pub if_not_exists: bool,
     pub replace: bool,
-    pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
 }
 
@@ -96,4 +95,11 @@ pub struct DropViewOptions {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct DropTemporaryViewOptions {
     pub if_exists: bool,
+}
+
+/// Options for altering a table in a catalog.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub enum AlterTableOptions {
+    SetTableProperties { properties: Vec<(String, String)> },
+    UnsetTableProperties { keys: Vec<String>, if_exists: bool },
 }

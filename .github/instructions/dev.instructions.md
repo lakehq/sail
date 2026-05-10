@@ -52,7 +52,7 @@ You can skip API documentation generation if you are only working on files insid
 
 ### Codec
 
-When adding SQL function implementations or physical execution plan nodes, make sure to update `crates/sail-execution/src/codec.rs` so that the query plan can work in cluster mode.
+When adding functions (`ScalarUDF` or `AggregateUDF`), physical expressions (`PhysicalExpr`), or physical plan nodes (`ExecutionPlan`), make sure to update `crates/sail-execution/src/codec.rs` so that the query plan can work in cluster mode.
 
 ### Test Style
 

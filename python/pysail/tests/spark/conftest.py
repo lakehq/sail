@@ -25,6 +25,11 @@ def pytest_configure(config):
         "markers",
         "sail-only: mark test as Sail-only (skipped when running against Spark JVM)",
     )
+    config.addinivalue_line(
+        "markers",
+        "catalog_integration: mark test as requiring external catalog services "
+        "(deselected by default; pass -m catalog_integration to run)",
+    )
     # Load all pytest-bdd step modules.
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
