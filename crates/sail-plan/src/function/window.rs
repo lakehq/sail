@@ -40,7 +40,7 @@ use crate::function::common::{
 use crate::function::transform_count_star_wildcard_expr;
 
 lazy_static! {
-    static ref BUILT_IN_WINDOW_FUNCTIONS: HashMap<&'static str, WinFunction> =
+    pub(crate) static ref BUILT_IN_WINDOW_FUNCTIONS: HashMap<&'static str, WinFunction> =
         HashMap::from_iter(list_built_in_window_functions());
 }
 

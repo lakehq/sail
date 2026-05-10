@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_datafusion::catalog::{DatabaseStatus, FunctionStatus, TableStatus};
 use tokio::runtime::Handle;
 
 use super::{
@@ -191,5 +191,28 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .spawn(async move { inner.drop_view(&database, &view, options).await })
             .await
             .map_err(|e| CatalogError::External(format!("Failed to execute drop_view: {e}")))?
+    }
+
+    async fn get_function(
+        &self,
+        database: &Namespace,
+        function: &str,
+    ) -> CatalogResult<FunctionStatus> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let function = function.to_string();
+        self.handle
+            .spawn(async move { inner.get_function(&database, &function).await })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute get_function: {e}")))?
+    }
+
+    async fn list_functions(&self, database: &Namespace) -> CatalogResult<Vec<FunctionStatus>> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        self.handle
+            .spawn(async move { inner.list_functions(&database).await })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute list_functions: {e}")))?
     }
 }

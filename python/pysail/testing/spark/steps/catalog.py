@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import re
+
+from pytest_bdd import parsers, then, when
+
+
+def parse_bool_string(value: str):
+    normalized = value.strip().lower()
+    if normalized in {"true", "false"}:
+        return normalized == "true"
+    return value
+
+
+@when(parsers.parse("catalog functionExists for {function_name}"), target_fixture="function_exists_result")
+def catalog_function_exists(function_name: str, spark) -> bool:
+    """Invoke ``spark.catalog.functionExists`` for the given function name."""
+    return spark.catalog.functionExists(function_name)
+
+
+@then(parsers.parse("the function existence result is {expected}"))
+def check_function_exists_result(expected: str, function_exists_result) -> None:
+    expected_value = parse_bool_string(expected)
+    assert function_exists_result == expected_value, (
+        f"expected functionExists to return {expected_value}, got {function_exists_result!r}"
+    )
+
+
+@when(parsers.parse("catalog getFunction for {function_name}"), target_fixture="get_function_result")
+def catalog_get_function(function_name: str, spark):
+    """Invoke ``spark.catalog.getFunction`` for the given function name."""
+    try:
+        return spark.catalog.getFunction(function_name)
+    except Exception as exc:  # noqa: BLE001
+        return exc
+
+
+@then(parsers.parse("the function attribute {attribute} is {value}"))
+def check_function_attribute(attribute: str, value: str, get_function_result) -> None:
+    if isinstance(get_function_result, Exception):
+        msg = f"expected Function, got exception: {get_function_result!r}"
+        raise AssertionError(msg)  # noqa: TRY004
+    actual = getattr(get_function_result, attribute)
+    expected = parse_bool_string(value)
+    assert actual == expected, f"expected {attribute}={expected!r}, got {actual!r}"
+
+
+@then(parsers.parse("the getFunction call raises an error matching {pattern}"))
+def check_get_function_error(pattern: str, get_function_result) -> None:
+    if not isinstance(get_function_result, Exception):
+        msg = f"expected an exception, got: {get_function_result!r}"
+        raise AssertionError(msg)  # noqa: TRY004
+    assert re.search(pattern, str(get_function_result)), (
+        f"expected error matching {pattern!r}, got: {get_function_result!r}"
+    )
+
+
+@when(parsers.parse("catalog listFunctions with pattern {pattern}"), target_fixture="list_functions_result")
+def catalog_list_functions_with_pattern(pattern: str, spark):
+    """Invoke ``spark.catalog.listFunctions`` with the given pattern."""
+    return spark.catalog.listFunctions(pattern=pattern)
+
+
+@when("catalog listFunctions", target_fixture="list_functions_result")
+def catalog_list_functions(spark):
+    """Invoke ``spark.catalog.listFunctions`` with no arguments."""
+    return spark.catalog.listFunctions()
+
+
+@then(parsers.parse("the listFunctions result contains a function named {name}"))
+def check_list_functions_contains(name: str, list_functions_result) -> None:
+    names = [f.name for f in list_functions_result]
+    assert name in names, f"expected {name!r} in listFunctions result, got names: {names[:20]}"
+
+
+@then("the listFunctions result is not empty")
+def check_list_functions_not_empty(list_functions_result) -> None:
+    assert len(list_functions_result) > 0, "expected listFunctions to return at least one function"
+
+
+@then("the listFunctions result is empty")
+def check_list_functions_empty(list_functions_result) -> None:
+    assert len(list_functions_result) == 0, (
+        f"expected listFunctions to return no functions, got {len(list_functions_result)}"
+    )

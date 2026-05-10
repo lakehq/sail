@@ -12,3 +12,6 @@ sail-catalog = { path = "../sail-catalog" }
 
 async-trait = { workspace = true }
 dashmap = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -15,7 +15,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    identity_partition_fields, DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind,
+    TableStatus,
 };
 use tokio::sync::OnceCell;
 
@@ -258,6 +259,21 @@ impl GlueCatalogProvider {
                 properties,
             },
         })
+    }
+
+    fn function_to_status(
+        &self,
+        database: &Namespace,
+        function: &aws_sdk_glue::types::UserDefinedFunction,
+    ) -> FunctionStatus {
+        FunctionStatus {
+            catalog: Some(self.name.clone()),
+            namespace: Some(database.clone().into()),
+            name: function.function_name().unwrap_or_default().to_string(),
+            description: None,
+            class_name: function.class_name().unwrap_or_default().to_string(),
+            is_temporary: false,
+        }
     }
 
     /// Builds Glue columns from CreateViewColumnOptions.
@@ -806,5 +822,69 @@ impl CatalogProvider for GlueCatalogProvider {
                 }
             }
         }
+    }
+
+    async fn get_function(
+        &self,
+        database: &Namespace,
+        function: &str,
+    ) -> CatalogResult<FunctionStatus> {
+        let client = self.get_client().await?;
+        let database_name = Self::database_name(database)?;
+
+        let result = client
+            .get_user_defined_function()
+            .database_name(&database_name)
+            .function_name(function)
+            .send()
+            .await;
+
+        match result {
+            Ok(output) => {
+                let udf = output.user_defined_function().ok_or_else(|| {
+                    CatalogError::External("Function response is empty".to_string())
+                })?;
+                Ok(self.function_to_status(database, udf))
+            }
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_entity_not_found_exception() {
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Function,
+                        function.to_string(),
+                    ))
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Failed to get function: {service_err}"
+                    )))
+                }
+            }
+        }
+    }
+
+    async fn list_functions(&self, database: &Namespace) -> CatalogResult<Vec<FunctionStatus>> {
+        let client = self.get_client().await?;
+        let database_name = Self::database_name(database)?;
+
+        let mut functions = Vec::new();
+        let mut paginator = client
+            .get_user_defined_functions()
+            .database_name(&database_name)
+            .pattern("*")
+            .into_paginator()
+            .send();
+
+        while let Some(page) = paginator
+            .next()
+            .await
+            .transpose()
+            .map_err(|e| CatalogError::External(format!("Failed to list functions: {e}")))?
+        {
+            for function in page.user_defined_functions() {
+                functions.push(self.function_to_status(database, function));
+            }
+        }
+
+        Ok(functions)
     }
 }

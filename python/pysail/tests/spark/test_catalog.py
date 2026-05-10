@@ -82,3 +82,38 @@ class TestListDatabases:
         databases = spark.catalog.listDatabases()
         db_names = [db.name for db in databases]
         assert "default" in db_names
+
+
+class TestFunctionExists:
+    """Test spark.catalog.functionExists() handles built-in and missing functions."""
+
+    def test_built_in_function_exists(self, spark):
+        """functionExists returns True for a built-in function such as `count`."""
+        assert spark.catalog.functionExists("count")
+
+    def test_built_in_function_exists_case_insensitive(self, spark):
+        """functionExists is case-insensitive."""
+        assert spark.catalog.functionExists("COUNT")
+
+    def test_missing_function_does_not_exist(self, spark):
+        """functionExists returns False for a function that does not exist."""
+        assert not spark.catalog.functionExists("this_function_definitely_does_not_exist")
+
+    def test_missing_qualified_function_does_not_exist(self, spark):
+        """functionExists returns False for a fully qualified function that does not exist."""
+        assert not spark.catalog.functionExists("default.unexisting_function")
+
+
+class TestGetFunction:
+    """Test spark.catalog.getFunction() returns correct field names and values."""
+
+    def test_get_built_in_function(self, spark):
+        """getFunction returns a Function object for a built-in function."""
+        function = spark.catalog.getFunction("count")
+        assert function.name == "count"
+        assert function.isTemporary
+
+    def test_get_missing_function_raises(self, spark):
+        """getFunction raises an exception when the function does not exist."""
+        with pytest.raises(Exception, match=r"(?i)not found|does not exist|cannot find"):
+            spark.catalog.getFunction("this_function_definitely_does_not_exist")

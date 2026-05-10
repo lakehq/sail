@@ -8,12 +8,15 @@ use sail_catalog::provider::{
     DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
+};
 
 struct MemoryDatabase {
     status: DatabaseStatus,
     tables: HashMap<String, TableStatus>,
     views: HashMap<String, TableStatus>,
+    functions: HashMap<String, FunctionStatus>,
 }
 
 /// An in-memory catalog provider.
@@ -41,9 +44,22 @@ impl MemoryCatalogProvider {
                 },
                 tables: HashMap::new(),
                 views: HashMap::new(),
+                functions: HashMap::new(),
             },
         );
         Self { name, databases }
+    }
+
+    pub fn insert_function(
+        &self,
+        database: &Namespace,
+        function: FunctionStatus,
+    ) -> CatalogResult<()> {
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
+        })?;
+        db.functions.insert(function.name.clone(), function);
+        Ok(())
     }
 }
 
@@ -88,6 +104,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     status: status.clone(),
                     tables: HashMap::new(),
                     views: HashMap::new(),
+                    functions: HashMap::new(),
                 };
                 entry.insert(db);
                 Ok(status)
@@ -453,5 +470,68 @@ impl CatalogProvider for MemoryCatalogProvider {
                 quote_namespace_if_needed(database),
             ))
         }
+    }
+
+    async fn get_function(
+        &self,
+        database: &Namespace,
+        function: &str,
+    ) -> CatalogResult<FunctionStatus> {
+        if let Some(db) = self.databases.get(database) {
+            if let Some(status) = db.functions.get(function) {
+                return Ok(status.clone());
+            }
+            return Err(CatalogError::NotFound(
+                CatalogObject::Function,
+                function.to_string(),
+            ));
+        }
+        Err(CatalogError::NotFound(
+            CatalogObject::Database,
+            quote_namespace_if_needed(database),
+        ))
+    }
+
+    async fn list_functions(&self, database: &Namespace) -> CatalogResult<Vec<FunctionStatus>> {
+        if let Some(db) = self.databases.get(database) {
+            Ok(db.functions.values().cloned().collect())
+        } else {
+            Err(CatalogError::NotFound(
+                CatalogObject::Database,
+                quote_namespace_if_needed(database),
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_get_and_list_functions() -> CatalogResult<()> {
+        let database = Namespace::try_from(vec!["default".to_string()])?;
+        let provider = MemoryCatalogProvider::new("memory".to_string(), database.clone(), None);
+        let function = FunctionStatus {
+            catalog: Some("memory".to_string()),
+            namespace: Some(vec!["default".to_string()]),
+            name: "my_function".to_string(),
+            description: Some("test function".to_string()),
+            class_name: "com.example.MyFunction".to_string(),
+            is_temporary: false,
+        };
+
+        provider.insert_function(&database, function.clone())?;
+
+        let actual = provider.get_function(&database, "my_function").await?;
+        assert_eq!(actual.name, function.name);
+        assert_eq!(actual.namespace, function.namespace);
+        assert_eq!(actual.class_name, function.class_name);
+        assert!(!actual.is_temporary);
+
+        let functions = provider.list_functions(&database).await?;
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "my_function");
+        Ok(())
     }
 }

@@ -495,14 +495,23 @@ impl CatalogCommand {
 
                 serializer.build_record_batch(&rows)?
             }
-            CatalogCommand::FunctionExists { .. } => {
-                return Err(CatalogError::NotSupported("function exists".to_string()));
+            CatalogCommand::FunctionExists { function } => {
+                let registry = service.function_registry();
+                let value = manager.function_exists(&function, registry).await?;
+                display.bools().to_record_batch(vec![value])?
             }
-            CatalogCommand::GetFunction { .. } => {
-                return Err(CatalogError::NotSupported("get function".to_string()));
+            CatalogCommand::GetFunction { function } => {
+                let registry = service.function_registry();
+                // We are supposed to return an error if the function does not exist.
+                let function = manager.get_catalog_function(&function, registry).await?;
+                display.functions().to_record_batch(vec![function])?
             }
-            CatalogCommand::ListFunctions { .. } => {
-                return Err(CatalogError::NotSupported("list functions".to_string()));
+            CatalogCommand::ListFunctions { database, pattern } => {
+                let registry = service.function_registry();
+                let functions = manager
+                    .list_all_functions(&database, pattern.as_deref(), registry)
+                    .await?;
+                display.functions().to_record_batch(functions)?
             }
             CatalogCommand::DropFunction {
                 function,

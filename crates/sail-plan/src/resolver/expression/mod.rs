@@ -435,6 +435,7 @@ mod tests {
         let plan_service = PlanService::new(
             Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
             Box::new(SparkPlanFormatter),
+            Box::new(crate::function_registry::SparkFunctionRegistry),
         );
         state.config_mut().set_extension(Arc::new(catalog_manager));
         state.config_mut().set_extension(Arc::new(plan_service));

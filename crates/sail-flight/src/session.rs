@@ -10,6 +10,7 @@ use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
+use sail_plan::function_registry::SparkFunctionRegistry;
 use sail_server::actor::ActorSystem;
 use sail_session::session_factory::{
     ServerSessionFactory, ServerSessionInfo, ServerSessionMutator, SessionFactory,
@@ -32,6 +33,7 @@ impl ServerSessionMutator for FlightSessionMutator {
         let plan_service = PlanService::new(
             Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
             Box::new(SparkPlanFormatter),
+            Box::new(SparkFunctionRegistry),
         );
         Ok(config.with_extension(Arc::new(plan_service)))
     }

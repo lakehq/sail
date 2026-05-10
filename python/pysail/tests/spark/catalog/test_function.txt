@@ -1,0 +1,17 @@
+>>> spark.catalog.functionExists("count")
+True
+>>> spark.catalog.functionExists("COUNT")
+True
+>>> spark.catalog.functionExists("default.not_a_real_function")
+False
+>>> spark.catalog.functionExists("spark_catalog.default.not_a_real_function")
+False
+>>> function = spark.catalog.getFunction("count")
+>>> function.name
+'count'
+>>> function.isTemporary
+True
+>>> spark.catalog.getFunction("not_a_real_function")
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...

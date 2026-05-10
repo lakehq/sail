@@ -16,8 +16,8 @@ mod scalar;
 mod table;
 mod window;
 
-pub(crate) use aggregate::get_built_in_aggregate_function;
-pub(crate) use window::get_built_in_window_function;
+pub(crate) use aggregate::{get_built_in_aggregate_function, BUILT_IN_AGGREGATE_FUNCTIONS};
+pub(crate) use window::{get_built_in_window_function, BUILT_IN_WINDOW_FUNCTIONS};
 
 lazy_static! {
     pub static ref BUILT_IN_SCALAR_FUNCTIONS: HashMap<&'static str, ScalarFunction> =

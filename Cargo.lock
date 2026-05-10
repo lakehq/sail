@@ -7044,6 +7044,7 @@ dependencies = [
  "dashmap",
  "sail-catalog",
  "sail-common-datafusion",
+ "tokio",
 ]
 
 [[package]]
