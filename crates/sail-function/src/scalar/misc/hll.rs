@@ -85,7 +85,8 @@ impl ScalarUDFImpl for HllSketchEstimate {
                 return exec_err!("hll_sketch_estimate received an invalid sketch");
             }
             let sketch = HllSketch::from_bytes(bytes)?;
-            builder.append_value(sketch.estimate() as i64);
+            let estimate = i64::try_from(sketch.estimate()).map_or(i64::MAX, |value| value);
+            builder.append_value(estimate);
         }
         let result: Int64Array = builder.finish();
         Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))

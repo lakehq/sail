@@ -28,6 +28,28 @@ Feature: hll_union_agg merges binary HLL sketches across rows
         | result |
         | binary |
 
+  Rule: hll_union_agg works as a window function
+
+    Scenario: hll_union_agg over an expanding window uses the default allowDifferentLgConfigK
+      When query
+        """
+        SELECT id, hll_sketch_estimate(hll_union_agg(sketch) OVER (
+          ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        )) AS result
+        FROM (
+          SELECT 1 AS id, hll_sketch_agg(col) AS sketch FROM VALUES (1), (2) AS t(col)
+          UNION ALL
+          SELECT 2 AS id, hll_sketch_agg(col) AS sketch FROM VALUES (2), (3) AS t(col)
+          UNION ALL
+          SELECT 3 AS id, hll_sketch_agg(col) AS sketch FROM VALUES (4) AS t(col)
+        )
+        """
+      Then query result
+        | id | result |
+        | 1  | 2      |
+        | 2  | 3      |
+        | 3  | 4      |
+
   Rule: hll_union_agg with allowDifferentLgConfigK
 
     Scenario: hll_union_agg rejects different lgConfigK by default

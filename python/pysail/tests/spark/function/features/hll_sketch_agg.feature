@@ -44,6 +44,23 @@ Feature: hll_sketch_agg builds an HLL sketch and supports cardinality estimation
         | result |
         | binary |
 
+  Rule: hll_sketch_agg works as a window function
+
+    Scenario: hll_sketch_agg over an expanding window uses the default lgConfigK
+      When query
+        """
+        SELECT id, hll_sketch_estimate(hll_sketch_agg(col) OVER (
+          ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        )) AS result
+        FROM VALUES (1, 1), (2, 1), (3, 2), (4, 3) AS tab(id, col)
+        """
+      Then query result
+        | id | result |
+        | 1  | 1      |
+        | 2  | 1      |
+        | 3  | 2      |
+        | 4  | 3      |
+
   Rule: hll_sketch_agg handles null values
 
     Scenario: hll_sketch_agg ignores null input values
