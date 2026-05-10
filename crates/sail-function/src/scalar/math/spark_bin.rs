@@ -143,7 +143,10 @@ fn parse_spark_string_i64(value: &str) -> Option<i64> {
     if fraction.contains('.') || (integer.is_empty() && fraction.is_empty()) {
         return None;
     }
-    if !integer.bytes().all(|b| b.is_ascii_digit()) || !fraction.bytes().all(|b| b.is_ascii_digit())
+    if !integer
+        .bytes()
+        .chain(fraction.bytes())
+        .all(|b| b.is_ascii_digit())
     {
         return None;
     }

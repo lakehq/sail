@@ -297,20 +297,17 @@ fn decode_spark_base64(value: &str) -> Result<Vec<u8>> {
     let bytes = value.as_bytes();
     match SPARK_BASE64_DECODE.decode(bytes) {
         Ok(value) => Ok(value),
-        Err(_) => {
-            let filtered_bytes: Vec<u8> = bytes
-                .iter()
-                .copied()
-                .filter(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
-                .collect();
-            if filtered_bytes.len() < bytes.len() {
+        Err(error) => {
+            let is_base64_byte =
+                |byte: &u8| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=');
+            if bytes.iter().any(|byte| !is_base64_byte(byte)) {
+                let filtered_bytes: Vec<u8> =
+                    bytes.iter().copied().filter(is_base64_byte).collect();
                 SPARK_BASE64_DECODE
                     .decode(filtered_bytes.as_slice())
                     .map_err(|e| exec_datafusion_err!("Spark `unbase64`: {e}"))
             } else {
-                SPARK_BASE64_DECODE
-                    .decode(bytes)
-                    .map_err(|e| exec_datafusion_err!("Spark `unbase64`: {e}"))
+                Err(exec_datafusion_err!("Spark `unbase64`: {error}"))
             }
         }
     }
