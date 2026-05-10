@@ -227,7 +227,7 @@ impl ScalarUDFImpl for SparkBase64 {
                 DataType::Null => Ok(encode_spark_base64_array(
                     array.len(),
                     |_| true,
-                    |_| unreachable!(),
+                    |_| &[],
                 )),
                 other => {
                     exec_err!("Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}")
@@ -425,11 +425,7 @@ impl ScalarUDFImpl for SparkUnbase64 {
                         |i| array.value(i),
                     ))
                 }
-                DataType::Null => Ok(decode_spark_base64_array(
-                    array.len(),
-                    |_| true,
-                    |_| unreachable!(),
-                )),
+                DataType::Null => Ok(decode_spark_base64_array(array.len(), |_| true, |_| "")),
                 other => exec_err!(
                     "Spark `unbase64`: Expr array must be STRING, got array of type {other}"
                 ),

@@ -11,7 +11,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
-const BIN_SUPPORTED_TYPES: &str = "Int64 or string";
+const BIN_SUPPORTED_TYPES: &str = "Int64 or String";
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBin {
