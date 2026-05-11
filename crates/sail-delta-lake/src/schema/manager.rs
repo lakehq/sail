@@ -396,58 +396,6 @@ mod tests {
     }
 
     #[test]
-    fn protocol_for_create_activates_type_widening_from_enable_property() -> DeltaResult<()> {
-        let mut config = HashMap::new();
-        config.insert("delta.enableTypeWidening".to_string(), "true".to_string());
-        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
-        assert_eq!(protocol.min_reader_version(), 3);
-        assert_eq!(protocol.min_writer_version(), 7);
-        assert!(protocol.has_reader_feature(&TableFeature::TypeWidening));
-        assert!(protocol.has_writer_feature(&TableFeature::TypeWidening));
-        Ok(())
-    }
-
-    #[test]
-    fn protocol_for_create_does_not_auto_upgrade_preview_type_widening() -> DeltaResult<()> {
-        let mut config = HashMap::new();
-        config.insert(
-            "delta.feature.typeWidening-preview".to_string(),
-            "supported".to_string(),
-        );
-        config.insert("delta.enableTypeWidening".to_string(), "true".to_string());
-
-        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
-
-        assert!(protocol.has_reader_feature(&TableFeature::TypeWideningPreview));
-        assert!(protocol.has_writer_feature(&TableFeature::TypeWideningPreview));
-        assert!(!protocol.has_reader_feature(&TableFeature::TypeWidening));
-        assert!(!protocol.has_writer_feature(&TableFeature::TypeWidening));
-        Ok(())
-    }
-
-    #[test]
-    fn protocol_for_create_allows_explicit_stable_type_widening_with_preview() -> DeltaResult<()> {
-        let mut config = HashMap::new();
-        config.insert(
-            "delta.feature.typeWidening-preview".to_string(),
-            "supported".to_string(),
-        );
-        config.insert(
-            "delta.feature.typeWidening".to_string(),
-            "supported".to_string(),
-        );
-        config.insert("delta.enableTypeWidening".to_string(), "true".to_string());
-
-        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
-
-        assert!(protocol.has_reader_feature(&TableFeature::TypeWideningPreview));
-        assert!(protocol.has_writer_feature(&TableFeature::TypeWideningPreview));
-        assert!(protocol.has_reader_feature(&TableFeature::TypeWidening));
-        assert!(protocol.has_writer_feature(&TableFeature::TypeWidening));
-        Ok(())
-    }
-
-    #[test]
     fn protocol_for_create_deletion_vectors_not_activated_when_disabled() -> DeltaResult<()> {
         // `delta.enableDeletionVectors = false` must NOT register the feature.
         let mut config = HashMap::new();

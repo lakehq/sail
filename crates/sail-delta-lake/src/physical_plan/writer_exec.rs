@@ -61,7 +61,7 @@ use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
-    compute_max_column_id, evolve_schema, get_physical_schema,
+    compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
     schema_contains_type_widening_metadata, schema_has_generated_columns,
@@ -516,12 +516,6 @@ impl ExecutionPlan for DeltaWriterExec {
         let stream = self.input.execute(partition, Arc::clone(&context))?;
         self.execute_stream(stream, partition, context)
     }
-}
-
-fn format_schema_change_path(struct_path: &[String], field_path: &[String]) -> String {
-    let mut path = struct_path.to_vec();
-    path.extend(field_path.iter().cloned());
-    path.join(".")
 }
 
 impl DeltaWriterExec {
@@ -1087,7 +1081,7 @@ impl DeltaWriterExec {
                                 return Err(DataFusionError::Plan(format!(
                                     "Delta type widening change at {} is not supported for \
                                      schema evolution: {} -> {}",
-                                    format_schema_change_path(field_path, &change.field_path),
+                                    format_type_change_path(field_path, &change.field_path),
                                     change.from_type,
                                     change.to_type
                                 )));

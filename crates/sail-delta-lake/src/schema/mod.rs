@@ -31,7 +31,7 @@ pub use mapping::{
 };
 pub use normalize::normalize_delta_schema;
 pub use type_widening::{
-    add_type_widening_metadata, alter_column_type, collect_type_changes,
+    add_type_widening_metadata, collect_type_changes, format_type_change_path,
     is_supported_type_change_for_schema_evolution, is_supported_type_change_for_write,
     protocol_can_write_type_widening, protocol_supports_type_widening,
     schema_contains_type_widening_metadata, validate_type_widening_metadata,

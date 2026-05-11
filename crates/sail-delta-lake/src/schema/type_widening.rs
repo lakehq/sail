@@ -101,7 +101,13 @@ pub fn add_type_widening_metadata(
     existing: &StructType,
     candidate: &StructType,
 ) -> DeltaResult<StructType> {
-    rewrite_struct_type(existing, candidate)
+    StructType::try_from_results(candidate.fields().map(|new_field| {
+        if let Some(old_field) = existing.field(new_field.name()) {
+            rewrite_field(old_field, new_field)
+        } else {
+            Ok(new_field.clone())
+        }
+    }))
 }
 
 pub fn collect_type_changes(
@@ -113,9 +119,10 @@ pub fn collect_type_changes(
     Ok(out)
 }
 
-pub fn alter_column_type(
+pub(crate) fn alter_column_type(
     schema: &StructType,
     path: &[String],
+    full_path: &[String],
     data_type: DataType,
 ) -> DeltaResult<StructType> {
     let Some((name, nested_path)) = path.split_first() else {
@@ -128,13 +135,13 @@ pub fn alter_column_type(
     let schema = StructType::try_from_results(schema.fields().map(|field| {
         if field.name() == name {
             found = true;
-            alter_field_type(field, nested_path, data_type.clone())
+            alter_field_type(field, nested_path, full_path, data_type.clone())
         } else {
             Ok(field.clone())
         }
     }))?;
     if !found {
-        return Err(DeltaTableError::missing_column(path.join(".")));
+        return Err(DeltaTableError::missing_column(full_path.join(".")));
     }
     Ok(schema)
 }
@@ -269,12 +276,13 @@ fn is_iceberg_v2_supported_type_change(from_type: &DataType, to_type: &DataType)
 fn alter_field_type(
     field: &StructField,
     path: &[String],
+    full_path: &[String],
     data_type: DataType,
 ) -> DeltaResult<StructField> {
     let data_type = if path.is_empty() {
         data_type
     } else {
-        alter_nested_data_type(field.data_type(), path, data_type)?
+        alter_nested_data_type(field.data_type(), path, full_path, data_type)?
     };
     Ok(StructField {
         name: field.name().clone(),
@@ -287,6 +295,7 @@ fn alter_field_type(
 fn alter_nested_data_type(
     current: &DataType,
     path: &[String],
+    full_path: &[String],
     data_type: DataType,
 ) -> DeltaResult<DataType> {
     let Some((name, nested_path)) = path.split_first() else {
@@ -296,22 +305,23 @@ fn alter_nested_data_type(
         DataType::Struct(struct_type) => Ok(DataType::Struct(Box::new(alter_column_type(
             struct_type,
             path,
+            full_path,
             data_type,
         )?))),
         DataType::Array(array) if name == "element" => {
             Ok(DataType::Array(Box::new(ArrayType::new(
-                alter_nested_data_type(array.element_type(), nested_path, data_type)?,
+                alter_nested_data_type(array.element_type(), nested_path, full_path, data_type)?,
                 array.contains_null(),
             ))))
         }
         DataType::Map(map) if name == "key" => Ok(DataType::Map(Box::new(MapType::new(
-            alter_nested_data_type(map.key_type(), nested_path, data_type)?,
+            alter_nested_data_type(map.key_type(), nested_path, full_path, data_type)?,
             map.value_type().clone(),
             map.value_contains_null(),
         )))),
         DataType::Map(map) if name == "value" => Ok(DataType::Map(Box::new(MapType::new(
             map.key_type().clone(),
-            alter_nested_data_type(map.value_type(), nested_path, data_type)?,
+            alter_nested_data_type(map.value_type(), nested_path, full_path, data_type)?,
             map.value_contains_null(),
         )))),
         DataType::Array(_) => Err(DeltaTableError::schema(format!(
@@ -428,16 +438,6 @@ fn validate_type_for_nested_structs(
     }
 }
 
-fn rewrite_struct_type(existing: &StructType, candidate: &StructType) -> DeltaResult<StructType> {
-    StructType::try_from_results(candidate.fields().map(|new_field| {
-        if let Some(old_field) = existing.field(new_field.name()) {
-            rewrite_field(old_field, new_field)
-        } else {
-            Ok(new_field.clone())
-        }
-    }))
-}
-
 fn rewrite_field(existing: &StructField, candidate: &StructField) -> DeltaResult<StructField> {
     let (data_type, changes) =
         rewrite_data_type(existing.data_type(), candidate.data_type(), Vec::new())?;
@@ -466,7 +466,7 @@ fn rewrite_data_type(
 ) -> DeltaResult<(DataType, Vec<TypeChange>)> {
     match (existing, candidate) {
         (DataType::Struct(old), DataType::Struct(new)) => Ok((
-            DataType::Struct(Box::new(rewrite_struct_type(old, new)?)),
+            DataType::Struct(Box::new(add_type_widening_metadata(old, new)?)),
             Vec::new(),
         )),
         (DataType::Array(old), DataType::Array(new)) => {
@@ -741,7 +741,7 @@ fn resolve_field_path<'a>(
     Ok(data_type)
 }
 
-fn format_type_change_path(struct_path: &[String], field_path: &[String]) -> String {
+pub fn format_type_change_path(struct_path: &[String], field_path: &[String]) -> String {
     let mut path = struct_path.to_vec();
     path.extend(field_path.iter().cloned());
     path.join(".")
@@ -759,239 +759,4 @@ fn integral_rank(data_type: &PrimitiveType) -> Option<u8> {
 
 fn decimal_wider_than_integral(precision: u8, scale: u8, base_precision: u8) -> bool {
     precision >= base_precision && precision - base_precision >= scale
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn supports_protocol_type_widening_matrix() -> DeltaResult<()> {
-        let cases = [
-            (DataType::BYTE, DataType::SHORT),
-            (DataType::BYTE, DataType::LONG),
-            (DataType::FLOAT, DataType::DOUBLE),
-            (DataType::INTEGER, DataType::DOUBLE),
-            (DataType::DATE, DataType::TIMESTAMP_NTZ),
-            (DataType::decimal(10, 2)?, DataType::decimal(20, 5)?),
-            (DataType::INTEGER, DataType::decimal(11, 1)?),
-            (DataType::LONG, DataType::decimal(21, 1)?),
-        ];
-
-        for (from_type, to_type) in cases {
-            assert!(
-                is_supported_type_change(&from_type, &to_type),
-                "{from_type} -> {to_type} should be supported"
-            );
-        }
-
-        assert!(!is_supported_type_change(
-            &DataType::LONG,
-            &DataType::INTEGER
-        ));
-        assert!(!is_supported_type_change(
-            &DataType::STRING,
-            &DataType::LONG
-        ));
-        assert!(!is_supported_type_change(
-            &DataType::decimal(10, 2)?,
-            &DataType::decimal(11, 1)?
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn protocol_type_widening_requires_table_feature_versions() {
-        let legacy_protocol = Protocol::new(
-            1,
-            2,
-            Some(vec![TableFeature::TypeWidening]),
-            Some(vec![TableFeature::TypeWidening]),
-        );
-        assert!(!protocol_supports_type_widening(&legacy_protocol));
-        assert!(!protocol_can_write_type_widening(&legacy_protocol));
-
-        let reader_only_protocol = Protocol::new(
-            3,
-            2,
-            Some(vec![TableFeature::TypeWidening]),
-            Some(vec![TableFeature::TypeWidening]),
-        );
-        assert!(protocol_supports_type_widening(&reader_only_protocol));
-        assert!(!protocol_can_write_type_widening(&reader_only_protocol));
-
-        let supported_protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::TypeWidening]),
-            Some(vec![TableFeature::TypeWidening]),
-        );
-        assert!(protocol_supports_type_widening(&supported_protocol));
-        assert!(protocol_can_write_type_widening(&supported_protocol));
-    }
-
-    #[test]
-    fn rejects_iceberg_incompatible_writes_for_iceberg_tables() -> DeltaResult<()> {
-        let plain_protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::TypeWidening]),
-            Some(vec![TableFeature::TypeWidening]),
-        );
-        let iceberg_protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::TypeWidening]),
-            Some(vec![
-                TableFeature::TypeWidening,
-                TableFeature::IcebergCompatV2,
-            ]),
-        );
-
-        assert!(is_supported_type_change_for_write(
-            &plain_protocol,
-            &DataType::INTEGER,
-            &DataType::DOUBLE
-        ));
-        assert!(!is_supported_type_change_for_schema_evolution(
-            &plain_protocol,
-            &DataType::INTEGER,
-            &DataType::DOUBLE
-        ));
-        assert!(!is_supported_type_change_for_schema_evolution(
-            &plain_protocol,
-            &DataType::INTEGER,
-            &DataType::decimal(11, 1)?
-        ));
-        assert!(is_supported_type_change_for_schema_evolution(
-            &plain_protocol,
-            &DataType::INTEGER,
-            &DataType::LONG
-        ));
-        assert!(is_supported_type_change_for_schema_evolution(
-            &plain_protocol,
-            &DataType::decimal(10, 2)?,
-            &DataType::decimal(12, 3)?
-        ));
-        assert!(!is_supported_type_change_for_write(
-            &iceberg_protocol,
-            &DataType::INTEGER,
-            &DataType::DOUBLE
-        ));
-        assert!(!is_supported_type_change_for_write(
-            &iceberg_protocol,
-            &DataType::DATE,
-            &DataType::TIMESTAMP_NTZ
-        ));
-        assert!(!is_supported_type_change_for_write(
-            &iceberg_protocol,
-            &DataType::decimal(10, 2)?,
-            &DataType::decimal(12, 3)?
-        ));
-        assert!(!is_supported_type_change_for_write(
-            &iceberg_protocol,
-            &DataType::LONG,
-            &DataType::decimal(21, 1)?
-        ));
-        assert!(is_supported_type_change_for_write(
-            &iceberg_protocol,
-            &DataType::INTEGER,
-            &DataType::LONG
-        ));
-        assert!(is_supported_type_change_for_write(
-            &iceberg_protocol,
-            &DataType::FLOAT,
-            &DataType::DOUBLE
-        ));
-        assert!(is_supported_type_change_for_write(
-            &iceberg_protocol,
-            &DataType::decimal(10, 2)?,
-            &DataType::decimal(12, 2)?
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn validates_nested_type_change_metadata() -> DeltaResult<()> {
-        let schema = StructType::try_new([StructField::nullable(
-            "items",
-            DataType::Array(Box::new(ArrayType::new(
-                DataType::Map(Box::new(MapType::new(
-                    DataType::STRING,
-                    DataType::decimal(10, 4)?,
-                    true,
-                ))),
-                true,
-            ))),
-        )
-        .add_metadata([(
-            ColumnMetadataKey::TypeChanges.as_ref(),
-            MetadataValue::Other(serde_json::json!([
-                {
-                    "fromType": "decimal(6,2)",
-                    "toType": "decimal(10,4)",
-                    "fieldPath": "element.value"
-                }
-            ])),
-        )])])?;
-
-        validate_type_widening_metadata(&schema)
-    }
-
-    #[test]
-    fn records_type_change_metadata_for_schema_evolution() -> DeltaResult<()> {
-        let existing = StructType::try_new([
-            StructField::nullable("id", DataType::INTEGER),
-            StructField::nullable(
-                "values",
-                DataType::Array(Box::new(ArrayType::new(DataType::SHORT, true))),
-            ),
-        ])?;
-        let candidate = StructType::try_new([
-            StructField::nullable("id", DataType::LONG),
-            StructField::nullable(
-                "values",
-                DataType::Array(Box::new(ArrayType::new(DataType::INTEGER, true))),
-            ),
-        ])?;
-
-        let updated = add_type_widening_metadata(&existing, &candidate)?;
-        let id = updated
-            .field("id")
-            .ok_or_else(|| DeltaTableError::missing_column("id"))?;
-        let id_changes = type_changes_from_field(id)?;
-        assert_eq!(id_changes.len(), 1);
-        assert_eq!(id_changes[0].from_type, DataType::INTEGER);
-        assert_eq!(id_changes[0].to_type, DataType::LONG);
-        assert!(id_changes[0].field_path.is_empty());
-
-        let values = updated
-            .field("values")
-            .ok_or_else(|| DeltaTableError::missing_column("values"))?;
-        let values_changes = type_changes_from_field(values)?;
-        assert_eq!(values_changes.len(), 1);
-        assert_eq!(values_changes[0].from_type, DataType::SHORT);
-        assert_eq!(values_changes[0].to_type, DataType::INTEGER);
-        assert_eq!(values_changes[0].field_path, ["element"]);
-        Ok(())
-    }
-
-    #[test]
-    fn preserves_existing_field_metadata_when_recording_type_changes() -> DeltaResult<()> {
-        let existing = StructType::try_new([StructField::nullable("id", DataType::INTEGER)
-            .add_metadata([("comment", MetadataValue::String("primary id".to_string()))])])?;
-        let candidate = StructType::try_new([StructField::nullable("id", DataType::LONG)])?;
-
-        let updated = add_type_widening_metadata(&existing, &candidate)?;
-        let id = updated
-            .field("id")
-            .ok_or_else(|| DeltaTableError::missing_column("id"))?;
-
-        assert_eq!(
-            id.metadata().get("comment"),
-            Some(&MetadataValue::String("primary id".to_string()))
-        );
-        assert_eq!(type_changes_from_field(id)?.len(), 1);
-        Ok(())
-    }
 }

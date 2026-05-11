@@ -24,9 +24,10 @@ use crate::physical_plan::planner::{
     plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
     DeltaPlannerConfig, PlannerContext,
 };
+use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
-    add_type_widening_metadata, alter_column_type as alter_delta_column_type, collect_type_changes,
-    evolve_schema, is_supported_type_change_for_write, protocol_can_write_type_widening,
+    add_type_widening_metadata, collect_type_changes, evolve_schema, format_type_change_path,
+    is_supported_type_change_for_write, protocol_can_write_type_widening,
 };
 use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
@@ -489,8 +490,9 @@ impl TableFormat for DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let target_type = DeltaDataType::try_from(&data_type)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let candidate_kernel = alter_delta_column_type(&current_kernel, &column_path, target_type)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let candidate_kernel =
+            alter_delta_column_type(&current_kernel, &column_path, &column_path, target_type)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let type_changes = collect_type_changes(&current_kernel, &candidate_kernel)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -515,7 +517,7 @@ impl TableFormat for DeltaTableFormat {
             ) {
                 return plan_err!(
                     "Delta ALTER COLUMN TYPE change at {} is not supported by Iceberg-compatible Delta tables: {} -> {}",
-                    format_schema_change_path(field_path, &change.field_path),
+                    format_type_change_path(field_path, &change.field_path),
                     change.from_type,
                     change.to_type
                 );
@@ -548,12 +550,6 @@ impl TableFormat for DeltaTableFormat {
     }
 }
 
-fn format_schema_change_path(struct_path: &[String], field_path: &[String]) -> String {
-    let mut path = struct_path.to_vec();
-    path.extend(field_path.iter().cloned());
-    path.join(".")
-}
-
 fn operation_column_json(
     schema: &StructType,
     column_path: &[String],
@@ -583,13 +579,14 @@ fn resolve_operation_column_field(
     if nested_path.is_empty() {
         Ok(field.clone())
     } else {
-        resolve_operation_nested_field(field.data_type(), nested_path)
+        resolve_operation_nested_field(field.data_type(), nested_path, column_path)
     }
 }
 
 fn resolve_operation_nested_field(
     data_type: &DeltaDataType,
     path: &[String],
+    full_path: &[String],
 ) -> crate::spec::DeltaResult<StructField> {
     let Some((name, nested_path)) = path.split_first() else {
         return Err(DeltaTableError::schema(
@@ -601,11 +598,11 @@ fn resolve_operation_nested_field(
         DeltaDataType::Struct(struct_type) => {
             let field = struct_type
                 .field(name)
-                .ok_or_else(|| DeltaTableError::missing_column(path.join(".")))?;
+                .ok_or_else(|| DeltaTableError::missing_column(full_path.join(".")))?;
             if nested_path.is_empty() {
                 Ok(field.clone())
             } else {
-                resolve_operation_nested_field(field.data_type(), nested_path)
+                resolve_operation_nested_field(field.data_type(), nested_path, full_path)
             }
         }
         DeltaDataType::Array(array) if name == "element" => synthetic_operation_field(
@@ -613,15 +610,17 @@ fn resolve_operation_nested_field(
             array.element_type(),
             array.contains_null(),
             nested_path,
+            full_path,
         ),
         DeltaDataType::Map(map) if name == "key" => {
-            synthetic_operation_field(name, map.key_type(), false, nested_path)
+            synthetic_operation_field(name, map.key_type(), false, nested_path, full_path)
         }
         DeltaDataType::Map(map) if name == "value" => synthetic_operation_field(
             name,
             map.value_type(),
             map.value_contains_null(),
             nested_path,
+            full_path,
         ),
         DeltaDataType::Array(_) => Err(DeltaTableError::schema(format!(
             "expected 'element' for array column path, found '{name}'"
@@ -640,11 +639,12 @@ fn synthetic_operation_field(
     data_type: &DeltaDataType,
     nullable: bool,
     nested_path: &[String],
+    full_path: &[String],
 ) -> crate::spec::DeltaResult<StructField> {
     if nested_path.is_empty() {
         Ok(StructField::new(name, data_type.clone(), nullable))
     } else {
-        resolve_operation_nested_field(data_type, nested_path)
+        resolve_operation_nested_field(data_type, nested_path, full_path)
     }
 }
 
@@ -678,7 +678,9 @@ fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
 ) -> Protocol {
     let existing_supports_preview = existing.has_reader_feature(&TableFeature::TypeWideningPreview)
         || existing.has_writer_feature(&TableFeature::TypeWideningPreview);
-    let stable_explicitly_requested = configuration.contains_key("delta.feature.typeWidening");
+    let stable_explicitly_requested = configuration
+        .keys()
+        .any(|key| key.eq_ignore_ascii_case("delta.feature.typeWidening"));
 
     if existing_supports_preview && !stable_explicitly_requested {
         protocol_without_feature(desired, TableFeature::TypeWidening)

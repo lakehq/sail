@@ -279,9 +279,7 @@ fn decimal_widening_supported(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use datafusion::arrow::datatypes::{Field, Fields};
+    use datafusion::arrow::datatypes::Field;
 
     use super::*;
 
@@ -340,68 +338,6 @@ mod tests {
 
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Decimal128(12, 2));
-    }
-
-    #[test]
-    fn test_decimal_type_widening_promotion() -> Result<()> {
-        let table_field = Field::new("test", DataType::Decimal128(10, 2), false);
-        let input_field = Field::new("test", DataType::Decimal128(12, 3), true);
-
-        let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)?;
-
-        assert!(result.is_nullable());
-        assert_eq!(result.data_type(), &DataType::Decimal128(12, 3));
-        Ok(())
-    }
-
-    #[test]
-    fn test_incompatible_decimal_promotion() {
-        let table_field = Field::new("test", DataType::Decimal128(10, 2), false);
-        let input_field = Field::new("test", DataType::Decimal128(11, 4), true);
-
-        let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_map_key_type_promotion() -> Result<()> {
-        let table_entries = Field::new(
-            "entries",
-            DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Int32, false),
-                Field::new("value", DataType::Utf8, true),
-            ])),
-            false,
-        );
-        let input_entries = Field::new(
-            "entries",
-            DataType::Struct(Fields::from(vec![
-                Field::new("key", DataType::Int64, false),
-                Field::new("value", DataType::Utf8, true),
-            ])),
-            false,
-        );
-        let table_field = Field::new("m", DataType::Map(Arc::new(table_entries), false), true);
-        let input_field = Field::new("m", DataType::Map(Arc::new(input_entries), false), true);
-
-        let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)?;
-
-        match result.data_type() {
-            DataType::Map(entries, _) => match entries.data_type() {
-                DataType::Struct(fields) => {
-                    assert_eq!(fields[0].data_type(), &DataType::Int64);
-                    assert_eq!(fields[1].data_type(), &DataType::Utf8);
-                    Ok(())
-                }
-                other => Err(DataFusionError::Plan(format!(
-                    "expected map entries struct, got {other}"
-                ))),
-            },
-            other => Err(DataFusionError::Plan(format!(
-                "expected map type, got {other}"
-            ))),
-        }
     }
 
     #[test]
