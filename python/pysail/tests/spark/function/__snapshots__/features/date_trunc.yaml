@@ -86,7 +86,7 @@ data:
         FilterExec: column1@0 >= 1711929600000000 AND column1@0 < 1719792000000000
           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
-name: "test_explain_where_date_trunc_week_does_not_rewrite"
+name: "test_explain_where_date_trunc_week_rewrites_to_timestamp_range_filter"
 data:
   |-
     == Physical Plan ==

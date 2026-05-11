@@ -118,7 +118,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
         // We handle this for all Timestamp(Microsecond, _) inputs before delegating to
         // DF, which would return an error for unknown units.
         let known_unit = unit.as_deref().filter(|u| is_known_unit(u));
-        if known_unit.is_none() {
+        if known_unit.is_none() && matches!(args.args.first(), Some(ColumnarValue::Scalar(_))) {
             match args.args.get(1) {
                 Some(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(_, tz))) => {
                     return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(

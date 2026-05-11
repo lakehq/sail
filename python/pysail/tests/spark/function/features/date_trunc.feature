@@ -638,10 +638,10 @@ Feature: DATE_TRUNC preserves timestamp type
         """
       Then query plan matches snapshot
 
-  Rule: week and quarter have no preimage (no filter rewrite)
+  Rule: WEEK preimage plan snapshot (validates filter rewrite fires)
 
     @sail-only
-    Scenario: EXPLAIN WHERE date_trunc WEEK does NOT rewrite
+    Scenario: EXPLAIN WHERE date_trunc WEEK rewrites to timestamp range filter
       When query
         """
         EXPLAIN SELECT ts FROM VALUES
