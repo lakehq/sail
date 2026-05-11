@@ -543,6 +543,7 @@ message DeltaMetadataStatsExecNode {
 
 message DeltaRemoveActionsExecNode {
   bytes input = 1;
+  optional string partition_value_columns_json = 2;
 }
 
 message ConsoleSinkExecNode {
@@ -729,6 +730,7 @@ message DeletionVectorWriterExecNode {
   bytes table_schema = 4;
   int64 version = 5;
   optional string operation_json = 6;
+  optional string partition_value_columns_json = 7;
 }
 
 message DeletionVectorRowsWriterExecNode {
@@ -739,6 +741,7 @@ message DeletionVectorRowsWriterExecNode {
   int64 version = 5;
   optional string operation_json = 6;
   bytes adds_input = 7;
+  optional string partition_value_columns_json = 8;
 }
 
 message PythonDataSourceInputPartition {

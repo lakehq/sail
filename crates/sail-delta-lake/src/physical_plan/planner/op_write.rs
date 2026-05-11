@@ -123,7 +123,10 @@ async fn build_full_overwrite_plan(
             partition_columns,
             true, // partition_scan
         )?);
-        let remove_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::new(all_adds)?);
+        let remove_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::try_new(
+            all_adds,
+            Some(snapshot_state.physical_partition_columns()),
+        )?);
 
         UnionExec::try_new(vec![writer, remove_plan])?
     } else {
@@ -236,7 +239,10 @@ async fn build_overwrite_if_plan(
         partition_columns.clone(),
         partition_only,
     )?);
-    let remove_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan)?);
+    let remove_plan = Arc::new(DeltaRemoveActionsExec::try_new(
+        find_files_plan,
+        Some(snapshot_state.physical_partition_columns()),
+    )?);
 
     let union_actions = UnionExec::try_new(vec![writer, remove_plan])?;
 

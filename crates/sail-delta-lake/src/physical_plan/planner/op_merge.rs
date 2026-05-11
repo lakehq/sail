@@ -113,6 +113,7 @@ pub async fn build_merge_plan(
     assemble_commit_plan(
         writer_input,
         remove_source,
+        Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
         options,
         ctx.metadata_configuration().clone(),
@@ -227,6 +228,7 @@ pub async fn build_merge_plan_mor(
                     PATH_COLUMN,
                     sail_common_datafusion::datasource::MERGE_ROW_INDEX_COLUMN,
                     version,
+                    Some(snapshot_state.physical_partition_columns()),
                     merge_operation,
                 )?);
             UnionExec::try_new(vec![writer, dv_writer])?
