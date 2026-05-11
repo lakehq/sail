@@ -367,8 +367,21 @@ data:
 ---
 name: "test_clickbench_query_plan[28]"
 data:
-  "== Physical Plan ==\nProjectionExec: expr=[#105@0 as k, #106@1 as l, #107@2 as c, #108@3 as MIN(Referer)]\n  ProjectionExec: expr=[#105@0 as #105, #106@1 as #106, #107@2 as #107, CAST(#108@3 AS LargeBinary) as #108]\n    SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=25\n      SortExec: TopK(fetch=25), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]\n        ProjectionExec: expr=[k@0 as #105, avg(character_length(hits.#14))@1 as #106, count(Int64(1))@2 as #107, min(hits.#14)@3 as #108]\n          FilterExec: count(Int64(1))@2 > 100000\n            AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[avg(character_length(hits.#14)), count(Int64(1)), min(hits.#14)]\n              RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4\n                AggregateExec: mode=Partial, gby=[regexp_replace(CAST(#14@0 AS LargeUtf8), ^https?:/(?:www.)?([^/]+)/.*$, \x01, g) as k], aggr=[avg(character_length(hits.#14)), count(Int64(1)), min(hits.#14)]\n        \
-    \          ProjectionExec: expr=[Referer@0 as #14]\n                    FilterExec: Referer@0 != <eol>\n                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1\n                        DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[Referer], file_type=parquet, predicate=Referer@14 != , pruning_predicate=Referer_null_count@2 != row_count@3 AND (Referer_min@0 !=  OR  != Referer_max@1), required_guarantees=[Referer not in ()]"
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#105@0 as k, #106@1 as l, #107@2 as c, #108@3 as MIN(Referer)]
+      ProjectionExec: expr=[#105@0 as #105, #106@1 as #106, #107@2 as #107, CAST(#108@3 AS LargeBinary) as #108]
+        SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=25
+          SortExec: TopK(fetch=25), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]
+            ProjectionExec: expr=[k@0 as #105, avg(character_length(hits.#14))@1 as #106, count(Int64(1))@2 as #107, min(hits.#14)@3 as #108]
+              FilterExec: count(Int64(1))@2 > 100000
+                AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[avg(character_length(hits.#14)), count(Int64(1)), min(hits.#14)]
+                  RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
+                    AggregateExec: mode=Partial, gby=[regexp_replace(CAST(#14@0 AS LargeUtf8), ^https?:/(?:www.)?([^/]+)/.*$, $1, g) as k], aggr=[avg(character_length(hits.#14)), count(Int64(1)), min(hits.#14)]
+                      ProjectionExec: expr=[Referer@0 as #14]
+                        FilterExec: Referer@0 != <eol>
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[Referer], file_type=parquet, predicate=Referer@14 != , pruning_predicate=Referer_null_count@2 != row_count@3 AND (Referer_min@0 !=  OR  != Referer_max@1), required_guarantees=[Referer not in ()]
 ---
 name: "test_clickbench_query_plan[29]"
 data:
