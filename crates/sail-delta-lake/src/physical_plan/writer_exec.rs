@@ -60,9 +60,11 @@ use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
 use crate::schema::{
-    annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
-    schema_has_generated_columns,
+    add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
+    compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
+    is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
+    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
+    schema_contains_type_widening_metadata, schema_has_generated_columns,
 };
 use crate::spec::{
     contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
@@ -1045,7 +1047,7 @@ impl DeltaWriterExec {
                 let merged_schema = Self::merge_schemas(&table_arrow_schema, input_schema)?;
                 if merged_schema.fields() != table_arrow_schema.fields() {
                     // Schema has changed, create metadata action
-                    let candidate_kernel = StructType::try_from(merged_schema.as_ref())
+                    let mut candidate_kernel = StructType::try_from(merged_schema.as_ref())
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let snapshot = table.snapshot()?;
@@ -1053,6 +1055,46 @@ impl DeltaWriterExec {
                     let current_kernel = StructType::try_from(snapshot.schema())
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     let kmode = snapshot.effective_column_mapping_mode();
+                    let type_changes = collect_type_changes(&current_kernel, &candidate_kernel)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    if !type_changes.is_empty() {
+                        if !snapshot.table_properties().enable_type_widening() {
+                            return Err(DataFusionError::Plan(
+                                "Delta type widening schema evolution requires table property \
+                                 delta.enableTypeWidening=true"
+                                    .to_string(),
+                            ));
+                        }
+                        if !protocol_can_write_type_widening(snapshot.protocol()) {
+                            return Err(DataFusionError::Plan(
+                                "Delta type widening schema evolution requires the typeWidening \
+                                 reader and writer table features"
+                                    .to_string(),
+                            ));
+                        }
+                        for (field_path, change) in &type_changes {
+                            if !is_supported_type_change_for_schema_evolution(
+                                snapshot.protocol(),
+                                &change.from_type,
+                                &change.to_type,
+                            ) {
+                                return Err(DataFusionError::Plan(format!(
+                                    "Delta type widening change at {} is not supported for \
+                                     schema evolution: {} -> {}",
+                                    format_type_change_path(field_path, &change.field_path),
+                                    change.from_type,
+                                    change.to_type
+                                )));
+                            }
+                        }
+                    }
+                    if !type_changes.is_empty()
+                        || schema_contains_type_widening_metadata(&current_kernel)
+                    {
+                        candidate_kernel =
+                            add_type_widening_metadata(&current_kernel, &candidate_kernel)
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    }
 
                     // Delegate schema evolution to SchemaManager
                     let (_final_kernel, updated_metadata) =

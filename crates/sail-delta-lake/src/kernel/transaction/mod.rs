@@ -429,13 +429,14 @@ impl OperationMetrics {
             | DeltaOperation::Write { .. }
             | DeltaOperation::Create { .. }
             | DeltaOperation::SetTableProperties { .. }
-            | DeltaOperation::UnsetTableProperties { .. } => {} // TODO: When the following operations are implemented, extend this match:
-                                                                //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
-                                                                //     executionTimeMs, scanTimeMs, rewriteTimeMs
-                                                                //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
-                                                                //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
-                                                                //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
-                                                                //     numDeletedFiles, numVacuumedDirectories
+            | DeltaOperation::UnsetTableProperties { .. }
+            | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
+                                                       //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
+                                                       //     executionTimeMs, scanTimeMs, rewriteTimeMs
+                                                       //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
+                                                       //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
+                                                       //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
+                                                       //     numDeletedFiles, numVacuumedDirectories
         }
     }
 }
