@@ -13,6 +13,41 @@ data:
     numOutputRows: 3
     writeTimeMs: <time_ms>
 ---
+name: "test_conditional_merge_counts_source_rows_without_actions"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 4072
+    numAddedFiles: 4
+    numFiles: 4
+    numOutputBytes: 4072
+    numOutputFiles: 4
+    numOutputRows: 6
+    numRemovedBytes: 1069
+    numRemovedFiles: 1
+    numSourceRows: 4
+    numTargetBytesAdded: 4072
+    numTargetBytesRemoved: 1069
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 4
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 4
+    numTargetRowsDeleted: 0
+    numTargetRowsInserted: 1
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 1
+    numTargetRowsNotMatchedBySourceDeleted: 0
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 1
+    numTouchedRows: 5
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
 name: "test_datapredicate_delete_reports_numdeletedrows_and_numcopiedrows"
 data:
   operation: DELETE

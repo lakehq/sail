@@ -191,6 +191,31 @@ Feature: Delta Lake operationMetrics in commitInfo
         | operationMetrics |
 
     @sail-only
+    Scenario: Conditional MERGE counts source rows without actions
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_op_metrics_merge_conditional AS
+        SELECT * FROM VALUES
+          (1,'same','keep'),
+          (2,'new','matched_update'),
+          (4,'ins','insert'),
+          (7,'skip','skip')
+        AS src(id, value, flag)
+        """
+      Given statement
+        """
+        MERGE INTO delta_op_metrics_merge AS t
+        USING src_op_metrics_merge_conditional AS s
+        ON t.id = s.id
+        WHEN MATCHED AND t.flag = 'matched_update' THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED AND s.flag = 'insert' THEN INSERT *
+        """
+      Then delta log latest commit info matches snapshot for paths
+        | path             |
+        | operation        |
+        | operationMetrics |
+
+    @sail-only
     Scenario: Insert-only MERGE fast-appends without removing files
       Given statement
         """

@@ -32,6 +32,10 @@ pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
 
+/// Marker column indicating that MERGE source-row metrics are supplied by
+/// [`RowLevelOperationType::SourceMetric`] rows.
+pub const MERGE_SOURCE_METRIC_COLUMN: &str = "__sail_merge_source_metric";
+
 /// A layer of options that can be applied to a data source.
 /// Multiple layers are used to represent different sources of options,
 /// applied in order so that later layers override earlier ones.
@@ -95,6 +99,8 @@ pub enum RowLevelOperationType {
     NotMatchedBySourceDelete = 7,
     /// Target-only row is updated by a MERGE clause.
     NotMatchedBySourceUpdate = 8,
+    /// Source row is counted for MERGE metrics but is not written.
+    SourceMetric = 9,
 }
 
 impl RowLevelOperationType {

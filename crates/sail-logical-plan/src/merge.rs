@@ -30,8 +30,8 @@ pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
-pub use sail_common_datafusion::datasource::OPERATION_COLUMN;
 use sail_common_datafusion::datasource::{OptionLayer, RowLevelOperationType};
+pub use sail_common_datafusion::datasource::{MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
 #[educe(PartialOrd)]
@@ -1056,6 +1056,17 @@ fn build_default_merge_expansion(
         .project(projection_exprs.clone())?
         .build()?;
     let projected = apply_generation_projection(projected, &options.generated_column_exprs)?;
+    let source_metric_projection_exprs =
+        build_source_metric_projection(target_schema, path_column, row_index_column)?;
+    let source_metric_projected = LogicalPlanBuilder::from(source_plan.clone())
+        .project(source_metric_projection_exprs)?
+        .build()?;
+    // Count source rows from a metric-only branch instead of inferring them from
+    // rewritten rows. Targeted rewrite can drop matched-but-unchanged rows from
+    // untouched files, and conditional inserts can drop source-only rows.
+    let projected = LogicalPlanBuilder::from(projected)
+        .union(source_metric_projected)?
+        .build()?;
 
     let (rewrite_matched, rewrite_not_matched_by_source) =
         build_rewrite_predicates(&options, &matched_pred, &not_matched_by_source_pred);
@@ -1344,6 +1355,39 @@ fn build_insert_only_noop_projection(
         projections.push(lit(null_value).alias(field.name().clone()));
     }
     projections.push(lit(RowLevelOperationType::Noop.as_i32()).alias(OPERATION_COLUMN));
+    Ok(projections)
+}
+
+fn build_source_metric_projection(
+    target_schema: &DFSchemaRef,
+    path_column: &str,
+    row_index_column: Option<&str>,
+) -> Result<Vec<Expr>> {
+    let mut projections = Vec::new();
+    let mut path_expr = None;
+
+    for field in target_schema.fields().iter() {
+        if field.name() == path_column {
+            let null_value = ScalarValue::try_new_null(field.data_type())?;
+            path_expr = Some(lit(null_value).alias(path_column.to_string()));
+            continue;
+        }
+        if row_index_column.is_some_and(|c| field.name() == c)
+            || field.name() == TARGET_ROW_ID_COLUMN
+        {
+            continue;
+        }
+        let null_value = ScalarValue::try_new_null(field.data_type())?;
+        projections.push(lit(null_value).alias(field.name().clone()));
+    }
+
+    let Some(path_expr) = path_expr else {
+        return plan_err!("MERGE source metric projection is missing required path column");
+    };
+    projections.push(path_expr);
+    projections.push(lit(RowLevelOperationType::SourceMetric.as_i32()).alias(OPERATION_COLUMN));
+    projections.push(lit(true).alias(MERGE_SOURCE_METRIC_COLUMN));
+
     Ok(projections)
 }
 
@@ -1755,6 +1799,7 @@ fn build_merge_projection(
         else_expr: Some(Box::new(copy_op)),
     });
     projections.push(op_expr.alias(OPERATION_COLUMN));
+    projections.push(lit(true).alias(MERGE_SOURCE_METRIC_COLUMN));
 
     Ok(projections)
 }

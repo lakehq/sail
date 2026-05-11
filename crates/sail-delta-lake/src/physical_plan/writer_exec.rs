@@ -48,7 +48,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::{
-    PhysicalSinkMode, RowLevelOperationType, OPERATION_COLUMN,
+    PhysicalSinkMode, RowLevelOperationType, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
 };
 use url::Url;
 
@@ -90,11 +90,13 @@ struct MergeRowMetrics {
     updated: u64,
     deleted: u64,
     noop: u64,
+    source_metric: u64,
     matched_updated: u64,
     not_matched_by_source_updated: u64,
     matched_deleted: u64,
     not_matched_by_source_deleted: u64,
     saw_detailed_merge_op: bool,
+    uses_source_metric: bool,
 }
 
 impl MergeRowMetrics {
@@ -138,11 +140,20 @@ impl MergeRowMetrics {
                 self.not_matched_by_source_deleted =
                     self.not_matched_by_source_deleted.saturating_add(1);
             }
+            v if v == i64::from(RowLevelOperationType::SourceMetric.as_i32()) => {
+                self.source_metric = self.source_metric.saturating_add(1);
+            }
             _ => {}
         }
     }
 
     fn source_rows(self) -> u64 {
+        if self.uses_source_metric {
+            return self.source_metric;
+        }
+        if self.source_metric > 0 {
+            return self.source_metric;
+        }
         let detailed_source_rows = self
             .inserted
             .saturating_add(self.matched_updated)
@@ -159,6 +170,10 @@ impl MergeRowMetrics {
     }
 
     fn accumulate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.uses_source_metric |= batch
+            .schema()
+            .column_with_name(MERGE_SOURCE_METRIC_COLUMN)
+            .is_some();
         let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
             return Ok(());
         };
@@ -448,9 +463,9 @@ impl DeltaWriterExec {
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
         let input_schema =
-            normalize_delta_schema(&Self::schema_without_operation_column(&self.input.schema()));
+            normalize_delta_schema(&Self::schema_without_metric_columns(&self.input.schema()));
         let sink_schema =
-            normalize_delta_schema(&Self::schema_without_operation_column(&self.sink_schema));
+            normalize_delta_schema(&Self::schema_without_metric_columns(&self.sink_schema));
         let operation_override = self.operation_override.clone();
         let session_timezone = context
             .session_config()
@@ -765,7 +780,7 @@ impl DeltaWriterExec {
                 let batch = batch_result?;
                 merge_row_metrics.accumulate_batch(&batch)?;
                 let batch = Self::filter_metric_only_operation_rows(batch)?;
-                let batch = Self::strip_operation_column(batch)?;
+                let batch = Self::strip_metric_columns(batch)?;
                 let rows: u64 = u64::try_from(batch.num_rows()).unwrap_or_default();
                 if rows == 0 {
                     continue;
@@ -1083,37 +1098,52 @@ impl DeltaWriterExec {
         Ok(())
     }
 
-    fn schema_without_operation_column(schema: &SchemaRef) -> SchemaRef {
-        if schema.column_with_name(OPERATION_COLUMN).is_none() {
+    fn is_writer_metric_column(name: &str) -> bool {
+        name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
+    }
+
+    fn schema_without_metric_columns(schema: &SchemaRef) -> SchemaRef {
+        if !schema
+            .fields()
+            .iter()
+            .any(|field| Self::is_writer_metric_column(field.name()))
+        {
             return Arc::clone(schema);
         }
         Arc::new(Schema::new(
             schema
                 .fields()
                 .iter()
-                .filter(|field| field.name() != OPERATION_COLUMN)
+                .filter(|field| !Self::is_writer_metric_column(field.name()))
                 .map(|field| field.as_ref().clone())
                 .collect::<Vec<_>>(),
         ))
     }
 
-    fn strip_operation_column(batch: RecordBatch) -> Result<RecordBatch> {
-        let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
+    fn strip_metric_columns(batch: RecordBatch) -> Result<RecordBatch> {
+        if !batch
+            .schema()
+            .fields()
+            .iter()
+            .any(|field| Self::is_writer_metric_column(field.name()))
+        {
             return Ok(batch);
-        };
+        }
         let fields = batch
             .schema()
             .fields()
             .iter()
             .enumerate()
-            .filter(|(field_index, _)| *field_index != index)
+            .filter(|(_, field)| !Self::is_writer_metric_column(field.name()))
             .map(|(_, field)| field.as_ref().clone())
             .collect::<Vec<_>>();
         let columns = batch
             .columns()
             .iter()
             .enumerate()
-            .filter(|(column_index, _)| *column_index != index)
+            .filter(|(column_index, _)| {
+                !Self::is_writer_metric_column(batch.schema().field(*column_index).name())
+            })
             .map(|(_, column)| Arc::clone(column))
             .collect::<Vec<_>>();
         RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
@@ -1145,6 +1175,7 @@ impl DeltaWriterExec {
                     || v == i64::from(RowLevelOperationType::Delete.as_i32())
                     || v == i64::from(RowLevelOperationType::MatchedDelete.as_i32())
                     || v == i64::from(RowLevelOperationType::NotMatchedBySourceDelete.as_i32())
+                    || v == i64::from(RowLevelOperationType::SourceMetric.as_i32())
             )
         };
 
