@@ -24,11 +24,8 @@ use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
     TableFormatRegistry,
 };
-use sail_data_source::error::DataSourceResult;
-use sail_data_source::options::gen::{
-    IcebergReadOptions, IcebergReadPartialOptions, IcebergWriteOptions, IcebergWritePartialOptions,
-};
-use sail_data_source::options::{BuildPartialOptions, PartialOptions};
+use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
+use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
@@ -37,8 +34,12 @@ use crate::logical::IcebergTableSource;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
+use crate::table::metadata_loader::{
+    encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
+    metadata_file_version_from_path,
+};
 use crate::table::{find_latest_metadata_file, Table};
-use crate::utils::metadata::{metadata_files_for_version, parse_metadata_version_from_path};
+use crate::utils::metadata::metadata_files_for_version;
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_exprs,
 };
@@ -96,7 +97,7 @@ impl TableFormat for IcebergTableFormat {
 
         let table_url = Self::parse_table_url(vec![path]).await?;
         let (options, table_properties) = split_iceberg_write_options_and_table_properties(options);
-        let iceberg_options = resolve_iceberg_write_options(options)
+        let iceberg_options = IcebergWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let store = ctx
@@ -209,21 +210,13 @@ impl TableFormat for IcebergTableFormat {
                 find_latest_metadata_file(&object_store, &table_url).await?
             };
 
-            let meta_path = object_store::path::Path::from(latest_meta.as_str());
-            let bytes = store_ctx
-                .base
-                .get(&meta_path)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .bytes()
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
             let mut table_meta = TableMetadata::from_json(&bytes)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
             crate::properties::apply_table_property_changes(&mut table_meta, &changes, if_exists)?;
 
-            let current_version = parse_metadata_version_from_path(&latest_meta).unwrap_or(0);
+            let current_version = metadata_file_version_from_path(&latest_meta).unwrap_or(0);
             let next_version = current_version + 1;
             let existing_for_next = metadata_files_for_version(&store_ctx, next_version).await?;
             if !existing_for_next.is_empty() {
@@ -249,11 +242,10 @@ impl TableFormat for IcebergTableFormat {
             let new_meta_bytes = table_meta
                 .to_json()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let new_meta_rel = format!(
-                "metadata/{:05}-{}.metadata.json",
-                next_version,
-                uuid::Uuid::new_v4()
-            );
+            let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
+            let new_meta_rel = format!("metadata/v{next_version}{file_extension}");
+            let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_bytes)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());
             let put_opts = object_store::PutOptions {
                 mode: object_store::PutMode::Create,
@@ -303,17 +295,12 @@ impl TableFormat for IcebergTableFormat {
                 continue;
             }
 
-            let metadata_filename = new_meta_rel
-                .rsplit('/')
-                .next()
-                .unwrap_or(new_meta_rel.as_str())
-                .to_string();
             let hint_path = object_store::path::Path::from("metadata/version-hint.text");
             store_ctx
                 .prefixed
                 .put(
                     &hint_path,
-                    object_store::PutPayload::from(Bytes::from(metadata_filename.into_bytes())),
+                    object_store::PutPayload::from(Bytes::from(next_version.to_string())),
                 )
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -321,6 +308,11 @@ impl TableFormat for IcebergTableFormat {
             return Ok(());
         }
     }
+
+    // TODO: Implement row-level DELETE/UPDATE/MERGE for this format. Expanded
+    // inputs should consume Sail row intent tags to decide which rows rewrite
+    // data files and which rows produce low-level delete artifacts, then strip
+    // all internal metadata before writing user data.
 }
 
 /// Create an Iceberg table provider for reading.
@@ -357,7 +349,7 @@ async fn build_iceberg_provider(
     } = info;
 
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
-    let iceberg_options = resolve_iceberg_read_options(options)
+    let iceberg_options = IcebergReadOptions::resolve(ctx, options)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     create_iceberg_provider_concrete(ctx, table_url, iceberg_options).await
 }
@@ -431,24 +423,6 @@ impl IcebergTableFormat {
     }
 }
 
-fn resolve_iceberg_read_options(options: Vec<OptionLayer>) -> DataSourceResult<IcebergReadOptions> {
-    let mut partial = IcebergReadPartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
-    }
-    partial.finalize()
-}
-
-fn resolve_iceberg_write_options(
-    options: Vec<OptionLayer>,
-) -> DataSourceResult<IcebergWriteOptions> {
-    let mut partial = IcebergWritePartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
-    }
-    partial.finalize()
-}
-
 fn split_iceberg_write_options_and_table_properties(
     options: Vec<OptionLayer>,
 ) -> (Vec<OptionLayer>, Vec<(String, String)>) {
@@ -517,8 +491,10 @@ mod tests {
                 ("custom.key".to_string(), "custom-value".to_string()),
             ]
         );
+        let ctx = datafusion::execution::context::SessionContext::default();
+        let state = ctx.state();
         #[expect(clippy::unwrap_used)]
-        let iceberg_options = resolve_iceberg_write_options(clean_options).unwrap();
+        let iceberg_options = IcebergWriteOptions::resolve(&state, clean_options).unwrap();
         assert!(iceberg_options.merge_schema);
         assert_eq!(
             iceberg_options.write_data_path.as_deref(),

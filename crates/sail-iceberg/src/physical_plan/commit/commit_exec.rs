@@ -36,6 +36,7 @@ use crate::io::StoreContext;
 use crate::operations::bootstrap::{
     bootstrap_first_snapshot, bootstrap_new_table, PersistStrategy,
 };
+use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
 use crate::physical_plan::action_schema::decode_actions_and_meta_from_batch;
 use crate::physical_plan::commit::IcebergCommitInfo;
@@ -43,8 +44,12 @@ use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
+use crate::table::metadata_loader::{
+    encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
+    metadata_file_version_from_path,
+};
 use crate::utils::get_object_store_from_context;
-use crate::utils::metadata::{metadata_files_for_version, parse_metadata_version_from_path};
+use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
 
 #[derive(Debug)]
@@ -100,6 +105,9 @@ impl IcebergCommitExec {
 
         table_meta.current_schema_id = schema_id;
         table_meta.last_column_id = table_meta.last_column_id.max(highest_field_id);
+        table_meta.format_version = table_meta
+            .format_version
+            .max(format_version_for_schema(&new_schema));
     }
 
     fn apply_partition_spec_update(table_meta: &mut TableMetadata, new_spec: PartitionSpec) {
@@ -333,15 +341,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .map_err(|e| DataFusionError::External(Box::new(e)))?
                 };
 
-                let meta_path = object_store::path::Path::from(latest_meta.as_str());
-                let bytes = store_ctx
-                    .base
-                    .get(&meta_path)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .bytes()
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
@@ -365,6 +365,10 @@ impl ExecutionPlan for IcebergCommitExec {
                 let schema_iceberg = table_meta.current_schema().cloned().ok_or_else(|| {
                     DataFusionError::Plan("No current schema in table metadata".to_string())
                 })?;
+                table_meta.format_version = table_meta
+                    .format_version
+                    .max(format_version_for_schema(&schema_iceberg));
+                let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
                 // bootstrap the first snapshot into the existing metadata using InPlace strategy
@@ -392,7 +396,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     DataFusionError::Plan("No current snapshot in table metadata".to_string())
                 })?;
 
-                let current_version = parse_metadata_version_from_path(&latest_meta).unwrap_or(0);
+                let current_version = metadata_file_version_from_path(&latest_meta).unwrap_or(0);
                 let next_version = current_version + 1;
 
                 let existing_for_next =
@@ -412,14 +416,18 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 // Build transaction and action based on operation
                 let tx = Transaction::new(table_url.to_string(), snapshot);
-                let manifest_meta =
-                    tx.default_manifest_metadata(&schema_iceberg, &partition_spec_for_commit);
+                let manifest_meta = tx.default_manifest_metadata(
+                    &schema_iceberg,
+                    &partition_spec_for_commit,
+                    table_meta.format_version,
+                );
                 let action_commit = match commit_info.operation {
                     crate::spec::Operation::Append => {
                         let mut action = tx
                             .fast_append()
                             .with_store_context(store_ctx.clone())
-                            .with_manifest_metadata(manifest_meta);
+                            .with_manifest_metadata(manifest_meta)
+                            .with_row_lineage_start_row_id(row_lineage_start_row_id);
                         for df in commit_info.data_files.clone().into_iter() {
                             action.add_file(df);
                         }
@@ -434,7 +442,8 @@ impl ExecutionPlan for IcebergCommitExec {
                             commit_info.data_files.clone(),
                             Some(store_ctx.clone()),
                             Some(manifest_meta),
-                        );
+                        )
+                        .with_row_lineage_start_row_id(row_lineage_start_row_id);
                         struct LocalOverwriteOperation;
                         impl SnapshotProduceOperation for LocalOverwriteOperation {
                             fn operation(&self) -> &'static str {
@@ -459,11 +468,13 @@ impl ExecutionPlan for IcebergCommitExec {
                 let updates = action_commit.into_updates();
                 log::trace!("commit_exec: applying updates: {:?}", &updates);
                 let mut newest_snapshot_seq: Option<i64> = None;
+                let mut newest_snapshot_added_rows: Option<i64> = None;
                 let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
                 for upd in updates {
                     match upd {
                         TableUpdate::AddSnapshot { snapshot } => {
                             newest_snapshot_seq = Some(snapshot.sequence_number());
+                            newest_snapshot_added_rows = snapshot.added_rows;
                             table_meta.snapshots.push(snapshot.clone());
                             table_meta.current_snapshot_id = Some(snapshot.snapshot_id());
                             table_meta.snapshot_log.push(SnapshotLog {
@@ -486,6 +497,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
                 table_meta.last_updated_ms = timestamp_ms;
+                if let Some(added_rows) = newest_snapshot_added_rows {
+                    table_meta.advance_next_row_id(added_rows);
+                }
 
                 // Add metadata_log entry referencing previous metadata file
                 table_meta
@@ -495,14 +509,14 @@ impl ExecutionPlan for IcebergCommitExec {
                         metadata_file: latest_meta.clone(),
                     });
 
-                let new_meta_bytes = table_meta
+                let new_meta_json = table_meta
                     .to_json()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let new_meta_rel = format!(
-                    "metadata/{:05}-{}.metadata.json",
-                    next_version,
-                    uuid::Uuid::new_v4()
-                );
+                let file_extension =
+                    metadata_file_extension_from_properties(&table_meta.properties)?;
+                let new_meta_rel = format!("metadata/v{next_version}{file_extension}");
+                let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 log::trace!(
                     "Writing metadata: {} snapshot_id={:?} table_url={}",
@@ -560,12 +574,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 }
                 log::trace!("Metadata written successfully");
 
-                let metadata_filename = if let Some(fname) = new_meta_rel.rsplit('/').next() {
-                    fname.to_string()
-                } else {
-                    new_meta_rel.clone()
-                };
-                let hint_bytes = Bytes::from(metadata_filename.into_bytes());
+                let hint_bytes = Bytes::from(next_version.to_string().into_bytes());
                 let hint_path = object_store::path::Path::from("metadata/version-hint.text");
                 store_ctx
                     .prefixed

@@ -90,6 +90,7 @@ fn parse_format_version(requested: &str) -> Result<FormatVersion> {
     match version {
         1 => Ok(FormatVersion::V1),
         2 => Ok(FormatVersion::V2),
+        3 => Ok(FormatVersion::V3),
         _ => plan_err!("cannot use unsupported Iceberg table format version v{version}"),
     }
 }
