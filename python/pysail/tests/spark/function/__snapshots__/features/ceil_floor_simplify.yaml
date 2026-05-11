@@ -1,0 +1,57 @@
+# serializer version: 1
+---
+name: "test_explain_ceil_of_bigint__no_spark_ceil_in_plan_no_cast_needed"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as c]
+      ProjectionExec: expr=[column1@0 as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_ceil_of_ceil__idempotence_removes_outer_call"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as c]
+      ProjectionExec: expr=[spark_ceil(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_ceil_of_double__spark_ceil_stays_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as c]
+      ProjectionExec: expr=[spark_ceil(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_ceil_of_int__no_spark_ceil_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as c]
+      ProjectionExec: expr=[CAST(column1@0 AS Int64) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_ceil_with_negative_scale__spark_ceil_stays_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as c]
+      ProjectionExec: expr=[spark_ceil(column1@0, -1) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_floor_of_floor__idempotence_removes_outer_call"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as c]
+      ProjectionExec: expr=[spark_floor(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_floor_of_int__no_spark_floor_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as c]
+      ProjectionExec: expr=[CAST(column1@0 AS Int64) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
