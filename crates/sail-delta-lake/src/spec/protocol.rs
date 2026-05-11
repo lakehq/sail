@@ -52,6 +52,8 @@ pub enum TableFeature {
     Clustering,
     VacuumProtocolCheck,
     VariantType,
+    #[serde(rename = "typeWidening-preview")]
+    TypeWideningPreview,
     TypeWidening,
     CatalogManaged,
     #[serde(other)]
@@ -80,6 +82,7 @@ impl TableFeature {
             Self::Clustering => "clustering",
             Self::VacuumProtocolCheck => "vacuumProtocolCheck",
             Self::VariantType => "variantType",
+            Self::TypeWideningPreview => "typeWidening-preview",
             Self::TypeWidening => "typeWidening",
             Self::CatalogManaged => "catalogManaged",
             Self::Unknown => "unknown",
@@ -107,6 +110,7 @@ impl TableFeature {
             "clustering" => Ok(Self::Clustering),
             "vacuumProtocolCheck" => Ok(Self::VacuumProtocolCheck),
             "variantType" => Ok(Self::VariantType),
+            "typeWidening-preview" => Ok(Self::TypeWideningPreview),
             "typeWidening" => Ok(Self::TypeWidening),
             "catalogManaged" => Ok(Self::CatalogManaged),
             _ => Err(DeltaTableError::generic(format!(
@@ -126,6 +130,7 @@ impl TableFeature {
                 | Self::VacuumProtocolCheck
                 | Self::CatalogManaged
                 | Self::VariantType
+                | Self::TypeWideningPreview
                 | Self::TypeWidening
         )
     }
@@ -144,6 +149,7 @@ mod tests {
             (TableFeature::Clustering, "clustering"),
             (TableFeature::VacuumProtocolCheck, "vacuumProtocolCheck"),
             (TableFeature::VariantType, "variantType"),
+            (TableFeature::TypeWideningPreview, "typeWidening-preview"),
             (TableFeature::TypeWidening, "typeWidening"),
             (TableFeature::CatalogManaged, "catalogManaged"),
         ];
