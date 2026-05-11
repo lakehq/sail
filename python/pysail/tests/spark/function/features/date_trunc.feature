@@ -372,6 +372,33 @@ Feature: DATE_TRUNC preserves timestamp type
         | result |
         | NULL   |
 
+    Scenario: date_trunc with invalid unit on zoned timestamp returns NULL
+      When query
+        """
+        SELECT date_trunc('INVALID_UNIT', TIMESTAMP '2026-05-15 10:30:00 UTC') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: date_trunc with NULL unit on zoned timestamp returns NULL
+      When query
+        """
+        SELECT date_trunc(NULL, TIMESTAMP '2026-05-15 10:30:00 UTC') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: date_trunc with nanosecond unit on zoned timestamp returns NULL
+      When query
+        """
+        SELECT date_trunc('nanosecond', TIMESTAMP '2026-05-15 10:30:00 UTC') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: DATE input is coerced to TIMESTAMP
 
     Scenario: date_trunc accepts DATE input and returns correct value

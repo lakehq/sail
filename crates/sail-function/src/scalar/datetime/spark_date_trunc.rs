@@ -89,16 +89,21 @@ impl ScalarUDFImpl for SparkDateTrunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let mut args = args;
         // Normalize Spark-specific unit aliases (yy→year, mm→month, dd→day).
-        let unit = if let Some(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))) =
-            args.args.first()
-        {
-            let normalized = normalize_unit(&s.to_lowercase()).to_string();
-            if normalized != *s {
-                args.args[0] = ColumnarValue::Scalar(ScalarValue::Utf8(Some(normalized.clone())));
+        // Match all string variants: Utf8, Utf8View, LargeUtf8.
+        let unit = match args.args.first() {
+            Some(ColumnarValue::Scalar(
+                ScalarValue::Utf8(Some(s))
+                | ScalarValue::Utf8View(Some(s))
+                | ScalarValue::LargeUtf8(Some(s)),
+            )) => {
+                let normalized = normalize_unit(&s.to_lowercase()).to_string();
+                if normalized != *s {
+                    args.args[0] =
+                        ColumnarValue::Scalar(ScalarValue::Utf8(Some(normalized.clone())));
+                }
+                Some(normalized)
             }
-            Some(normalized)
-        } else {
-            None
+            _ => None,
         };
 
         // DF's date_trunc uses Arrow's temporal kernel, which calls timestamp_nanos()
@@ -107,35 +112,38 @@ impl ScalarUDFImpl for SparkDateTrunc {
         // we truncate directly with chrono to avoid the overflow.
         //
         // A NULL unit or an unrecognized unit string returns NULL (Spark semantics).
-        // We handle both cases here before delegating to DF, which would return an error.
+        // We handle this for all Timestamp(Microsecond, _) inputs before delegating to
+        // DF, which would return an error for unknown units.
         let known_unit = unit.as_deref().filter(|u| is_known_unit(u));
-        let is_ntz_scalar = matches!(
-            args.args.get(1),
-            Some(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                _,
-                None
-            )))
-        );
-        let is_ntz_array = matches!(
-            args.args.get(1),
-            Some(ColumnarValue::Array(arr)) if arr.data_type() == &DataType::Timestamp(TimeUnit::Microsecond, None)
-        );
-        if known_unit.is_none() && (is_ntz_scalar || is_ntz_array) {
-            return match args.args.get(1) {
-                Some(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(_, None))) => Ok(
-                    ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(None, None)),
-                ),
-                Some(ColumnarValue::Array(arr)) => {
+        if known_unit.is_none() {
+            match args.args.get(1) {
+                Some(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(_, tz))) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                        None,
+                        tz.clone(),
+                    )));
+                }
+                Some(ColumnarValue::Array(arr))
+                    if matches!(
+                        arr.data_type(),
+                        DataType::Timestamp(TimeUnit::Microsecond, _)
+                    ) =>
+                {
+                    let tz = match arr.data_type() {
+                        DataType::Timestamp(_, tz) => tz.clone(),
+                        _ => unreachable!(),
+                    };
                     let nulls = arrow::buffer::NullBuffer::new_null(arr.len());
-                    Ok(ColumnarValue::Array(Arc::new(
+                    return Ok(ColumnarValue::Array(Arc::new(
                         TimestampMicrosecondArray::new(
                             arrow::buffer::ScalarBuffer::from(vec![0i64; arr.len()]),
                             Some(nulls),
-                        ),
-                    )))
+                        )
+                        .with_timezone_opt(tz),
+                    )));
                 }
-                _ => unreachable!(),
-            };
+                _ => {}
+            }
         }
         if let Some(u) = known_unit {
             match args.args.get(1) {
