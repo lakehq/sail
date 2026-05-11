@@ -57,7 +57,9 @@ pub async fn build_delete_plan(
     // build a visible metadata pipeline over a log-derived meta table.
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
     let log_replay_options = LogReplayOptions {
-        include_stats_json: !partition_only,
+        // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
+        // for partition-only deletes where data-skipping itself does not need stats_json.
+        include_stats_json: true,
         ..Default::default()
     };
 

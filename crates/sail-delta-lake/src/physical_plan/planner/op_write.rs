@@ -218,7 +218,9 @@ async fn build_overwrite_if_plan(
 
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
     let log_replay_options = LogReplayOptions {
-        include_stats_json: !partition_only,
+        // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
+        // for partition-only overwrites where data-skipping itself does not need stats_json.
+        include_stats_json: true,
         ..Default::default()
     };
     let meta_scan: Arc<dyn ExecutionPlan> =
