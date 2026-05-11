@@ -76,6 +76,8 @@ pub struct DeletionVectorWriterExec {
     table_schema: datafusion::arrow::datatypes::SchemaRef,
     /// Table version.
     version: i64,
+    /// Mapping from replay output partition column names to Delta log partition value keys.
+    partition_value_columns: Option<Vec<(String, String)>>,
     /// The delta operation to record in the commit log.
     operation: Option<crate::kernel::DeltaOperation>,
     /// Metrics set.
@@ -91,6 +93,7 @@ impl DeletionVectorWriterExec {
         condition: Arc<dyn PhysicalExpr>,
         table_schema: datafusion::arrow::datatypes::SchemaRef,
         version: i64,
+        partition_value_columns: Option<Vec<(String, String)>>,
         operation: Option<crate::kernel::DeltaOperation>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
@@ -107,6 +110,7 @@ impl DeletionVectorWriterExec {
             condition,
             table_schema,
             version,
+            partition_value_columns,
             operation,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
@@ -133,6 +137,10 @@ impl DeletionVectorWriterExec {
         self.version
     }
 
+    pub fn partition_value_columns(&self) -> Option<&[(String, String)]> {
+        self.partition_value_columns.as_deref()
+    }
+
     pub fn operation(&self) -> Option<&crate::kernel::DeltaOperation> {
         self.operation.as_ref()
     }
@@ -150,6 +158,7 @@ pub struct DeletionVectorRowsWriterExec {
     path_column: String,
     row_index_column: String,
     version: i64,
+    partition_value_columns: Option<Vec<(String, String)>>,
     operation: Option<crate::kernel::DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
@@ -163,6 +172,7 @@ impl DeletionVectorRowsWriterExec {
         path_column: impl Into<String>,
         row_index_column: impl Into<String>,
         version: i64,
+        partition_value_columns: Option<Vec<(String, String)>>,
         operation: Option<crate::kernel::DeltaOperation>,
     ) -> Result<Self> {
         let path_column = path_column.into();
@@ -181,16 +191,10 @@ impl DeletionVectorRowsWriterExec {
             .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
 
         let schema = delta_action_schema()?;
-        let input_partition_count = input.output_partitioning().partition_count().max(1);
-        let adds_input_partition_count = adds_input.output_partitioning().partition_count().max(1);
-        if input_partition_count != adds_input_partition_count {
-            return Err(DataFusionError::Plan(format!(
-                "DeletionVectorRowsWriterExec requires inputs with the same partition count, got {input_partition_count} and {adds_input_partition_count}"
-            )));
-        }
+        let partition_count = input.output_partitioning().partition_count().max(1);
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(input_partition_count),
+            Partitioning::UnknownPartitioning(partition_count),
             EmissionType::Final,
             Boundedness::Bounded,
         ));
@@ -201,6 +205,7 @@ impl DeletionVectorRowsWriterExec {
             path_column,
             row_index_column,
             version,
+            partition_value_columns,
             operation,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
@@ -229,6 +234,10 @@ impl DeletionVectorRowsWriterExec {
 
     pub fn version(&self) -> i64 {
         self.version
+    }
+
+    pub fn partition_value_columns(&self) -> Option<&[(String, String)]> {
+        self.partition_value_columns.as_deref()
     }
 
     pub fn operation(&self) -> Option<&crate::kernel::DeltaOperation> {
@@ -385,25 +394,21 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             self.path_column.clone(),
             self.row_index_column.clone(),
             self.version,
+            self.partition_value_columns.clone(),
             self.operation.clone(),
         )?))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        let distribution_for = |input: &Arc<dyn ExecutionPlan>, name: &str| {
-            let idx = match input.schema().index_of(name) {
+        let dist_for = |plan: &Arc<dyn ExecutionPlan>| -> Distribution {
+            let idx = match plan.schema().index_of(&self.path_column) {
                 Ok(i) => i,
                 Err(_) => return Distribution::SinglePartition,
             };
-            let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-                Arc::new(Column::new(name, idx));
+            let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new(&self.path_column, idx));
             Distribution::HashPartitioned(vec![expr])
         };
-
-        vec![
-            distribution_for(&self.input, &self.path_column),
-            distribution_for(&self.adds_input, &self.path_column),
-        ]
+        vec![dist_for(&self.input), dist_for(&self.adds_input)]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -428,11 +433,24 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let mut stream = self.input.execute(partition, context.clone())?;
+        let input = Arc::clone(&self.input);
+        let input_partition_count = input.output_partitioning().partition_count().max(1);
         let adds_input = Arc::clone(&self.adds_input);
+        let adds_partition_count = adds_input.output_partitioning().partition_count().max(1);
+        if input_partition_count != adds_partition_count {
+            return internal_err!(
+                "DeletionVectorRowsWriterExec requires aligned input partitions, got {input_partition_count} DV row partitions and {adds_partition_count} Add partitions"
+            );
+        }
+        if partition >= input_partition_count {
+            return internal_err!(
+                "DeletionVectorRowsWriterExec partition {partition} exceeds partition count {input_partition_count}"
+            );
+        }
         let table_url = self.table_url.clone();
         let path_column = self.path_column.clone();
         let row_index_column = self.row_index_column.clone();
+        let partition_value_columns = self.partition_value_columns.clone();
         let operation = self.operation.clone();
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
@@ -442,14 +460,17 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let exec_start = Instant::now();
 
-            let mut adds_stream = adds_input.execute(partition, context.clone())?;
             let mut add_by_path = HashMap::new();
+            let mut adds_stream = adds_input.execute(partition, context.clone())?;
             while let Some(batch_result) = adds_stream.next().await {
                 let batch = batch_result?;
                 let adds = if batch.column_by_name(COL_ACTION).is_some() {
                     decode_adds_from_batch(&batch)?
                 } else {
-                    meta_adds::decode_adds_from_meta_batch(&batch, None)?
+                    meta_adds::decode_adds_from_meta_batch_with_partition_value_columns(
+                        &batch,
+                        partition_value_columns.as_deref(),
+                    )?
                 };
                 for add in adds {
                     add_by_path.insert(add.path.clone(), add);
@@ -471,6 +492,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             let mut current_path: Option<String> = None;
             let mut current_bitmap = DeletionVectorBitmap::new();
 
+            let mut stream = input.execute(partition, context.clone())?;
             while let Some(batch_result) = stream.next().await {
                 let batch = batch_result?;
                 let path_idx = batch.schema().index_of(&path_column)?;
@@ -494,7 +516,6 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                             "MERGE DV row-index column '{row_index_column}' must be Int64"
                         ))
                     })?;
-
                 for row in 0..batch.num_rows() {
                     if paths.is_null(row) || row_indices.is_null(row) {
                         return Err(DataFusionError::Execution(
@@ -577,6 +598,10 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 execution_time_ms: Some(exec_start.elapsed().as_millis() as u64),
                 num_removed_files: Some(num_dv_added),
                 num_added_files: Some(num_dv_added),
+                num_target_rows_deleted: Some(total_deleted_rows),
+                num_target_deletion_vectors_added: Some(num_dv_added),
+                num_target_deletion_vectors_updated: Some(num_dv_updated),
+                num_target_deletion_vectors_removed: Some(num_dv_updated),
                 ..Default::default()
             };
 
@@ -646,6 +671,7 @@ impl ExecutionPlan for DeletionVectorWriterExec {
             self.condition.clone(),
             self.table_schema.clone(),
             self.version,
+            self.partition_value_columns.clone(),
             self.operation.clone(),
         )?))
     }
@@ -664,6 +690,7 @@ impl ExecutionPlan for DeletionVectorWriterExec {
         let condition = self.condition.clone();
         let table_schema = self.table_schema.clone();
         let operation = self.operation.clone();
+        let partition_value_columns = self.partition_value_columns.clone();
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let _output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
@@ -680,7 +707,12 @@ impl ExecutionPlan for DeletionVectorWriterExec {
                 if batch.column_by_name(COL_ACTION).is_some() {
                     adds_to_process.extend(decode_adds_from_batch(&batch)?);
                 } else {
-                    adds_to_process.extend(meta_adds::decode_adds_from_meta_batch(&batch, None)?);
+                    adds_to_process.extend(
+                        meta_adds::decode_adds_from_meta_batch_with_partition_value_columns(
+                            &batch,
+                            partition_value_columns.as_deref(),
+                        )?,
+                    );
                 }
             }
 
@@ -826,9 +858,7 @@ impl ExecutionPlan for DeletionVectorWriterExec {
                 num_copied_rows: Some(0),
                 num_deletion_vectors_added: Some(num_dv_added),
                 num_deletion_vectors_updated: Some(num_dv_updated),
-                // TODO: numDeletionVectorsRemoved is not populated here because MoR DELETE
-                // only updates/adds DVs. It should be emitted from MERGE/UPDATE paths that
-                // physically drop files previously carrying DVs.
+                num_deletion_vectors_removed: Some(num_dv_updated),
                 ..Default::default()
             };
 

@@ -126,7 +126,10 @@ async fn build_full_overwrite_plan(
             partition_columns,
             true, // partition_scan
         )?);
-        let remove_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::new(all_adds)?);
+        let remove_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::try_new(
+            all_adds,
+            Some(snapshot_state.physical_partition_columns()),
+        )?);
 
         UnionExec::try_new(vec![writer, remove_plan])?
     } else {
@@ -235,7 +238,9 @@ async fn build_overwrite_if_plan(
 
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
     let log_replay_options = LogReplayOptions {
-        include_stats_json: !partition_only,
+        // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
+        // for partition-only overwrites where data-skipping itself does not need stats_json.
+        include_stats_json: true,
         ..Default::default()
     };
     let meta_scan: Arc<dyn ExecutionPlan> =
@@ -256,7 +261,10 @@ async fn build_overwrite_if_plan(
         partition_columns.clone(),
         partition_only,
     )?);
-    let remove_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan)?);
+    let remove_plan = Arc::new(DeltaRemoveActionsExec::try_new(
+        find_files_plan,
+        Some(snapshot_state.physical_partition_columns()),
+    )?);
 
     let union_actions = UnionExec::try_new(vec![writer, remove_plan])?;
 

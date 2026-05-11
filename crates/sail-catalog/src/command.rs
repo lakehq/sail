@@ -406,23 +406,37 @@ impl CatalogCommand {
                         ))
                     })?;
                     let runtime = ctx.runtime_env();
-                    let (changes, if_exists_flag) = match &options {
-                        AlterTableOptions::SetTableProperties { properties } => (
-                            properties
+                    match &options {
+                        AlterTableOptions::SetTableProperties { properties } => {
+                            let changes = properties
                                 .iter()
                                 .map(|(k, v)| (k.clone(), Some(v.clone())))
-                                .collect::<Vec<_>>(),
-                            false,
-                        ),
-                        AlterTableOptions::UnsetTableProperties { keys, if_exists } => (
-                            keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>(),
-                            *if_exists,
-                        ),
+                                .collect::<Vec<_>>();
+                            table_format
+                                .alter_table_properties(runtime, &location, changes, false)
+                                .await
+                                .map_err(|e| CatalogError::External(e.to_string()))?;
+                        }
+                        AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+                            let changes =
+                                keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>();
+                            table_format
+                                .alter_table_properties(runtime, &location, changes, *if_exists)
+                                .await
+                                .map_err(|e| CatalogError::External(e.to_string()))?;
+                        }
+                        AlterTableOptions::AlterColumnType { name, data_type } => {
+                            table_format
+                                .alter_table_column_type(
+                                    runtime,
+                                    &location,
+                                    name.clone(),
+                                    data_type.clone(),
+                                )
+                                .await
+                                .map_err(|e| CatalogError::External(e.to_string()))?;
+                        }
                     };
-                    table_format
-                        .alter_table_properties(runtime, &location, changes, if_exists_flag)
-                        .await
-                        .map_err(|e| CatalogError::External(e.to_string()))?;
                 }
 
                 manager.alter_table(&table, options).await?;

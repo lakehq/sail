@@ -41,7 +41,7 @@ use crate::physical_plan::{decode_actions_and_meta_from_batch, DeltaCommitContex
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
-use crate::spec::{CommitAction, StructType};
+use crate::spec::{contains_variant_arrow, CommitAction, StructType};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{
     create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
@@ -346,8 +346,15 @@ impl ExecutionPlan for DeltaCommitExec {
                 } else {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
-                    let protocol = protocol_for_create(false, false, false, false, &HashMap::new())
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let protocol = protocol_for_create(
+                        false,
+                        false,
+                        false,
+                        false,
+                        contains_variant_arrow(normalized_sink.as_ref()),
+                        &HashMap::new(),
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let metadata = metadata_for_create_with_struct_type(
                         StructType::try_from(normalized_sink.as_ref())

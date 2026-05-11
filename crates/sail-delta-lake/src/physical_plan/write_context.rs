@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::datasource::{
+    PhysicalSinkMode, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
+};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -11,13 +13,16 @@ use crate::conversion::DeltaTypeConverter;
 use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::schema::{
-    annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
-    schema_has_generated_columns,
+    add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
+    compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
+    is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
+    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
+    schema_contains_type_widening_metadata, schema_has_generated_columns,
 };
 use crate::spec::{
-    contains_timestampntz_arrow, Action, ColumnMappingMode, ColumnMetadataKey, DomainMetadata,
-    Metadata, MetadataValue, Protocol, StructField, StructType, TableProperties, Transaction,
+    contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
+    ColumnMetadataKey, DomainMetadata, Metadata, MetadataValue, Protocol, StructField, StructType,
+    TableProperties, Transaction,
 };
 use crate::storage::LogStore;
 use crate::table::DeltaSnapshot;
@@ -138,7 +143,7 @@ pub fn prepare_delta_write_context(
     input_schema: &SchemaRef,
     operation_override: Option<DeltaOperation>,
 ) -> Result<DeltaWriteContext> {
-    let input_schema = normalize_delta_schema(input_schema);
+    let input_schema = normalize_delta_schema(&schema_without_writer_metric_columns(input_schema));
     let mut initial_actions: Vec<Action> = Vec::new();
     let planned_operation = operation_for_sink_mode(table_url, partition_columns, sink_mode);
 
@@ -155,7 +160,7 @@ pub fn prepare_delta_write_context(
             _ => SaveMode::Append,
         };
         let schema_mode = get_schema_mode(options, save_mode)?;
-        handle_schema_evolution(snapshot, &input_schema, schema_mode)?
+        handle_schema_evolution(snapshot, &input_schema, schema_mode, partition_columns)?
     } else {
         (input_schema.clone(), Vec::new())
     };
@@ -174,6 +179,7 @@ pub fn prepare_delta_write_context(
     let mut annotated_schema_opt: Option<StructType> = None;
     if !table_exists {
         let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
+        let has_variant = contains_variant_arrow(final_schema.as_ref());
         let mut kernel_schema = StructType::try_from(final_schema.as_ref())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if !options.generation_expressions.is_empty() {
@@ -203,6 +209,7 @@ pub fn prepare_delta_write_context(
             has_timestamp_ntz,
             TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
             schema_has_generated_columns(&metadata_schema),
+            has_variant,
             &configuration,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -287,6 +294,28 @@ pub fn prepare_delta_write_context(
     })
 }
 
+fn is_writer_metric_column(name: &str) -> bool {
+    name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
+}
+
+fn schema_without_writer_metric_columns(schema: &SchemaRef) -> SchemaRef {
+    if !schema
+        .fields()
+        .iter()
+        .any(|field| is_writer_metric_column(field.name()))
+    {
+        return Arc::clone(schema);
+    }
+    Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .filter(|field| !is_writer_metric_column(field.name()))
+            .map(|field| field.as_ref().clone())
+            .collect::<Vec<_>>(),
+    ))
+}
+
 fn operation_for_sink_mode(
     table_url: &Url,
     partition_columns: &[String],
@@ -344,6 +373,7 @@ fn handle_schema_evolution(
     snapshot: &DeltaSnapshot,
     input_schema: &SchemaRef,
     schema_mode: Option<SchemaMode>,
+    partition_columns: &[String],
 ) -> Result<(SchemaRef, Vec<Action>)> {
     let table_arrow_schema = Arc::new(
         snapshot
@@ -356,12 +386,52 @@ fn handle_schema_evolution(
         Some(SchemaMode::Merge) => {
             let merged_schema = merge_schemas(&table_arrow_schema, input_schema)?;
             if merged_schema.fields() != table_arrow_schema.fields() {
-                let candidate_kernel = StructType::try_from(merged_schema.as_ref())
+                let mut candidate_kernel = StructType::try_from(merged_schema.as_ref())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let current_metadata = snapshot.metadata();
                 let current_kernel = StructType::try_from(snapshot.schema())
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let mode = snapshot.effective_column_mapping_mode();
+                let type_changes = collect_type_changes(&current_kernel, &candidate_kernel)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                if !type_changes.is_empty() {
+                    if !snapshot.table_properties().enable_type_widening() {
+                        return Err(DataFusionError::Plan(
+                            "Delta type widening schema evolution requires table property \
+                             delta.enableTypeWidening=true"
+                                .to_string(),
+                        ));
+                    }
+                    if !protocol_can_write_type_widening(snapshot.protocol()) {
+                        return Err(DataFusionError::Plan(
+                            "Delta type widening schema evolution requires the typeWidening \
+                             reader and writer table features"
+                                .to_string(),
+                        ));
+                    }
+                    for (field_path, change) in &type_changes {
+                        if !is_supported_type_change_for_schema_evolution(
+                            snapshot.protocol(),
+                            &change.from_type,
+                            &change.to_type,
+                        ) {
+                            return Err(DataFusionError::Plan(format!(
+                                "Delta type widening change at {} is not supported for \
+                                 schema evolution: {} -> {}",
+                                format_type_change_path(field_path, &change.field_path),
+                                change.from_type,
+                                change.to_type
+                            )));
+                        }
+                    }
+                }
+                if !type_changes.is_empty()
+                    || schema_contains_type_widening_metadata(&current_kernel)
+                {
+                    candidate_kernel =
+                        add_type_widening_metadata(&current_kernel, &candidate_kernel)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                }
                 let (_final_kernel, updated_metadata) =
                     evolve_schema(&current_kernel, &candidate_kernel, current_metadata, mode)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -380,6 +450,8 @@ fn handle_schema_evolution(
             let (_final_kernel, updated_metadata) =
                 evolve_schema(&current_kernel, &candidate_kernel, current_metadata, mode)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let updated_metadata =
+                updated_metadata.with_partition_columns(partition_columns.to_vec());
             Ok((
                 input_schema.clone(),
                 vec![Action::Metadata(updated_metadata)],
