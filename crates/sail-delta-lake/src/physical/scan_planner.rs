@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use arrow_schema::DataType;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
@@ -270,12 +269,9 @@ pub(crate) async fn plan_delta_scan(
 
         let needs_wrapping = output_schema.fields().iter().any(|field| {
             let Ok(input_field) = renamed_schema.field_with_name(field.name()) else {
-                return false;
+                return true;
             };
-            matches!(
-                (input_field.data_type(), field.data_type()),
-                (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
-            ) && input_field.data_type() != field.data_type()
+            input_field.data_type() != field.data_type()
         });
         if needs_wrapping {
             return Ok(

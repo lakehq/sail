@@ -8,7 +8,9 @@ use sail_catalog::provider::{
     DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    alter_column_type, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
 
 struct MemoryDatabase {
     status: DatabaseStatus,
@@ -307,7 +309,11 @@ impl CatalogProvider for MemoryCatalogProvider {
             .get_mut(table)
             .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.to_string()))?;
         match &mut status.kind {
-            TableKind::Table { properties, .. } => match options {
+            TableKind::Table {
+                columns,
+                properties,
+                ..
+            } => match options {
                 AlterTableOptions::SetTableProperties {
                     properties: new_props,
                 } => {
@@ -332,6 +338,14 @@ impl CatalogProvider for MemoryCatalogProvider {
                         properties.retain(|(k, _)| k != key);
                     }
                     Ok(())
+                }
+                AlterTableOptions::AlterColumnType { name, data_type } => {
+                    alter_column_type(columns, &name, data_type).map_err(|e| {
+                        CatalogError::InvalidArgument(format!(
+                            "failed to alter column type for '{}': {e}",
+                            name.join(".")
+                        ))
+                    })
                 }
             },
             _ => Err(CatalogError::NotSupported(

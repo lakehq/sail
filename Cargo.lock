@@ -7383,6 +7383,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-common",
+ "flate2",
  "futures",
  "log",
  "murmur3",

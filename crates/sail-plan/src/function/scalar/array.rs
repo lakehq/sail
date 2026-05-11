@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
@@ -24,6 +26,23 @@ fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
 
 fn array_compact(array: expr::Expr) -> expr::Expr {
     ScalarUDF::from(SparkArrayCompact::new()).call(vec![array])
+}
+
+fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let field_names: Vec<String> = input
+        .arguments
+        .iter()
+        .zip(input.function_context.argument_display_names)
+        .enumerate()
+        .map(|(i, (expr, name))| match expr {
+            expr::Expr::Column(_) | expr::Expr::Alias(_) => name.clone(),
+            _ => format!("{i}"),
+        })
+        .collect();
+    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(ArraysZip::new(field_names))),
+        args: input.arguments,
+    }))
 }
 
 fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr {
@@ -280,7 +299,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ),
         ("array_union", F::binary(expr_fn::array_union)),
         ("arrays_overlap", F::custom(arrays_overlap)),
-        ("arrays_zip", F::udf(ArraysZip::new())),
+        ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::udf(SparkSequence::new())),

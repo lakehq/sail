@@ -23,8 +23,8 @@ use std::sync::LazyLock;
 
 use crate::kernel::DeltaOperation;
 use crate::spec::{
-    contains_timestampntz, Action, CommitConflictError, Protocol, Schema, TableFeature,
-    TransactionError,
+    contains_timestampntz, contains_variant, Action, CommitConflictError, Protocol, Schema,
+    TableFeature, TransactionError,
 };
 use crate::table::DeltaSnapshot;
 
@@ -214,6 +214,25 @@ impl ProtocolChecker {
         Ok(())
     }
 
+    pub fn check_can_write_variant_to_protocol(
+        &self,
+        protocol: &Protocol,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        let contains_variant = contains_variant(schema.fields());
+        if contains_variant
+            && !(protocol.min_reader_version() >= 3
+                && protocol.min_writer_version() >= 7
+                && protocol.has_reader_feature(&TableFeature::VariantType)
+                && protocol.has_writer_feature(&TableFeature::VariantType))
+        {
+            return Err(TransactionError::TableFeaturesRequired(
+                TableFeature::VariantType,
+            ));
+        }
+        Ok(())
+    }
+
     pub fn can_write_to_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
         // NOTE: writers must always support all required reader features
         self.can_read_from_protocol(protocol)?;
@@ -274,7 +293,9 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::ColumnMapping);
     reader_features.insert(TableFeature::DeletionVectors);
     reader_features.insert(TableFeature::V2Checkpoint);
-
+    reader_features.insert(TableFeature::TypeWideningPreview);
+    reader_features.insert(TableFeature::TypeWidening);
+    reader_features.insert(TableFeature::VariantType);
     let mut writer_features = HashSet::new();
     // Keep this list aligned with end-to-end behavior, not just protocol parsing.
     // For writer versions 2..=6, claiming support here also means accepting older tables whose
@@ -292,6 +313,9 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::GeneratedColumns);
     // writer_features.insert(TableFeature::IdentityColumns);
     writer_features.insert(TableFeature::V2Checkpoint);
+    writer_features.insert(TableFeature::TypeWideningPreview);
+    writer_features.insert(TableFeature::TypeWidening);
+    writer_features.insert(TableFeature::VariantType);
 
     ProtocolChecker::new(reader_features, writer_features)
 });

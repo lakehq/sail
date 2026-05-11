@@ -14,10 +14,10 @@ use datafusion_common::{not_impl_err, plan_err, Result};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
-use crate::formats::socket::options::resolve_socket_read_options;
 pub use crate::formats::socket::reader::SocketSourceExec;
 use crate::formats::socket::reader::SocketStreamSource;
 pub use crate::options::gen::SocketReadOptions;
+use crate::options::ResolveOptions;
 
 /// Read test data from a TCP socket for testing purposes.
 /// The record batches contain a single string column corresponding to lines read from the socket.
@@ -32,7 +32,7 @@ impl TableFormat for SocketTableFormat {
 
     async fn create_source(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
@@ -57,7 +57,7 @@ impl TableFormat for SocketTableFormat {
             Some(schema) if !schema.fields.is_empty() => schema,
             _ => Schema::new(vec![Arc::new(Field::new("value", DataType::Utf8, false))]),
         };
-        let options = resolve_socket_read_options(options)?;
+        let options = SocketReadOptions::resolve(ctx, options)?;
         let source = SocketStreamSource::try_new(options, Arc::new(schema))?;
         Ok(provider_as_source(Arc::new(
             StreamSourceTableProvider::new(Arc::new(source)),

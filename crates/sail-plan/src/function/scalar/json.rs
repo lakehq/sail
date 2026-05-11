@@ -2,6 +2,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when, ScalarUDF};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::json::{
     json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf, SparkFromJson,
     SparkSchemaOfJson,
@@ -56,11 +57,20 @@ fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
 
 fn from_json(
     ScalarFunctionInput {
-        arguments,
+        mut arguments,
         function_context,
     }: ScalarFunctionInput,
 ) -> PlanResult<expr::Expr> {
     let tz = function_context.plan_config.session_timezone.clone();
+    // Try to constant-fold the schema argument (index 1) if it's not already a literal.
+    // This handles cases like `from_json(col, schema_of_json(lit(...)))` where the schema
+    // is a constant expression that can be evaluated at planning time.
+    if arguments.len() >= 2 && !matches!(&arguments[1], expr::Expr::Literal(_, _)) {
+        let evaluator = LiteralEvaluator::new();
+        if let Ok(scalar) = evaluator.evaluate(&arguments[1]) {
+            arguments[1] = expr::Expr::Literal(scalar, None);
+        }
+    }
     let udf = ScalarUDF::from(SparkFromJson::new(tz));
     Ok(udf.call(arguments))
 }

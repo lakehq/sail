@@ -4,6 +4,7 @@ name: "test_bucket_transform_creates_consistent_partitions"
 data:
   current-schema-id: 0
   current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
   default-spec-id: 0
   format-version: 2
   last-column-id: 3
@@ -51,12 +52,16 @@ data:
     summary:
       operation: append
     timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
   table-uuid: <uuid>
 ---
 name: "test_combined_year_and_category_partitioning"
 data:
   current-schema-id: 0
   current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
   default-spec-id: 0
   format-version: 2
   last-column-id: 4
@@ -112,6 +117,9 @@ data:
     summary:
       operation: append
     timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
   table-uuid: <uuid>
 ---
 name: "test_combined_year_and_category_partitioning.1"
@@ -133,6 +141,7 @@ name: "test_day_transform_partitions_by_full_date"
 data:
   current-schema-id: 0
   current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
   default-spec-id: 0
   format-version: 2
   last-column-id: 3
@@ -180,12 +189,16 @@ data:
     summary:
       operation: append
     timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
   table-uuid: <uuid>
 ---
 name: "test_hour_transform_partitions_by_hour"
 data:
   current-schema-id: 0
   current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
   default-spec-id: 0
   format-version: 2
   last-column-id: 3
@@ -233,12 +246,16 @@ data:
     summary:
       operation: append
     timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
   table-uuid: <uuid>
 ---
 name: "test_month_transform_partitions_by_year_and_month"
 data:
   current-schema-id: 0
   current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
   default-spec-id: 0
   format-version: 2
   last-column-id: 3
@@ -286,6 +303,9 @@ data:
     summary:
       operation: append
     timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
   table-uuid: <uuid>
 ---
 name: "test_month_transform_partitions_by_year_and_month.1"
@@ -296,6 +316,7 @@ name: "test_truncate_on_string_column_groups_similar_values"
 data:
   current-schema-id: 0
   current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
   default-spec-id: 0
   format-version: 2
   last-column-id: 3
@@ -343,6 +364,9 @@ data:
     summary:
       operation: append
     timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
   table-uuid: <uuid>
 ---
 name: "test_truncate_on_string_column_groups_similar_values.1"
@@ -360,6 +384,7 @@ name: "test_year_transform_partitions_by_year"
 data:
   current-schema-id: 0
   current-snapshot-id: <snapshot-id>
+  default-sort-order-id: 0
   default-spec-id: 0
   format-version: 2
   last-column-id: 3
@@ -407,4 +432,7 @@ data:
     summary:
       operation: append
     timestamp-ms: <timestamp>
+  sort-orders:
+  - fields: []
+    order-id: 0
   table-uuid: <uuid>

@@ -142,7 +142,7 @@ class YamlDataSerializer:
             sort_keys=True,
             default_flow_style=False,
             allow_unicode=True,
-            width=1000,
+            width=0x7FFFFFFF,
         ).strip()
         return text.replace("\r\n", "\n").replace("\r", "\n")
 

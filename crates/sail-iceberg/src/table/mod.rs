@@ -16,8 +16,6 @@ use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 pub use metadata_loader::find_latest_metadata_file;
-use object_store::path::Path as ObjectPath;
-use object_store::ObjectStoreExt;
 use sail_data_source::options::gen::IcebergReadOptions;
 use url::Url;
 
@@ -47,14 +45,8 @@ impl Table {
         let metadata_location =
             metadata_loader::find_latest_metadata_file(&object_store, &table_url).await?;
         log::trace!("Found Iceberg metadata file at {}", metadata_location);
-        let metadata_path = ObjectPath::from(metadata_location.as_str());
-        let metadata_data = object_store
-            .get(&metadata_path)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .bytes()
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata_data =
+            metadata_loader::load_metadata_file_bytes(&object_store, &metadata_location).await?;
         let metadata = TableMetadata::from_json(&metadata_data).map_err(|e| {
             log::trace!("Failed to parse table metadata: {:?}", e);
             DataFusionError::External(Box::new(e))

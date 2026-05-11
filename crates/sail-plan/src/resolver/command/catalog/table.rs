@@ -415,7 +415,7 @@ impl PlanResolver<'_> {
         table: spec::ObjectName,
         if_exists: bool,
         operation: spec::AlterTableOperation,
-        _state: &mut PlanResolverState,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let options = match operation {
             spec::AlterTableOperation::SetTableProperties { properties } => {
@@ -423,6 +423,12 @@ impl PlanResolver<'_> {
             }
             spec::AlterTableOperation::UnsetTableProperties { keys, if_exists } => {
                 AlterTableOptions::UnsetTableProperties { keys, if_exists }
+            }
+            spec::AlterTableOperation::AlterColumnType { name, data_type } => {
+                AlterTableOptions::AlterColumnType {
+                    name: name.into(),
+                    data_type: self.resolve_data_type(&data_type, state)?,
+                }
             }
             spec::AlterTableOperation::Unknown => {
                 return Err(PlanError::todo("unsupported ALTER TABLE operation"));

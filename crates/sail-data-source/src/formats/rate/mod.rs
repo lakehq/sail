@@ -14,9 +14,10 @@ use datafusion_common::{plan_err, Result};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
-use crate::formats::rate::options::resolve_rate_read_options;
 pub use crate::formats::rate::reader::RateSourceExec;
 use crate::formats::rate::reader::RateStreamSource;
+use crate::options::gen::RateReadOptions;
+use crate::options::ResolveOptions;
 
 /// Generate record batches at a fixed rate for testing purposes.
 /// The record batches contain two columns, a timestamp and an integer value.
@@ -74,7 +75,7 @@ impl TableFormat for RateTableFormat {
                 ])
             }
         };
-        let options = resolve_rate_read_options(options)?;
+        let options = RateReadOptions::resolve(ctx, options)?;
         let source = RateStreamSource::try_new(options, Arc::new(schema))?;
         Ok(provider_as_source(Arc::new(
             StreamSourceTableProvider::new(Arc::new(source)),
