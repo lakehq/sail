@@ -456,3 +456,405 @@ Feature: DATE_TRUNC preserves timestamp type
         WHERE date_trunc('MONTH', ts) = TIMESTAMP_NTZ '2024-03-15 10:00:00'
         """
       Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN date_trunc YEAR != boundary rewrites to disjunction on Parquet
+      Given variable location for temporary directory explain_date_trunc_neq_year
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_date_trunc_neq_year_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_date_trunc_neq_year_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (TIMESTAMP_NTZ '2023-06-15 10:00:00'),
+          (TIMESTAMP_NTZ '2024-03-01 00:00:00'),
+          (TIMESTAMP_NTZ '2024-06-15 10:30:00'),
+          (TIMESTAMP_NTZ '2025-03-01 08:00:00')
+        AS t(ts)
+        """
+      When query
+        """
+        EXPLAIN SELECT ts FROM explain_date_trunc_neq_year_parquet
+        WHERE date_trunc('YEAR', ts) != TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        """
+      Then query plan matches snapshot
+
+  Rule: Preimage != plan snapshots (validates disjunction rewrite fires)
+
+    @sail-only
+    Scenario: EXPLAIN WHERE date_trunc YEAR != boundary rewrites to disjunction
+      When query
+        """
+        EXPLAIN SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-06-15 10:30:00'),
+          (TIMESTAMP_NTZ '2023-12-31 23:59:59'),
+          (TIMESTAMP_NTZ '2025-01-15 08:00:00')
+        AS t(ts)
+        WHERE date_trunc('YEAR', ts) != TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        """
+      Then query plan matches snapshot
+
+  Rule: week and quarter have no preimage (no filter rewrite)
+
+    @sail-only
+    Scenario: EXPLAIN WHERE date_trunc WEEK does NOT rewrite
+      When query
+        """
+        EXPLAIN SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-03-18 10:30:00')
+        AS t(ts)
+        WHERE date_trunc('week', ts) = TIMESTAMP_NTZ '2024-03-18 00:00:00'
+        """
+      Then query plan matches snapshot
+
+  Rule: Pre-epoch timestamps are handled correctly
+
+    Scenario: date_trunc DAY on pre-epoch timestamp truncates to midnight
+      When query
+        """
+        SELECT date_trunc('DAY', TIMESTAMP_NTZ '1969-12-31 14:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-31 00:00:00 |
+
+    Scenario: date_trunc DAY filter on pre-epoch boundary keeps correct rows
+      When query
+        """
+        SELECT count(*) AS c FROM VALUES
+          (TIMESTAMP_NTZ '1969-12-31 08:00:00'),
+          (TIMESTAMP_NTZ '1969-12-31 23:59:59'),
+          (TIMESTAMP_NTZ '1970-01-01 00:00:00')
+        AS t(ts)
+        WHERE date_trunc('DAY', ts) = TIMESTAMP_NTZ '1969-12-31 00:00:00'
+        """
+      Then query result
+        | c |
+        | 2 |
+
+  Rule: Year 9999 boundary does not overflow
+
+    Scenario: date_trunc YEAR on year 9999 does not crash
+      When query
+        """
+        SELECT date_trunc('YEAR', TIMESTAMP_NTZ '9999-12-31 23:59:59') AS result
+        """
+      Then query result
+        | result              |
+        | 9999-01-01 00:00:00 |
+
+    Scenario: date_trunc MONTH on year 9999
+      When query
+        """
+        SELECT date_trunc('MONTH', TIMESTAMP_NTZ '9999-12-31 23:59:59') AS result
+        """
+      Then query result
+        | result              |
+        | 9999-12-01 00:00:00 |
+
+    Scenario: date_trunc QUARTER on year 9999
+      When query
+        """
+        SELECT date_trunc('quarter', TIMESTAMP_NTZ '9999-12-31 23:59:59') AS result
+        """
+      Then query result
+        | result              |
+        | 9999-10-01 00:00:00 |
+
+    Scenario: date_trunc WEEK on year 9999
+      When query
+        """
+        SELECT date_trunc('week', TIMESTAMP_NTZ '9999-12-31 23:59:59') AS result
+        """
+      Then query result
+        | result              |
+        | 9999-12-27 00:00:00 |
+
+    Scenario: date_trunc MILLISECOND on year 9999
+      When query
+        """
+        SELECT date_trunc('millisecond', TIMESTAMP_NTZ '9999-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result                  |
+        | 9999-12-31 23:59:59.999 |
+
+  Rule: Pre-epoch — all granularities on 1969-12-31 23:59:59.999999
+
+    Scenario: date_trunc SECOND pre-epoch
+      When query
+        """
+        SELECT date_trunc('second', TIMESTAMP_NTZ '1969-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-31 23:59:59 |
+
+    Scenario: date_trunc MINUTE pre-epoch
+      When query
+        """
+        SELECT date_trunc('minute', TIMESTAMP_NTZ '1969-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-31 23:59:00 |
+
+    Scenario: date_trunc HOUR pre-epoch
+      When query
+        """
+        SELECT date_trunc('hour', TIMESTAMP_NTZ '1969-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-31 23:00:00 |
+
+    Scenario: date_trunc WEEK pre-epoch truncates to Monday 1969-12-29
+      When query
+        """
+        SELECT date_trunc('week', TIMESTAMP_NTZ '1969-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-29 00:00:00 |
+
+    Scenario: date_trunc MONTH pre-epoch
+      When query
+        """
+        SELECT date_trunc('month', TIMESTAMP_NTZ '1969-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-01 00:00:00 |
+
+    Scenario: date_trunc QUARTER pre-epoch Q4
+      When query
+        """
+        SELECT date_trunc('quarter', TIMESTAMP_NTZ '1969-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-10-01 00:00:00 |
+
+    Scenario: date_trunc YEAR pre-epoch
+      When query
+        """
+        SELECT date_trunc('year', TIMESTAMP_NTZ '1969-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-01-01 00:00:00 |
+
+    Scenario: date_trunc MILLISECOND pre-epoch
+      When query
+        """
+        SELECT date_trunc('millisecond', TIMESTAMP_NTZ '1969-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result                  |
+        | 1969-12-31 23:59:59.999 |
+
+    Scenario: date_trunc MICROSECOND pre-epoch is identity
+      When query
+        """
+        SELECT date_trunc('microsecond', TIMESTAMP_NTZ '1969-12-31 23:59:59.999999') AS result
+        """
+      Then query result
+        | result                      |
+        | 1969-12-31 23:59:59.999999 |
+
+    Scenario: date_trunc SECOND pre-epoch with sub-second fractional
+      When query
+        """
+        SELECT date_trunc('second', TIMESTAMP_NTZ '1969-12-31 23:59:59.500000') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-31 23:59:59 |
+
+    Scenario: date_trunc MINUTE pre-epoch mid-minute
+      When query
+        """
+        SELECT date_trunc('minute', TIMESTAMP_NTZ '1969-12-31 23:59:30') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-31 23:59:00 |
+
+    Scenario: date_trunc HOUR pre-epoch mid-hour
+      When query
+        """
+        SELECT date_trunc('hour', TIMESTAMP_NTZ '1969-12-31 23:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 1969-12-31 23:00:00 |
+
+  Rule: Leap year — Feb 29 truncates correctly
+
+    Scenario: date_trunc DAY on Feb 29 leap year
+      When query
+        """
+        SELECT date_trunc('day', TIMESTAMP_NTZ '2024-02-29 15:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-02-29 00:00:00 |
+
+    Scenario: date_trunc WEEK on Feb 29 truncates to Monday Feb 26
+      When query
+        """
+        SELECT date_trunc('week', TIMESTAMP_NTZ '2024-02-29 15:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-02-26 00:00:00 |
+
+    Scenario: date_trunc MONTH on Feb 29 truncates to Feb 1
+      When query
+        """
+        SELECT date_trunc('month', TIMESTAMP_NTZ '2024-02-29 15:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-02-01 00:00:00 |
+
+    Scenario: date_trunc QUARTER on Feb 29 truncates to Jan 1
+      When query
+        """
+        SELECT date_trunc('quarter', TIMESTAMP_NTZ '2024-02-29 15:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 00:00:00 |
+
+    Scenario: date_trunc YEAR on Feb 29 truncates to Jan 1
+      When query
+        """
+        SELECT date_trunc('year', TIMESTAMP_NTZ '2024-02-29 15:30:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 00:00:00 |
+
+  Rule: WEEK crosses year boundary correctly
+
+    Scenario: date_trunc WEEK on Wednesday Jan 1 2025 truncates to Monday Dec 30 2024
+      When query
+        """
+        SELECT date_trunc('week', TIMESTAMP_NTZ '2025-01-01 10:00:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-12-30 00:00:00 |
+
+    Scenario: date_trunc WEEK on Sunday Dec 29 2024 truncates to Monday Dec 23 2024
+      When query
+        """
+        SELECT date_trunc('week', TIMESTAMP_NTZ '2024-12-29 10:00:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-12-23 00:00:00 |
+
+    Scenario: date_trunc WEEK on Sunday Jan 5 2025 truncates to Monday Dec 30 2024
+      When query
+        """
+        SELECT date_trunc('week', TIMESTAMP_NTZ '2025-01-05 10:00:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-12-30 00:00:00 |
+
+  Rule: QUARTER — all four quarter boundaries
+
+    Scenario: date_trunc QUARTER on Apr 1 is Q2 start
+      When query
+        """
+        SELECT date_trunc('quarter', TIMESTAMP_NTZ '2024-04-01 00:00:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-04-01 00:00:00 |
+
+    Scenario: date_trunc QUARTER on Jun 30 is still Q2
+      When query
+        """
+        SELECT date_trunc('quarter', TIMESTAMP_NTZ '2024-06-30 23:59:59') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-04-01 00:00:00 |
+
+    Scenario: date_trunc QUARTER on Oct 1 is Q4 start
+      When query
+        """
+        SELECT date_trunc('quarter', TIMESTAMP_NTZ '2024-10-01 00:00:00') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-10-01 00:00:00 |
+
+    Scenario: date_trunc QUARTER on Dec 31 is still Q4
+      When query
+        """
+        SELECT date_trunc('quarter', TIMESTAMP_NTZ '2024-12-31 23:59:59') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-10-01 00:00:00 |
+
+  Rule: NULL timestamp input returns NULL
+
+    Scenario: date_trunc with NULL timestamp returns NULL
+      When query
+        """
+        SELECT date_trunc('YEAR', CAST(NULL AS TIMESTAMP_NTZ)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: nanosecond is not a valid Spark unit
+
+    @sail-bug
+    Scenario: date_trunc with nanosecond unit returns NULL
+      When query
+        """
+        SELECT date_trunc('nanosecond', TIMESTAMP_NTZ '2024-01-01 00:00:00') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Millisecond sub-precision is zeroed
+
+    Scenario: date_trunc MILLISECOND zeros sub-millisecond micros
+      When query
+        """
+        SELECT date_trunc('millisecond', TIMESTAMP_NTZ '2024-05-15 10:30:45.000001') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-05-15 10:30:45 |
+
+    Scenario: date_trunc MILLISECOND on exact millisecond boundary is unchanged
+      When query
+        """
+        SELECT date_trunc('millisecond', TIMESTAMP_NTZ '2024-05-15 10:30:45.001000') AS result
+        """
+      Then query result
+        | result                  |
+        | 2024-05-15 10:30:45.001 |
+
+    Scenario: date_trunc SECOND zeros all sub-second precision
+      When query
+        """
+        SELECT date_trunc('second', TIMESTAMP_NTZ '2024-05-15 10:30:45.999999') AS result
+        """
+      Then query result
+        | result              |
+        | 2024-05-15 10:30:45 |

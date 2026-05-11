@@ -2,11 +2,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDateTime, Timelike};
+use datafusion::arrow::array::TimestampMicrosecondArray;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::types::{logical_date, logical_string, NativeType};
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
@@ -73,14 +75,68 @@ impl ScalarUDFImpl for SparkDateTrunc {
         )))
     }
 
+    // Adapted from datafusion-functions DateTruncFunc::output_ordering:
+    // https://github.com/apache/datafusion/blob/main/datafusion-functions/src/datetime/date_trunc.rs
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        let precision = &input[0];
+        let date_value = &input[1];
+        if precision.sort_properties == SortProperties::Singleton {
+            Ok(date_value.sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let mut args = args;
-        if let Some(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))) = args.args.first() {
+        // Normalize Spark-specific unit aliases (yy→year, mm→month, dd→day).
+        let unit = if let Some(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))) =
+            args.args.first()
+        {
             let normalized = normalize_unit(&s.to_lowercase()).to_string();
             if normalized != *s {
-                args.args[0] = ColumnarValue::Scalar(ScalarValue::Utf8(Some(normalized)));
+                args.args[0] = ColumnarValue::Scalar(ScalarValue::Utf8(Some(normalized.clone())));
+            }
+            Some(normalized)
+        } else {
+            None
+        };
+
+        // DF's date_trunc uses Arrow's temporal kernel, which calls timestamp_nanos()
+        // internally. That multiplies seconds × 1_000_000_000 and overflows i64 for
+        // timestamps beyond ~2262 CE, causing a panic. For NTZ microsecond timestamps
+        // we truncate directly with chrono to avoid the overflow.
+        if let Some(ref u) = unit {
+            match args.args.get(1) {
+                Some(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, None))) => {
+                    let result = v.map(|micros| trunc_micros(u, micros)).transpose()?;
+                    return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                        result, None,
+                    )));
+                }
+                Some(ColumnarValue::Array(arr))
+                    if arr.data_type() == &DataType::Timestamp(TimeUnit::Microsecond, None) =>
+                {
+                    let ts_arr = arr
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or_else(|| {
+                            datafusion_common::DataFusionError::Internal(
+                                "expected TimestampMicrosecondArray".to_string(),
+                            )
+                        })?;
+                    let values: Vec<Option<i64>> = ts_arr
+                        .iter()
+                        .map(|v| v.map(|micros| trunc_micros(u, micros)).transpose())
+                        .collect::<Result<_>>()?;
+                    return Ok(ColumnarValue::Array(Arc::new(
+                        TimestampMicrosecondArray::from(values),
+                    )));
+                }
+                _ => {}
             }
         }
+
         datafusion::functions::datetime::date_trunc().invoke_with_args(args)
     }
 
@@ -137,10 +193,76 @@ fn normalize_unit(s: &str) -> &str {
     }
 }
 
+const MICROS_PER_MILLISECOND: i64 = 1_000;
 const MICROS_PER_SECOND: i64 = 1_000_000;
 const MICROS_PER_MINUTE: i64 = 60 * MICROS_PER_SECOND;
 const MICROS_PER_HOUR: i64 = 60 * MICROS_PER_MINUTE;
 const MICROS_PER_DAY: i64 = 24 * MICROS_PER_HOUR;
+
+/// Truncate a UTC microsecond timestamp to the given unit using chrono arithmetic.
+///
+/// This avoids DF/Arrow's `timestamp_nanos()` call, which multiplies seconds ×
+/// 1_000_000_000 and overflows i64 for timestamps beyond ~2262 CE.
+fn trunc_micros(unit: &str, micros: i64) -> Result<i64> {
+    match unit {
+        "microsecond" => Ok(micros),
+        "millisecond" => Ok(micros - micros.rem_euclid(MICROS_PER_MILLISECOND)),
+        "second" => Ok(micros - micros.rem_euclid(MICROS_PER_SECOND)),
+        "minute" => Ok(micros - micros.rem_euclid(MICROS_PER_MINUTE)),
+        "hour" => Ok(micros - micros.rem_euclid(MICROS_PER_HOUR)),
+        "day" => Ok(micros - micros.rem_euclid(MICROS_PER_DAY)),
+        "week" => {
+            let Some(dt) = micros_to_naive_dt(micros) else {
+                return exec_err!("date_trunc: timestamp out of range: {micros}");
+            };
+            let day_start = micros - micros.rem_euclid(MICROS_PER_DAY);
+            let monday_offset = dt.weekday().num_days_from_monday() as i64;
+            let Some(result) = day_start.checked_sub(monday_offset * MICROS_PER_DAY) else {
+                return exec_err!("date_trunc: week start out of range");
+            };
+            Ok(result)
+        }
+        "month" => {
+            let Some(dt) = micros_to_naive_dt(micros) else {
+                return exec_err!("date_trunc: timestamp out of range: {micros}");
+            };
+            let Some(result) = chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .and_then(naive_dt_to_micros)
+            else {
+                return exec_err!("date_trunc: month start out of range");
+            };
+            Ok(result)
+        }
+        "quarter" => {
+            let Some(dt) = micros_to_naive_dt(micros) else {
+                return exec_err!("date_trunc: timestamp out of range: {micros}");
+            };
+            let quarter_start_month = ((dt.month() - 1) / 3) * 3 + 1;
+            let Some(result) = chrono::NaiveDate::from_ymd_opt(dt.year(), quarter_start_month, 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .and_then(naive_dt_to_micros)
+            else {
+                return exec_err!("date_trunc: quarter start out of range");
+            };
+            Ok(result)
+        }
+        "year" => {
+            let Some(dt) = micros_to_naive_dt(micros) else {
+                return exec_err!("date_trunc: timestamp out of range: {micros}");
+            };
+            let Some(result) = chrono::NaiveDate::from_ymd_opt(dt.year(), 1, 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .and_then(naive_dt_to_micros)
+            else {
+                return exec_err!("date_trunc: year start out of range");
+            };
+            Ok(result)
+        }
+        // Unknown unit — DF returns an error here; Spark returns NULL (tracked as @sail-bug).
+        _ => exec_err!("date_trunc: unknown granularity: '{unit}'"),
+    }
+}
 
 /// Given a unit and a timestamp already truncated to that bucket,
 /// returns `(bucket_start_micros, next_bucket_start_micros)`.
@@ -177,7 +299,6 @@ fn bucket_bounds_micros(unit: &str, micros: i64) -> Option<(i64, i64)> {
         }
         "month" => {
             let dt = micros_to_naive_dt(micros)?;
-            // must be first of month at midnight
             if dt.day() != 1
                 || dt.hour() != 0
                 || dt.minute() != 0
@@ -198,7 +319,6 @@ fn bucket_bounds_micros(unit: &str, micros: i64) -> Option<(i64, i64)> {
         }
         "year" => {
             let dt = micros_to_naive_dt(micros)?;
-            // must be Jan 1 at midnight
             if dt.month() != 1
                 || dt.day() != 1
                 || dt.hour() != 0
@@ -223,5 +343,5 @@ fn micros_to_naive_dt(micros: i64) -> Option<NaiveDateTime> {
 }
 
 fn naive_dt_to_micros(dt: NaiveDateTime) -> Option<i64> {
-    dt.and_utc().timestamp_micros().into()
+    Some(dt.and_utc().timestamp_micros())
 }
