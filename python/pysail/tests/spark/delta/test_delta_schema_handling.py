@@ -5,10 +5,13 @@ Test Delta Lake schema handling (mergeSchema, overwriteSchema, evolution) in Sai
 import json
 import platform
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pandas as pd
 import pytest
 from pyspark.sql.types import (
+    ArrayType,
+    DecimalType,
     DoubleType,
     FloatType,
     IntegerType,
@@ -412,6 +415,99 @@ class TestDeltaSchemaHandling:
         assert type_changes[-1]["fromType"] == "float"
         assert type_changes[-1]["toType"] == "double"
 
+    def test_delta_schema_merge_decimal_type_widening(self, spark, tmp_path):
+        """mergeSchema widens decimal precision and scale when type widening is enabled."""
+        delta_path = tmp_path / "delta_invoice_decimal_widening"
+
+        initial_schema = StructType(
+            [
+                StructField("invoice_id", IntegerType(), True),
+                StructField("amount", DecimalType(8, 2), True),
+            ]
+        )
+        initial_rows = [
+            Row(invoice_id=10, amount=Decimal("12.30")),
+            Row(invoice_id=20, amount=Decimal("0.05")),
+        ]
+        df1 = spark.createDataFrame(initial_rows, schema=initial_schema)
+        df1.createOrReplaceTempView("_tw_decimal_initial")
+        spark.sql("DROP TABLE IF EXISTS delta_merge_decimal_type_widening_tbl")
+        spark.sql(
+            f"""
+            CREATE TABLE delta_merge_decimal_type_widening_tbl
+            USING DELTA
+            LOCATION '{delta_path}'
+            TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+            AS SELECT * FROM _tw_decimal_initial
+            """  # noqa: S608
+        )
+
+        widened_schema = StructType(
+            [
+                StructField("invoice_id", IntegerType(), True),
+                StructField("amount", DecimalType(12, 4), True),
+            ]
+        )
+        widened_rows = [
+            Row(invoice_id=30, amount=Decimal("3456.7890")),
+            Row(invoice_id=40, amount=Decimal("-7.5001")),
+        ]
+        spark.createDataFrame(widened_rows, schema=widened_schema).write.format("delta").mode("append").option(
+            "mergeSchema", "true"
+        ).save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path)).orderBy("invoice_id")
+        assert result_df.schema["amount"].dataType == DecimalType(12, 4)
+        assert [(row.invoice_id, row.amount) for row in result_df.collect()] == [
+            (10, Decimal("12.3000")),
+            (20, Decimal("0.0500")),
+            (30, Decimal("3456.7890")),
+            (40, Decimal("-7.5001")),
+        ]
+
+        amount_field = _delta_field(_latest_delta_schema(delta_path), "amount")
+        type_changes = amount_field["metadata"]["delta.typeChanges"]
+        assert type_changes[-1]["fromType"] == "decimal(8,2)"
+        assert type_changes[-1]["toType"] == "decimal(12,4)"
+
+    def test_delta_schema_merge_rejects_alter_only_widening(self, spark, tmp_path):
+        """mergeSchema must not apply type changes that Delta only allows via ALTER TABLE."""
+        delta_path = tmp_path / "delta_alter_only_widening_rejected"
+
+        initial_schema = StructType(
+            [
+                StructField("sensor_id", IntegerType(), True),
+                StructField("reading", IntegerType(), True),
+            ]
+        )
+        df1 = spark.createDataFrame([Row(sensor_id=1, reading=17)], schema=initial_schema)
+        df1.createOrReplaceTempView("_tw_alter_only_initial")
+        spark.sql("DROP TABLE IF EXISTS delta_merge_alter_only_widening_tbl")
+        spark.sql(
+            f"""
+            CREATE TABLE delta_merge_alter_only_widening_tbl
+            USING DELTA
+            LOCATION '{delta_path}'
+            TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+            AS SELECT * FROM _tw_alter_only_initial
+            """  # noqa: S608
+        )
+
+        widened_schema = StructType(
+            [
+                StructField("sensor_id", IntegerType(), True),
+                StructField("reading", DoubleType(), True),
+            ]
+        )
+        widened_df = spark.createDataFrame([Row(sensor_id=2, reading=17.25)], schema=widened_schema)
+
+        with pytest.raises(Exception, match=r"(?i)(schema evolution|type widening|not supported)"):
+            widened_df.write.format("delta").mode("append").option("mergeSchema", "true").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path)).orderBy("sensor_id")
+        assert result_df.schema["reading"].dataType == IntegerType()
+        assert [(row.sensor_id, row.reading) for row in result_df.collect()] == [(1, 17)]
+
     def test_delta_schema_merge_map_key_type_widening(self, spark, tmp_path):
         """mergeSchema records type widening metadata for map key promotion."""
         delta_path = tmp_path / "delta_map_key_type_widening"
@@ -449,6 +545,58 @@ class TestDeltaSchemaHandling:
         assert type_changes[-1]["fromType"] == "integer"
         assert type_changes[-1]["toType"] == "long"
         assert type_changes[-1]["fieldPath"] == "key"
+
+    def test_delta_schema_merge_array_element_type_widening(self, spark, tmp_path):
+        """mergeSchema records type widening metadata for array element promotion."""
+        delta_path = tmp_path / "delta_array_element_type_widening"
+
+        initial_schema = StructType(
+            [
+                StructField("batch_id", IntegerType(), True),
+                StructField("readings", ArrayType(IntegerType()), True),
+            ]
+        )
+        initial_data = [
+            Row(batch_id=1, readings=[3, 5, 8]),
+            Row(batch_id=2, readings=[13]),
+        ]
+        df1 = spark.createDataFrame(initial_data, schema=initial_schema)
+        df1.createOrReplaceTempView("_tw_array_element_initial")
+        spark.sql("DROP TABLE IF EXISTS delta_merge_array_element_type_widening_tbl")
+        spark.sql(
+            f"""
+            CREATE TABLE delta_merge_array_element_type_widening_tbl
+            USING DELTA
+            LOCATION '{delta_path}'
+            TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
+            AS SELECT * FROM _tw_array_element_initial
+            """  # noqa: S608
+        )
+
+        widened_schema = StructType(
+            [
+                StructField("batch_id", IntegerType(), True),
+                StructField("readings", ArrayType(LongType()), True),
+            ]
+        )
+        widened_data = [Row(batch_id=3, readings=[2147483648, -2147483649])]
+        spark.createDataFrame(widened_data, schema=widened_schema).write.format("delta").mode("append").option(
+            "mergeSchema", "true"
+        ).save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path)).orderBy("batch_id")
+        assert result_df.schema["readings"].dataType == ArrayType(LongType())
+        assert [(row.batch_id, row.readings) for row in result_df.collect()] == [
+            (1, [3, 5, 8]),
+            (2, [13]),
+            (3, [2147483648, -2147483649]),
+        ]
+
+        readings_field = _delta_field(_latest_delta_schema(delta_path), "readings")
+        type_changes = readings_field["metadata"]["delta.typeChanges"]
+        assert type_changes[-1]["fromType"] == "integer"
+        assert type_changes[-1]["toType"] == "long"
+        assert type_changes[-1]["fieldPath"] == "element"
 
     def test_delta_schema_merge_type_widening_requires_table_property(self, spark, tmp_path):
         """mergeSchema rejects widening existing columns unless type widening is enabled."""

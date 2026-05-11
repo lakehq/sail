@@ -195,6 +195,47 @@ pub fn is_supported_type_change_for_write(
     is_iceberg_v2_supported_type_change(from_type, to_type)
 }
 
+pub fn is_supported_type_change_for_schema_evolution(
+    protocol: &Protocol,
+    from_type: &DataType,
+    to_type: &DataType,
+) -> bool {
+    if from_type == to_type {
+        return true;
+    }
+    if !is_supported_schema_evolution_type_change(from_type, to_type) {
+        return false;
+    }
+    if !protocol_has_iceberg_compat(protocol) {
+        return true;
+    }
+    is_iceberg_v2_supported_type_change(from_type, to_type)
+}
+
+fn is_supported_schema_evolution_type_change(from_type: &DataType, to_type: &DataType) -> bool {
+    let (DataType::Primitive(from), DataType::Primitive(to)) = (from_type, to_type) else {
+        return false;
+    };
+
+    match (from, to) {
+        (from, to)
+            if integral_rank(from)
+                .zip(integral_rank(to))
+                .is_some_and(|(a, b)| a < b) =>
+        {
+            true
+        }
+        (PrimitiveType::Float, PrimitiveType::Double) => true,
+        (PrimitiveType::Date, PrimitiveType::TimestampNtz) => true,
+        (PrimitiveType::Decimal(from), PrimitiveType::Decimal(to)) => {
+            let precision_diff = i16::from(to.precision()) - i16::from(from.precision());
+            let scale_diff = i16::from(to.scale()) - i16::from(from.scale());
+            precision_diff >= scale_diff && scale_diff >= 0
+        }
+        _ => false,
+    }
+}
+
 fn protocol_has_iceberg_compat(protocol: &Protocol) -> bool {
     protocol.has_writer_feature(&TableFeature::IcebergCompatV1)
         || protocol.has_writer_feature(&TableFeature::IcebergCompatV2)
@@ -811,6 +852,26 @@ mod tests {
             &plain_protocol,
             &DataType::INTEGER,
             &DataType::DOUBLE
+        ));
+        assert!(!is_supported_type_change_for_schema_evolution(
+            &plain_protocol,
+            &DataType::INTEGER,
+            &DataType::DOUBLE
+        ));
+        assert!(!is_supported_type_change_for_schema_evolution(
+            &plain_protocol,
+            &DataType::INTEGER,
+            &DataType::decimal(11, 1)?
+        ));
+        assert!(is_supported_type_change_for_schema_evolution(
+            &plain_protocol,
+            &DataType::INTEGER,
+            &DataType::LONG
+        ));
+        assert!(is_supported_type_change_for_schema_evolution(
+            &plain_protocol,
+            &DataType::decimal(10, 2)?,
+            &DataType::decimal(12, 3)?
         ));
         assert!(!is_supported_type_change_for_write(
             &iceberg_protocol,

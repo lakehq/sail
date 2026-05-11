@@ -61,9 +61,10 @@ use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
-    compute_max_column_id, evolve_schema, get_physical_schema, is_supported_type_change_for_write,
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_can_write_type_widening,
-    protocol_for_create, schema_contains_type_widening_metadata, schema_has_generated_columns,
+    compute_max_column_id, evolve_schema, get_physical_schema,
+    is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
+    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
+    schema_contains_type_widening_metadata, schema_has_generated_columns,
 };
 use crate::spec::{
     contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
@@ -1078,14 +1079,14 @@ impl DeltaWriterExec {
                             ));
                         }
                         for (field_path, change) in &type_changes {
-                            if !is_supported_type_change_for_write(
+                            if !is_supported_type_change_for_schema_evolution(
                                 snapshot.protocol(),
                                 &change.from_type,
                                 &change.to_type,
                             ) {
                                 return Err(DataFusionError::Plan(format!(
-                                    "Delta type widening change at {} is not supported by \
-                                     Iceberg-compatible Delta tables: {} -> {}",
+                                    "Delta type widening change at {} is not supported for \
+                                     schema evolution: {} -> {}",
                                     format_schema_change_path(field_path, &change.field_path),
                                     change.from_type,
                                     change.to_type

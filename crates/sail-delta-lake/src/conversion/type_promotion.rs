@@ -43,7 +43,7 @@ impl DeltaTypeConverter {
                 DataType::Decimal128(from_precision, from_scale)
                 | DataType::Decimal256(from_precision, from_scale),
                 DataType::Decimal128(to_precision, to_scale),
-            ) => from_precision <= to_precision && from_scale <= to_scale,
+            ) => decimal_widening_supported(*from_precision, *from_scale, *to_precision, *to_scale),
             (from_dt, to_dt) => can_cast_types(from_dt, to_dt) || can_cast_types(to_dt, from_dt),
         }
     }
@@ -150,8 +150,20 @@ impl DeltaTypeConverter {
                 | DataType::Decimal256(table_precision, table_scale),
                 DataType::Decimal128(input_precision, input_scale),
             ) => {
-                if input_precision <= table_precision && input_scale <= table_scale {
+                if decimal_widening_supported(
+                    *input_precision,
+                    *input_scale,
+                    *table_precision,
+                    *table_scale,
+                ) {
                     Some(table_type.clone())
+                } else if decimal_widening_supported(
+                    *table_precision,
+                    *table_scale,
+                    *input_precision,
+                    *input_scale,
+                ) {
+                    Some(input_type.clone())
                 } else {
                     return Err(DataFusionError::Plan(format!(
                         "Cannot merge field {} from {} to {}. Decimal precision/scale mismatch.",
@@ -254,6 +266,17 @@ impl DeltaTypeConverter {
     }
 }
 
+fn decimal_widening_supported(
+    from_precision: u8,
+    from_scale: i8,
+    to_precision: u8,
+    to_scale: i8,
+) -> bool {
+    let precision_diff = i16::from(to_precision) - i16::from(from_precision);
+    let scale_diff = i16::from(to_scale) - i16::from(from_scale);
+    precision_diff >= scale_diff && scale_diff >= 0
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -320,9 +343,21 @@ mod tests {
     }
 
     #[test]
-    fn test_incompatible_decimal_promotion() {
+    fn test_decimal_type_widening_promotion() -> Result<()> {
         let table_field = Field::new("test", DataType::Decimal128(10, 2), false);
         let input_field = Field::new("test", DataType::Decimal128(12, 3), true);
+
+        let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)?;
+
+        assert!(result.is_nullable());
+        assert_eq!(result.data_type(), &DataType::Decimal128(12, 3));
+        Ok(())
+    }
+
+    #[test]
+    fn test_incompatible_decimal_promotion() {
+        let table_field = Field::new("test", DataType::Decimal128(10, 2), false);
+        let input_field = Field::new("test", DataType::Decimal128(11, 4), true);
 
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field);
 
