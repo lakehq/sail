@@ -562,7 +562,8 @@ impl DeltaWriterExec {
                 // Get schema mode based on options
                 let schema_mode = Self::get_schema_mode(&options, save_mode)?;
 
-                Self::handle_schema_evolution(table, &input_schema, schema_mode).await?
+                Self::handle_schema_evolution(table, &input_schema, schema_mode, &partition_columns)
+                    .await?
             } else {
                 (sink_schema.clone(), Vec::new())
             };
@@ -940,6 +941,7 @@ impl DeltaWriterExec {
         table: &crate::table::DeltaTable,
         input_schema: &SchemaRef,
         schema_mode: Option<SchemaMode>,
+        partition_columns: &[String],
     ) -> Result<(SchemaRef, Vec<Action>)> {
         let table_metadata = table.snapshot()?.metadata();
         let table_arrow_schema = Arc::new(
@@ -989,6 +991,8 @@ impl DeltaWriterExec {
                 let (_final_kernel, updated_metadata) =
                     evolve_schema(&current_kernel, &candidate_kernel, current_metadata, kmode)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let updated_metadata =
+                    updated_metadata.with_partition_columns(partition_columns.to_vec());
 
                 Ok((
                     input_schema.clone(),
