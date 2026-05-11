@@ -3,12 +3,14 @@ use std::fmt::Formatter;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use datafusion::functions_aggregate::count::count_udaf;
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Dependency, NullEquality, Result,
     ScalarValue, TableReference,
 };
-use datafusion_expr::expr::Case;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, Case};
 use datafusion_expr::expr_fn::not;
 use datafusion_expr::logical_plan::{
     Aggregate, Extension, Filter, LogicalPlanBuilder, Projection, SubqueryAlias,
@@ -1056,14 +1058,16 @@ fn build_default_merge_expansion(
         .project(projection_exprs.clone())?
         .build()?;
     let projected = apply_generation_projection(projected, &options.generated_column_exprs)?;
-    let source_metric_projection_exprs =
-        build_source_metric_projection(target_schema, path_column, row_index_column)?;
-    let source_metric_projected = LogicalPlanBuilder::from(source_plan.clone())
-        .project(source_metric_projection_exprs)?
-        .build()?;
     // Count source rows from a metric-only branch instead of inferring them from
     // rewritten rows. Targeted rewrite can drop matched-but-unchanged rows from
-    // untouched files, and conditional inserts can drop source-only rows.
+    // untouched files, and conditional inserts can drop source-only rows. Aggregate
+    // first so only one metric row flows to the writer.
+    let source_metric_projected = build_source_metric_plan(
+        source_plan.clone(),
+        target_schema,
+        path_column,
+        row_index_column,
+    )?;
     let projected = LogicalPlanBuilder::from(projected)
         .union(source_metric_projected)?
         .build()?;
@@ -1358,11 +1362,27 @@ fn build_insert_only_noop_projection(
     Ok(projections)
 }
 
-fn build_source_metric_projection(
+fn build_source_metric_plan(
+    source_plan: LogicalPlan,
     target_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
-) -> Result<Vec<Expr>> {
+) -> Result<LogicalPlan> {
+    let source_count = Expr::AggregateFunction(AggregateFunction {
+        func: count_udaf(),
+        params: AggregateFunctionParams {
+            args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
+            distinct: false,
+            filter: None,
+            order_by: vec![],
+            null_treatment: None,
+        },
+    })
+    .alias(MERGE_SOURCE_METRIC_COLUMN);
+    let count_plan = LogicalPlanBuilder::from(source_plan)
+        .aggregate(Vec::<Expr>::new(), vec![source_count])?
+        .build()?;
+
     let mut projections = Vec::new();
     let mut path_expr = None;
 
@@ -1386,9 +1406,11 @@ fn build_source_metric_projection(
     };
     projections.push(path_expr);
     projections.push(lit(RowLevelOperationType::SourceMetric.as_i32()).alias(OPERATION_COLUMN));
-    projections.push(lit(true).alias(MERGE_SOURCE_METRIC_COLUMN));
+    projections.push(col(MERGE_SOURCE_METRIC_COLUMN).alias(MERGE_SOURCE_METRIC_COLUMN));
 
-    Ok(projections)
+    LogicalPlanBuilder::from(count_plan)
+        .project(projections)?
+        .build()
 }
 
 fn should_check_cardinality(matched_clauses: &[MergeMatchedClause]) -> bool {
@@ -1799,7 +1821,7 @@ fn build_merge_projection(
         else_expr: Some(Box::new(copy_op)),
     });
     projections.push(op_expr.alias(OPERATION_COLUMN));
-    projections.push(lit(true).alias(MERGE_SOURCE_METRIC_COLUMN));
+    projections.push(lit(ScalarValue::UInt64(None)).alias(MERGE_SOURCE_METRIC_COLUMN));
 
     Ok(projections)
 }

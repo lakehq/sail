@@ -32,7 +32,7 @@ pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
 
-/// Marker column indicating that MERGE source-row metrics are supplied by
+/// Internal column carrying pre-aggregated MERGE source row counts on
 /// [`RowLevelOperationType::SourceMetric`] rows.
 pub const MERGE_SOURCE_METRIC_COLUMN: &str = "__sail_merge_source_metric";
 
@@ -99,7 +99,7 @@ pub enum RowLevelOperationType {
     NotMatchedBySourceDelete = 7,
     /// Target-only row is updated by a MERGE clause.
     NotMatchedBySourceUpdate = 8,
-    /// Source row is counted for MERGE metrics but is not written.
+    /// Metric-only row carrying a MERGE source row count.
     SourceMetric = 9,
 }
 

@@ -27,6 +27,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBuilder, Int32Array, Int64Array, PrimitiveArray,
+    UInt64Array,
 };
 use datafusion::arrow::compute::{filter_record_batch, SortOptions};
 use datafusion::arrow::datatypes::{
@@ -99,8 +100,69 @@ struct MergeRowMetrics {
     uses_source_metric: bool,
 }
 
+enum SourceMetricColumn<'a> {
+    UInt64(&'a UInt64Array),
+    Int64(&'a Int64Array),
+    None,
+}
+
+impl<'a> SourceMetricColumn<'a> {
+    fn try_from_batch(batch: &'a RecordBatch) -> Result<Self> {
+        let Some((index, _)) = batch.schema().column_with_name(MERGE_SOURCE_METRIC_COLUMN) else {
+            return Ok(Self::None);
+        };
+        let column = batch.column(index);
+        match column.data_type() {
+            DataType::UInt64 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as UInt64"
+                        ))
+                    })?;
+                Ok(Self::UInt64(values))
+            }
+            DataType::Int64 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as Int64"
+                        ))
+                    })?;
+                Ok(Self::Int64(values))
+            }
+            other => Err(DataFusionError::Plan(format!(
+                "MERGE source metric column {MERGE_SOURCE_METRIC_COLUMN} must be UInt64 or Int64, got {other:?}"
+            ))),
+        }
+    }
+
+    fn value(&self, row: usize) -> Result<Option<u64>> {
+        match self {
+            Self::UInt64(values) => Ok(values.is_valid(row).then(|| values.value(row))),
+            Self::Int64(values) => {
+                if !values.is_valid(row) {
+                    return Ok(None);
+                }
+                let value = values.value(row);
+                let value = u64::try_from(value).map_err(|_| {
+                    DataFusionError::Plan(format!(
+                        "MERGE source metric column {MERGE_SOURCE_METRIC_COLUMN} must be non-negative, got {value}"
+                    ))
+                })?;
+                Ok(Some(value))
+            }
+            Self::None => Ok(None),
+        }
+    }
+}
+
 impl MergeRowMetrics {
-    fn add_operation_value(&mut self, value: i64) {
+    fn add_operation_value(&mut self, value: i64, source_metric_count: Option<u64>) {
         match value {
             v if v == i64::from(RowLevelOperationType::Copy.as_i32()) => {
                 self.copied = self.copied.saturating_add(1)
@@ -141,7 +203,9 @@ impl MergeRowMetrics {
                     self.not_matched_by_source_deleted.saturating_add(1);
             }
             v if v == i64::from(RowLevelOperationType::SourceMetric.as_i32()) => {
-                self.source_metric = self.source_metric.saturating_add(1);
+                self.source_metric = self
+                    .source_metric
+                    .saturating_add(source_metric_count.unwrap_or(1));
             }
             _ => {}
         }
@@ -174,6 +238,7 @@ impl MergeRowMetrics {
             .schema()
             .column_with_name(MERGE_SOURCE_METRIC_COLUMN)
             .is_some();
+        let source_metric_column = SourceMetricColumn::try_from_batch(batch)?;
         let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
             return Ok(());
         };
@@ -190,7 +255,10 @@ impl MergeRowMetrics {
                     })?;
                 for row in 0..values.len() {
                     if values.is_valid(row) {
-                        self.add_operation_value(i64::from(values.value(row)));
+                        self.add_operation_value(
+                            i64::from(values.value(row)),
+                            source_metric_column.value(row)?,
+                        );
                     }
                 }
             }
@@ -205,7 +273,10 @@ impl MergeRowMetrics {
                     })?;
                 for row in 0..values.len() {
                     if values.is_valid(row) {
-                        self.add_operation_value(values.value(row));
+                        self.add_operation_value(
+                            values.value(row),
+                            source_metric_column.value(row)?,
+                        );
                     }
                 }
             }
@@ -867,7 +938,10 @@ impl DeltaWriterExec {
                 operation_metrics.num_target_rows_not_matched_by_source_deleted =
                     Some(merge_row_metrics.not_matched_by_source_deleted);
                 let source_rows = merge_row_metrics.source_rows();
-                if source_rows > 0 || merge_row_metrics.saw_detailed_merge_op {
+                if source_rows > 0
+                    || merge_row_metrics.saw_detailed_merge_op
+                    || merge_row_metrics.uses_source_metric
+                {
                     operation_metrics.num_source_rows = Some(source_rows);
                 }
             }
