@@ -133,7 +133,6 @@ pub async fn build_merge_plan(
         partition_columns,
         true, // table exists
         table_schema,
-        merge_operation,
         ctx.options().user_metadata.clone(),
         write_context,
     )
@@ -215,7 +214,6 @@ pub async fn build_merge_plan_mor(
         PhysicalSinkMode::Append,
         true,
         table_schema.clone(),
-        merge_operation.clone(),
         write_context.clone(),
     )?);
 

@@ -128,7 +128,7 @@ pub async fn build_delete_plan(
         &sail_common_datafusion::datasource::PhysicalSinkMode::Append,
         ctx.table_exists(),
         &filter_exec.schema(),
-        operation.clone(),
+        operation,
     )?;
 
     assemble_commit_plan(
@@ -141,7 +141,6 @@ pub async fn build_delete_plan(
         partition_columns,
         ctx.table_exists(),
         table_schema,
-        operation,
         ctx.options().user_metadata.clone(),
         write_context,
     )

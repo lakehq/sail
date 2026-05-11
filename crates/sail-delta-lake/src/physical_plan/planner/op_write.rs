@@ -97,7 +97,6 @@ async fn build_full_overwrite_plan(
         PhysicalSinkMode::Overwrite,
         ctx.table_exists(),
         writer_schema,
-        None,
         write_context.clone(),
     )?);
 
@@ -218,7 +217,7 @@ async fn build_overwrite_if_plan(
         },
         ctx.table_exists(),
         &union_plan.schema(),
-        operation_override.clone(),
+        operation_override,
     )?;
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&union_plan),
@@ -232,7 +231,6 @@ async fn build_overwrite_if_plan(
         },
         ctx.table_exists(),
         union_plan.schema(),
-        operation_override,
         write_context.clone(),
     )?);
 

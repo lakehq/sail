@@ -20,6 +20,7 @@ use chrono::Utc;
 use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -227,6 +228,38 @@ impl ExecutionPlan for DeltaCommitExec {
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
+            let full_snapshot_task = if table_exists {
+                let open_url = table_url.clone();
+                let open_store = Arc::clone(&object_store);
+                let open_storage = storage_config.clone();
+                let base_version = commit_context.base_version();
+                Some(SpawnedTask::spawn(async move {
+                    match base_version {
+                        Some(version) => {
+                            open_table_with_object_store_and_table_config_at_version(
+                                open_url,
+                                open_store,
+                                open_storage,
+                                DeltaSnapshotConfig::default(),
+                                version,
+                            )
+                            .await
+                        }
+                        None => {
+                            open_table_with_object_store_and_table_config(
+                                open_url,
+                                open_store,
+                                open_storage,
+                                DeltaSnapshotConfig::default(),
+                            )
+                            .await
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
+
             let mut total_rows = 0u64;
             let mut has_data = false;
             // "data" actions (Add/Remove/other) and "initial" actions (Protocol/Metadata)
@@ -410,7 +443,24 @@ impl ExecutionPlan for DeltaCommitExec {
             let log_store = table.log_store();
 
             let reference = if table_exists {
-                if !needs_full_snapshot {
+                if needs_full_snapshot {
+                    let table = full_snapshot_task
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "Delta full snapshot task missing for existing table".to_string(),
+                            )
+                        })?
+                        .await
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    Some(
+                        table
+                            .snapshot()
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?
+                            .clone(),
+                    )
+                } else {
+                    drop(full_snapshot_task);
                     if let Some(snapshot_context) = commit_context.base_snapshot.as_ref() {
                         Some(Arc::new(
                             snapshot_context
@@ -459,35 +509,6 @@ impl ExecutionPlan for DeltaCommitExec {
                                 .clone(),
                         )
                     }
-                } else {
-                    let table = match commit_context.base_version() {
-                        Some(version) => {
-                            open_table_with_object_store_and_table_config_at_version(
-                                table_url.clone(),
-                                object_store.clone(),
-                                storage_config.clone(),
-                                DeltaSnapshotConfig::default(),
-                                version,
-                            )
-                            .await
-                        }
-                        None => {
-                            open_table_with_object_store_and_table_config(
-                                table_url.clone(),
-                                object_store.clone(),
-                                storage_config.clone(),
-                                DeltaSnapshotConfig::default(),
-                            )
-                            .await
-                        }
-                    }
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    Some(
-                        table
-                            .snapshot()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                            .clone(),
-                    )
                 }
             } else {
                 None

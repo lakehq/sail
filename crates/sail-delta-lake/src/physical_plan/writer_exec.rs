@@ -284,8 +284,6 @@ pub struct DeltaWriterExec {
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     sink_schema: SchemaRef,
-    /// Optional override for commit operation metadata.
-    operation_override: Option<DeltaOperation>,
     write_context: DeltaWriteContext,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
@@ -316,7 +314,6 @@ impl DeltaWriterExec {
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         sink_schema: SchemaRef,
-        operation_override: Option<DeltaOperation>,
         write_context: DeltaWriteContext,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
@@ -331,7 +328,6 @@ impl DeltaWriterExec {
             sink_mode,
             table_exists,
             sink_schema,
-            operation_override,
             write_context,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
@@ -377,10 +373,6 @@ impl DeltaWriterExec {
 
     pub fn table_exists(&self) -> bool {
         self.table_exists
-    }
-
-    pub fn operation_override(&self) -> Option<&DeltaOperation> {
-        self.operation_override.as_ref()
     }
 
     pub fn write_context(&self) -> &DeltaWriteContext {
@@ -482,7 +474,6 @@ impl ExecutionPlan for DeltaWriterExec {
             self.sink_mode.clone(),
             self.table_exists,
             self.sink_schema.clone(),
-            self.operation_override.clone(),
             self.write_context.clone(),
         )?))
     }

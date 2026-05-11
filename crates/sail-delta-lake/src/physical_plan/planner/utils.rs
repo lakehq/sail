@@ -150,7 +150,6 @@ pub fn build_standard_write_layers(
         sink_mode.clone(),
         ctx.table_exists(),
         writer_schema,
-        None,
         write_context.clone(),
     )?);
 
