@@ -95,3 +95,50 @@ def test_dataframewriter_path_append_rejects_generated_column_mismatch(spark, tm
 
     with pytest.raises(Exception, match="DELTA_GENERATED_COLUMNS_VALUE_MISMATCH"):
         df.write.format("delta").mode("append").save(str(delta_path))
+
+
+def test_dataframewriter_path_overwrite_computes_omitted_generated_column(spark, tmp_path):
+    delta_path = tmp_path / "delta_generated_columns_overwrite"
+    _create_empty_generated_column_table(delta_path)
+
+    spark.createDataFrame(
+        [(1, "A"), (2, "B")],
+        "some_id INT, some_category STRING",
+    ).write.format("delta").mode("overwrite").save(str(delta_path))
+
+    rows = spark.read.format("delta").load(str(delta_path)).orderBy("some_id").collect()
+
+    assert [row.asDict() for row in rows] == [
+        {"some_id": 1, "gen": 2, "some_category": "A"},
+        {"some_id": 2, "gen": 4, "some_category": "B"},
+    ]
+
+
+def test_dataframewriter_path_overwrite_rejects_generated_column_mismatch(spark, tmp_path):
+    delta_path = tmp_path / "delta_generated_columns_overwrite_mismatch"
+    _create_empty_generated_column_table(delta_path)
+
+    df = spark.createDataFrame(
+        [(1, 999, "A")],
+        "some_id INT, gen INT, some_category STRING",
+    )
+
+    with pytest.raises(Exception, match="DELTA_GENERATED_COLUMNS_VALUE_MISMATCH"):
+        df.write.format("delta").mode("overwrite").save(str(delta_path))
+
+
+def test_dataframewriter_path_overwrite_schema_does_not_rewrite_old_generated_column(spark, tmp_path):
+    delta_path = tmp_path / "delta_generated_columns_overwrite_schema"
+    _create_empty_generated_column_table(delta_path)
+
+    spark.createDataFrame(
+        [(1, "A")],
+        "some_id INT, some_category STRING",
+    ).write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(delta_path))
+
+    df = spark.read.format("delta").load(str(delta_path))
+
+    assert df.schema.fieldNames() == ["some_id", "some_category"]
+    assert [row.asDict() for row in df.collect()] == [
+        {"some_id": 1, "some_category": "A"},
+    ]

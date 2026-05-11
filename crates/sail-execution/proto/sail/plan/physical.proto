@@ -490,6 +490,36 @@ message PhysicalSinkMode {
   }
 }
 
+enum DeltaColumnMappingMode {
+  DELTA_COLUMN_MAPPING_MODE_NONE = 0;
+  DELTA_COLUMN_MAPPING_MODE_NAME = 1;
+  DELTA_COLUMN_MAPPING_MODE_ID = 2;
+}
+
+message DeltaSnapshotContextNode {
+  int64 version = 1;
+  string protocol_json = 2;
+  string metadata_json = 3;
+  string txns_json = 4;
+  string domain_metadata_json = 5;
+  string commit_timestamps_json = 6;
+}
+
+message DeltaCommitContextNode {
+  optional DeltaSnapshotContextNode base_snapshot = 1;
+}
+
+message DeltaWriteContextNode {
+  DeltaCommitContextNode commit_context = 1;
+  string final_schema_json = 2;
+  DeltaColumnMappingMode effective_column_mapping_mode = 3;
+  repeated string initial_actions_json = 4;
+  repeated string schema_actions_json = 5;
+  optional string operation_json = 6;
+  optional string logical_kernel_for_mapping_json = 7;
+  repeated string physical_partition_columns = 8;
+}
+
 message DeltaWriterExecNode {
   bytes input = 1;
   string table_url = 2;
@@ -499,8 +529,8 @@ message DeltaWriterExecNode {
   bool table_exists = 6;
   PhysicalSinkMode sink_mode = 7;
   optional string operation_override_json = 8;
-  string metadata_configuration = 9;
-  string write_context = 10;
+  map<string, string> metadata_configuration = 9;
+  DeltaWriteContextNode write_context = 10;
 }
 
 message DeltaCommitExecNode {
@@ -511,7 +541,7 @@ message DeltaCommitExecNode {
   bytes sink_schema = 5;
   PhysicalSinkMode sink_mode = 6;
   optional string user_metadata = 7;
-  string commit_context = 8;
+  DeltaCommitContextNode commit_context = 8;
 }
 
 message DeltaScanByAddsExecNode {
