@@ -155,6 +155,58 @@ Feature: DATE_TRUNC preserves timestamp type
         """
       Then query plan matches snapshot
 
+    @sail-only
+    Scenario: EXPLAIN WHERE date_trunc week rewrites to week range
+      When query
+        """
+        EXPLAIN SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00'),
+          (TIMESTAMP_NTZ '2024-01-03 12:00:00'),
+          (TIMESTAMP_NTZ '2024-01-08 00:00:00')
+          AS t(ts)
+        WHERE date_trunc('week', ts) = TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN WHERE date_trunc quarter rewrites to quarter range
+      When query
+        """
+        EXPLAIN SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-04-01 00:00:00'),
+          (TIMESTAMP_NTZ '2024-05-15 10:00:00'),
+          (TIMESTAMP_NTZ '2024-07-01 00:00:00')
+          AS t(ts)
+        WHERE date_trunc('quarter', ts) = TIMESTAMP_NTZ '2024-04-01 00:00:00'
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN WHERE date_trunc microsecond rewrites to single-microsecond range
+      When query
+        """
+        EXPLAIN SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.000001'),
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.000002'),
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.000003')
+          AS t(ts)
+        WHERE date_trunc('microsecond', ts) = TIMESTAMP_NTZ '2024-01-01 00:00:00.000002'
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN WHERE date_trunc millisecond rewrites to millisecond range
+      When query
+        """
+        EXPLAIN SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.001'),
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.001001'),
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.002')
+          AS t(ts)
+        WHERE date_trunc('millisecond', ts) = TIMESTAMP_NTZ '2024-01-01 00:00:00.001'
+        """
+      Then query plan matches snapshot
+
   Rule: Plan snapshot — filter pushdown on Parquet (preimage)
 
     @sail-only
@@ -451,6 +503,73 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query result
         | ts                  |
         | 2023-06-15 10:30:00 |
+
+    Scenario: date_trunc week preimage keeps rows within that week
+      When query
+        """
+        SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00'),
+          (TIMESTAMP_NTZ '2024-01-03 12:00:00'),
+          (TIMESTAMP_NTZ '2024-01-07 23:59:59'),
+          (TIMESTAMP_NTZ '2024-01-08 00:00:00')
+        AS t(ts)
+        WHERE date_trunc('week', ts) = TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ORDER BY ts
+        """
+      Then query result ordered
+        | ts                  |
+        | 2024-01-01 00:00:00 |
+        | 2024-01-03 12:00:00 |
+        | 2024-01-07 23:59:59 |
+
+    Scenario: date_trunc quarter preimage keeps rows within that quarter
+      When query
+        """
+        SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-04-01 00:00:00'),
+          (TIMESTAMP_NTZ '2024-05-15 10:00:00'),
+          (TIMESTAMP_NTZ '2024-06-30 23:59:59'),
+          (TIMESTAMP_NTZ '2024-07-01 00:00:00')
+        AS t(ts)
+        WHERE date_trunc('quarter', ts) = TIMESTAMP_NTZ '2024-04-01 00:00:00'
+        ORDER BY ts
+        """
+      Then query result ordered
+        | ts                  |
+        | 2024-04-01 00:00:00 |
+        | 2024-05-15 10:00:00 |
+        | 2024-06-30 23:59:59 |
+
+    Scenario: date_trunc microsecond preimage keeps only matching microsecond
+      When query
+        """
+        SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.000001'),
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.000002'),
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.000003')
+        AS t(ts)
+        WHERE date_trunc('microsecond', ts) = TIMESTAMP_NTZ '2024-01-01 00:00:00.000002'
+        ORDER BY ts
+        """
+      Then query result ordered
+        | ts                           |
+        | 2024-01-01 00:00:00.000002   |
+
+    Scenario: date_trunc millisecond preimage keeps all micros within that millisecond
+      When query
+        """
+        SELECT ts FROM VALUES
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.001'),
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.001001'),
+          (TIMESTAMP_NTZ '2024-01-01 00:00:00.002')
+        AS t(ts)
+        WHERE date_trunc('millisecond', ts) = TIMESTAMP_NTZ '2024-01-01 00:00:00.001'
+        ORDER BY ts
+        """
+      Then query result ordered
+        | ts                           |
+        | 2024-01-01 00:00:00.001      |
+        | 2024-01-01 00:00:00.001001   |
 
   Rule: Plan snapshot — filter pushdown on Parquet (preimage)
 

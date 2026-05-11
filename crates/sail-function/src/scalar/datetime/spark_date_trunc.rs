@@ -77,6 +77,9 @@ impl ScalarUDFImpl for SparkDateTrunc {
     // Adapted from datafusion-functions DateTruncFunc::output_ordering:
     // https://github.com/apache/datafusion/blob/main/datafusion-functions/src/datetime/date_trunc.rs
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if input.len() != 2 {
+            return Ok(SortProperties::Unordered);
+        }
         let precision = &input[0];
         let date_value = &input[1];
         if precision.sort_properties == SortProperties::Singleton {
@@ -129,18 +132,9 @@ impl ScalarUDFImpl for SparkDateTrunc {
                         DataType::Timestamp(TimeUnit::Microsecond, _)
                     ) =>
                 {
-                    let tz = match arr.data_type() {
-                        DataType::Timestamp(_, tz) => tz.clone(),
-                        _ => unreachable!(),
-                    };
-                    let nulls = arrow::buffer::NullBuffer::new_null(arr.len());
-                    return Ok(ColumnarValue::Array(Arc::new(
-                        TimestampMicrosecondArray::new(
-                            arrow::buffer::ScalarBuffer::from(vec![0i64; arr.len()]),
-                            Some(nulls),
-                        )
-                        .with_timezone_opt(tz),
-                    )));
+                    return Ok(ColumnarValue::Array(
+                        datafusion::arrow::array::new_null_array(arr.data_type(), arr.len()),
+                    ));
                 }
                 _ => {}
             }
@@ -330,6 +324,14 @@ fn trunc_micros(unit: &str, micros: i64) -> Result<i64> {
 /// Returns `None` if `micros` is not on a bucket boundary or arithmetic overflows.
 fn bucket_bounds_micros(unit: &str, micros: i64) -> Option<(i64, i64)> {
     match unit {
+        "microsecond" => Some((micros, micros.checked_add(1)?)),
+        "millisecond" => {
+            let lo = micros - micros.rem_euclid(MICROS_PER_MILLISECOND);
+            if lo != micros {
+                return None;
+            }
+            Some((lo, lo.checked_add(MICROS_PER_MILLISECOND)?))
+        }
         "second" => {
             let lo = micros - micros.rem_euclid(MICROS_PER_SECOND);
             if lo != micros {
@@ -357,6 +359,39 @@ fn bucket_bounds_micros(unit: &str, micros: i64) -> Option<(i64, i64)> {
                 return None;
             }
             Some((lo, lo.checked_add(MICROS_PER_DAY)?))
+        }
+        "week" => {
+            let dt = micros_to_naive_dt(micros)?;
+            if dt.weekday() != chrono::Weekday::Mon
+                || dt.hour() != 0
+                || dt.minute() != 0
+                || dt.second() != 0
+                || dt.nanosecond() != 0
+            {
+                return None;
+            }
+            Some((micros, micros.checked_add(7 * MICROS_PER_DAY)?))
+        }
+        "quarter" => {
+            let dt = micros_to_naive_dt(micros)?;
+            if !matches!(dt.month(), 1 | 4 | 7 | 10)
+                || dt.day() != 1
+                || dt.hour() != 0
+                || dt.minute() != 0
+                || dt.second() != 0
+                || dt.nanosecond() != 0
+            {
+                return None;
+            }
+            let (next_year, next_month) = if dt.month() == 10 {
+                (dt.year().checked_add(1)?, 1u32)
+            } else {
+                (dt.year(), dt.month() + 3)
+            };
+            let next = naive_dt_to_micros(
+                chrono::NaiveDate::from_ymd_opt(next_year, next_month, 1)?.and_hms_opt(0, 0, 0)?,
+            )?;
+            Some((micros, next))
         }
         "month" => {
             let dt = micros_to_naive_dt(micros)?;
