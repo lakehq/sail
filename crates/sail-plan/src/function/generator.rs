@@ -51,7 +51,7 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
         .map(|col| ScalarUDF::from(SparkArray::new()).call(col))
         .collect::<Vec<_>>();
 
-    let zipped = ScalarUDF::from(ArraysZip::new()).call(arrays);
+    let zipped = ScalarUDF::from(ArraysZip::new(vec![])).call(arrays);
 
     let err_struct = || {
         Err(PlanError::internal(

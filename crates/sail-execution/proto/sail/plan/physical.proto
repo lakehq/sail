@@ -95,6 +95,7 @@ message ExtendedScalarUdf {
     SparkNextDayUdf spark_next_day = 15;
     SparkTimeUdf spark_time = 16;
     SparkFromJsonUdf spark_from_json = 17;
+    ArraysZipUdf arrays_zip = 18;
   }
 }
 
@@ -156,6 +157,10 @@ message SparkUnixTimestampUdf {
 }
 
 message StructFunctionUdf {
+  repeated string field_names = 1;
+}
+
+message ArraysZipUdf {
   repeated string field_names = 1;
 }
 
