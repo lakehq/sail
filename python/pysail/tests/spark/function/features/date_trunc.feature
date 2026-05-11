@@ -61,10 +61,9 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp_ntz (nullable = false)
+       |-- result: timestamp_ntz (nullable = true)
       """
 
-    @sail-bug
     Scenario: date_trunc YEAR on timestamp values
       When query
       """
@@ -79,7 +78,6 @@ Feature: DATE_TRUNC preserves timestamp type
       | result              |
       | 2026-01-01 00:00:00 |
 
-    @sail-bug
     Scenario: date_trunc MONTH on timestamp values
       When query
       """
@@ -94,7 +92,6 @@ Feature: DATE_TRUNC preserves timestamp type
       | result              |
       | 2026-03-01 00:00:00 |
 
-    @sail-bug
     Scenario: date_trunc DAY on timestamp with America/Los_Angeles timezone
       When query
       """
@@ -109,7 +106,6 @@ Feature: DATE_TRUNC preserves timestamp type
       | result              |
       | 2026-03-15 00:00:00 |
 
-    @sail-bug
     Scenario: date_trunc HOUR on timestamp with America/New_York timezone
       When query
       """
@@ -358,7 +354,6 @@ Feature: DATE_TRUNC preserves timestamp type
 
   Rule: unknown unit returns NULL
 
-    @sail-bug
     Scenario: date_trunc with invalid unit returns NULL
       When query
         """
@@ -368,7 +363,6 @@ Feature: DATE_TRUNC preserves timestamp type
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: date_trunc with NULL unit returns NULL
       When query
         """
@@ -820,7 +814,6 @@ Feature: DATE_TRUNC preserves timestamp type
 
   Rule: nanosecond is not a valid Spark unit
 
-    @sail-bug
     Scenario: date_trunc with nanosecond unit returns NULL
       When query
         """

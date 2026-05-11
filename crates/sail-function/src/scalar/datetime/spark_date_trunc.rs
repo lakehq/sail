@@ -67,11 +67,10 @@ impl ScalarUDFImpl for SparkDateTrunc {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(Field::new(
             self.name(),
             args.arg_fields[1].data_type().clone(),
-            nullable,
+            true,
         )))
     }
 
@@ -106,10 +105,45 @@ impl ScalarUDFImpl for SparkDateTrunc {
         // internally. That multiplies seconds × 1_000_000_000 and overflows i64 for
         // timestamps beyond ~2262 CE, causing a panic. For NTZ microsecond timestamps
         // we truncate directly with chrono to avoid the overflow.
-        if let Some(ref u) = unit {
+        //
+        // A NULL unit or an unrecognized unit string returns NULL (Spark semantics).
+        // We handle both cases here before delegating to DF, which would return an error.
+        let known_unit = unit.as_deref().filter(|u| is_known_unit(u));
+        let is_ntz_scalar = matches!(
+            args.args.get(1),
+            Some(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                _,
+                None
+            )))
+        );
+        let is_ntz_array = matches!(
+            args.args.get(1),
+            Some(ColumnarValue::Array(arr)) if arr.data_type() == &DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+        if known_unit.is_none() && (is_ntz_scalar || is_ntz_array) {
+            return match args.args.get(1) {
+                Some(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(_, None))) => Ok(
+                    ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(None, None)),
+                ),
+                Some(ColumnarValue::Array(arr)) => {
+                    let nulls = arrow::buffer::NullBuffer::new_null(arr.len());
+                    Ok(ColumnarValue::Array(Arc::new(
+                        TimestampMicrosecondArray::new(
+                            arrow::buffer::ScalarBuffer::from(vec![0i64; arr.len()]),
+                            Some(nulls),
+                        ),
+                    )))
+                }
+                _ => unreachable!(),
+            };
+        }
+        if let Some(u) = known_unit {
             match args.args.get(1) {
                 Some(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, None))) => {
-                    let result = v.map(|micros| trunc_micros(u, micros)).transpose()?;
+                    let result = match v {
+                        None => None,
+                        Some(micros) => Some(trunc_micros(u, *micros)?),
+                    };
                     return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
                         result, None,
                     )));
@@ -127,7 +161,10 @@ impl ScalarUDFImpl for SparkDateTrunc {
                         })?;
                     let values: Vec<Option<i64>> = ts_arr
                         .iter()
-                        .map(|v| v.map(|micros| trunc_micros(u, micros)).transpose())
+                        .map(|v| match v {
+                            None => Ok(None),
+                            Some(micros) => trunc_micros(u, micros).map(Some),
+                        })
                         .collect::<Result<_>>()?;
                     return Ok(ColumnarValue::Array(Arc::new(
                         TimestampMicrosecondArray::from(values),
@@ -181,6 +218,22 @@ impl ScalarUDFImpl for SparkDateTrunc {
             interval: Box::new(Interval::try_new(lo_sv, hi_sv)?),
         })
     }
+}
+
+fn is_known_unit(unit: &str) -> bool {
+    matches!(
+        unit,
+        "microsecond"
+            | "millisecond"
+            | "second"
+            | "minute"
+            | "hour"
+            | "day"
+            | "week"
+            | "month"
+            | "quarter"
+            | "year"
+    )
 }
 
 /// Normalize Spark-specific unit aliases to DataFusion standard names.
@@ -259,7 +312,7 @@ fn trunc_micros(unit: &str, micros: i64) -> Result<i64> {
             };
             Ok(result)
         }
-        // Unknown unit — DF returns an error here; Spark returns NULL (tracked as @sail-bug).
+        // Unknown units are filtered out before reaching here; this arm is a safety net.
         _ => exec_err!("date_trunc: unknown granularity: '{unit}'"),
     }
 }
