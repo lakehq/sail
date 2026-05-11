@@ -282,7 +282,7 @@ impl MergeRowMetrics {
             }
             other => {
                 return Err(DataFusionError::Plan(format!(
-                    "MERGE operation metric column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
+                    "row-level operation column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
                 )));
             }
         }
@@ -1286,7 +1286,7 @@ impl DeltaWriterExec {
             }
             other => {
                 return Err(DataFusionError::Plan(format!(
-                    "MERGE operation metric column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
+                    "row-level operation column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
                 )));
             }
         }
