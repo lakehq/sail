@@ -817,11 +817,9 @@ fn stamp_row_tracking_actions(
     }
 
     let mut max_assigned: Option<i64> = None;
-    let mut any_assigned = false;
     for action in actions.iter_mut() {
         if let CommitAction::Add(add) = action {
             if let Some(base_row_id) = add.base_row_id {
-                any_assigned = true;
                 let stats = add
                     .stats
                     .as_deref()
@@ -831,17 +829,15 @@ fn stamp_row_tracking_actions(
                     .and_then(|v| v.get("numRecords"))
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0);
-                let last = base_row_id.saturating_add(num_records.saturating_sub(1).max(0));
-                max_assigned = Some(max_assigned.map_or(last, |current| current.max(last)));
+                if num_records > 0 {
+                    let last = base_row_id.saturating_add(num_records.saturating_sub(1));
+                    max_assigned = Some(max_assigned.map_or(last, |current| current.max(last)));
+                }
                 if add.default_row_commit_version.is_none() {
                     add.default_row_commit_version = Some(version);
                 }
             }
         }
-    }
-
-    if !any_assigned {
-        return Ok(());
     }
 
     let previous_high_water_mark = read_snapshot
@@ -855,11 +851,15 @@ fn stamp_row_tracking_actions(
                 })
                 .and_then(|v| v.as_i64())
         });
-    let new_high_water_mark = match (previous_high_water_mark, max_assigned) {
-        (Some(prev), Some(cur)) => prev.max(cur),
-        (None, Some(cur)) => cur,
-        (Some(prev), None) => prev,
-        (None, None) => return Ok(()),
+    let Some(new_high_water_mark) = max_assigned else {
+        return Ok(());
+    };
+    if previous_high_water_mark.is_some_and(|prev| new_high_water_mark <= prev) {
+        return Ok(());
+    }
+    let new_high_water_mark = match previous_high_water_mark {
+        Some(prev) => prev.max(new_high_water_mark),
+        None => new_high_water_mark,
     };
 
     let configuration =
@@ -974,8 +974,14 @@ fn validate_effective_commit_target(
 
     // Row Tracking: every Add in a commit on a supported, non-suspended table MUST
     // carry baseRowId and defaultRowCommitVersion.
-    let row_tracking_requested = table_property_enabled(&metadata, "delta.enableRowTracking")
-        || table_property_enabled(&metadata, "delta.rowTrackingSuspended");
+    let row_tracking_enabled = table_property_enabled(&metadata, "delta.enableRowTracking");
+    let row_tracking_suspended = table_property_enabled(&metadata, "delta.rowTrackingSuspended");
+    if row_tracking_enabled && row_tracking_suspended {
+        return Err(DeltaError::generic(
+            "delta.enableRowTracking and delta.rowTrackingSuspended cannot both be true",
+        ));
+    }
+    let row_tracking_requested = row_tracking_enabled || row_tracking_suspended;
     if row_tracking_requested && !protocol_has_writer_feature(&protocol, &TableFeature::RowTracking)
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::RowTracking).into());
@@ -985,7 +991,7 @@ fn validate_effective_commit_target(
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DomainMetadata).into());
     }
-    if table_property_enabled(&metadata, "delta.enableRowTracking") {
+    if row_tracking_enabled {
         for key in [
             ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
             ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
@@ -1013,7 +1019,6 @@ fn validate_effective_commit_target(
         )?;
     }
     let row_tracking_supported = protocol_has_writer_feature(&protocol, &TableFeature::RowTracking);
-    let row_tracking_suspended = table_property_enabled(&metadata, "delta.rowTrackingSuspended");
     if row_tracking_supported && !row_tracking_suspended {
         for action in &actions_as_actions {
             if let Action::Add(add) = action {
@@ -2220,7 +2225,7 @@ mod tests {
     use super::*;
     use crate::schema::protocol_for_create;
     use crate::spec::{
-        checksum_path, Action, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata,
+        checksum_path, Action, Add, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata,
         Metadata, Protocol, SaveMode, StructField, StructType, TableFeature, VersionChecksum,
     };
     use crate::storage::{default_logstore, get_actions, StorageConfig};
@@ -2249,6 +2254,24 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    fn test_add(path: &str, base_row_id: Option<i64>, stats: Option<&str>) -> Add {
+        Add {
+            path: path.to_string(),
+            partition_values: HashMap::new(),
+            size: 0,
+            modification_time: 0,
+            data_change: true,
+            stats: stats.map(str::to_string),
+            tags: None,
+            deletion_vector: None,
+            base_row_id,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
+        }
     }
 
     async fn read_commit_actions(log_store: &LogStoreRef, version: i64) -> Vec<Action> {
@@ -2593,6 +2616,83 @@ mod tests {
             DeltaError::Transaction(TransactionError::TableFeaturesRequired(
                 TableFeature::DomainMetadata
             ))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn stamp_row_tracking_empty_files_do_not_advance_high_watermark() -> DeltaResult<()> {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let mut actions = vec![
+            CommitAction::Protocol(protocol),
+            CommitAction::Metadata(metadata),
+            CommitAction::Add(test_add(
+                "empty.parquet",
+                Some(0),
+                Some(r#"{"numRecords":0}"#),
+            )),
+        ];
+
+        stamp_row_tracking_actions(&mut actions, None, 5)?;
+
+        let Some(add) = actions.iter().find_map(|action| match action {
+            CommitAction::Add(add) => Some(add),
+            _ => None,
+        }) else {
+            return Err(DeltaError::generic("expected add action"));
+        };
+        assert_eq!(add.default_row_commit_version, Some(5));
+        assert!(
+            !actions.iter().any(|action| matches!(
+                action,
+                CommitAction::DomainMetadata(dm) if dm.domain == "delta.rowTracking"
+            )),
+            "empty files must not publish a rowTracking high-water-mark"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validate_rejects_enabled_and_suspended_row_tracking() -> DeltaResult<()> {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([
+            ("delta.enableRowTracking", "true"),
+            ("delta.rowTrackingSuspended", "true"),
+        ]);
+        let err = match validate_effective_commit_target(
+            None,
+            &[
+                CommitAction::Protocol(protocol),
+                CommitAction::Metadata(metadata),
+            ],
+        ) {
+            Ok(()) => {
+                return Err(DeltaError::generic(
+                    "expected rowTracking enabled/suspended conflict",
+                ));
+            }
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains(
+            "delta.enableRowTracking and delta.rowTrackingSuspended cannot both be true"
         ));
         Ok(())
     }

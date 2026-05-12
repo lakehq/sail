@@ -153,6 +153,37 @@ Feature: Delta Lake Row Tracking writer (baseRowId, defaultRowCommitVersion, row
       Then delta log commit 00000000000000000000.json in location has rowTracking high-water-mark 2
 
   @sail-only
+  Rule: delta.feature.rowTracking alone auto-activates required dependencies
+
+    Background:
+      Given variable location for temporary directory delta_rt_feature_only
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_rt_feature_only_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_rt_feature_only_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.feature.rowTracking' = 'supported')
+        """
+      Given statement
+        """
+        INSERT INTO delta_rt_feature_only_test VALUES (1), (2)
+        """
+
+    Scenario: RowTracking feature property alone produces a writable row-tracking table
+      Then delta log commit 00000000000000000000.json in location contains action
+        | path                         | value                            |
+        | protocol.writerFeatures      | ["domainMetadata", "rowTracking"] |
+        | add.baseRowId                | 0                                |
+        | add.defaultRowCommitVersion  | 0                                |
+        | domainMetadata.domain        | "delta.rowTracking"              |
+      Then delta log commit 00000000000000000000.json in location has rowTracking high-water-mark 1
+
+  @sail-only
   Rule: SQL can read _metadata.row_id and _metadata.row_commit_version
 
     Background:
@@ -341,6 +372,27 @@ Feature: Delta Lake Row Tracking writer (baseRowId, defaultRowCommitVersion, row
 
   @sail-only
   Rule: Row tracking protocol validation rejects conflicting materialized columns
+
+    Scenario: enableRowTracking cannot be combined with rowTrackingSuspended
+      Given variable location for temporary directory delta_rt_enable_suspended_conflict
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_rt_enable_suspended_conflict_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_rt_enable_suspended_conflict_test (id INT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.enableRowTracking' = 'true',
+          'delta.rowTrackingSuspended' = 'true'
+        )
+        """
+      Given statement with error delta.enableRowTracking
+        """
+        INSERT INTO delta_rt_enable_suspended_conflict_test VALUES (1)
+        """
 
     Scenario: Materialized row id column cannot conflict with a data column
       Given variable location for temporary directory delta_rt_materialized_conflict
