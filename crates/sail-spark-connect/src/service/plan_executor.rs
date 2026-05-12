@@ -5,14 +5,14 @@ use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
 use datafusion::catalog::MemTable;
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion::parquet::arrow::AsyncArrowWriter;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use fastrace::Span;
-use futures::stream;
+use futures::{stream, TryStreamExt};
 use log::{debug, warn};
 use sail_catalog::manager::tracker::CatalogCachedRelation;
 use sail_catalog::manager::CatalogManager;
@@ -672,11 +672,14 @@ async fn materialize_logical_plan_to_memory(
 /// system temporary directory.
 ///
 /// In cluster deployments the operator should configure `spark.checkpoint_dir`
-/// to a path that is shared and readable by all workers (for example, a
-/// distributed filesystem mount or an object-store URI).  The default
-/// node-local path is suitable for single-node deployments and tests but
-/// will not work correctly for distributed execution since remote workers
-/// cannot read from the driver's local temporary directory.
+/// to a filesystem path that is shared and readable by all workers (for
+/// example, a network mount such as NFS).  The default node-local path is
+/// suitable for single-node deployments and tests but will not work
+/// correctly for distributed execution since remote workers cannot read
+/// from the driver's local temporary directory.  Only local or shared
+/// filesystem paths are currently supported; remote object-store URIs
+/// (such as `s3://`) are not and will surface as filesystem I/O errors
+/// when the checkpoint directory is created.
 fn resolve_checkpoint_root(spark: &SparkSession) -> PathBuf {
     let configured = spark.options().checkpoint_dir.trim();
     if configured.is_empty() {
@@ -686,8 +689,15 @@ fn resolve_checkpoint_root(spark: &SparkSession) -> PathBuf {
     }
 }
 
-/// Eagerly executes the resolved logical plan, writes the result to checkpoint
-/// files, and returns a new logical plan that scans those files.
+/// Eagerly executes the resolved logical plan, streaming the result directly
+/// to a checkpoint Parquet file on disk, and returns a new logical plan that
+/// scans those files.
+///
+/// Streaming the physical plan output through an `AsyncArrowWriter` avoids
+/// buffering the entire materialized DataFrame in driver memory, which is
+/// the whole point of using the on-disk checkpoint path.  Execution still
+/// goes through the [`JobService`] runner so that the work participates in
+/// distributed execution, job tracking, and cancellation.
 async fn materialize_logical_plan_to_disk(
     ctx: &SessionContext,
     plan: LogicalPlan,
@@ -703,35 +713,48 @@ async fn materialize_logical_plan_to_disk(
         .await
         .map_err(|e| SparkError::internal(format!("failed to create checkpoint directory: {e}")))?;
     let checkpoint_path = checkpoint_root.join(uuid::Uuid::new_v4().to_string());
-    let checkpoint_path_string = checkpoint_path.to_string_lossy().into_owned();
 
-    let (arrow_schema, batches) = execute_plan_via_runner(ctx, plan).await?;
+    // Plan and execute via the `JobService` runner so checkpoint
+    // materialization goes through the same execution path as user queries.
+    let arrow_schema = plan.schema().inner().clone();
+    let df = ctx.execute_logical_plan(plan).await?;
+    let (session_state, plan) = df.into_parts();
+    let plan = session_state.optimize(&plan)?;
+    let physical_plan = session_state
+        .query_planner()
+        .create_physical_plan(&plan, &session_state)
+        .await?;
+    let service = ctx.extension::<JobService>()?;
+    let mut stream = service.runner().execute(ctx, physical_plan).await?;
 
-    // For empty DataFrames, skip writing to disk entirely.
-    // DataFusion's `write_parquet` creates an empty directory with no parquet files,
-    // and `read_parquet` then fails because the directory has no `.parquet` files.
-    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-    if total_rows == 0 {
-        let table = Arc::new(MemTable::try_new(arrow_schema, vec![vec![]])?);
-        let scan = LogicalPlanBuilder::scan(
-            datafusion::common::TableReference::bare(UNNAMED_TABLE),
-            provider_as_source(table),
-            None,
-        )?
-        .build()?;
-        return Ok((scan, None));
+    // Stream batches directly to a single Parquet file inside the checkpoint
+    // directory without collecting them all into memory first.
+    let write_result: SparkResult<()> = async {
+        tokio::fs::create_dir_all(&checkpoint_path).await?;
+        let parquet_path = checkpoint_path.join("part-0.parquet");
+        let file = tokio::fs::File::create(&parquet_path).await?;
+        let mut writer = AsyncArrowWriter::try_new(file, arrow_schema, None)
+            .map_err(|e| SparkError::internal(format!("failed to create parquet writer: {e}")))?;
+        while let Some(batch) = stream.try_next().await? {
+            writer
+                .write(&batch)
+                .await
+                .map_err(|e| SparkError::internal(format!("failed to write parquet batch: {e}")))?;
+        }
+        writer
+            .close()
+            .await
+            .map_err(|e| SparkError::internal(format!("failed to close parquet writer: {e}")))?;
+        Ok(())
     }
+    .await;
 
-    // Re-create a DataFrame from the collected batches and write to parquet.
-    let table = Arc::new(MemTable::try_new(arrow_schema, vec![batches])?);
-    let df = ctx.read_table(table)?;
-    if let Err(error) = df
-        .write_parquet(&checkpoint_path_string, DataFrameWriteOptions::new(), None)
-        .await
-    {
+    if let Err(error) = write_result {
         cleanup_checkpoint_path(&checkpoint_path).await;
-        return Err(error.into());
+        return Err(error);
     }
+
+    let checkpoint_path_string = checkpoint_path.to_string_lossy().into_owned();
     let df = match ctx
         .read_parquet(&checkpoint_path_string, ParquetReadOptions::default())
         .await

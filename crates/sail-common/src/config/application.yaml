@@ -744,11 +744,13 @@
     The directory where reliable (disk) checkpoints created via
     `DataFrame.checkpoint()` and `DataFrame.localCheckpoint()` are written.
     When empty, a `sail-checkpoints/` subdirectory of the system temporary
-    directory is used. In cluster deployments, this should be set to a path
-    that is shared and readable by all workers (e.g. a shared filesystem or
-    object-store URI), since the default location is node-local. Checkpoint
-    files are best-effort cleaned up when the client releases the cached
-    relation or when the session ends.
+    directory is used. In cluster deployments, this should be set to a
+    filesystem path that is shared and readable by all workers (for example,
+    a network mount such as NFS), since the default location is node-local.
+    Only local or shared filesystem paths are currently supported; remote
+    object-store URIs (such as `s3://`) are not. Checkpoint files are
+    best-effort cleaned up when the client releases the cached relation or
+    when the session ends.
   experimental: true
 
 - key: flight.session_timeout_secs

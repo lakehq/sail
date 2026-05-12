@@ -233,10 +233,10 @@ def patch_pyspark_connect_test_class():
 class TestMarker:
     keywords: list[str]
     reason: str
+    # Optional list of PySpark version prefixes (e.g. ``["3.5."]``) to restrict
+    # when this marker applies.  When ``None`` (default) the marker applies to
+    # all versions.
     pyspark_versions: list[str] | None = None
-    """Optional list of PySpark version prefixes (e.g. ``["3.5."]``) to restrict
-    when this marker applies.  When ``None`` (default) the marker applies to all
-    versions."""
 
 
 SKIPPED_SPARK_TESTS = [
