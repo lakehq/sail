@@ -246,9 +246,10 @@ fn common_supertype(a: InferredType, b: InferredType) -> InferredType {
         (BigInt, Double) | (Double, BigInt) => Double,
         (Decimal { .. }, Double) | (Double, Decimal { .. }) => Double,
         (BigInt, Decimal { precision }) | (Decimal { precision }, BigInt) => {
-            // BIGINT has up to 19 decimal digits; widen to hold both.
+            // Spark widens BIGINT to DECIMAL(20,0) when merging with DECIMAL,
+            // to accommodate i64::MAX overflow values like 9223372036854775808.
             Decimal {
-                precision: precision.max(19),
+                precision: precision.max(20),
             }
         }
         (Decimal { precision: p1 }, Decimal { precision: p2 }) => Decimal {
@@ -309,7 +310,7 @@ fn escape_field_name(name: &str) -> String {
 
 /// Infer the Spark SQL DDL schema from a JSON string.
 fn infer_json_schema(json: &str) -> Result<String> {
-    if json.is_empty() {
+    if json.trim().is_empty() {
         return Ok(InferredType::String.to_ddl());
     }
     let mut jiter = Jiter::new(json.as_bytes());
@@ -361,8 +362,12 @@ fn infer_number_type(jiter: &mut Jiter) -> Result<InferredType> {
         return Ok(InferredType::Double);
     }
 
-    // Integer that doesn't fit in BIGINT widens to DECIMAL(digits, 0).
     let digits = num_str.trim_start_matches('-');
+    if digits.len() > 38 {
+        // Overflows DECIMAL(38,0) max precision → Spark falls back to DOUBLE.
+        return Ok(InferredType::Double);
+    }
+    // Integer that doesn't fit in BIGINT widens to DECIMAL(digits, 0).
     if digits.len() > 18 && num_str.parse::<i64>().is_err() {
         return Ok(InferredType::Decimal {
             precision: digits.len() as u32,
@@ -403,7 +408,10 @@ fn infer_struct_type(jiter: &mut Jiter) -> Result<InferredType> {
         let field_name = current_key.to_string();
         let peek = jiter.peek().map_err(jiter_err)?;
         let field_type = infer_type_from_peek(jiter, peek)?.coerce_bare_null();
-        fields.push((field_name, field_type));
+        // Spark silently drops fields with empty-string keys.
+        if !field_name.is_empty() {
+            fields.push((field_name, field_type));
+        }
 
         match jiter.next_key().map_err(jiter_err)? {
             Some(key) => current_key = key,

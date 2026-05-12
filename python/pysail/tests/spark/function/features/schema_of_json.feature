@@ -666,3 +666,400 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json(true) AS result
         """
       Then query error .*
+
+  Rule: Decimal boundary precision
+
+    Scenario: 18 digit integer stays BIGINT
+      When query
+        """
+        SELECT schema_of_json('{"v":123456789012345678}') AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<v: BIGINT> |
+
+    Scenario: 21 digit integer becomes DECIMAL(21,0)
+      When query
+        """
+        SELECT schema_of_json('{"v":999999999999999999999}') AS result
+        """
+      Then query result
+        | result                   |
+        | STRUCT<v: DECIMAL(21,0)> |
+
+    Scenario: 38 digit integer becomes DECIMAL(38,0)
+      When query
+        """
+        SELECT schema_of_json('{"v":99999999999999999999999999999999999999}') AS result
+        """
+      Then query result
+        | result                   |
+        | STRUCT<v: DECIMAL(38,0)> |
+
+    Scenario: 39 digit integer overflows to DOUBLE
+      When query
+        """
+        SELECT schema_of_json('{"v":999999999999999999999999999999999999999}') AS result
+        """
+      Then query result
+        | result             |
+        | STRUCT<v: DOUBLE>  |
+
+    Scenario: top-level DECIMAL(19,0) for number just above i64 max
+      When query
+        """
+        SELECT schema_of_json('9223372036854775808') AS result
+        """
+      Then query result
+        | result          |
+        | DECIMAL(19,0)   |
+
+    Scenario: top-level 38 digit integer is DECIMAL(38,0)
+      When query
+        """
+        SELECT schema_of_json('99999999999999999999999999999999999999') AS result
+        """
+      Then query result
+        | result        |
+        | DECIMAL(38,0) |
+
+  Rule: Array with DECIMAL element promotion
+
+    Scenario: BIGINT and DECIMAL in array promotes to DECIMAL with wider precision
+      When query
+        """
+        SELECT schema_of_json('[1, 9223372036854775808]') AS result
+        """
+      Then query result
+        | result               |
+        | ARRAY<DECIMAL(20,0)> |
+
+    Scenario: two DECIMAL values in array uses narrower precision
+      When query
+        """
+        SELECT schema_of_json('[9223372036854775808, 9999999999999999999]') AS result
+        """
+      Then query result
+        | result               |
+        | ARRAY<DECIMAL(19,0)> |
+
+    Scenario: DECIMAL and DOUBLE in array promotes to DOUBLE
+      When query
+        """
+        SELECT schema_of_json('[9223372036854775808, 1.5]') AS result
+        """
+      Then query result
+        | result        |
+        | ARRAY<DOUBLE> |
+
+    Scenario: struct field contains array with DECIMAL promotion
+      When query
+        """
+        SELECT schema_of_json('{"v":[1,9223372036854775808]}') AS result
+        """
+      Then query result
+        | result                        |
+        | STRUCT<v: ARRAY<DECIMAL(20,0)>> |
+
+    Scenario: three integers triggering DECIMAL promotion in array
+      When query
+        """
+        SELECT schema_of_json('[1, 2, 9223372036854775808]') AS result
+        """
+      Then query result
+        | result               |
+        | ARRAY<DECIMAL(20,0)> |
+
+  Rule: Top-level array supertype inference
+
+    Scenario: top-level array of booleans
+      When query
+        """
+        SELECT schema_of_json('[true, false]') AS result
+        """
+      Then query result
+        | result           |
+        | ARRAY<BOOLEAN>   |
+
+    Scenario: top-level array of bool and null
+      When query
+        """
+        SELECT schema_of_json('[true, null]') AS result
+        """
+      Then query result
+        | result           |
+        | ARRAY<BOOLEAN>   |
+
+    Scenario: top-level array of bool and string
+      When query
+        """
+        SELECT schema_of_json('[true, "hello"]') AS result
+        """
+      Then query result
+        | result        |
+        | ARRAY<STRING> |
+
+    Scenario: top-level array of bool and int promotes to STRING
+      When query
+        """
+        SELECT schema_of_json('[true, 1]') AS result
+        """
+      Then query result
+        | result        |
+        | ARRAY<STRING> |
+
+    Scenario: top-level array of bool and double promotes to STRING
+      When query
+        """
+        SELECT schema_of_json('[true, 1.5]') AS result
+        """
+      Then query result
+        | result        |
+        | ARRAY<STRING> |
+
+    Scenario: top-level array of int and object promotes to STRING
+      When query
+        """
+        SELECT schema_of_json('[1, {"a":2}]') AS result
+        """
+      Then query result
+        | result        |
+        | ARRAY<STRING> |
+
+    Scenario: top-level array of DECIMAL and string promotes to STRING
+      When query
+        """
+        SELECT schema_of_json('[9223372036854775808, "hi"]') AS result
+        """
+      Then query result
+        | result        |
+        | ARRAY<STRING> |
+
+    Scenario: top-level array of objects with null between them merges fields
+      When query
+        """
+        SELECT schema_of_json('[{"a":1}, null, {"b":2}]') AS result
+        """
+      Then query result
+        | result                            |
+        | ARRAY<STRUCT<a: BIGINT, b: BIGINT>> |
+
+    Scenario: top-level array of single null
+      When query
+        """
+        SELECT schema_of_json('[null]') AS result
+        """
+      Then query result
+        | result        |
+        | ARRAY<STRING> |
+
+  Rule: Field ordering is always alphabetical
+
+    Scenario: JSON object fields output in alphabetical order not insertion order
+      When query
+        """
+        SELECT schema_of_json('{"z": 1, "a": 2}') AS result
+        """
+      Then query result
+        | result                     |
+        | STRUCT<a: BIGINT, z: BIGINT> |
+
+    Scenario: three fields sorted alphabetically regardless of insertion order
+      When query
+        """
+        SELECT schema_of_json('{"b": 1, "a": 2, "c": 3}') AS result
+        """
+      Then query result
+        | result                                  |
+        | STRUCT<a: BIGINT, b: BIGINT, c: BIGINT> |
+
+    Scenario: merged array struct fields are sorted alphabetically
+      When query
+        """
+        SELECT schema_of_json('[{"z":1},{"a":2}]') AS result
+        """
+      Then query result
+        | result                            |
+        | ARRAY<STRUCT<a: BIGINT, z: BIGINT>> |
+
+  Rule: Additional special key names
+
+    Scenario: hyphen in key name requires backtick quoting
+      When query
+        """
+        SELECT schema_of_json('{"a-b":1}') AS result
+        """
+      Then query result
+        | result                 |
+        | STRUCT<`a-b`: BIGINT>  |
+
+    Scenario: slash in key name requires backtick quoting
+      When query
+        """
+        SELECT schema_of_json('{"a/b":1}') AS result
+        """
+      Then query result
+        | result                 |
+        | STRUCT<`a/b`: BIGINT>  |
+
+    Scenario: colon in key name requires backtick quoting
+      When query
+        """
+        SELECT schema_of_json('{"a:b":1}') AS result
+        """
+      Then query result
+        | result                 |
+        | STRUCT<`a:b`: BIGINT>  |
+
+    Scenario: backtick in key name is escaped as double backtick
+      When query
+        """
+        SELECT schema_of_json('{"a`b":1}') AS result
+        """
+      Then query result
+        | result                   |
+        | STRUCT<`a``b`: BIGINT>   |
+
+    Scenario: empty string key produces empty struct
+      When query
+        """
+        SELECT schema_of_json('{"":1}') AS result
+        """
+      Then query result
+        | result   |
+        | STRUCT<> |
+
+  Rule: primitivesAsString option
+
+    @sail-bug
+    Scenario: primitivesAsString converts integers to STRING
+      When query
+        """
+        SELECT schema_of_json('{"a": 1, "b": 1.5, "c": true}', map('primitivesAsString', 'true')) AS result
+        """
+      Then query result
+        | result                                      |
+        | STRUCT<a: STRING, b: STRING, c: STRING>     |
+
+    @sail-bug
+    Scenario: primitivesAsString keeps arrays of primitives as ARRAY<STRING>
+      When query
+        """
+        SELECT schema_of_json('{"a": [1, 2]}', map('primitivesAsString', 'true')) AS result
+        """
+      Then query result
+        | result                        |
+        | STRUCT<a: ARRAY<STRING>>      |
+
+    @sail-bug
+    Scenario: primitivesAsString keeps nested structs intact with STRING leaf values
+      When query
+        """
+        SELECT schema_of_json('{"a": {"b": 1}}', map('primitivesAsString', 'true')) AS result
+        """
+      Then query result
+        | result                        |
+        | STRUCT<a: STRUCT<b: STRING>>  |
+
+  Rule: inferTimestamp option
+
+    @sail-bug
+    Scenario: inferTimestamp true infers TIMESTAMP from datetime string
+      When query
+        """
+        SELECT schema_of_json('{"a": "2021-01-01 00:00:00"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result                   |
+        | STRUCT<a: TIMESTAMP>     |
+
+    @sail-bug
+    Scenario: inferTimestamp true infers TIMESTAMP from date-only string
+      When query
+        """
+        SELECT schema_of_json('{"a": "2021-01-01"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<a: TIMESTAMP> |
+
+    Scenario: inferTimestamp false keeps datetime string as STRING
+      When query
+        """
+        SELECT schema_of_json('{"a": "2021-01-01 00:00:00"}') AS result
+        """
+      Then query result
+        | result             |
+        | STRUCT<a: STRING>  |
+
+    @sail-bug
+    Scenario: inferTimestamp with non-timestamp string keeps STRING
+      When query
+        """
+        SELECT schema_of_json('{"a": "hello"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result             |
+        | STRUCT<a: STRING>  |
+
+  Rule: allowNonNumericNumbers option
+
+    @sail-bug
+    Scenario: allowNonNumericNumbers true allows NaN as DOUBLE
+      When query
+        """
+        SELECT schema_of_json('{"a": NaN}', map('allowNonNumericNumbers', 'true')) AS result
+        """
+      Then query result
+        | result             |
+        | STRUCT<a: DOUBLE>  |
+
+    @sail-bug
+    Scenario: allowNonNumericNumbers true allows Infinity as DOUBLE
+      When query
+        """
+        SELECT schema_of_json('{"a": Infinity}', map('allowNonNumericNumbers', 'true')) AS result
+        """
+      Then query result
+        | result             |
+        | STRUCT<a: DOUBLE>  |
+
+  Rule: Nested struct merging in arrays
+
+    Scenario: nested struct fields from different objects are merged and sorted
+      When query
+        """
+        SELECT schema_of_json('[{"a":{"z":1}},{"a":{"m":2}}]') AS result
+        """
+      Then query result
+        | result                                         |
+        | ARRAY<STRUCT<a: STRUCT<m: BIGINT, z: BIGINT>>> |
+
+    Scenario: struct field conflicting with primitive becomes STRING
+      When query
+        """
+        SELECT schema_of_json('[{"a":{"x":1}},{"a":1}]') AS result
+        """
+      Then query result
+        | result                   |
+        | ARRAY<STRUCT<a: STRING>> |
+
+    Scenario: array field types conflicting in different objects merge to supertype
+      When query
+        """
+        SELECT schema_of_json('[{"a":[1]},{"a":["x"]}]') AS result
+        """
+      Then query result
+        | result                          |
+        | ARRAY<STRUCT<a: ARRAY<STRING>>> |
+
+  Rule: Whitespace and invalid JSON
+
+    Scenario: whitespace-only string returns STRING
+      When query
+        """
+        SELECT schema_of_json('   ') AS result
+        """
+      Then query result
+        | result |
+        | STRING |
