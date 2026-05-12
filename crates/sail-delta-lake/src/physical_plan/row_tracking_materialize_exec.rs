@@ -1,15 +1,3 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -34,8 +22,7 @@ use futures::StreamExt;
 use sail_common_datafusion::datasource::{RowLevelOperationType, OPERATION_COLUMN};
 
 use crate::datasource::{
-    is_metadata_struct_field, METADATA_COLUMN_NAME, METADATA_ROW_COMMIT_VERSION_FIELD,
-    METADATA_ROW_ID_FIELD,
+    is_metadata_struct_field, METADATA_ROW_COMMIT_VERSION_FIELD, METADATA_ROW_ID_FIELD,
 };
 
 /// Replaces Delta's synthetic row-tracking `_metadata` struct with the hidden
@@ -351,13 +338,4 @@ fn row_level_operation_array(batch: &RecordBatch) -> Result<Option<RowLevelOpera
             field.data_type()
         )))
     }
-}
-
-pub fn default_row_tracking_metadata_column_name(schema: &SchemaRef) -> String {
-    schema
-        .fields()
-        .iter()
-        .find(|field| is_metadata_struct_field(field))
-        .map(|field| field.name().clone())
-        .unwrap_or_else(|| METADATA_COLUMN_NAME.to_string())
 }

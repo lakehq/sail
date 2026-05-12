@@ -66,15 +66,13 @@ use crate::schema::{
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
     schema_contains_type_widening_metadata, schema_has_generated_columns,
-    ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
-    ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
 };
 use crate::spec::{
     contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
     ColumnMetadataKey, MetadataValue, StructField, StructType, TableProperties,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
-use crate::table::open_table_with_object_store;
+use crate::table::{enabled_row_tracking_materialized_column_names, open_table_with_object_store};
 
 /// Schema handling mode for Delta Lake writes
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1328,34 +1326,9 @@ impl DeltaWriterExec {
         let snapshot = table
             .snapshot()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        if !matches!(
-            snapshot
-                .get_row_tracking_state()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-            crate::table::features::RowTrackingToken::Enabled(_)
-        ) {
-            return Ok(None);
-        }
-        let config = snapshot.metadata().configuration();
-        let row_id = config
-            .get(ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
-            .filter(|value| !value.is_empty())
-            .cloned()
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "{ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
-                ))
-            })?;
-        let row_commit_version = config
-            .get(ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
-            .filter(|value| !value.is_empty())
-            .cloned()
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "{ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
-                ))
-            })?;
-        Ok(Some((row_id, row_commit_version)))
+        enabled_row_tracking_materialized_column_names(snapshot)
+            .map(|columns| columns.map(|columns| (columns.row_id, columns.row_commit_version)))
+            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     fn schema_with_materialized_row_tracking_columns(

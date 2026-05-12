@@ -49,17 +49,14 @@ use crate::schema::{arrow_field_physical_name, get_physical_schema};
 use crate::session_extension::{load_table_uncached, DeltaTableCache};
 use crate::spec::StructType;
 use crate::storage::LogStoreRef;
-use crate::table::DeltaSnapshot;
+use crate::table::{
+    enabled_row_tracking_materialized_column_names, DeltaSnapshot,
+    RowTrackingMaterializedColumnNames,
+};
 
 // TODO(dynamic-file-scheduling): Replace fixed file-count chunking with byte-aware chunking
 // and optional work-stealing so executors pull remaining file work dynamically under skew.
 const ADD_SCAN_CHUNK_FILES: usize = 1024;
-
-#[derive(Debug, Clone)]
-struct RowTrackingMaterializedColumns {
-    row_id: String,
-    row_commit_version: String,
-}
 
 struct BulkScanParams<'a> {
     snapshot: &'a DeltaSnapshot,
@@ -69,7 +66,7 @@ struct BulkScanParams<'a> {
     file_schema: SchemaRef,
     logical_names: &'a [String],
     partition_columns: &'a [String],
-    materialized_columns: Option<&'a RowTrackingMaterializedColumns>,
+    materialized_columns: Option<&'a RowTrackingMaterializedColumnNames>,
     disable_row_filtering: bool,
 }
 
@@ -545,7 +542,7 @@ impl ScanByAddsStreamState {
         &self,
         logical_names: &[String],
         partition_columns: &[String],
-        materialized_columns: Option<&RowTrackingMaterializedColumns>,
+        materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
     ) -> Vec<String> {
         let mut names = self.inner_logical_names(logical_names);
         if let Some(columns) = materialized_columns {
@@ -568,7 +565,7 @@ impl ScanByAddsStreamState {
         &self,
         logical_names: &[String],
         inner_logical_names: &[String],
-        materialized_columns: Option<&RowTrackingMaterializedColumns>,
+        materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
     ) -> Result<Option<Vec<usize>>> {
         metadata_scan_projection(
             self.projection.as_deref(),
@@ -696,7 +693,7 @@ fn metadata_scan_projection(
     logical_names: &[String],
     inner_logical_names: &[String],
     metadata_column_name: Option<&str>,
-    materialized_columns: Option<&RowTrackingMaterializedColumns>,
+    materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
 ) -> Result<Option<Vec<usize>>> {
     let Some(projection) = projection else {
         return Ok(None);
@@ -843,45 +840,14 @@ fn dv_filter_stream(
 
 fn row_tracking_materialized_columns(
     snapshot: &DeltaSnapshot,
-) -> Result<Option<RowTrackingMaterializedColumns>> {
-    if !matches!(
-        snapshot
-            .get_row_tracking_state()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?,
-        crate::table::features::RowTrackingToken::Enabled(_)
-    ) {
-        return Ok(None);
-    }
-    let config = snapshot.metadata().configuration();
-    let row_id = config
-        .get(crate::schema::ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "{} is required when delta.enableRowTracking = true",
-                crate::schema::ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY
-            ))
-        })?;
-    let row_commit_version = config
-        .get(crate::schema::ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "{} is required when delta.enableRowTracking = true",
-                crate::schema::ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY
-            ))
-        })?;
-    Ok(Some(RowTrackingMaterializedColumns {
-        row_id,
-        row_commit_version,
-    }))
+) -> Result<Option<RowTrackingMaterializedColumnNames>> {
+    enabled_row_tracking_materialized_column_names(snapshot)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 fn file_schema_with_materialized_columns(
     file_schema: SchemaRef,
-    materialized_columns: Option<&RowTrackingMaterializedColumns>,
+    materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
 ) -> SchemaRef {
     let Some(columns) = materialized_columns else {
         return file_schema;
@@ -960,7 +926,7 @@ fn row_tracking_metadata_stream(
     inner: SendableRecordBatchStream,
     base_row_id: Option<i64>,
     default_row_commit_version: Option<i64>,
-    materialized_columns: Option<RowTrackingMaterializedColumns>,
+    materialized_columns: Option<RowTrackingMaterializedColumnNames>,
     metadata_column_name: &str,
 ) -> SendableRecordBatchStream {
     let inner_schema = inner.schema();
@@ -1427,10 +1393,8 @@ mod tests {
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use url::Url;
 
-    use super::{
-        map_statistics_to_schema, metadata_scan_projection, DeltaScanByAddsExec,
-        RowTrackingMaterializedColumns,
-    };
+    use super::{map_statistics_to_schema, metadata_scan_projection, DeltaScanByAddsExec};
+    use crate::table::RowTrackingMaterializedColumnNames;
 
     #[test]
     fn metadata_scan_projection_keeps_user_projection_and_materialized_columns() -> Result<()> {
@@ -1448,7 +1412,7 @@ mod tests {
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
-        let materialized_columns = RowTrackingMaterializedColumns {
+        let materialized_columns = RowTrackingMaterializedColumnNames {
             row_id: "_row-id-col-test".to_string(),
             row_commit_version: "_row-commit-version-col-test".to_string(),
         };

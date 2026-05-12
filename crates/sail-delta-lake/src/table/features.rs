@@ -1,6 +1,10 @@
 use serde_json::Value;
 
 use super::DeltaSnapshot;
+use crate::schema::{
+    ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+    ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
+};
 use crate::spec::{ColumnMappingMode, DeltaError, DeltaResult, TableFeature};
 
 /// Proof that column mapping is active on a snapshot.
@@ -41,6 +45,12 @@ pub enum RowTrackingToken {
 #[derive(Debug)]
 pub struct EnabledRowTrackingToken {
     pub next_row_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowTrackingMaterializedColumnNames {
+    pub row_id: String,
+    pub row_commit_version: String,
 }
 
 impl EnabledRowTrackingToken {
@@ -130,6 +140,40 @@ pub(crate) fn parse_row_tracking_high_water_mark(configuration: &str) -> DeltaRe
             "delta.rowTracking rowIdHighWaterMark must be a JSON number or string",
         )),
     }
+}
+
+pub fn enabled_row_tracking_materialized_column_names(
+    snapshot: &DeltaSnapshot,
+) -> DeltaResult<Option<RowTrackingMaterializedColumnNames>> {
+    if !matches!(
+        snapshot.get_row_tracking_state()?,
+        RowTrackingToken::Enabled(_)
+    ) {
+        return Ok(None);
+    }
+    let config = snapshot.metadata().configuration();
+    let row_id = config
+        .get(ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            DeltaError::generic(format!(
+                "{ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
+            ))
+        })?;
+    let row_commit_version = config
+        .get(ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            DeltaError::generic(format!(
+                "{ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
+            ))
+        })?;
+    Ok(Some(RowTrackingMaterializedColumnNames {
+        row_id,
+        row_commit_version,
+    }))
 }
 
 pub(crate) fn require_reader_writer_feature(

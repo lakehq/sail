@@ -58,9 +58,7 @@ pub use planner::{
 };
 pub use relaxed_tz_exec::RelaxedTzCastExec;
 pub use remove_actions_exec::DeltaRemoveActionsExec;
-pub use row_tracking_materialize_exec::{
-    default_row_tracking_metadata_column_name, RowTrackingMaterializeExec,
-};
+pub use row_tracking_materialize_exec::RowTrackingMaterializeExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
 pub use writer_exec::DeltaWriterExec;
 pub use writer_options::DeltaWriterExecOptions;

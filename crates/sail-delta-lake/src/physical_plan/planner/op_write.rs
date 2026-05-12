@@ -28,7 +28,8 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{
-    align_schemas_for_union, build_log_replay_pipeline_with_options, build_standard_write_layers,
+    align_schemas_for_union, append_null_row_tracking_columns,
+    build_log_replay_pipeline_with_options, build_standard_write_layers,
     materialize_row_tracking_columns, row_tracking_preserving_scan_schema, LogReplayOptions,
 };
 use crate::kernel::{DeltaOperation, SaveMode};
@@ -186,7 +187,7 @@ async fn build_overwrite_if_plan(
             create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)
         })
         .and_then(|plan| create_sort(plan, ctx.partition_columns().to_vec(), sort_order))?;
-    let new_plan = materialize_row_tracking_columns(new_plan, &snapshot_state)?;
+    let new_plan = append_null_row_tracking_columns(new_plan, &snapshot_state)?;
 
     let (aligned_new, aligned_old) = align_schemas_for_union(new_plan, old_data_plan)?;
     let union_plan = UnionExec::try_new(vec![aligned_new, aligned_old])?;

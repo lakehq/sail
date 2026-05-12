@@ -19,7 +19,7 @@ use datafusion::common::{
 };
 use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
 use datafusion::logical_expr::Expr;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::expressions::{Column, Literal};
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -47,14 +47,13 @@ use crate::physical_plan::{
     DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions,
     RowTrackingMaterializeExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH,
 };
-use crate::schema::{
-    ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
-    ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
-};
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
 };
-use crate::table::DeltaSnapshot;
+use crate::table::{
+    enabled_row_tracking_materialized_column_names as table_enabled_row_tracking_materialized_column_names,
+    DeltaSnapshot, RowTrackingMaterializedColumnNames,
+};
 
 /// Options that control what the log replay pipeline materializes as payload columns.
 ///
@@ -181,35 +180,9 @@ pub fn build_standard_write_layers(
 
 pub fn enabled_row_tracking_materialized_column_names(
     snapshot: &DeltaSnapshot,
-) -> Result<Option<(String, String)>> {
-    if !matches!(
-        snapshot
-            .get_row_tracking_state()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?,
-        crate::table::features::RowTrackingToken::Enabled(_)
-    ) {
-        return Ok(None);
-    }
-    let config = snapshot.metadata().configuration();
-    let row_id = config
-        .get(ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "{ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
-            ))
-        })?;
-    let row_commit_version = config
-        .get(ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "{ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
-            ))
-        })?;
-    Ok(Some((row_id, row_commit_version)))
+) -> Result<Option<RowTrackingMaterializedColumnNames>> {
+    table_enabled_row_tracking_materialized_column_names(snapshot)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 pub fn row_tracking_preserving_scan_schema(
@@ -227,9 +200,7 @@ pub fn materialize_row_tracking_columns(
     input: Arc<dyn ExecutionPlan>,
     snapshot: &DeltaSnapshot,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let Some((row_id, row_commit_version)) =
-        enabled_row_tracking_materialized_column_names(snapshot)?
-    else {
+    let Some(columns) = enabled_row_tracking_materialized_column_names(snapshot)? else {
         return Ok(input);
     };
     let metadata_column_name = input
@@ -238,13 +209,50 @@ pub fn materialize_row_tracking_columns(
         .iter()
         .find(|field| is_metadata_struct_field(field))
         .map(|field| field.name().clone())
-        .unwrap_or_else(|| "__sail_delta_row_tracking_metadata".to_string());
+        .ok_or_else(|| {
+            DataFusionError::Plan(
+                "row tracking materialization requires a row tracking _metadata struct column"
+                    .to_string(),
+            )
+        })?;
     Ok(Arc::new(RowTrackingMaterializeExec::try_new(
         input,
         metadata_column_name,
-        row_id,
-        row_commit_version,
+        columns.row_id,
+        columns.row_commit_version,
     )?))
+}
+
+pub fn append_null_row_tracking_columns(
+    input: Arc<dyn ExecutionPlan>,
+    snapshot: &DeltaSnapshot,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let Some(columns) = enabled_row_tracking_materialized_column_names(snapshot)? else {
+        return Ok(input);
+    };
+
+    let schema = input.schema();
+    let mut projections = Vec::with_capacity(schema.fields().len() + 2);
+    for (index, field) in schema.fields().iter().enumerate() {
+        let name = field.name();
+        if name == &columns.row_id || name == &columns.row_commit_version {
+            continue;
+        }
+        projections.push((
+            Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>,
+            name.clone(),
+        ));
+    }
+    projections.push((
+        Arc::new(Literal::new(ScalarValue::Int64(None))) as Arc<dyn PhysicalExpr>,
+        columns.row_id,
+    ));
+    projections.push((
+        Arc::new(Literal::new(ScalarValue::Int64(None))) as Arc<dyn PhysicalExpr>,
+        columns.row_commit_version,
+    ));
+
+    Ok(Arc::new(ProjectionExec::try_new(projections, input)?))
 }
 
 pub fn align_schemas_for_union(
