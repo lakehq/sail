@@ -52,6 +52,7 @@ impl PlanResolver<'_> {
         // Spark uses the end field (or start field for single-field intervals)
         // to interpret the numeric value: e.g. DayTimeIntervalType(DAY, DAY) treats
         // the value as days, while DayTimeIntervalType(DAY, SECOND) treats it as seconds.
+        let interval_metadata = interval_field_metadata(&cast_to_type)?;
         let day_time_interval_field = match &cast_to_type {
             spec::DataType::Interval {
                 interval_unit: spec::IntervalUnit::DayTime,
@@ -163,7 +164,51 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(NamedExpr::new(name, expr))
+        let mut expr = NamedExpr::new(name, expr);
+        expr.metadata.extend(interval_metadata);
+        Ok(expr)
+    }
+}
+
+fn interval_field_metadata(data_type: &spec::DataType) -> PlanResult<Vec<(String, String)>> {
+    let spec::DataType::Interval {
+        interval_unit,
+        start_field,
+        end_field,
+    } = data_type
+    else {
+        return Ok(vec![]);
+    };
+    let mut metadata = vec![];
+    if let Some(start_field) = start_field {
+        metadata.push((
+            spec::SAIL_INTERVAL_START_FIELD_KEY.to_string(),
+            spark_interval_field_value(interval_unit, start_field)?.to_string(),
+        ));
+    }
+    if let Some(end_field) = end_field {
+        metadata.push((
+            spec::SAIL_INTERVAL_END_FIELD_KEY.to_string(),
+            spark_interval_field_value(interval_unit, end_field)?.to_string(),
+        ));
+    }
+    Ok(metadata)
+}
+
+fn spark_interval_field_value(
+    interval_unit: &spec::IntervalUnit,
+    field: &spec::IntervalFieldType,
+) -> PlanResult<i32> {
+    match (interval_unit, field) {
+        (spec::IntervalUnit::YearMonth, spec::IntervalFieldType::Year) => Ok(0),
+        (spec::IntervalUnit::YearMonth, spec::IntervalFieldType::Month) => Ok(1),
+        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Day) => Ok(0),
+        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Hour) => Ok(1),
+        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Minute) => Ok(2),
+        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Second) => Ok(3),
+        _ => Err(PlanError::invalid(format!(
+            "invalid interval field {field:?} for interval unit {interval_unit:?}"
+        ))),
     }
 }
 

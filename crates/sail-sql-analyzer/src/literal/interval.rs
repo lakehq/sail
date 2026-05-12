@@ -96,6 +96,91 @@ impl From<IntervalValue> for spec::Literal {
     }
 }
 
+fn data_type_from_standard_interval_kind(kind: StandardIntervalKind) -> spec::DataType {
+    let (interval_unit, start_field, end_field) = match kind {
+        StandardIntervalKind::Year => (
+            spec::IntervalUnit::YearMonth,
+            spec::IntervalFieldType::Year,
+            None,
+        ),
+        StandardIntervalKind::YearToMonth => (
+            spec::IntervalUnit::YearMonth,
+            spec::IntervalFieldType::Year,
+            Some(spec::IntervalFieldType::Month),
+        ),
+        StandardIntervalKind::Month => (
+            spec::IntervalUnit::YearMonth,
+            spec::IntervalFieldType::Month,
+            None,
+        ),
+        StandardIntervalKind::Day => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Day,
+            None,
+        ),
+        StandardIntervalKind::DayToHour => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Day,
+            Some(spec::IntervalFieldType::Hour),
+        ),
+        StandardIntervalKind::DayToMinute => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Day,
+            Some(spec::IntervalFieldType::Minute),
+        ),
+        StandardIntervalKind::DayToSecond => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Day,
+            Some(spec::IntervalFieldType::Second),
+        ),
+        StandardIntervalKind::Hour => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Hour,
+            None,
+        ),
+        StandardIntervalKind::HourToMinute => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Hour,
+            Some(spec::IntervalFieldType::Minute),
+        ),
+        StandardIntervalKind::HourToSecond => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Hour,
+            Some(spec::IntervalFieldType::Second),
+        ),
+        StandardIntervalKind::Minute => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Minute,
+            None,
+        ),
+        StandardIntervalKind::MinuteToSecond => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Minute,
+            Some(spec::IntervalFieldType::Second),
+        ),
+        StandardIntervalKind::Second => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Second,
+            None,
+        ),
+    };
+    spec::DataType::Interval {
+        interval_unit,
+        start_field: Some(start_field),
+        end_field,
+    }
+}
+
+pub fn data_type_from_ast_interval(value: &IntervalExpr) -> SqlResult<Option<spec::DataType>> {
+    match value {
+        IntervalExpr::Standard { qualifier, .. } => {
+            let kind = from_ast_interval_qualifier(qualifier.clone())?;
+            Ok(Some(data_type_from_standard_interval_kind(kind)))
+        }
+        _ => Ok(None),
+    }
+}
+
 pub fn from_ast_signed_interval(value: Signed<IntervalExpr>) -> SqlResult<IntervalValue> {
     // TODO: support the legacy calendar interval when `spark.sql.legacy.interval.enabled` is `true`
     let negated = value.is_negative();
