@@ -110,12 +110,25 @@ impl ScalarUDFImpl for SparkConcat {
         }
     }
 
-    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        if args.len() == 1 {
-            let mut args = args;
-            return Ok(ExprSimplifyResult::Simplified(args.remove(0)));
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if args.len() != 1 {
+            return Ok(ExprSimplifyResult::Original(args));
         }
-        Ok(ExprSimplifyResult::Original(args))
+        let mut args = args;
+        let arg = args.remove(0);
+        if matches!(
+            info.get_data_type(&arg)?,
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::List(_)
+        ) {
+            Ok(ExprSimplifyResult::Simplified(arg))
+        } else {
+            Ok(ExprSimplifyResult::Original(vec![arg]))
+        }
     }
 
     fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
@@ -153,9 +166,6 @@ impl ScalarUDFImpl for SparkConcat {
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
-            // Cast arrays with Null element type to the return type for proper concatenation
-            // This handles cases like concat(array(), array(1, 2, 3)) where the first array
-            // has type List(Null) and needs to be cast to List(Int32)
             let casted_args = cast_list_columnar_values(args.args, return_type)?;
             let casted_scalar_args = ScalarFunctionArgs {
                 args: casted_args,
