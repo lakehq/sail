@@ -942,15 +942,29 @@ fn strip_row_tracking_fields_for_suspended_table(
 }
 
 fn add_num_records(add: &crate::spec::Add) -> DeltaResult<i64> {
-    let Some(stats) = add.stats.as_deref() else {
-        return Ok(0);
-    };
+    let stats = add.stats.as_deref().ok_or_else(|| {
+        DeltaError::generic(format!(
+            "row tracking requires Add action stats.numRecords for file '{}'",
+            add.path
+        ))
+    })?;
     let stats: Value = serde_json::from_str(stats)?;
-    Ok(stats
+    let num_records = stats
         .get("numRecords")
         .and_then(Value::as_i64)
-        .unwrap_or(0)
-        .max(0))
+        .ok_or_else(|| {
+            DeltaError::generic(format!(
+                "row tracking requires Add action stats.numRecords for file '{}'",
+                add.path
+            ))
+        })?;
+    if num_records < 0 {
+        return Err(DeltaError::generic(format!(
+            "row tracking requires non-negative Add action stats.numRecords for file '{}'",
+            add.path
+        )));
+    }
+    Ok(num_records)
 }
 
 fn table_property_enabled(metadata: &Metadata, key: &str) -> bool {
@@ -2767,6 +2781,40 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn stamp_row_tracking_requires_num_records() -> DeltaResult<()> {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let mut actions = vec![
+            CommitAction::Protocol(protocol),
+            CommitAction::Metadata(metadata),
+            CommitAction::Add(test_add("missing-stats.parquet", None, None)),
+        ];
+
+        let err = match stamp_row_tracking_actions(&mut actions, None, 5) {
+            Ok(()) => {
+                return Err(DeltaError::generic(
+                    "missing numRecords should be rejected under row tracking",
+                ));
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("stats.numRecords"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn commit_preserves_string_row_tracking_high_watermark() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -3051,6 +3099,100 @@ mod tests {
         assert_eq!(
             parse_row_tracking_high_water_mark(&domain.configuration)?,
             2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_rebases_row_tracking_after_concurrent_append() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+                CommitAction::Add(test_add(
+                    "initial.parquet",
+                    None,
+                    Some(r#"{"numRecords":2}"#),
+                )),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+        let stale_snapshot = created.snapshot.clone();
+
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(test_add(
+                "first-writer.parquet",
+                Some(0),
+                Some(r#"{"numRecords":2}"#),
+            ))])
+            .build(
+                stale_snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(test_add(
+                "second-writer.parquet",
+                Some(0),
+                Some(r#"{"numRecords":2}"#),
+            ))])
+            .build(
+                stale_snapshot,
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        let actions = read_commit_actions(&log_store, 2).await;
+        let add = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::Add(add) => Some(add),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("expected add action"))?;
+        assert_eq!(add.base_row_id, Some(4));
+        let domain = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::DomainMetadata(dm) if dm.domain == "delta.rowTracking" => Some(dm),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("expected rowTracking domain update"))?;
+        assert_eq!(
+            parse_row_tracking_high_water_mark(&domain.configuration)?,
+            5
         );
         Ok(())
     }
