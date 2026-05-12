@@ -509,6 +509,7 @@ pub enum CatalogType {
 pub struct SparkConfig {
     pub session_timeout_secs: u64,
     pub execution_heartbeat_interval_secs: u64,
+    pub checkpoint_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

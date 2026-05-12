@@ -21,6 +21,11 @@ use crate::streaming::{
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
+    /// Directory where reliable (disk) checkpoints are written.  When empty,
+    /// a `sail-checkpoints/` subdirectory of the system temporary directory
+    /// is used.  In cluster mode this should be set to a path that is shared
+    /// and readable by all workers.
+    pub checkpoint_dir: String,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].

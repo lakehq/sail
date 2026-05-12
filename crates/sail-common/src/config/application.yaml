@@ -737,6 +737,20 @@
     the session active.
   experimental: true
 
+- key: spark.checkpoint_dir
+  type: string
+  default: ""
+  description: |
+    The directory where reliable (disk) checkpoints created via
+    `DataFrame.checkpoint()` and `DataFrame.localCheckpoint()` are written.
+    When empty, a `sail-checkpoints/` subdirectory of the system temporary
+    directory is used. In cluster deployments, this should be set to a path
+    that is shared and readable by all workers (e.g. a shared filesystem or
+    object-store URI), since the default location is node-local. Checkpoint
+    files are best-effort cleaned up when the client releases the cached
+    relation or when the session ends.
+  experimental: true
+
 - key: flight.session_timeout_secs
   type: number
   default: "3600"

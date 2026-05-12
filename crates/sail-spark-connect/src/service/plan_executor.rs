@@ -532,7 +532,14 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let CheckpointCommand {
         relation,
         local,
-        eager,
+        // The `eager` flag is a Spark hint requesting that materialization be
+        // deferred until the cached relation is first used.  Sail does not
+        // implement deferred materialization (which would require intercepting
+        // `CachedRemoteRelation` reads and updating the cached entry on first
+        // use), so we always materialize eagerly.  This is a correctness-
+        // preserving choice: lineage is truncated and the checkpoint exists
+        // immediately, matching Spark's observable semantics for `eager=true`.
+        eager: _,
         storage_level,
     } = checkpoint;
     let relation = relation.required("checkpoint relation")?;
@@ -547,15 +554,13 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let fields = named_plan_fields(&logical_plan, fields);
 
     let use_disk = checkpoint_uses_disk(local, storage_level.as_ref());
-    let (cached_plan, storage_path) = if eager && use_disk {
+    let (cached_plan, storage_path) = if use_disk {
         materialize_logical_plan_to_disk(ctx, logical_plan).await?
-    } else if eager {
+    } else {
         (
             materialize_logical_plan_to_memory(ctx, logical_plan).await?,
             None,
         )
-    } else {
-        (logical_plan, None)
     };
 
     let relation_id = uuid::Uuid::new_v4().to_string();
@@ -620,15 +625,38 @@ fn checkpoint_uses_disk(
     storage_level.map(|level| level.use_disk).unwrap_or(true)
 }
 
-/// Eagerly executes the resolved logical plan, collects all batches, and returns
-/// a new logical plan that scans the materialized data from an in-memory table.
+/// Eagerly executes a logical plan via the [`JobService`] runner used by
+/// regular query execution.  This ensures checkpoint materialization runs on
+/// the same execution path as user queries (including in cluster mode) and
+/// participates in job tracking and cancellation.
+async fn execute_plan_via_runner(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+) -> SparkResult<(
+    datafusion::arrow::datatypes::SchemaRef,
+    Vec<datafusion::arrow::array::RecordBatch>,
+)> {
+    let arrow_schema = plan.schema().inner().clone();
+    let df = ctx.execute_logical_plan(plan).await?;
+    let (session_state, plan) = df.into_parts();
+    let plan = session_state.optimize(&plan)?;
+    let physical_plan = session_state
+        .query_planner()
+        .create_physical_plan(&plan, &session_state)
+        .await?;
+    let service = ctx.extension::<JobService>()?;
+    let stream = service.runner().execute(ctx, physical_plan).await?;
+    let batches = read_stream(stream).await?;
+    Ok((arrow_schema, batches))
+}
+
+/// Eagerly executes the resolved logical plan and returns a new logical plan
+/// that scans the materialized data from an in-memory table.
 async fn materialize_logical_plan_to_memory(
     ctx: &SessionContext,
     plan: LogicalPlan,
 ) -> SparkResult<LogicalPlan> {
-    let arrow_schema = plan.schema().inner().clone();
-    let df = ctx.execute_logical_plan(plan).await?;
-    let batches = df.collect().await?;
+    let (arrow_schema, batches) = execute_plan_via_runner(ctx, plan).await?;
     let table = Arc::new(MemTable::try_new(arrow_schema, vec![batches])?);
     let scan = LogicalPlanBuilder::scan(
         datafusion::common::TableReference::bare(UNNAMED_TABLE),
@@ -639,24 +667,45 @@ async fn materialize_logical_plan_to_memory(
     Ok(scan)
 }
 
-/// Eagerly executes the resolved logical plan, writes the result to local
-/// checkpoint files, and returns a new logical plan that scans those files.
+/// Returns the configured checkpoint root directory.  When the configuration
+/// option is empty, falls back to a `sail-checkpoints/` subdirectory of the
+/// system temporary directory.
+///
+/// In cluster deployments the operator should configure `spark.checkpoint_dir`
+/// to a path that is shared and readable by all workers (for example, a
+/// distributed filesystem mount or an object-store URI).  The default
+/// node-local path is suitable for single-node deployments and tests but
+/// will not work correctly for distributed execution since remote workers
+/// cannot read from the driver's local temporary directory.
+fn resolve_checkpoint_root(spark: &SparkSession) -> PathBuf {
+    let configured = spark.options().checkpoint_dir.trim();
+    if configured.is_empty() {
+        std::env::temp_dir().join("sail-checkpoints")
+    } else {
+        PathBuf::from(configured)
+    }
+}
+
+/// Eagerly executes the resolved logical plan, writes the result to checkpoint
+/// files, and returns a new logical plan that scans those files.
 async fn materialize_logical_plan_to_disk(
     ctx: &SessionContext,
     plan: LogicalPlan,
 ) -> SparkResult<(LogicalPlan, Option<PathBuf>)> {
     // Spark Connect does not send a user checkpoint directory with this command,
-    // so Sail stores reliable checkpoint files in a per-server temporary area
-    // and deletes them when the client releases the cached remote relation.
-    let checkpoint_root = std::env::temp_dir().join("sail-checkpoints");
+    // so Sail uses the directory configured by `spark.checkpoint_dir` (or a
+    // server-local temporary area if unset).  Files are best-effort cleaned
+    // up when the client releases the cached remote relation or when the
+    // session ends.
+    let spark = ctx.extension::<SparkSession>()?;
+    let checkpoint_root = resolve_checkpoint_root(&spark);
     tokio::fs::create_dir_all(&checkpoint_root)
         .await
         .map_err(|e| SparkError::internal(format!("failed to create checkpoint directory: {e}")))?;
     let checkpoint_path = checkpoint_root.join(uuid::Uuid::new_v4().to_string());
     let checkpoint_path_string = checkpoint_path.to_string_lossy().into_owned();
-    let arrow_schema = plan.schema().inner().clone();
-    let df = ctx.execute_logical_plan(plan).await?;
-    let batches = df.collect().await?;
+
+    let (arrow_schema, batches) = execute_plan_via_runner(ctx, plan).await?;
 
     // For empty DataFrames, skip writing to disk entirely.
     // DataFusion's `write_parquet` creates an empty directory with no parquet files,
