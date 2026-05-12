@@ -233,6 +233,10 @@ def patch_pyspark_connect_test_class():
 class TestMarker:
     keywords: list[str]
     reason: str
+    pyspark_versions: list[str] | None = None
+    """Optional list of PySpark version prefixes (e.g. ``["3.5."]``) to restrict
+    when this marker applies.  When ``None`` (default) the marker applies to all
+    versions."""
 
 
 SKIPPED_SPARK_TESTS = [
@@ -319,6 +323,20 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_parity_job_cancellation.py"],
         reason="Slow test not working yet",
     ),
+    # The PySpark 3.5.x Spark Connect client does not implement checkpoint
+    # or localCheckpoint on the DataFrame, so the doctests fail with
+    # PySparkNotImplementedError.  PySpark 4.x supports these APIs natively.
+    # Sail's own checkpoint tests (in PySail) cover the functionality.
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.checkpoint"],
+        reason="PySpark 3.5.x Spark Connect does not support checkpoint; ported to PySail test suite",
+        pyspark_versions=["3.4.", "3.5."],
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.localCheckpoint"],
+        reason="PySpark 3.5.x Spark Connect does not support localCheckpoint; ported to PySail test suite",
+        pyspark_versions=["3.4.", "3.5."],
+    ),
     # The following tests rely on direct JVM access (RDD API, Java gateway),
     # which is not supported by Sail.
     TestMarker(
@@ -377,8 +395,13 @@ SKIPPED_SPARK_TESTS = [
 
 
 def add_pyspark_test_markers(items: list[pytest.Item]):
+    import pyspark
+
+    version = pyspark.__version__
     for item in items:
         for test in SKIPPED_SPARK_TESTS:
+            if test.pyspark_versions is not None and not any(version.startswith(v) for v in test.pyspark_versions):
+                continue
             if all(k in item.keywords for k in test.keywords):
                 item.add_marker(pytest.mark.skip(reason=test.reason))
 

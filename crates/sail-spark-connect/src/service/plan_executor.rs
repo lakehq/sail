@@ -656,28 +656,13 @@ async fn materialize_logical_plan_to_disk(
     let checkpoint_path_string = checkpoint_path.to_string_lossy().into_owned();
     let arrow_schema = plan.schema().inner().clone();
     let df = ctx.execute_logical_plan(plan).await?;
-    if let Err(error) = df
-        .write_parquet(&checkpoint_path_string, DataFrameWriteOptions::new(), None)
-        .await
-    {
-        cleanup_checkpoint_path(&checkpoint_path).await;
-        return Err(error.into());
-    }
-    // DataFusion's `write_parquet` may not create the checkpoint directory when
-    // the DataFrame is empty (zero rows).  In that case we fall back to an
-    // in-memory table so that downstream scans see the correct (empty) schema
-    // instead of failing with a "path does not exist" error.
-    let path_exists = match tokio::fs::try_exists(&checkpoint_path).await {
-        Ok(exists) => exists,
-        Err(e) => {
-            warn!(
-                "failed to check checkpoint path {}: {e}; assuming it exists",
-                checkpoint_path.display()
-            );
-            true
-        }
-    };
-    if !path_exists {
+    let batches = df.collect().await?;
+
+    // For empty DataFrames, skip writing to disk entirely.
+    // DataFusion's `write_parquet` creates an empty directory with no parquet files,
+    // and `read_parquet` then fails because the directory has no `.parquet` files.
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    if total_rows == 0 {
         let table = Arc::new(MemTable::try_new(arrow_schema, vec![vec![]])?);
         let scan = LogicalPlanBuilder::scan(
             datafusion::common::TableReference::bare(UNNAMED_TABLE),
@@ -686,6 +671,17 @@ async fn materialize_logical_plan_to_disk(
         )?
         .build()?;
         return Ok((scan, None));
+    }
+
+    // Re-create a DataFrame from the collected batches and write to parquet.
+    let table = Arc::new(MemTable::try_new(arrow_schema, vec![batches])?);
+    let df = ctx.read_table(table)?;
+    if let Err(error) = df
+        .write_parquet(&checkpoint_path_string, DataFrameWriteOptions::new(), None)
+        .await
+    {
+        cleanup_checkpoint_path(&checkpoint_path).await;
+        return Err(error.into());
     }
     let df = match ctx
         .read_parquet(&checkpoint_path_string, ParquetReadOptions::default())
