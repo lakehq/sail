@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use super::DeltaSnapshot;
 use crate::spec::{ColumnMappingMode, DeltaError, DeltaResult, TableFeature};
 
@@ -98,10 +100,35 @@ impl RowTrackingToken {
     /// Current high-water-mark (= next_row_id - 1) when row tracking is active.
     pub fn high_water_mark(&self) -> Option<i64> {
         match self {
-            RowTrackingToken::Enabled(t) => Some(t.next_row_id.saturating_sub(1)),
-            RowTrackingToken::SupportedOnly(t) => Some(t.next_row_id.saturating_sub(1)),
+            RowTrackingToken::Enabled(t) => active_high_water_mark(t.next_row_id),
+            RowTrackingToken::SupportedOnly(t) => active_high_water_mark(t.next_row_id),
             _ => None,
         }
+    }
+}
+
+fn active_high_water_mark(next_row_id: i64) -> Option<i64> {
+    (next_row_id > 0).then_some(next_row_id - 1)
+}
+
+pub(crate) fn parse_row_tracking_high_water_mark(configuration: &str) -> DeltaResult<i64> {
+    let configuration: Value = serde_json::from_str(configuration)?;
+    let value = configuration
+        .as_object()
+        .and_then(|object| object.get("rowIdHighWaterMark"))
+        .ok_or_else(|| {
+            DeltaError::generic("delta.rowTracking domain metadata is missing rowIdHighWaterMark")
+        })?;
+    match value {
+        Value::Number(number) => number.as_i64().ok_or_else(|| {
+            DeltaError::generic("delta.rowTracking rowIdHighWaterMark must be representable as i64")
+        }),
+        Value::String(string) => string.parse::<i64>().map_err(|_| {
+            DeltaError::generic("delta.rowTracking rowIdHighWaterMark must be an integer string")
+        }),
+        _ => Err(DeltaError::generic(
+            "delta.rowTracking rowIdHighWaterMark must be a JSON number or string",
+        )),
     }
 }
 
@@ -118,5 +145,40 @@ pub(crate) fn require_reader_writer_feature(
         Err(DeltaError::generic(format!(
             "table feature '{feature_name}' is not fully enabled on this table"
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn high_water_mark_is_none_before_rows_are_assigned() {
+        assert_eq!(
+            RowTrackingToken::Enabled(EnabledRowTrackingToken { next_row_id: 0 }).high_water_mark(),
+            None
+        );
+        assert_eq!(
+            RowTrackingToken::SupportedOnly(SupportedRowTrackingToken { next_row_id: 0 })
+                .high_water_mark(),
+            None
+        );
+        assert_eq!(
+            RowTrackingToken::Enabled(EnabledRowTrackingToken { next_row_id: 1 }).high_water_mark(),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn parse_row_tracking_high_water_mark_accepts_numbers_and_strings() -> DeltaResult<()> {
+        assert_eq!(
+            parse_row_tracking_high_water_mark(r#"{"rowIdHighWaterMark":42}"#)?,
+            42
+        );
+        assert_eq!(
+            parse_row_tracking_high_water_mark(r#"{"rowIdHighWaterMark":"42"}"#)?,
+            42
+        );
+        Ok(())
     }
 }

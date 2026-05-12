@@ -564,16 +564,26 @@ impl ScanByAddsStreamState {
         names
     }
 
+    fn inner_projection_for_metadata_scan(
+        &self,
+        logical_names: &[String],
+        inner_logical_names: &[String],
+        materialized_columns: Option<&RowTrackingMaterializedColumns>,
+    ) -> Result<Option<Vec<usize>>> {
+        metadata_scan_projection(
+            self.projection.as_deref(),
+            logical_names,
+            inner_logical_names,
+            self.metadata_column_name.as_deref(),
+            materialized_columns,
+        )
+    }
+
     fn build_bulk_scan(
         &self,
         params: BulkScanParams<'_>,
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let wants_metadata = self.output_schema_has_row_tracking_metadata();
-        let inner_projection = if wants_metadata {
-            None
-        } else {
-            self.projection.clone()
-        };
         let inner_logical_names_vec;
         let inner_logical_names: &[String] = if wants_metadata {
             inner_logical_names_vec = self.inner_logical_names_for_metadata_scan(
@@ -584,6 +594,15 @@ impl ScanByAddsStreamState {
             &inner_logical_names_vec
         } else {
             params.logical_names
+        };
+        let inner_projection = if wants_metadata {
+            self.inner_projection_for_metadata_scan(
+                params.logical_names,
+                inner_logical_names,
+                params.materialized_columns,
+            )?
+        } else {
+            self.projection.clone()
         };
 
         let mut scan_config = self.scan_config.clone();
@@ -664,6 +683,62 @@ impl ScanByAddsStreamState {
             .unwrap_or_else(|| meta_adds::infer_partition_columns_from_schema(&batch.schema()));
         meta_adds::decode_adds_from_meta_batch(batch, Some(&partition_columns))
     }
+}
+
+fn push_projection_index_once(projection: &mut Vec<usize>, index: usize) {
+    if !projection.contains(&index) {
+        projection.push(index);
+    }
+}
+
+fn metadata_scan_projection(
+    projection: Option<&[usize]>,
+    logical_names: &[String],
+    inner_logical_names: &[String],
+    metadata_column_name: Option<&str>,
+    materialized_columns: Option<&RowTrackingMaterializedColumns>,
+) -> Result<Option<Vec<usize>>> {
+    let Some(projection) = projection else {
+        return Ok(None);
+    };
+
+    let mut inner_projection =
+        Vec::with_capacity(projection.len() + usize::from(materialized_columns.is_some()) * 2);
+    for index in projection {
+        let name = logical_names.get(*index).ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "projection index {index} is out of bounds for Delta logical schema"
+            ))
+        })?;
+        if Some(name.as_str()) == metadata_column_name {
+            continue;
+        }
+        let inner_index = inner_logical_names
+            .iter()
+            .position(|inner_name| inner_name == name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "projected Delta column '{name}' is missing from metadata scan schema"
+                ))
+            })?;
+        push_projection_index_once(&mut inner_projection, inner_index);
+    }
+
+    if let Some(columns) = materialized_columns {
+        for name in [&columns.row_id, &columns.row_commit_version] {
+            let inner_index = inner_logical_names
+                .iter()
+                .position(|inner_name| inner_name == name)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Row Tracking materialized column '{name}' is missing from metadata scan schema"
+                    ))
+                })?;
+            push_projection_index_once(&mut inner_projection, inner_index);
+        }
+    }
+
+    Ok(Some(inner_projection))
 }
 
 /// Append a file-local row-index column to a single-file scan stream.
@@ -1352,7 +1427,51 @@ mod tests {
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use url::Url;
 
-    use super::{map_statistics_to_schema, DeltaScanByAddsExec};
+    use super::{
+        map_statistics_to_schema, metadata_scan_projection, DeltaScanByAddsExec,
+        RowTrackingMaterializedColumns,
+    };
+
+    #[test]
+    fn metadata_scan_projection_keeps_user_projection_and_materialized_columns() -> Result<()> {
+        let logical_names = ["id", "value", "_metadata", "part"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let inner_logical_names = [
+            "id",
+            "value",
+            "_row-id-col-test",
+            "_row-commit-version-col-test",
+            "part",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let materialized_columns = RowTrackingMaterializedColumns {
+            row_id: "_row-id-col-test".to_string(),
+            row_commit_version: "_row-commit-version-col-test".to_string(),
+        };
+
+        let projection = metadata_scan_projection(
+            Some(&[2]),
+            &logical_names,
+            &inner_logical_names,
+            Some("_metadata"),
+            Some(&materialized_columns),
+        )?;
+        assert_eq!(projection, Some(vec![2, 3]));
+
+        let projection = metadata_scan_projection(
+            Some(&[0, 2]),
+            &logical_names,
+            &inner_logical_names,
+            Some("_metadata"),
+            Some(&materialized_columns),
+        )?;
+        assert_eq!(projection, Some(vec![0, 2, 3]));
+        Ok(())
+    }
 
     #[test]
     fn test_map_statistics_to_schema_by_name() {

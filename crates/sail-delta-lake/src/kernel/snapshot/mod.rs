@@ -29,7 +29,6 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use once_cell::sync::OnceCell;
-use serde_json::Value;
 use url::Url;
 
 use crate::kernel::checkpoints::{
@@ -55,6 +54,7 @@ use crate::spec::{
     TableProperties, Transaction, TransactionError, VersionChecksum,
 };
 use crate::storage::LogStore;
+use crate::table::features::parse_row_tracking_high_water_mark;
 use crate::table::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
@@ -823,31 +823,7 @@ impl DeltaSnapshot {
         let Some(domain) = self.domain_metadata().get("delta.rowTracking") else {
             return Ok(None);
         };
-        let configuration: Value = serde_json::from_str(&domain.configuration)?;
-        let value = configuration
-            .as_object()
-            .and_then(|object| object.get("rowIdHighWaterMark"))
-            .ok_or_else(|| {
-                DeltaTableError::generic(
-                    "delta.rowTracking domain metadata is missing rowIdHighWaterMark",
-                )
-            })?;
-        match value {
-            Value::Number(number) => number.as_i64().ok_or_else(|| {
-                DeltaTableError::generic(
-                    "delta.rowTracking rowIdHighWaterMark must be representable as i64",
-                )
-            }),
-            Value::String(string) => string.parse::<i64>().map_err(|_| {
-                DeltaTableError::generic(
-                    "delta.rowTracking rowIdHighWaterMark must be an integer string",
-                )
-            }),
-            _ => Err(DeltaTableError::generic(
-                "delta.rowTracking rowIdHighWaterMark must be a JSON number or string",
-            )),
-        }
-        .map(Some)
+        parse_row_tracking_high_water_mark(&domain.configuration).map(Some)
     }
 }
 

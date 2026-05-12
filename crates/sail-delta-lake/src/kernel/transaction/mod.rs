@@ -49,6 +49,7 @@ use crate::spec::{
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
+use crate::table::features::parse_row_tracking_high_water_mark;
 use crate::table::DeltaSnapshot;
 
 mod conflict_checker;
@@ -841,16 +842,9 @@ fn stamp_row_tracking_actions(
     }
 
     let previous_high_water_mark = read_snapshot
-        .and_then(|snapshot| snapshot.domain_metadata().get("delta.rowTracking").cloned())
-        .and_then(|domain| {
-            serde_json::from_str::<Value>(&domain.configuration)
-                .ok()
-                .and_then(|v| {
-                    v.as_object()
-                        .and_then(|o| o.get("rowIdHighWaterMark").cloned())
-                })
-                .and_then(|v| v.as_i64())
-        });
+        .and_then(|snapshot| snapshot.domain_metadata().get("delta.rowTracking"))
+        .map(|domain| parse_row_tracking_high_water_mark(&domain.configuration))
+        .transpose()?;
     let Some(new_high_water_mark) = max_assigned else {
         return Ok(());
     };
@@ -2657,6 +2651,70 @@ mod tests {
                 CommitAction::DomainMetadata(dm) if dm.domain == "delta.rowTracking"
             )),
             "empty files must not publish a rowTracking high-water-mark"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_preserves_string_row_tracking_high_watermark() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+                CommitAction::DomainMetadata(DomainMetadata {
+                    domain: "delta.rowTracking".to_string(),
+                    configuration: r#"{"rowIdHighWaterMark":"10"}"#.to_string(),
+                    removed: false,
+                }),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(test_add(
+                "new.parquet",
+                Some(0),
+                Some(r#"{"numRecords":1}"#),
+            ))])
+            .build(
+                created.snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        let actions = read_commit_actions(&log_store, 1).await;
+        assert!(
+            !actions.iter().any(|action| matches!(
+                action,
+                Action::DomainMetadata(dm) if dm.domain == "delta.rowTracking"
+            )),
+            "string high-water-mark must not be ignored and lowered"
         );
         Ok(())
     }

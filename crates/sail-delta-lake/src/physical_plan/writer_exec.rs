@@ -847,12 +847,11 @@ impl DeltaWriterExec {
             } else {
                 // New-table CREATE/CTAS: derive row-tracking state from config (next_row_id = 0).
                 let cfg = &metadata_configuration;
-                let rt_supported = cfg
-                    .get("delta.feature.rowTracking")
-                    .is_some_and(|v| !v.is_empty())
-                    || cfg
-                        .get("delta.enableRowTracking")
-                        .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+                let rt_supported = cfg.get("delta.feature.rowTracking").is_some_and(|v| {
+                    v.eq_ignore_ascii_case("supported") || v.eq_ignore_ascii_case("enabled")
+                }) || cfg
+                    .get("delta.enableRowTracking")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("true"))
                     || cfg
                         .get("delta.rowTrackingSuspended")
                         .is_some_and(|v| v.eq_ignore_ascii_case("true"));
