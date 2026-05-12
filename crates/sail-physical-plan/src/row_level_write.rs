@@ -40,6 +40,7 @@ pub async fn create_row_level_write_physical_plan(
                 condition: node.condition().cloned(),
                 expanded_input: None,
                 touched_file_plan: None,
+                deletion_vector_plan: None,
                 with_schema_evolution: false,
                 operation_override: None,
                 merge_strategy,
@@ -57,6 +58,12 @@ pub async fn create_row_level_write_physical_plan(
             let touched_file_plan = node.touched_files_plan();
             let physical_touched = if let Some(tp) = touched_file_plan {
                 Some(planner.create_physical_plan(tp, ctx).await?)
+            } else {
+                None
+            };
+            let deletion_vector_plan = node.deletion_vector_plan();
+            let physical_deletion_vector = if let Some(dvp) = deletion_vector_plan {
+                Some(planner.create_physical_plan(dvp, ctx).await?)
             } else {
                 None
             };
@@ -82,6 +89,11 @@ pub async fn create_row_level_write_physical_plan(
                     None
                 } else {
                     physical_touched
+                },
+                deletion_vector_plan: if is_insert_only {
+                    None
+                } else {
+                    physical_deletion_vector
                 },
                 with_schema_evolution: node.with_schema_evolution(),
                 operation_override,

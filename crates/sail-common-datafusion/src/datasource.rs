@@ -21,9 +21,20 @@ use crate::logical_expr::ExprWithSource;
 /// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
 pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
 
-/// Row-level operation type column appended to the expanded MERGE output.
+/// File-local row index metadata column for row-level modifications that write deletion vectors.
+pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
+
+/// Row-level operation type column appended to expanded row-level write output.
+///
+/// This is internal Sail metadata. Format writers may use it to route rows,
+/// collect operation metrics, or produce low-level delete artifacts, but must
+/// remove it before persisting user data.
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
+
+/// Internal column carrying pre-aggregated MERGE source row counts on
+/// [`RowLevelOperationType::SourceMetric`] rows.
+pub const MERGE_SOURCE_METRIC_COLUMN: &str = "__sail_merge_source_metric";
 
 /// A layer of options that can be applied to a data source.
 /// Multiple layers are used to represent different sources of options,
@@ -62,13 +73,34 @@ impl OptionLayer {
     }
 }
 
-/// Row-level operation type tag.
+/// Internal row intent tag for row-level write plans.
+///
+/// The numeric values are not table-format protocol values. They are stable
+/// within Sail physical plans so logical expansion and format writers can share
+/// a compact representation of per-row intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum RowLevelOperationType {
+    /// Existing target row is rewritten unchanged.
+    Copy = 0,
+    /// Existing target row is deleted.
     Delete = 1,
+    /// Existing target row is rewritten with updated values.
     Update = 2,
+    /// Source row is inserted as a new target row.
     Insert = 3,
+    /// Source row participates in metrics or checks but is not written.
+    Noop = 4,
+    /// Matched target row is deleted by a MERGE clause.
+    MatchedDelete = 5,
+    /// Matched target row is updated by a MERGE clause.
+    MatchedUpdate = 6,
+    /// Target-only row is deleted by a MERGE clause.
+    NotMatchedBySourceDelete = 7,
+    /// Target-only row is updated by a MERGE clause.
+    NotMatchedBySourceUpdate = 8,
+    /// Metric-only row carrying a MERGE source row count.
+    SourceMetric = 9,
 }
 
 impl RowLevelOperationType {
@@ -101,6 +133,12 @@ pub trait MergeCapableSource: Send + Sync {
 
     /// Returns a reconfigured source with the file column enabled.
     fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
+
+    /// Returns the file-local row index column name if already configured.
+    fn row_index_column_name(&self) -> Option<&str>;
+
+    /// Returns a reconfigured source with the file-local row index column enabled.
+    fn with_row_index_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -241,6 +279,8 @@ pub struct RowLevelWriteInfo {
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths (MERGE targeted rewrite).
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
+    pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
     pub with_schema_evolution: bool,
     /// Override for commit operation metadata.
     pub operation_override: Option<OperationOverride>,
@@ -309,6 +349,21 @@ pub trait TableFormat: Send + Sync {
         let _ = (runtime_env, path, changes, if_exists);
         not_impl_err!(
             "Table properties alteration not supported for {} format",
+            self.name()
+        )
+    }
+
+    /// Alters the type of a table column.
+    async fn alter_table_column_type(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        data_type: datafusion::arrow::datatypes::DataType,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, column_path, data_type);
+        not_impl_err!(
+            "Column type alteration not supported for {} format",
             self.name()
         )
     }
