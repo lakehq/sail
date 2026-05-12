@@ -172,12 +172,39 @@ fn data_type_from_standard_interval_kind(kind: StandardIntervalKind) -> spec::Da
 }
 
 pub fn data_type_from_ast_interval(value: &IntervalExpr) -> SqlResult<Option<spec::DataType>> {
-    match value {
+    let kind = match value {
         IntervalExpr::Standard { qualifier, .. } => {
-            let kind = from_ast_interval_qualifier(qualifier.clone())?;
-            Ok(Some(data_type_from_standard_interval_kind(kind)))
+            Some(from_ast_interval_qualifier(qualifier.clone())?)
         }
-        _ => Ok(None),
+        IntervalExpr::MultiUnit { head, tail } if tail.is_empty() => {
+            standard_interval_kind_from_unit(&head.unit)
+        }
+        IntervalExpr::Literal(value) => {
+            let IntervalLiteral {
+                interval: _,
+                value: interval,
+            } = parse_interval_literal(&from_ast_string(value)?)?;
+            return data_type_from_ast_interval(&interval);
+        }
+        _ => None,
+    };
+    Ok(kind.map(data_type_from_standard_interval_kind))
+}
+
+fn standard_interval_kind_from_unit(unit: &IntervalUnit) -> Option<StandardIntervalKind> {
+    match unit {
+        IntervalUnit::Year(_) | IntervalUnit::Years(_) => Some(StandardIntervalKind::Year),
+        IntervalUnit::Month(_) | IntervalUnit::Months(_) => Some(StandardIntervalKind::Month),
+        IntervalUnit::Day(_) | IntervalUnit::Days(_) => Some(StandardIntervalKind::Day),
+        IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => Some(StandardIntervalKind::Hour),
+        IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => Some(StandardIntervalKind::Minute),
+        IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => Some(StandardIntervalKind::Second),
+        IntervalUnit::Week(_)
+        | IntervalUnit::Weeks(_)
+        | IntervalUnit::Millisecond(_)
+        | IntervalUnit::Milliseconds(_)
+        | IntervalUnit::Microsecond(_)
+        | IntervalUnit::Microseconds(_) => None,
     }
 }
 
