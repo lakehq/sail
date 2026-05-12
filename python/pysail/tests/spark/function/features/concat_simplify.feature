@@ -1,7 +1,7 @@
 @concat_simplify
 Feature: concat() — simplify hook (single-argument identity)
 
-  Rule: String and array inputs — identity, no coercion needed
+  Rule: String, array, and binary inputs — identity, no coercion needed
 
     Scenario: concat of single string literal is identity
       When query
@@ -99,7 +99,7 @@ Feature: concat() — simplify hook (single-argument identity)
       | 1      |
       | 2      |
 
-  Rule: Plan snapshots — simplify removes UDF call for string/array, keeps it for coercion
+  Rule: Plan snapshots — simplify removes UDF call only for single-argument identity cases (string/array/binary), and keeps it for coercion or multi-arg array concat
 
     @sail-only
     Scenario: EXPLAIN concat of single string column — no spark_concat in plan
