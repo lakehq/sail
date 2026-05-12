@@ -330,12 +330,12 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame.checkpoint"],
         reason="PySpark 3.5.x Spark Connect does not support checkpoint; ported to PySail test suite",
-        pyspark_versions=["3.4.", "3.5."],
+        pyspark_versions=["3.5."],
     ),
     TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame.localCheckpoint"],
         reason="PySpark 3.5.x Spark Connect does not support localCheckpoint; ported to PySail test suite",
-        pyspark_versions=["3.4.", "3.5."],
+        pyspark_versions=["3.5."],
     ),
     # The following tests rely on direct JVM access (RDD API, Java gateway),
     # which is not supported by Sail.
