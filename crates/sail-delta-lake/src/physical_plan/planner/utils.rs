@@ -38,13 +38,18 @@ use super::context::PlannerContext;
 use super::log_scan::{build_delta_log_datasource_scans_with_options, LogScanOptions};
 use super::log_segment::{resolve_log_segment_files, LogSegmentResolveOptions};
 use crate::datasource::{
-    simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
+    df_logical_schema, is_metadata_struct_field, simplify_expr, COMMIT_TIMESTAMP_COLUMN,
+    COMMIT_VERSION_COLUMN, PATH_COLUMN,
 };
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions, COL_LOG_IS_REMOVE,
-    COL_LOG_VERSION, COL_REPLAY_PATH,
+    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions,
+    RowTrackingMaterializeExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH,
+};
+use crate::schema::{
+    ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+    ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
 };
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
@@ -172,6 +177,74 @@ pub fn build_standard_write_layers(
         sink_mode.clone(),
         ctx.options().user_metadata.clone(),
     )))
+}
+
+pub fn enabled_row_tracking_materialized_column_names(
+    snapshot: &DeltaSnapshot,
+) -> Result<Option<(String, String)>> {
+    if !matches!(
+        snapshot
+            .get_row_tracking_state()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        crate::table::features::RowTrackingToken::Enabled(_)
+    ) {
+        return Ok(None);
+    }
+    let config = snapshot.metadata().configuration();
+    let row_id = config
+        .get(ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "{ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
+            ))
+        })?;
+    let row_commit_version = config
+        .get(ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "{ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
+            ))
+        })?;
+    Ok(Some((row_id, row_commit_version)))
+}
+
+pub fn row_tracking_preserving_scan_schema(
+    snapshot: &DeltaSnapshot,
+    table_schema: SchemaRef,
+) -> Result<SchemaRef> {
+    if enabled_row_tracking_materialized_column_names(snapshot)?.is_none() {
+        return Ok(table_schema);
+    }
+    df_logical_schema(snapshot, &None, &None, &None, &None, Some(table_schema))
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
+pub fn materialize_row_tracking_columns(
+    input: Arc<dyn ExecutionPlan>,
+    snapshot: &DeltaSnapshot,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let Some((row_id, row_commit_version)) =
+        enabled_row_tracking_materialized_column_names(snapshot)?
+    else {
+        return Ok(input);
+    };
+    let metadata_column_name = input
+        .schema()
+        .fields()
+        .iter()
+        .find(|field| is_metadata_struct_field(field))
+        .map(|field| field.name().clone())
+        .unwrap_or_else(|| "__sail_delta_row_tracking_metadata".to_string());
+    Ok(Arc::new(RowTrackingMaterializeExec::try_new(
+        input,
+        metadata_column_name,
+        row_id,
+        row_commit_version,
+    )?))
 }
 
 pub fn align_schemas_for_union(

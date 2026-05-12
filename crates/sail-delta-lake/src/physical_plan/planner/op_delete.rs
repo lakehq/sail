@@ -23,7 +23,10 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
-use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
+use super::utils::{
+    build_log_replay_pipeline_with_options, materialize_row_tracking_columns,
+    row_tracking_preserving_scan_schema, LogReplayOptions,
+};
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
     DeltaDiscoveryExec, DeltaPhysicalExprAdapterFactory, DeltaScanByAddsExec,
@@ -64,17 +67,6 @@ pub async fn build_delete_plan(
         crate::table::features::RowTrackingToken::Enabled(_)
             | crate::table::features::RowTrackingToken::SupportedOnly(_)
     );
-    if !partition_only
-        && matches!(
-            row_tracking_state,
-            crate::table::features::RowTrackingToken::Enabled(_)
-        )
-    {
-        return Err(DataFusionError::NotImplemented(
-            "Copy-on-Write DELETE on Delta tables with row tracking enabled requires preserving stable row IDs via materialized row-tracking columns"
-                .to_string(),
-        ));
-    }
     let log_replay_options = LogReplayOptions {
         include_row_tracking,
         // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
@@ -109,12 +101,14 @@ pub async fn build_delete_plan(
         Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
+    let scan_output_schema =
+        row_tracking_preserving_scan_schema(snapshot_state, table_schema.clone())?;
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
         version,
         table_schema.clone(),
-        table_schema.clone(),
+        scan_output_schema,
         crate::datasource::DeltaScanConfig::default(),
         None,
         None,
@@ -134,6 +128,7 @@ pub async fn build_delete_plan(
     let negated_condition = Arc::new(NotExpr::new(adapted_condition));
     let filter_exec: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+    let filter_exec = materialize_row_tracking_columns(filter_exec, snapshot_state)?;
 
     let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,

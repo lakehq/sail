@@ -54,6 +54,7 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
+use crate::datasource::is_metadata_struct_field;
 use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -65,6 +66,8 @@ use crate::schema::{
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
     schema_contains_type_widening_metadata, schema_has_generated_columns,
+    ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+    ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
 };
 use crate::spec::{
     contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
@@ -535,10 +538,8 @@ impl DeltaWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let input_schema =
-            normalize_delta_schema(&Self::schema_without_metric_columns(&self.input.schema()));
-        let sink_schema =
-            normalize_delta_schema(&Self::schema_without_metric_columns(&self.sink_schema));
+        let raw_input_schema = self.input.schema();
+        let raw_sink_schema = self.sink_schema.clone();
         let operation_override = self.operation_override.clone();
         let session_timezone = context
             .session_config()
@@ -580,6 +581,27 @@ impl DeltaWriterExec {
             } else {
                 None
             };
+            let materialized_row_tracking_columns = if let Some(table) = &table {
+                Self::enabled_row_tracking_materialized_columns(table)?
+            } else {
+                None
+            };
+            let input_has_materialized_row_tracking_columns = materialized_row_tracking_columns
+                .as_ref()
+                .is_some_and(|(row_id, row_commit_version)| {
+                    raw_input_schema.field_with_name(row_id).is_ok()
+                        && raw_input_schema.field_with_name(row_commit_version).is_ok()
+                });
+            let input_schema =
+                normalize_delta_schema(&Self::schema_without_writer_internal_columns(
+                    &raw_input_schema,
+                    materialized_row_tracking_columns.as_ref(),
+                ));
+            let sink_schema =
+                normalize_delta_schema(&Self::schema_without_writer_internal_columns(
+                    &raw_sink_schema,
+                    materialized_row_tracking_columns.as_ref(),
+                ));
 
             match &sink_mode {
                 PhysicalSinkMode::Append => {
@@ -753,7 +775,7 @@ impl DeltaWriterExec {
 
             // Build physical writer schema (use physical names and set parquet field ids)
             // Prefer schema from pending Metadata action (schema evolution) if present
-            let (writer_schema, physical_partition_columns, logical_kernel_for_mapping) =
+            let (mut writer_schema, physical_partition_columns, logical_kernel_for_mapping) =
                 if !matches!(effective_mode, ColumnMappingMode::None) {
                     // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
                     let logical_kernel: StructType = if let Some(meta_action_schema) =
@@ -825,6 +847,33 @@ impl DeltaWriterExec {
                 } else {
                     (final_schema.clone(), partition_columns.clone(), None)
                 };
+            if input_has_materialized_row_tracking_columns {
+                if let Some((row_id, row_commit_version)) =
+                    materialized_row_tracking_columns.as_ref()
+                {
+                    writer_schema = Self::schema_with_materialized_row_tracking_columns(
+                        writer_schema,
+                        row_id,
+                        row_commit_version,
+                    );
+                }
+            }
+            let stats_columns = input_has_materialized_row_tracking_columns.then(|| {
+                writer_schema
+                    .fields()
+                    .iter()
+                    .filter_map(|field| {
+                        let name = field.name();
+                        let is_partition = physical_partition_columns.iter().any(|p| p == name);
+                        let is_row_tracking = materialized_row_tracking_columns
+                            .as_ref()
+                            .is_some_and(|(row_id, row_commit_version)| {
+                                name == row_id || name == row_commit_version
+                            });
+                        (!is_partition && !is_row_tracking).then_some(name.clone())
+                    })
+                    .collect::<Vec<_>>()
+            });
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
@@ -834,7 +883,7 @@ impl DeltaWriterExec {
                 *target_file_size,
                 write_batch_size.get(),
                 32,
-                None,
+                stats_columns,
             );
 
             let writer_path = object_store::path::Path::from(table_url.path());
@@ -1264,19 +1313,92 @@ impl DeltaWriterExec {
         name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
     }
 
-    fn schema_without_metric_columns(schema: &SchemaRef) -> SchemaRef {
-        if !schema
+    fn is_materialized_row_tracking_column(
+        name: &str,
+        materialized_columns: Option<&(String, String)>,
+    ) -> bool {
+        materialized_columns.is_some_and(|(row_id, row_commit_version)| {
+            name == row_id || name == row_commit_version
+        })
+    }
+
+    fn enabled_row_tracking_materialized_columns(
+        table: &crate::table::DeltaTable,
+    ) -> Result<Option<(String, String)>> {
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if !matches!(
+            snapshot
+                .get_row_tracking_state()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            crate::table::features::RowTrackingToken::Enabled(_)
+        ) {
+            return Ok(None);
+        }
+        let config = snapshot.metadata().configuration();
+        let row_id = config
+            .get(ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "{ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
+                ))
+            })?;
+        let row_commit_version = config
+            .get(ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "{ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
+                ))
+            })?;
+        Ok(Some((row_id, row_commit_version)))
+    }
+
+    fn schema_with_materialized_row_tracking_columns(
+        schema: SchemaRef,
+        row_id: &str,
+        row_commit_version: &str,
+    ) -> SchemaRef {
+        let mut fields = schema
             .fields()
             .iter()
-            .any(|field| Self::is_writer_metric_column(field.name()))
-        {
+            .map(|field| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        for name in [row_id, row_commit_version] {
+            if !fields.iter().any(|field| field.name() == name) {
+                fields.push(Field::new(name.to_string(), DataType::Int64, true));
+            }
+        }
+        Arc::new(Schema::new(fields))
+    }
+
+    fn schema_without_writer_internal_columns(
+        schema: &SchemaRef,
+        materialized_columns: Option<&(String, String)>,
+    ) -> SchemaRef {
+        if !schema.fields().iter().any(|field| {
+            Self::is_writer_metric_column(field.name())
+                || is_metadata_struct_field(field)
+                || Self::is_materialized_row_tracking_column(field.name(), materialized_columns)
+        }) {
             return Arc::clone(schema);
         }
         Arc::new(Schema::new(
             schema
                 .fields()
                 .iter()
-                .filter(|field| !Self::is_writer_metric_column(field.name()))
+                .filter(|field| {
+                    !Self::is_writer_metric_column(field.name())
+                        && !is_metadata_struct_field(field)
+                        && !Self::is_materialized_row_tracking_column(
+                            field.name(),
+                            materialized_columns,
+                        )
+                })
                 .map(|field| field.as_ref().clone())
                 .collect::<Vec<_>>(),
         ))

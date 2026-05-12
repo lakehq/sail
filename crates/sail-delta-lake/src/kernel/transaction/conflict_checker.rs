@@ -387,7 +387,10 @@ impl<'a> ConflictChecker<'a> {
         }
 
         let winning_domains = self.winning_commit_summary.domain_metadata_domains();
-        if let Some(domain) = txn_domains.intersection(&winning_domains).next() {
+        if let Some(domain) = txn_domains
+            .intersection(&winning_domains)
+            .find(|domain| domain.as_str() != "delta.rowTracking")
+        {
             Err(CommitConflictError::ConcurrentDomainMetadata(
                 (*domain).clone(),
             ))

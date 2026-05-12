@@ -42,10 +42,6 @@ use crate::spec::{
 ///
 /// Reserves `[baseRowId, baseRowId + num_records)` when row tracking is active.
 /// `defaultRowCommitVersion` is stamped post-commit by `finalize_attempt_actions`.
-//
-// TODO(row-tracking-preserve): UPDATE/MERGE rewrites currently re-stamp baseRowId,
-// which breaks row-id stability across rewrites. Preserve per-row row_ids via the
-// PreservedRowTrackingTag or row-by-row propagation once the rewriter is available.
 pub fn create_add(
     partition_values: &IndexMap<String, ScalarValue>,
     path: String,

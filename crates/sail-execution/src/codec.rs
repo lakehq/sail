@@ -94,7 +94,7 @@ use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCastColumnExpr, DeltaCommitExec,
     DeltaDiscoveryExec, DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
-    DeltaScanByAddsExec, DeltaWriterExec, RelaxedTzCastExec,
+    DeltaScanByAddsExec, DeltaWriterExec, RelaxedTzCastExec, RowTrackingMaterializeExec,
 };
 use sail_delta_lake::spec::DeltaOperation;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
@@ -750,6 +750,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     )
                     .with_output_statistics(statistics),
                 ))
+            }
+            NodeKind::RowTrackingMaterialize(gen::RowTrackingMaterializeExecNode {
+                input,
+                metadata_column_name,
+                row_id_column_name,
+                row_commit_version_column_name,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(RowTrackingMaterializeExec::try_new(
+                    input,
+                    metadata_column_name,
+                    row_id_column_name,
+                    row_commit_version_column_name,
+                )?))
             }
             NodeKind::DeltaDiscovery(gen::DeltaDiscoveryExecNode {
                 table_url,
@@ -1622,6 +1636,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pushdown_filter,
                 version: delta_scan_by_adds_exec.version(),
                 statistics,
+            })
+        } else if let Some(row_tracking_materialize_exec) =
+            node.as_any().downcast_ref::<RowTrackingMaterializeExec>()
+        {
+            NodeKind::RowTrackingMaterialize(gen::RowTrackingMaterializeExecNode {
+                input: self.try_encode_plan(row_tracking_materialize_exec.input())?,
+                metadata_column_name: row_tracking_materialize_exec.metadata_column_name().into(),
+                row_id_column_name: row_tracking_materialize_exec.row_id_column_name().into(),
+                row_commit_version_column_name: row_tracking_materialize_exec
+                    .row_commit_version_column_name()
+                    .into(),
             })
         } else if let Some(delta_discovery_exec) =
             node.as_any().downcast_ref::<DeltaDiscoveryExec>()

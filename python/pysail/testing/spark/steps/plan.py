@@ -81,6 +81,18 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    text = re.sub(
+        r"_row-id-col-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        "_row-id-col-<uuid>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"_row-commit-version-col-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        "_row-commit-version-col-<uuid>",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Normalize Iceberg parquet files: part-<UUID>-<sequence>.parquet.
     text = re.sub(
         r"part-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-\d+\.parquet",

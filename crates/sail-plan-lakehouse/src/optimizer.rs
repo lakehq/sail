@@ -11,6 +11,7 @@ use log::trace;
 use sail_common_datafusion::datasource::{
     is_lakehouse_format, MergeCapableSource, MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN,
 };
+use sail_delta_lake::datasource::is_metadata_struct_field;
 use sail_delta_lake::DeltaTableSource;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::merge::{
@@ -279,6 +280,11 @@ fn ensure_merge_metadata_columns(
                                 }
                             }
                         }
+                        for (idx, field) in schema.fields().iter().enumerate() {
+                            if is_metadata_struct_field(field) && !proj.contains(&idx) {
+                                proj.push(idx);
+                            }
+                        }
                     }
 
                     let new_scan = LogicalPlan::TableScan(TableScan::try_new(
@@ -316,6 +322,21 @@ fn ensure_merge_metadata_columns(
                     });
                     if has_in_input && !has_in_projection {
                         new_exprs.push(Expr::Column(Column::from_name(*col)).alias(*col));
+                        changed = true;
+                    }
+                }
+                for field in input_schema.fields() {
+                    if !is_metadata_struct_field(field) {
+                        continue;
+                    }
+                    let name = field.name();
+                    let has_in_projection = proj.expr.iter().any(|e| match e {
+                        Expr::Column(c) => c.name == *name,
+                        Expr::Alias(a) => a.name == *name,
+                        _ => false,
+                    });
+                    if !has_in_projection {
+                        new_exprs.push(Expr::Column(Column::from_name(name.clone())).alias(name));
                         changed = true;
                     }
                 }
