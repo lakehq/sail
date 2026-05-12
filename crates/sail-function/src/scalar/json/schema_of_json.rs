@@ -280,21 +280,20 @@ fn common_supertype(a: InferredType, b: InferredType) -> InferredType {
 /// `common_supertype`, unique names are kept. Output is sorted by name to
 /// match Spark's deterministic ordering.
 fn merge_struct_fields(
-    mut a: Vec<(String, InferredType)>,
+    a: Vec<(String, InferredType)>,
     b: Vec<(String, InferredType)>,
 ) -> Vec<(String, InferredType)> {
-    for (name_b, type_b) in b {
-        match a.iter_mut().find(|(n, _)| n == &name_b) {
-            Some((_, type_a)) => {
-                let merged =
-                    common_supertype(std::mem::replace(type_a, InferredType::Null), type_b);
-                *type_a = merged;
-            }
-            None => a.push((name_b, type_b)),
-        }
+    use std::collections::BTreeMap;
+    let mut map: BTreeMap<String, InferredType> = a.into_iter().collect();
+    for (name, typ) in b {
+        map.entry(name)
+            .and_modify(|existing| {
+                *existing =
+                    common_supertype(std::mem::replace(existing, InferredType::Null), typ.clone());
+            })
+            .or_insert(typ);
     }
-    a.sort_by(|(n1, _), (n2, _)| n1.cmp(n2));
-    a
+    map.into_iter().collect()
 }
 
 /// Spark-compatible field-name escaping.
@@ -505,6 +504,9 @@ struct SparkSchemaOfJsonOptions {
 
 impl SparkSchemaOfJsonOptions {
     pub fn map_to_options(mut self, map_array: &MapArray) -> Result<Self> {
+        if map_array.is_empty() {
+            return Ok(self);
+        }
         let inner_struct = map_array.value(0);
         let (keys, values) = Self::get_keys_values_from_map(inner_struct)?;
         for (key, value) in keys.iter().zip(values.iter()) {

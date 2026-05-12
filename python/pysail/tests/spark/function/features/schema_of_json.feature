@@ -1055,3 +1055,23 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
       Then query result
         | result |
         | STRING |
+
+  Rule: struct field merge ordering and type promotion across many fields
+
+    Scenario: merging structs with many disjoint fields preserves sorted order
+      When query
+        """
+        SELECT schema_of_json('[{"z":1,"a":2,"m":3},{"b":4,"n":5,"c":6}]') AS result
+        """
+      Then query result
+        | result                                                              |
+        | ARRAY<STRUCT<a: BIGINT, b: BIGINT, c: BIGINT, m: BIGINT, n: BIGINT, z: BIGINT>> |
+
+    Scenario: merging structs with shared and disjoint fields promotes types correctly
+      When query
+        """
+        SELECT schema_of_json('[{"a":1,"b":"x","c":1.5},{"a":"text","b":2,"d":true}]') AS result
+        """
+      Then query result
+        | result                                                          |
+        | ARRAY<STRUCT<a: STRING, b: STRING, c: DOUBLE, d: BOOLEAN>>     |
