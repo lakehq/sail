@@ -20,7 +20,8 @@ _ICEBERG_PART_FILE_RE = re.compile(
     r"-\d+\.parquet$"
 )
 _ICEBERG_METADATA_FILE_RE = re.compile(
-    r"^\d+-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.metadata\.json$"
+    r"^(?:v\d+|\d+-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+    r"(?:\.metadata\.json(?:\.gz)?|\.gz\.metadata\.json)$"
 )
 _ICEBERG_MANIFEST_FILE_RE = re.compile(
     r"^manifest-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.avro$"
@@ -156,6 +157,8 @@ def render_normalized_file_tree(root_path: Path) -> str:
                 dirs.append((rendered, p))
             else:
                 files.append(rendered)
+
+        files.sort()
 
         for name, p in dirs:
             indent = "  " * depth

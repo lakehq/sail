@@ -14,8 +14,9 @@ use std::collections::HashMap;
 
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{
-    ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata,
-    Protocol, StructType, TableFeature,
+    contains_timestampntz, contains_variant, ColumnMappingMode, ColumnMetadataKey,
+    DeltaError as DeltaTableError, DeltaResult, Metadata, Protocol, StructType, TableFeature,
+    TableProperties,
 };
 
 pub const ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY: &str =
@@ -81,6 +82,25 @@ pub fn metadata_for_create_with_struct_type(
     )
 }
 
+/// Build Protocol for an existing metadata action by deriving required features from schema and configuration.
+pub fn protocol_for_metadata(metadata: &Metadata) -> DeltaResult<Protocol> {
+    let configuration = metadata.configuration();
+    let table_properties = TableProperties::from(configuration.iter());
+    let schema = metadata.parse_schema()?;
+    let enable_column_mapping = table_properties
+        .column_mapping_mode
+        .is_some_and(|mode| !matches!(mode, ColumnMappingMode::None));
+
+    protocol_for_create(
+        enable_column_mapping,
+        contains_timestampntz(schema.fields()),
+        table_properties.enable_in_commit_timestamps(),
+        schema_has_generated_columns(&schema),
+        contains_variant(schema.fields()),
+        configuration,
+    )
+}
+
 /// Build Protocol for a create/write path based on required table features.
 ///
 /// In addition to the explicitly toggled features, this function scans the table
@@ -91,6 +111,7 @@ pub fn protocol_for_create(
     enable_timestamp_ntz: bool,
     enable_in_commit_timestamps: bool,
     enable_generated_columns: bool,
+    enable_variant: bool,
     configuration: &HashMap<String, String>,
 ) -> DeltaResult<Protocol> {
     let mut reader_features = Vec::new();
@@ -109,6 +130,16 @@ pub fn protocol_for_create(
     }
     if enable_generated_columns {
         writer_features.push(TableFeature::GeneratedColumns);
+    }
+    if enable_variant {
+        reader_features.push(TableFeature::VariantType);
+        writer_features.push(TableFeature::VariantType);
+        if !writer_features.contains(&TableFeature::AppendOnly) {
+            writer_features.push(TableFeature::AppendOnly);
+        }
+        if !writer_features.contains(&TableFeature::Invariants) {
+            writer_features.push(TableFeature::Invariants);
+        }
     }
 
     // Extract features from `delta.feature.<name> = "supported"|"enabled"` configuration entries.
@@ -170,6 +201,19 @@ pub fn protocol_for_create(
         }
         if !writer_features.contains(&TableFeature::DomainMetadata) {
             writer_features.push(TableFeature::DomainMetadata);
+        }
+    }
+
+    // `delta.enableTypeWidening = "true"` enables the stable TypeWidening feature unless
+    // the table explicitly uses the preview feature.
+    if TableProperties::from(configuration.iter()).enable_type_widening() {
+        let preview_enabled = reader_features.contains(&TableFeature::TypeWideningPreview)
+            || writer_features.contains(&TableFeature::TypeWideningPreview);
+        if !preview_enabled && !reader_features.contains(&TableFeature::TypeWidening) {
+            reader_features.push(TableFeature::TypeWidening);
+        }
+        if !preview_enabled && !writer_features.contains(&TableFeature::TypeWidening) {
+            writer_features.push(TableFeature::TypeWidening);
         }
     }
 
@@ -291,17 +335,17 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        ensure_row_tracking_materialized_column_names, protocol_for_create,
+        ensure_row_tracking_materialized_column_names, protocol_for_create, protocol_for_metadata,
         validate_row_tracking_materialized_column_names,
     };
     use crate::spec::{
-        ColumnMappingMode, DataType, DeltaError as DeltaTableError, DeltaResult, MetadataValue,
-        StructField, StructType, TableFeature,
+        ColumnMappingMode, ColumnMetadataKey, DataType, DeltaError as DeltaTableError, DeltaResult,
+        Metadata, MetadataValue, StructField, StructType, TableFeature,
     };
 
     #[test]
     fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {
-        let protocol = protocol_for_create(false, false, true, false, &HashMap::new())?;
+        let protocol = protocol_for_create(false, false, true, false, false, &HashMap::new())?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(protocol.reader_features(), None);
@@ -320,7 +364,7 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "enabled".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -336,7 +380,7 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -345,10 +389,52 @@ mod tests {
     }
 
     #[test]
+    fn protocol_for_create_activates_variant_type_from_schema() -> DeltaResult<()> {
+        let protocol = protocol_for_create(false, false, false, false, true, &HashMap::new())?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::VariantType));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantType));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_metadata_activates_schema_and_property_features() -> DeltaResult<()> {
+        let schema = StructType::try_new([
+            StructField::nullable("id", DataType::INTEGER),
+            StructField::nullable("event_time", DataType::TIMESTAMP_NTZ),
+            StructField::nullable("payload", DataType::unshredded_variant()),
+            StructField::nullable("generated_id", DataType::INTEGER)
+                .with_metadata([(ColumnMetadataKey::GenerationExpression.as_ref(), "id + 1")]),
+        ])?;
+        let mut configuration = HashMap::new();
+        configuration.insert("delta.columnMapping.mode".to_string(), "name".to_string());
+        configuration.insert(
+            "delta.enableInCommitTimestamps".to_string(),
+            "true".to_string(),
+        );
+        let metadata = Metadata::try_new(None, None, schema, vec![], 0, configuration)?;
+
+        let protocol = protocol_for_metadata(&metadata)?;
+
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::ColumnMapping));
+        assert!(protocol.has_writer_feature(&TableFeature::ColumnMapping));
+        assert!(protocol.has_reader_feature(&TableFeature::TimestampWithoutTimezone));
+        assert!(protocol.has_writer_feature(&TableFeature::TimestampWithoutTimezone));
+        assert!(protocol.has_writer_feature(&TableFeature::InCommitTimestamp));
+        assert!(protocol.has_writer_feature(&TableFeature::GeneratedColumns));
+        assert!(protocol.has_reader_feature(&TableFeature::VariantType));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantType));
+        Ok(())
+    }
+
+    #[test]
     fn protocol_for_create_activates_v2_checkpoint_from_checkpoint_policy() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.checkpointPolicy".to_string(), "v2".to_string());
-        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -360,7 +446,7 @@ mod tests {
     fn protocol_for_create_classic_policy_does_not_activate_v2_checkpoint() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.checkpointPolicy".to_string(), "classic".to_string());
-        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 2);
         assert!(!protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -377,7 +463,7 @@ mod tests {
             "delta.feature.v2Checkpiont".to_string(), // intentional typo
             "supported".to_string(),
         );
-        let Err(err) = protocol_for_create(false, false, false, false, &config) else {
+        let Err(err) = protocol_for_create(false, false, false, false, false, &config) else {
             panic!("expected protocol_for_create to error on unknown feature name");
         };
         let msg = err.to_string();
@@ -396,7 +482,7 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "true".to_string(), // invalid
         );
-        let Err(err) = protocol_for_create(false, false, false, false, &config) else {
+        let Err(err) = protocol_for_create(false, false, false, false, false, &config) else {
             panic!("expected protocol_for_create to error on invalid feature value");
         };
         let msg = err.to_string();
@@ -415,7 +501,7 @@ mod tests {
             "delta.enableDeletionVectors".to_string(),
             "true".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::DeletionVectors));
@@ -431,7 +517,7 @@ mod tests {
             "delta.enableDeletionVectors".to_string(),
             "false".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert!(!protocol.has_reader_feature(&TableFeature::DeletionVectors));
         assert!(!protocol.has_writer_feature(&TableFeature::DeletionVectors));
         Ok(())
@@ -441,7 +527,7 @@ mod tests {
     fn protocol_for_create_activates_row_tracking_from_enable_row_tracking() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.enableRowTracking".to_string(), "true".to_string());
-        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert!(protocol.has_writer_feature(&TableFeature::RowTracking));
         assert!(protocol.has_writer_feature(&TableFeature::DomainMetadata));
         Ok(())
@@ -451,7 +537,7 @@ mod tests {
     fn protocol_for_create_activates_row_tracking_from_suspended_flag() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.rowTrackingSuspended".to_string(), "true".to_string());
-        let protocol = protocol_for_create(false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert!(protocol.has_writer_feature(&TableFeature::RowTracking));
         assert!(protocol.has_writer_feature(&TableFeature::DomainMetadata));
         Ok(())

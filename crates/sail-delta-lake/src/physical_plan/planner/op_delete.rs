@@ -76,8 +76,10 @@ pub async fn build_delete_plan(
         ));
     }
     let log_replay_options = LogReplayOptions {
-        include_stats_json: !partition_only,
         include_row_tracking,
+        // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
+        // for partition-only deletes where data-skipping itself does not need stats_json.
+        include_stats_json: true,
         ..Default::default()
     };
 
@@ -140,6 +142,7 @@ pub async fn build_delete_plan(
     assemble_commit_plan(
         filter_exec,
         Some(find_files_exec),
+        Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
         DeltaWriterExecOptions::from(ctx.options().clone()),
         ctx.metadata_configuration().clone(),
@@ -244,6 +247,7 @@ pub async fn build_delete_plan_mor(
             physical_condition,
             table_schema.clone(),
             version,
+            Some(snapshot_state.physical_partition_columns()),
             operation,
         )?);
 
