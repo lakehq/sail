@@ -165,8 +165,13 @@ impl TryFrom<DataType> for spec::DataType {
                     .transpose()?
                     .map(spec::IntervalFieldType::try_from)
                     .transpose()?;
-                let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Year));
-                let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Month));
+                let (start_field, end_field) = match (start_field, end_field) {
+                    (None, None) => (
+                        Some(spec::IntervalFieldType::Year),
+                        Some(spec::IntervalFieldType::Month),
+                    ),
+                    (start_field, end_field) => (start_field, end_field),
+                };
                 Ok(spec::DataType::Interval {
                     interval_unit: spec::IntervalUnit::YearMonth,
                     start_field,
@@ -188,8 +193,13 @@ impl TryFrom<DataType> for spec::DataType {
                     .transpose()?
                     .map(spec::IntervalFieldType::try_from)
                     .transpose()?;
-                let start_field = Some(start_field.unwrap_or(spec::IntervalFieldType::Day));
-                let end_field = Some(end_field.unwrap_or(spec::IntervalFieldType::Second));
+                let (start_field, end_field) = match (start_field, end_field) {
+                    (None, None) => (
+                        Some(spec::IntervalFieldType::Day),
+                        Some(spec::IntervalFieldType::Second),
+                    ),
+                    (start_field, end_field) => (start_field, end_field),
+                };
                 Ok(spec::DataType::Interval {
                     interval_unit: spec::IntervalUnit::DayTime,
                     start_field,

@@ -58,6 +58,23 @@ fn validate_geography_srid(srid: i32) -> PlanResult<()> {
     Ok(())
 }
 
+fn spark_interval_field_value(
+    interval_unit: &spec::IntervalUnit,
+    field: &spec::IntervalFieldType,
+) -> PlanResult<i32> {
+    match (interval_unit, field) {
+        (spec::IntervalUnit::YearMonth, spec::IntervalFieldType::Year) => Ok(0),
+        (spec::IntervalUnit::YearMonth, spec::IntervalFieldType::Month) => Ok(1),
+        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Day) => Ok(0),
+        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Hour) => Ok(1),
+        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Minute) => Ok(2),
+        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Second) => Ok(3),
+        _ => Err(PlanError::invalid(format!(
+            "invalid interval field {field:?} for interval unit {interval_unit:?}"
+        ))),
+    }
+}
+
 impl PlanResolver<'_> {
     fn arrow_binary_type(&self, state: &mut PlanResolverState) -> adt::DataType {
         if self.config.arrow_use_large_var_types && state.config().arrow_allow_large_var_types {
@@ -368,6 +385,25 @@ impl PlanResolver<'_> {
                     spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     spec::VARIANT_EXTENSION_NAME.to_string(),
                 );
+                data_type
+            }
+            spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            } => {
+                if let Some(start_field) = start_field {
+                    metadata.insert(
+                        spec::SAIL_INTERVAL_START_FIELD_KEY.to_string(),
+                        spark_interval_field_value(interval_unit, start_field)?.to_string(),
+                    );
+                }
+                if let Some(end_field) = end_field {
+                    metadata.insert(
+                        spec::SAIL_INTERVAL_END_FIELD_KEY.to_string(),
+                        spark_interval_field_value(interval_unit, end_field)?.to_string(),
+                    );
+                }
                 data_type
             }
             x => x,
