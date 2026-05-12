@@ -112,9 +112,8 @@ impl ScalarUDFImpl for SparkConcat {
 
     fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
         if args.len() == 1 {
-            return Ok(ExprSimplifyResult::Simplified(
-                args.into_iter().next().unwrap(),
-            ));
+            let mut args = args;
+            return Ok(ExprSimplifyResult::Simplified(args.remove(0)));
         }
         Ok(ExprSimplifyResult::Original(args))
     }
