@@ -16,6 +16,7 @@ pub struct PySparkUnresolvedUDF {
     /// The output type of the UDF. `None` for UDTFs that use an `analyze` static method
     /// to determine the return type dynamically at query analysis time.
     output_type: Option<DataType>,
+    output_metadata: Vec<(String, String)>,
     deterministic: bool,
 }
 
@@ -26,6 +27,7 @@ impl PySparkUnresolvedUDF {
         eval_type: spec::PySparkUdfType,
         command: Vec<u8>,
         output_type: Option<DataType>,
+        output_metadata: Vec<(String, String)>,
         deterministic: bool,
     ) -> Self {
         Self {
@@ -38,6 +40,7 @@ impl PySparkUnresolvedUDF {
             eval_type,
             command,
             output_type,
+            output_metadata,
             deterministic,
         }
     }
@@ -56,6 +59,10 @@ impl PySparkUnresolvedUDF {
 
     pub fn output_type(&self) -> Option<&DataType> {
         self.output_type.as_ref()
+    }
+
+    pub fn output_metadata(&self) -> &[(String, String)] {
+        &self.output_metadata
     }
 
     pub fn deterministic(&self) -> bool {

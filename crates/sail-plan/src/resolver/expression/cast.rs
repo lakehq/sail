@@ -60,9 +60,38 @@ impl PlanResolver<'_> {
             } => end_field.or(*start_field),
             _ => None,
         };
-        let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
+        if let spec::DataType::UserDefined {
+            jvm_class,
+            python_class,
+            serialized_python_class,
+            ..
+        } = &cast_to_type
+        {
+            let field = expr.to_field(schema)?.1;
+            let metadata = field.metadata();
+            let is_source_udt = [
+                "udt.jvm_class",
+                "udt.python_class",
+                "udt.serialized_python_class",
+            ]
+            .into_iter()
+            .any(|key| metadata.contains_key(key));
+            let is_same_udt = udt_metadata_matches(metadata, "udt.jvm_class", jvm_class)
+                && udt_metadata_matches(metadata, "udt.python_class", python_class)
+                && udt_metadata_matches(
+                    metadata,
+                    "udt.serialized_python_class",
+                    serialized_python_class,
+                );
+            if is_source_udt && !is_same_udt {
+                return Err(PlanError::AnalysisError(
+                    "cannot cast between different user-defined data types".to_string(),
+                ));
+            }
+        }
+        let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let expr_type = expr.get_type(schema)?;
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
@@ -185,5 +214,17 @@ fn need_rename_cast(expr: &expr::Expr) -> bool {
         expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
         expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
         _ => true,
+    }
+}
+
+fn udt_metadata_matches(
+    metadata: &std::collections::HashMap<String, String>,
+    key: &str,
+    expected: &Option<String>,
+) -> bool {
+    match (metadata.get(key), expected.as_ref()) {
+        (Some(actual), Some(expected)) => actual == expected,
+        (None, None) => true,
+        _ => false,
     }
 }

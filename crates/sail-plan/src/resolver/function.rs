@@ -11,6 +11,7 @@ pub(super) struct PythonUdf {
     pub eval_type: spec::PySparkUdfType,
     pub command: Vec<u8>,
     pub output_type: DataType,
+    pub output_metadata: Vec<(String, String)>,
 }
 
 pub(super) struct PythonUdtf {
@@ -47,12 +48,14 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
+        let output_metadata = user_defined_type_metadata(&output_type);
         let output_type = self.resolve_data_type(&output_type, state)?;
         Ok(PythonUdf {
             python_version,
             eval_type,
             command,
             output_type,
+            output_metadata,
         })
     }
 
@@ -82,5 +85,27 @@ impl PlanResolver<'_> {
             command,
             return_type,
         })
+    }
+}
+
+fn user_defined_type_metadata(data_type: &spec::DataType) -> Vec<(String, String)> {
+    match data_type {
+        spec::DataType::UserDefined {
+            jvm_class,
+            python_class,
+            serialized_python_class,
+            ..
+        } => [
+            ("udt.jvm_class", jvm_class.as_ref()),
+            ("udt.python_class", python_class.as_ref()),
+            (
+                "udt.serialized_python_class",
+                serialized_python_class.as_ref(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|value| (key.to_string(), value.to_string())))
+        .collect(),
+        _ => vec![],
     }
 }

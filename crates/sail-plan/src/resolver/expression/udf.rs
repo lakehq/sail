@@ -175,6 +175,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    function.output_metadata,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -190,6 +191,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    function.output_metadata,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -205,6 +207,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    function.output_metadata,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -220,6 +223,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    function.output_metadata,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -284,6 +288,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    function.output_metadata,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -300,6 +305,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    function.output_metadata,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {

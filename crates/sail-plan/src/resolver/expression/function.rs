@@ -106,11 +106,13 @@ impl PlanResolver<'_> {
                         "unresolved UDF {function_name} has no scalar return type"
                     ))
                 })?;
+                let output_metadata = f.output_metadata().to_vec();
                 let function = PythonUdf {
                     python_version: f.python_version().to_string(),
                     eval_type: f.eval_type(),
                     command: f.command().to_vec(),
                     output_type,
+                    output_metadata,
                 };
                 self.resolve_python_udf_expr(
                     function,

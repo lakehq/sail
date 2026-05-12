@@ -1,12 +1,15 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
 use datafusion::arrow::compute::cast;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::Result;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use pyo3::{Py, PyAny, Python};
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
@@ -36,6 +39,7 @@ pub struct PySparkUDF {
     deterministic: bool,
     input_types: Vec<DataType>,
     output_type: DataType,
+    output_metadata: Vec<(String, String)>,
     config: Arc<PySparkUdfConfig>,
     udf: LazyPyObject,
 }
@@ -48,6 +52,7 @@ impl PySparkUDF {
         deterministic: bool,
         input_types: Vec<DataType>,
         output_type: DataType,
+        output_metadata: Vec<(String, String)>,
         config: Arc<PySparkUdfConfig>,
     ) -> Self {
         Self {
@@ -64,6 +69,7 @@ impl PySparkUDF {
             deterministic,
             input_types,
             output_type,
+            output_metadata,
             config,
             udf: LazyPyObject::new(),
         }
@@ -87,6 +93,10 @@ impl PySparkUDF {
 
     pub fn output_type(&self) -> &DataType {
         &self.output_type
+    }
+
+    pub fn output_metadata(&self) -> &[(String, String)] {
+        &self.output_metadata
     }
 
     pub fn config(&self) -> &Arc<PySparkUdfConfig> {
@@ -132,6 +142,13 @@ impl ScalarUDFImpl for PySparkUDF {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.output_type.clone())
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        let metadata: HashMap<String, String> = self.output_metadata.iter().cloned().collect();
+        Ok(Arc::new(
+            Field::new(self.name(), self.output_type.clone(), true).with_metadata(metadata),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
