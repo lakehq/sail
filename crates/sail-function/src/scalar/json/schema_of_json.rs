@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::array::{downcast_array, Array, MapArray, StringArray, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
@@ -133,14 +134,16 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
 
         Self::validate_args_are_literal(&args)?;
 
-        // Parse and validate options from the optional second argument.
-        // TODO: apply mode option to inference behavior.
-        if args.len() > 1 {
+        // Parse options from the optional second argument.
+        let opts = if args.len() > 1 {
             if let ColumnarValue::Scalar(ScalarValue::Map(map_arr)) = &args[1] {
-                let _options =
-                    SparkSchemaOfJsonOptions::default().map_to_options(map_arr.as_ref())?;
+                SparkSchemaOfJsonOptions::default().map_to_options(map_arr.as_ref())?
+            } else {
+                SparkSchemaOfJsonOptions::default()
             }
-        }
+        } else {
+            SparkSchemaOfJsonOptions::default()
+        };
 
         match &args[0] {
             ColumnarValue::Scalar(scalar) => {
@@ -166,7 +169,7 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
                     generic_exec_err("schema_of_json", "the json must not be null")
                 })?;
 
-                let schema = infer_json_schema(json_str)?;
+                let schema = infer_json_schema(json_str, &opts)?;
 
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(schema))))
             }
@@ -195,6 +198,7 @@ enum InferredType {
     },
     Double,
     String,
+    Timestamp,
     Array(Box<InferredType>),
     Struct(Vec<(String, InferredType)>),
 }
@@ -217,6 +221,7 @@ impl InferredType {
             InferredType::Decimal { precision } => format!("DECIMAL({precision},0)"),
             InferredType::Double => "DOUBLE".to_string(),
             InferredType::String => "STRING".to_string(),
+            InferredType::Timestamp => "TIMESTAMP".to_string(),
             InferredType::Array(elem) => format!("ARRAY<{}>", elem.to_ddl()),
             InferredType::Struct(fields) if fields.is_empty() => "STRUCT<>".to_string(),
             InferredType::Struct(fields) => {
@@ -255,6 +260,9 @@ fn common_supertype(a: InferredType, b: InferredType) -> InferredType {
         (Decimal { precision: p1 }, Decimal { precision: p2 }) => Decimal {
             precision: p1.max(p2),
         },
+
+        // Timestamp merges with String as STRING.
+        (Timestamp, String) | (String, Timestamp) => String,
 
         // Arrays recurse on element type.
         (Array(a), Array(b)) => Array(Box::new(common_supertype(*a, *b))),
@@ -308,16 +316,28 @@ fn escape_field_name(name: &str) -> String {
     }
 }
 
+/// Returns true if `s` looks like a timestamp or date literal that Spark's
+/// `inferTimestamp` option would promote to TIMESTAMP.
+fn is_timestamp_string(s: &str) -> bool {
+    NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").is_ok()
+        || NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").is_ok()
+        || NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
+}
+
 /// Infer the Spark SQL DDL schema from a JSON string.
-fn infer_json_schema(json: &str) -> Result<String> {
+fn infer_json_schema(json: &str, opts: &SparkSchemaOfJsonOptions) -> Result<String> {
     if json.trim().is_empty() {
         return Ok(InferredType::String.to_ddl());
     }
-    let mut jiter = Jiter::new(json.as_bytes());
+    let mut jiter = if opts.allow_non_numeric_numbers {
+        Jiter::new(json.as_bytes()).with_allow_inf_nan()
+    } else {
+        Jiter::new(json.as_bytes())
+    };
     let peek = jiter
         .peek()
         .map_err(|e| generic_exec_err("schema_of_json", &format!("failed to parse JSON: {e}")))?;
-    let inferred = infer_type_from_peek(&mut jiter, peek)?;
+    let inferred = infer_type_from_peek(&mut jiter, peek, opts)?;
     Ok(inferred.coerce_bare_null().to_ddl())
 }
 
@@ -325,7 +345,11 @@ fn jiter_err(e: impl std::fmt::Display) -> DataFusionError {
     generic_exec_err("schema_of_json", &format!("failed to parse JSON: {e}"))
 }
 
-fn infer_type_from_peek(jiter: &mut Jiter, peek: Peek) -> Result<InferredType> {
+fn infer_type_from_peek(
+    jiter: &mut Jiter,
+    peek: Peek,
+    opts: &SparkSchemaOfJsonOptions,
+) -> Result<InferredType> {
     let inferred = match peek {
         Peek::Null => {
             jiter.known_null().map_err(jiter_err)?;
@@ -333,20 +357,46 @@ fn infer_type_from_peek(jiter: &mut Jiter, peek: Peek) -> Result<InferredType> {
         }
         Peek::True | Peek::False => {
             jiter.known_bool(peek).map_err(jiter_err)?;
-            InferredType::Boolean
+            if opts.primitives_as_string {
+                InferredType::String
+            } else {
+                InferredType::Boolean
+            }
         }
         Peek::String => {
-            jiter.known_str().map_err(jiter_err)?;
-            InferredType::String
+            let s = jiter.known_str().map_err(jiter_err)?;
+            if opts.infer_timestamp && is_timestamp_string(s) {
+                InferredType::Timestamp
+            } else {
+                InferredType::String
+            }
         }
-        Peek::Minus => infer_number_type(jiter)?,
+        Peek::Minus => {
+            let t = infer_number_type(jiter)?;
+            if opts.primitives_as_string {
+                InferredType::String
+            } else {
+                t
+            }
+        }
         Peek::Infinity | Peek::NaN => {
             jiter.known_float(peek).map_err(jiter_err)?;
-            InferredType::Double
+            if opts.primitives_as_string {
+                InferredType::String
+            } else {
+                InferredType::Double
+            }
         }
-        Peek::Array => infer_array_type(jiter)?,
-        Peek::Object => infer_struct_type(jiter)?,
-        _ => infer_number_type(jiter)?,
+        Peek::Array => infer_array_type(jiter, opts)?,
+        Peek::Object => infer_struct_type(jiter, opts)?,
+        _ => {
+            let t = infer_number_type(jiter)?;
+            if opts.primitives_as_string {
+                InferredType::String
+            } else {
+                t
+            }
+        }
     };
     Ok(inferred)
 }
@@ -376,17 +426,17 @@ fn infer_number_type(jiter: &mut Jiter) -> Result<InferredType> {
     Ok(InferredType::BigInt)
 }
 
-fn infer_array_type(jiter: &mut Jiter) -> Result<InferredType> {
+fn infer_array_type(jiter: &mut Jiter, opts: &SparkSchemaOfJsonOptions) -> Result<InferredType> {
     let first_peek = jiter.known_array().map_err(jiter_err)?;
 
     let Some(element_peek) = first_peek else {
         return Ok(InferredType::Array(Box::new(InferredType::String)));
     };
 
-    let mut element_type = infer_type_from_peek(jiter, element_peek)?;
+    let mut element_type = infer_type_from_peek(jiter, element_peek, opts)?;
 
     while let Some(peek) = jiter.array_step().map_err(jiter_err)? {
-        let next_type = infer_type_from_peek(jiter, peek)?;
+        let next_type = infer_type_from_peek(jiter, peek, opts)?;
         element_type = common_supertype(element_type, next_type);
     }
 
@@ -395,7 +445,7 @@ fn infer_array_type(jiter: &mut Jiter) -> Result<InferredType> {
     )))
 }
 
-fn infer_struct_type(jiter: &mut Jiter) -> Result<InferredType> {
+fn infer_struct_type(jiter: &mut Jiter, opts: &SparkSchemaOfJsonOptions) -> Result<InferredType> {
     let first_key = jiter.known_object().map_err(jiter_err)?;
 
     let Some(mut current_key) = first_key else {
@@ -407,7 +457,7 @@ fn infer_struct_type(jiter: &mut Jiter) -> Result<InferredType> {
     loop {
         let field_name = current_key.to_string();
         let peek = jiter.peek().map_err(jiter_err)?;
-        let field_type = infer_type_from_peek(jiter, peek)?.coerce_bare_null();
+        let field_type = infer_type_from_peek(jiter, peek, opts)?.coerce_bare_null();
         // Spark silently drops fields with empty-string keys.
         if !field_name.is_empty() {
             fields.push((field_name, field_type));
@@ -448,6 +498,9 @@ impl ModeOptions {
 #[derive(Debug, Default)]
 struct SparkSchemaOfJsonOptions {
     mode: ModeOptions,
+    primitives_as_string: bool,
+    infer_timestamp: bool,
+    allow_non_numeric_numbers: bool,
 }
 
 impl SparkSchemaOfJsonOptions {
@@ -458,6 +511,9 @@ impl SparkSchemaOfJsonOptions {
             let (key, value) = Self::unwrap_or_key_value(key, value)?;
             match key {
                 "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
+                "primitivesAsString" => self.primitives_as_string = value == "true",
+                "inferTimestamp" => self.infer_timestamp = value == "true",
+                "allowNonNumericNumbers" => self.allow_non_numeric_numbers = value == "true",
                 "allowNumericLeadingZeros" => {
                     // Parsing numbers with leading zeros would require either a
                     // permissive JSON parser or extending jiter. Until that is

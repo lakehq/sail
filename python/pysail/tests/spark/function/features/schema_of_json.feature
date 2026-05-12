@@ -931,7 +931,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: primitivesAsString option
 
-    @sail-bug
     Scenario: primitivesAsString converts integers to STRING
       When query
         """
@@ -941,7 +940,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | result                                      |
         | STRUCT<a: STRING, b: STRING, c: STRING>     |
 
-    @sail-bug
     Scenario: primitivesAsString keeps arrays of primitives as ARRAY<STRING>
       When query
         """
@@ -951,7 +949,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | result                        |
         | STRUCT<a: ARRAY<STRING>>      |
 
-    @sail-bug
     Scenario: primitivesAsString keeps nested structs intact with STRING leaf values
       When query
         """
@@ -963,7 +960,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: inferTimestamp option
 
-    @sail-bug
     Scenario: inferTimestamp true infers TIMESTAMP from datetime string
       When query
         """
@@ -973,7 +969,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | result                   |
         | STRUCT<a: TIMESTAMP>     |
 
-    @sail-bug
     Scenario: inferTimestamp true infers TIMESTAMP from date-only string
       When query
         """
@@ -992,7 +987,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | result             |
         | STRUCT<a: STRING>  |
 
-    @sail-bug
     Scenario: inferTimestamp with non-timestamp string keeps STRING
       When query
         """
@@ -1004,7 +998,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
 
   Rule: allowNonNumericNumbers option
 
-    @sail-bug
     Scenario: allowNonNumericNumbers true allows NaN as DOUBLE
       When query
         """
@@ -1014,7 +1007,6 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | result             |
         | STRUCT<a: DOUBLE>  |
 
-    @sail-bug
     Scenario: allowNonNumericNumbers true allows Infinity as DOUBLE
       When query
         """
