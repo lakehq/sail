@@ -183,7 +183,7 @@ pub fn data_type_from_ast_interval(value: &IntervalExpr) -> SqlResult<Option<spe
             let IntervalLiteral {
                 interval: _,
                 value: interval,
-            } = parse_interval_literal(&from_ast_string(value)?)?;
+            } = parse_interval_literal(&from_ast_string(value.clone())?)?;
             return data_type_from_ast_interval(&interval);
         }
         _ => None,
