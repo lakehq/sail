@@ -18,6 +18,7 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::data_type::spark_interval_field_value;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -193,23 +194,6 @@ fn interval_field_metadata(data_type: &spec::DataType) -> PlanResult<Vec<(String
         ));
     }
     Ok(metadata)
-}
-
-fn spark_interval_field_value(
-    interval_unit: &spec::IntervalUnit,
-    field: &spec::IntervalFieldType,
-) -> PlanResult<i32> {
-    match (interval_unit, field) {
-        (spec::IntervalUnit::YearMonth, spec::IntervalFieldType::Year) => Ok(0),
-        (spec::IntervalUnit::YearMonth, spec::IntervalFieldType::Month) => Ok(1),
-        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Day) => Ok(0),
-        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Hour) => Ok(1),
-        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Minute) => Ok(2),
-        (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Second) => Ok(3),
-        _ => Err(PlanError::invalid(format!(
-            "invalid interval field {field:?} for interval unit {interval_unit:?}"
-        ))),
-    }
 }
 
 fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {

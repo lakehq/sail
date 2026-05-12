@@ -58,7 +58,7 @@ fn validate_geography_srid(srid: i32) -> PlanResult<()> {
     Ok(())
 }
 
-fn spark_interval_field_value(
+pub(super) fn spark_interval_field_value(
     interval_unit: &spec::IntervalUnit,
     field: &spec::IntervalFieldType,
 ) -> PlanResult<i32> {
