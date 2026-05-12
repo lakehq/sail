@@ -1075,3 +1075,28 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
       Then query result
         | result                                                          |
         | ARRAY<STRUCT<a: STRING, b: STRING, c: DOUBLE, d: BOOLEAN>>     |
+
+  Rule: Array with mixed null, normal, and unusual values
+
+    Scenario: array with null, integer, and string values promotes to STRING
+      When query
+        """
+        SELECT schema_of_json('[{"a": null}, {"a": 1}, {"a": "weird"}]') AS result
+        """
+      Then query result
+        | result                   |
+        | ARRAY<STRUCT<a: STRING>> |
+
+  Rule: Multiple schema_of_json calls in one query
+
+    Scenario: null JSON bare value, normal struct, and wide integer in same SELECT
+      When query
+        """
+        SELECT
+          schema_of_json('null')                       AS from_null,
+          schema_of_json('{"id": 1, "name": "alice"}') AS normal_struct,
+          schema_of_json('{"n": 99999999999999999999}') AS big_num
+        """
+      Then query result
+        | from_null | normal_struct                    | big_num               |
+        | STRING    | STRUCT<id: BIGINT, name: STRING> | STRUCT<n: DECIMAL(20,0)> |
