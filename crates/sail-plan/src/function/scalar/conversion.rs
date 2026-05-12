@@ -4,6 +4,7 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_expr::{expr, ExprSchemable, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 
 use crate::error::PlanResult;
@@ -28,6 +29,29 @@ pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr>
         Ok(expr::Expr::Cast(expr::Cast::new(
             Box::new(arg),
             DataType::Date32,
+        )))
+    }
+}
+
+fn cast_to_time(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arg = input.arguments.one()?;
+    let data_type = arg
+        .to_field(input.function_context.schema)?
+        .1
+        .data_type()
+        .clone();
+    if matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkTime::new(false))),
+            args: vec![arg],
+        }))
+    } else {
+        Ok(expr::Expr::Cast(expr::Cast::new(
+            Box::new(arg),
+            DataType::Time64(TimeUnit::Microsecond),
         )))
     }
 }
@@ -73,6 +97,7 @@ pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, ScalarF
         ("int", F::cast(DataType::Int32)),
         ("smallint", F::cast(DataType::Int16)),
         ("string", F::cast(DataType::Utf8)),
+        ("time", F::custom(cast_to_time)),
         ("timestamp", F::custom(cast_to_timestamp)),
         ("tinyint", F::cast(DataType::Int8)),
     ]

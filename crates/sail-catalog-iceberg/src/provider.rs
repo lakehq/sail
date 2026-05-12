@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
@@ -336,20 +336,6 @@ impl IcebergRestCatalogProvider {
 
         let comment = get_property(&properties, "comment");
 
-        let options: Vec<_> = properties
-            .extract_if(|k, _| k.trim().to_lowercase().starts_with("options."))
-            .map(|(k, v)| {
-                let trimmed = k.trim().to_string();
-                let stripped =
-                    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("options.") {
-                        trimmed[8..].to_string()
-                    } else {
-                        trimmed
-                    };
-                (stripped, v)
-            })
-            .collect();
-
         if let Some(metadata_location) = result.metadata_location {
             properties.insert("metadata-location".to_string(), metadata_location);
         }
@@ -414,7 +400,6 @@ impl IcebergRestCatalogProvider {
                 partition_by,
                 sort_by,
                 bucket_by: None,
-                options,
                 properties,
             },
         })
@@ -689,10 +674,40 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     ) -> CatalogResult<()> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
-        let DropDatabaseOptions {
-            if_exists,
-            cascade: _,
-        } = options;
+        let DropDatabaseOptions { if_exists, cascade } = options;
+
+        if cascade {
+            // For CASCADE, first drop all tables and views in the namespace before dropping the namespace.
+            let prefix = catalog_config
+                .props
+                .get(REST_CATALOG_PROP_PREFIX)
+                .map(|s| s.as_str());
+            let ns_string = Self::namespace_string(database);
+            let tables_result = client
+                .catalog_api_api()
+                .list_tables(&ns_string, None, None, prefix)
+                .await;
+            if let Ok(tables) = tables_result {
+                for identifier in tables.identifiers.unwrap_or_default() {
+                    let _ = client
+                        .catalog_api_api()
+                        .drop_table(&ns_string, &identifier.name, Some(true), prefix)
+                        .await;
+                }
+            }
+            let views_result = client
+                .catalog_api_api()
+                .list_views(&ns_string, None, None, prefix)
+                .await;
+            if let Ok(views) = views_result {
+                for identifier in views.identifiers.unwrap_or_default() {
+                    let _ = client
+                        .catalog_api_api()
+                        .drop_view(&ns_string, &identifier.name, prefix)
+                        .await;
+                }
+            }
+        }
 
         match client
             .catalog_api_api()
@@ -736,7 +751,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
-            options,
             properties,
         } = options;
 
@@ -795,10 +809,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
         let mut props = HashMap::new();
-        // TODO: Is this correct for options?
-        for (k, v) in options {
-            props.insert(format!("options.{k}"), v);
-        }
         if let Some(c) = comment {
             props.insert("comment".to_string(), c);
         }
@@ -905,7 +915,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     partition_by: Vec::new(),
                     sort_by: Vec::new(),
                     bucket_by: None,
-                    options: Vec::new(),
                     properties: Vec::new(),
                 },
             })
@@ -943,6 +952,17 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
     }
 
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "alter table in Iceberg catalog".to_string(),
+        ))
+    }
+
     async fn create_view(
         &self,
         database: &Namespace,
@@ -974,20 +994,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let mut fields = Vec::new();
-        for (idx, col) in columns.iter().enumerate() {
+        for col in columns.iter() {
             let CreateViewColumnOptions {
                 name,
                 data_type,
                 nullable,
                 comment,
             } = col;
-            let field_id = idx as i32 + 1; // FIXME: Is this wrong?
             let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
                 CatalogError::External(format!(
                     "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
                 ))
             })?;
-            let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+            // Use a placeholder field id of 0; after all fields are collected,
+            // `SchemaEvolver::assign_schema_field_ids` assigns unique IDs
+            // including for nested struct/list/map children.
+            let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
             if let Some(comment) = comment {
                 field = field.with_doc(comment);
             }
@@ -998,6 +1020,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .with_fields(fields)
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
+        let schema = sail_iceberg::SchemaEvolver::assign_schema_field_ids(&schema)
+            .map_err(|e| CatalogError::External(format!("Failed to assign field ids: {e}")))?;
         let schema = crate::models::Schema {
             r#type: crate::models::schema::Type::Struct,
             fields: schema.fields().to_vec(),
@@ -1172,11 +1196,18 @@ where
 }
 
 /// Converts table column options to Iceberg nested fields.
+///
+/// Ensures all fields (top-level and nested) receive sequential, unique field
+/// IDs starting at 1 via `SchemaEvolver::assign_schema_field_ids`. This is
+/// required because Iceberg uses field IDs for schema indexing and column
+/// identity, and nested children produced by `arrow_type_to_iceberg` would
+/// otherwise default to id 0 since the source `CreateTableColumnOptions` carry
+/// no Iceberg field-id metadata.
 fn columns_to_nested_fields(
     columns: &[CreateTableColumnOptions],
 ) -> CatalogResult<Vec<Arc<NestedField>>> {
     let mut fields = Vec::new();
-    for (idx, col) in columns.iter().enumerate() {
+    for col in columns.iter() {
         let CreateTableColumnOptions {
             name,
             data_type,
@@ -1185,20 +1216,28 @@ fn columns_to_nested_fields(
             default: _,
             generated_always_as: _,
         } = col;
-        let field_id = idx as i32 + 1; // FIXME: Is this wrong?
         let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
             CatalogError::External(format!(
                 "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
             ))
         })?;
         // TODO: `default` is not supported until Iceberg V3
-        let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+        // Use a placeholder field id of 0; after all fields are collected,
+        // `SchemaEvolver::assign_schema_field_ids` assigns unique IDs including
+        // for nested struct/list/map children.
+        let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
         if let Some(comment) = comment {
             field = field.with_doc(comment);
         }
         fields.push(Arc::new(field));
     }
-    Ok(fields)
+    let temp_schema = sail_iceberg::spec::Schema::builder()
+        .with_fields(fields)
+        .build()
+        .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
+    let assigned = sail_iceberg::SchemaEvolver::assign_schema_field_ids(&temp_schema)
+        .map_err(|e| CatalogError::External(format!("Failed to assign field ids: {e}")))?;
+    Ok(assigned.fields().to_vec())
 }
 
 /// Builds an Iceberg partition spec from partition fields and their field ID mappings.
@@ -1273,6 +1312,7 @@ fn build_sort_order(
         if let Some(&source_id) = name_to_id.get(&sort.column) {
             sort_fields.push(sail_iceberg::spec::sort::SortField {
                 source_id,
+                source_ids: vec![],
                 transform: sail_iceberg::Transform::Identity, // FIXME: This is wrong, col needs to be parsed.
                 direction: if sort.ascending {
                     sail_iceberg::spec::sort::SortDirection::Ascending

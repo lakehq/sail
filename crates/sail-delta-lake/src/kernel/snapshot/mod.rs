@@ -39,7 +39,10 @@ use crate::kernel::checkpoints::{
 use crate::kernel::log_segment::ReplayedTableHeader;
 pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
 use crate::kernel::{DeltaSnapshotConfig, SchemaRef};
-use crate::schema::{arrow_field_physical_name, arrow_schema_reorder_partitions};
+use crate::schema::{
+    arrow_field_physical_name, arrow_schema_reorder_partitions, protocol_supports_type_widening,
+    schema_contains_type_widening_metadata, validate_type_widening_metadata,
+};
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_PATH,
     FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
@@ -47,8 +50,8 @@ use crate::spec::fields::{
 };
 use crate::spec::{
     Add, ColumnMappingMode, ColumnMetadataKey, CommitConflictError, DeltaError as DeltaTableError,
-    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, TableFeature, TableProperties,
-    Transaction, TransactionError, VersionChecksum,
+    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, StructType, TableFeature,
+    TableProperties, Transaction, TransactionError, VersionChecksum,
 };
 use crate::storage::LogStore;
 use crate::table::{
@@ -56,7 +59,7 @@ use crate::table::{
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-mod materialize;
+pub(crate) mod materialize;
 mod stats;
 
 pub struct DeltaSnapshot {
@@ -370,7 +373,19 @@ impl DeltaSnapshot {
     pub fn ensure_data_read_supported(&self) -> DeltaResult<()> {
         crate::kernel::transaction::PROTOCOL
             .can_read_from_protocol(self.protocol())
-            .map_err(map_read_protocol_error)
+            .map_err(map_read_protocol_error)?;
+
+        let schema = StructType::try_from(self.schema())?;
+        let has_type_changes = schema_contains_type_widening_metadata(&schema);
+        if has_type_changes && !protocol_supports_type_widening(self.protocol()) {
+            return Err(DeltaTableError::Unsupported(
+                "Reading this Delta table requires the typeWidening reader feature".to_string(),
+            ));
+        }
+        if has_type_changes {
+            validate_type_widening_metadata(&schema)?;
+        }
+        Ok(())
     }
 
     fn has_unsupported_table_features(&self) -> bool {
@@ -901,7 +916,7 @@ mod tests {
     use url::Url;
 
     use super::DeltaSnapshot;
-    use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+    use crate::datasource::DeltaScanConfig;
     use crate::kernel::DeltaSnapshotConfig;
     use crate::logical::table_source::DeltaTableSource;
     use crate::spec::{
@@ -1253,39 +1268,14 @@ mod tests {
     }
 
     #[test]
-    fn delta_table_provider_rejects_unsupported_reader_features() {
-        let protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::DeletionVectors]),
-            Some(vec![TableFeature::DeletionVectors]),
-        );
-        let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
-
-        let result =
-            DeltaTableProvider::try_new(snapshot, test_log_store(), DeltaScanConfig::default());
-        assert!(
-            result.is_err(),
-            "provider creation should reject unsupported reader features"
-        );
-        let err = match result {
-            Err(err) => err,
-            Ok(_) => return,
-        };
-
-        assert!(matches!(
-            err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
-        ));
-    }
-
-    #[test]
     fn delta_table_source_rejects_unsupported_reader_features() {
+        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
+        // Use it to verify that the source correctly rejects tables with unsupported features.
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::DeletionVectors]),
-            Some(vec![TableFeature::DeletionVectors]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1302,7 +1292,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("DeletionVectors")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("VacuumProtocolCheck")
         ));
     }
 

@@ -10,10 +10,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+
 use sail_data_source::options::gen::DeltaWriteOptions;
 use serde::{Deserialize, Serialize};
 
 /// Options for the Delta Lake writer execution plan.
+///
 /// This is a subset of `DeltaWriteOptions` containing only the fields used
 /// during physical writing. It derives serde for use in the physical plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +26,8 @@ pub struct DeltaWriterExecOptions {
     pub merge_schema: bool,
     pub overwrite_schema: bool,
     pub replace_where: Option<String>,
+    #[serde(default)]
+    pub generation_expressions: HashMap<String, String>,
 }
 
 impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
@@ -33,6 +38,19 @@ impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
             merge_schema: options.merge_schema,
             overwrite_schema: options.overwrite_schema,
             replace_where: options.replace_where,
+            generation_expressions: HashMap::new(),
         }
+    }
+}
+
+impl DeltaWriterExecOptions {
+    /// Attach column-level generation expressions resolved from the write input's
+    /// logical schema.
+    pub fn with_generation_expressions(
+        mut self,
+        generation_expressions: HashMap<String, String>,
+    ) -> Self {
+        self.generation_expressions = generation_expressions;
+        self
     }
 }
