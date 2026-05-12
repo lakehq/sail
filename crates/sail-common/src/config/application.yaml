@@ -710,6 +710,16 @@
     Whether to enable cost-based join reorder in the query optimizer.
   experimental: true
 
+- key: optimizer.expand_views_at_output
+  type: boolean
+  default: "true"
+  description: |
+    Whether the optimizer should coerce view types to non-view types at query output.
+    If the value is `true`, `Utf8View` is coerced to `LargeUtf8` and `BinaryView` is coerced
+    to `LargeBinary` before results leave the query boundary. If the value is `false`, view
+    types pass through to the client.
+  experimental: true
+
 - key: spark.session_timeout_secs
   type: number
   default: "900"

@@ -17,14 +17,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_variant_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_variant_object",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

@@ -67,6 +67,14 @@ jobs:
           fail_ci_if_error: true
           env_vars: OS
 
+      - name: Install Kerberos client tools
+        if: ${{ inputs.run_catalog_tests == 'true' }}
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            krb5-user \
+            libgssapi-krb5-2
+
       - name: Run Cargo Test (Ignored)
         if: ${{ inputs.run_catalog_tests == 'true' }}
         env:
