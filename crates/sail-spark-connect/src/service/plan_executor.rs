@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -7,13 +7,16 @@ use datafusion::arrow::compute::concat_batches;
 use datafusion::catalog::MemTable;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion::parquet::arrow::async_writer::ParquetObjectWriter;
 use datafusion::parquet::arrow::AsyncArrowWriter;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use fastrace::Span;
-use futures::{stream, TryStreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
 use log::{debug, warn};
+use object_store::path::Path as ObjectStorePath;
+use object_store::ObjectStoreScheme;
 use sail_catalog::manager::tracker::CatalogCachedRelation;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
@@ -554,7 +557,7 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let fields = named_plan_fields(&logical_plan, fields);
 
     let use_disk = checkpoint_uses_disk(local, storage_level.as_ref());
-    let (cached_plan, storage_path) = if use_disk {
+    let (cached_plan, storage_uri) = if use_disk {
         materialize_logical_plan_to_disk(ctx, logical_plan).await?
     } else {
         (
@@ -570,11 +573,11 @@ pub(crate) async fn handle_execute_checkpoint_command(
         CatalogCachedRelation {
             plan: Arc::new(cached_plan),
             fields,
-            storage_path: storage_path.clone(),
+            storage_uri: storage_uri.clone(),
         },
     ) {
-        if let Some(path) = storage_path {
-            cleanup_checkpoint_path(&path).await;
+        if let Some(uri) = storage_uri {
+            cleanup_checkpoint_path(ctx, &uri).await;
         }
         return Err(SparkError::internal(format!(
             "failed to track cached relation: {error}"
@@ -667,26 +670,60 @@ async fn materialize_logical_plan_to_memory(
     Ok(scan)
 }
 
-/// Returns the configured checkpoint root directory.  When the configuration
+fn directory_file_url(path: PathBuf) -> SparkResult<url::Url> {
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    url::Url::from_directory_path(&path).map_err(|_| {
+        SparkError::invalid(format!(
+            "checkpoint directory is not a valid file path: {}",
+            path.display()
+        ))
+    })
+}
+
+fn ensure_directory_url(mut url: url::Url) -> SparkResult<url::Url> {
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    Ok(url)
+}
+
+/// Returns the configured checkpoint root location.  When the configuration
 /// option is empty, falls back to a `sail-checkpoints/` subdirectory of the
 /// system temporary directory.
 ///
 /// In cluster deployments the operator should configure `spark.checkpoint_dir`
-/// to a filesystem path that is shared and readable by all workers (for
-/// example, a network mount such as NFS).  The default node-local path is
-/// suitable for single-node deployments and tests but will not work
-/// correctly for distributed execution since remote workers cannot read
-/// from the driver's local temporary directory.  Only local or shared
-/// filesystem paths are currently supported; remote object-store URIs
-/// (such as `s3://`) are not and will surface as filesystem I/O errors
-/// when the checkpoint directory is created.
-fn resolve_checkpoint_root(spark: &SparkSession) -> PathBuf {
+/// to a location that is shared and readable by all workers, such as an
+/// object-store URI or a shared filesystem path.  The default node-local path
+/// is suitable for single-node deployments and tests but will not work
+/// correctly for distributed execution since remote workers cannot read from
+/// the driver's local temporary directory.
+fn resolve_checkpoint_root(spark: &SparkSession) -> SparkResult<url::Url> {
     let configured = spark.options().checkpoint_dir.trim();
     if configured.is_empty() {
-        std::env::temp_dir().join("sail-checkpoints")
+        directory_file_url(std::env::temp_dir().join("sail-checkpoints"))
+    } else if let Ok(url) = url::Url::parse(configured) {
+        ensure_directory_url(url)
     } else {
-        PathBuf::from(configured)
+        directory_file_url(PathBuf::from(configured))
     }
+}
+
+fn checkpoint_store_and_path(
+    ctx: &SessionContext,
+    checkpoint_url: &url::Url,
+) -> SparkResult<(Arc<dyn object_store::ObjectStore>, ObjectStorePath)> {
+    let (_, checkpoint_path) = ObjectStoreScheme::parse(checkpoint_url)
+        .map_err(|e| SparkError::invalid(format!("invalid checkpoint location: {e}")))?;
+    let object_store = ctx
+        .runtime_env()
+        .object_store_registry
+        .get_store(checkpoint_url)?;
+    Ok((object_store, checkpoint_path))
 }
 
 /// Eagerly executes the resolved logical plan, streaming the result directly
@@ -701,18 +738,19 @@ fn resolve_checkpoint_root(spark: &SparkSession) -> PathBuf {
 async fn materialize_logical_plan_to_disk(
     ctx: &SessionContext,
     plan: LogicalPlan,
-) -> SparkResult<(LogicalPlan, Option<PathBuf>)> {
+) -> SparkResult<(LogicalPlan, Option<String>)> {
     // Spark Connect does not send a user checkpoint directory with this command,
     // so Sail uses the directory configured by `spark.checkpoint_dir` (or a
     // server-local temporary area if unset).  Files are best-effort cleaned
     // up when the client releases the cached remote relation or when the
     // session ends.
     let spark = ctx.extension::<SparkSession>()?;
-    let checkpoint_root = resolve_checkpoint_root(&spark);
-    tokio::fs::create_dir_all(&checkpoint_root)
-        .await
-        .map_err(|e| SparkError::internal(format!("failed to create checkpoint directory: {e}")))?;
-    let checkpoint_path = checkpoint_root.join(uuid::Uuid::new_v4().to_string());
+    let checkpoint_root = resolve_checkpoint_root(&spark)?;
+    let checkpoint_url = checkpoint_root
+        .join(&format!("{}/", uuid::Uuid::new_v4()))
+        .map_err(|e| SparkError::invalid(format!("invalid checkpoint location: {e}")))?;
+    let checkpoint_uri = checkpoint_url.to_string();
+    let (object_store, checkpoint_path) = checkpoint_store_and_path(ctx, &checkpoint_url)?;
 
     // Plan and execute via the `JobService` runner so checkpoint
     // materialization goes through the same execution path as user queries.
@@ -730,10 +768,9 @@ async fn materialize_logical_plan_to_disk(
     // Stream batches directly to a single Parquet file inside the checkpoint
     // directory without collecting them all into memory first.
     let write_result: SparkResult<()> = async {
-        tokio::fs::create_dir_all(&checkpoint_path).await?;
-        let parquet_path = checkpoint_path.join("part-0.parquet");
-        let file = tokio::fs::File::create(&parquet_path).await?;
-        let mut writer = AsyncArrowWriter::try_new(file, arrow_schema, None)
+        let parquet_path = ObjectStorePath::from(format!("{checkpoint_path}/part-0.parquet"));
+        let object_writer = ParquetObjectWriter::new(object_store.clone(), parquet_path);
+        let mut writer = AsyncArrowWriter::try_new(object_writer, arrow_schema, None)
             .map_err(|e| SparkError::internal(format!("failed to create parquet writer: {e}")))?;
         while let Some(batch) = stream.try_next().await? {
             writer
@@ -750,34 +787,43 @@ async fn materialize_logical_plan_to_disk(
     .await;
 
     if let Err(error) = write_result {
-        cleanup_checkpoint_path(&checkpoint_path).await;
+        cleanup_checkpoint_path(ctx, &checkpoint_uri).await;
         return Err(error);
     }
 
-    let checkpoint_path_string = checkpoint_path.to_string_lossy().into_owned();
     let df = match ctx
-        .read_parquet(&checkpoint_path_string, ParquetReadOptions::default())
+        .read_parquet(&checkpoint_uri, ParquetReadOptions::default())
         .await
     {
         Ok(df) => df,
         Err(error) => {
-            cleanup_checkpoint_path(&checkpoint_path).await;
+            cleanup_checkpoint_path(ctx, &checkpoint_uri).await;
             return Err(error.into());
         }
     };
-    Ok((df.into_unoptimized_plan(), Some(checkpoint_path)))
+    Ok((df.into_unoptimized_plan(), Some(checkpoint_uri)))
 }
 
-async fn cleanup_checkpoint_path(path: &Path) {
-    match tokio::fs::remove_dir_all(path).await {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            warn!(
-                "failed to remove checkpoint directory {}: {e}",
-                path.display()
-            );
-        }
+async fn cleanup_checkpoint_path(ctx: &SessionContext, checkpoint_uri: &str) {
+    let Ok(checkpoint_url) = url::Url::parse(checkpoint_uri) else {
+        warn!("failed to parse checkpoint location for cleanup: {checkpoint_uri}");
+        return;
+    };
+    let Ok((object_store, checkpoint_path)) = checkpoint_store_and_path(ctx, &checkpoint_url)
+    else {
+        warn!("failed to resolve checkpoint object store for cleanup: {checkpoint_uri}");
+        return;
+    };
+    let locations = object_store
+        .list(Some(&checkpoint_path))
+        .map_ok(|meta| meta.location)
+        .boxed();
+    if let Err(e) = object_store
+        .delete_stream(locations)
+        .try_collect::<Vec<_>>()
+        .await
+    {
+        warn!("failed to remove checkpoint location {checkpoint_uri}: {e}");
     }
 }
 
@@ -794,8 +840,8 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
     let removed = manager
         .remove_cached_relation(&relation.relation_id)
         .map_err(|e| SparkError::internal(format!("failed to remove cached relation: {e}")))?;
-    if let Some(path) = removed.and_then(|relation| relation.storage_path) {
-        cleanup_checkpoint_path(&path).await;
+    if let Some(uri) = removed.and_then(|relation| relation.storage_uri) {
+        cleanup_checkpoint_path(ctx, &uri).await;
     }
 
     let spark = ctx.extension::<SparkSession>()?;

@@ -41,6 +41,8 @@ log = { workspace = true }
 futures = { workspace = true }
 fastrace = { workspace = true }
 pyo3 = { workspace = true }
+object_store = { workspace = true }
+url = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

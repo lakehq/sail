@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use datafusion_expr::{LogicalPlan, ScalarUDF};
@@ -17,7 +16,7 @@ pub struct CatalogLogicalPlanId(u64);
 pub struct CatalogCachedRelation {
     pub plan: Arc<LogicalPlan>,
     pub fields: Vec<String>,
-    pub storage_path: Option<PathBuf>,
+    pub storage_uri: Option<String>,
 }
 
 #[derive(Default)]
@@ -133,12 +132,19 @@ impl Drop for CatalogObjectTracker {
             return;
         };
         for (_, relation) in state.cached_relations.drain() {
-            let Some(path) = relation.storage_path else {
+            let Some(uri) = relation.storage_uri else {
                 continue;
             };
-            // `Drop` runs in a sync context, so we use blocking filesystem calls.
-            // Errors are ignored because the caller cannot react to them.
-            let _ = std::fs::remove_dir_all(&path);
+            if let Ok(url) = url::Url::parse(&uri) {
+                if url.scheme() == "file" {
+                    if let Ok(path) = url.to_file_path() {
+                        // `Drop` runs in a sync context, so we use blocking
+                        // filesystem calls for local checkpoint cleanup.
+                        // Errors are ignored because the caller cannot react.
+                        let _ = std::fs::remove_dir_all(path);
+                    }
+                }
+            }
         }
     }
 }

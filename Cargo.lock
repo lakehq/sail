@@ -6975,6 +6975,7 @@ dependencies = [
  "serde_arrow",
  "thiserror 2.0.18",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -7654,6 +7655,7 @@ dependencies = [
  "lazy_static",
  "log",
  "monostate",
+ "object_store",
  "pbjson",
  "pbjson-build",
  "pbjson-types",
@@ -7685,6 +7687,7 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tonic-types",
+ "url",
  "uuid",
 ]
 
