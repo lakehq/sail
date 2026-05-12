@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
@@ -23,9 +24,14 @@ use crate::physical_plan::planner::{
     plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
     DeltaPlannerConfig, PlannerContext,
 };
+use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
+use crate::schema::{
+    add_type_widening_metadata, collect_type_changes, evolve_schema, format_type_change_path,
+    is_supported_type_change_for_write, protocol_can_write_type_widening,
+};
 use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
-    DeltaOperation,
+    DataType as DeltaDataType, DeltaOperation, Protocol, StructField, StructType, TableFeature,
 };
 use crate::table::{open_table_with_object_store, open_table_with_object_store_and_table_config};
 use crate::{create_delta_source, DeltaTableError};
@@ -166,8 +172,9 @@ impl TableFormat for DeltaTableFormat {
         // Validate partition column mismatch for append/overwrite operations
         if let Some(existing_partitions) = &existing_partition_columns {
             if !partition_by.is_empty() && partition_by != *existing_partitions {
-                // Allow partition column changes only when overwriting with schema changes
-                // For append mode, this is always an error
+                // Allow partition column changes only for full-table overwrite with schema changes.
+                // Append and overwrite-if leave some existing files active, so changing table-wide
+                // partition metadata would make those active files inconsistent with the snapshot.
                 match unified_mode {
                     PhysicalSinkMode::Append => {
                         return plan_err!(
@@ -177,7 +184,15 @@ impl TableFormat for DeltaTableFormat {
                             partition_by
                         );
                     }
-                    PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwriteIf { .. }
+                    PhysicalSinkMode::OverwriteIf { .. } => {
+                        return plan_err!(
+                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                            Cannot change partitioning with replaceWhere or conditional overwrite.",
+                            existing_partitions,
+                            partition_by
+                        );
+                    }
+                    PhysicalSinkMode::Overwrite
                         // For overwrite mode, check if schema overwrite is allowed
                         if !delta_options.overwrite_schema => {
                             return plan_err!(
@@ -192,10 +207,17 @@ impl TableFormat for DeltaTableFormat {
             }
         }
 
-        let partition_columns = if !partition_by.is_empty() {
-            partition_by
-        } else {
-            existing_partition_columns.unwrap_or_default()
+        let partition_columns = match (&existing_partition_columns, &unified_mode) {
+            (
+                Some(existing_partitions),
+                PhysicalSinkMode::Append | PhysicalSinkMode::OverwriteIf { .. },
+            ) if partition_by.is_empty() => existing_partitions.clone(),
+            (Some(existing_partitions), PhysicalSinkMode::Overwrite)
+                if partition_by.is_empty() && !delta_options.overwrite_schema =>
+            {
+                existing_partitions.clone()
+            }
+            _ => partition_by,
         };
 
         let table_config = DeltaPlannerConfig::new(
@@ -395,6 +417,11 @@ impl TableFormat for DeltaTableFormat {
         // are preserved, and new feature requirements are added.
         let desired_protocol = protocol_for_metadata(&new_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            snapshot.protocol(),
+            &desired_protocol,
+            new_metadata.configuration(),
+        );
 
         let existing_protocol = snapshot.protocol();
         let (merged_protocol, protocol_upgraded) =
@@ -426,6 +453,239 @@ impl TableFormat for DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         Ok(())
+    }
+
+    async fn alter_table_column_type(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        data_type: ArrowDataType,
+    ) -> Result<()> {
+        use crate::kernel::transaction::CommitBuilder;
+
+        let url = parse_location_to_url(path)?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let table = open_table_with_object_store_and_table_config(
+            url,
+            object_store,
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .clone();
+        let current_metadata = snapshot.metadata();
+        let current_kernel = StructType::try_from(snapshot.schema())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let target_type = DeltaDataType::try_from(&data_type)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let candidate_kernel =
+            alter_delta_column_type(&current_kernel, &column_path, &column_path, target_type)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let type_changes = collect_type_changes(&current_kernel, &candidate_kernel)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        if type_changes.is_empty() {
+            return Ok(());
+        }
+        if !snapshot.table_properties().enable_type_widening() {
+            return plan_err!(
+                "Delta ALTER COLUMN TYPE requires table property delta.enableTypeWidening=true"
+            );
+        }
+        if !protocol_can_write_type_widening(snapshot.protocol()) {
+            return plan_err!(
+                "Delta ALTER COLUMN TYPE requires the typeWidening reader and writer table features"
+            );
+        }
+        for (field_path, change) in &type_changes {
+            if !is_supported_type_change_for_write(
+                snapshot.protocol(),
+                &change.from_type,
+                &change.to_type,
+            ) {
+                return plan_err!(
+                    "Delta ALTER COLUMN TYPE change at {} is not supported by Iceberg-compatible Delta tables: {} -> {}",
+                    format_type_change_path(field_path, &change.field_path),
+                    change.from_type,
+                    change.to_type
+                );
+            }
+        }
+
+        let operation_column = operation_column_json(&candidate_kernel, &column_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let candidate_kernel = add_type_widening_metadata(&current_kernel, &candidate_kernel)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let kmode = snapshot.effective_column_mapping_mode();
+        let (_final_kernel, updated_metadata) =
+            evolve_schema(&current_kernel, &candidate_kernel, current_metadata, kmode)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let actions = vec![CommitAction::Metadata(updated_metadata)];
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(snapshot),
+                table.log_store(),
+                DeltaOperation::AlterColumn {
+                    column: operation_column,
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+fn operation_column_json(
+    schema: &StructType,
+    column_path: &[String],
+) -> crate::spec::DeltaResult<serde_json::Value> {
+    let field = resolve_operation_column_field(schema, column_path)?;
+    let metadata = serde_json::to_value(field.metadata()).map_err(DeltaTableError::generic_err)?;
+    Ok(serde_json::json!({
+        "name": column_path.join("."),
+        "type": field.data_type().to_string(),
+        "nullable": field.is_nullable(),
+        "metadata": metadata,
+    }))
+}
+
+fn resolve_operation_column_field(
+    schema: &StructType,
+    column_path: &[String],
+) -> crate::spec::DeltaResult<StructField> {
+    let Some((name, nested_path)) = column_path.split_first() else {
+        return Err(DeltaTableError::schema(
+            "ALTER COLUMN TYPE requires a column name",
+        ));
+    };
+    let field = schema
+        .field(name)
+        .ok_or_else(|| DeltaTableError::missing_column(column_path.join(".")))?;
+    if nested_path.is_empty() {
+        Ok(field.clone())
+    } else {
+        resolve_operation_nested_field(field.data_type(), nested_path, column_path)
+    }
+}
+
+fn resolve_operation_nested_field(
+    data_type: &DeltaDataType,
+    path: &[String],
+    full_path: &[String],
+) -> crate::spec::DeltaResult<StructField> {
+    let Some((name, nested_path)) = path.split_first() else {
+        return Err(DeltaTableError::schema(
+            "ALTER COLUMN TYPE requires a column name",
+        ));
+    };
+
+    match data_type {
+        DeltaDataType::Struct(struct_type) => {
+            let field = struct_type
+                .field(name)
+                .ok_or_else(|| DeltaTableError::missing_column(full_path.join(".")))?;
+            if nested_path.is_empty() {
+                Ok(field.clone())
+            } else {
+                resolve_operation_nested_field(field.data_type(), nested_path, full_path)
+            }
+        }
+        DeltaDataType::Array(array) if name == "element" => synthetic_operation_field(
+            name,
+            array.element_type(),
+            array.contains_null(),
+            nested_path,
+            full_path,
+        ),
+        DeltaDataType::Map(map) if name == "key" => {
+            synthetic_operation_field(name, map.key_type(), false, nested_path, full_path)
+        }
+        DeltaDataType::Map(map) if name == "value" => synthetic_operation_field(
+            name,
+            map.value_type(),
+            map.value_contains_null(),
+            nested_path,
+            full_path,
+        ),
+        DeltaDataType::Array(_) => Err(DeltaTableError::schema(format!(
+            "expected 'element' for array column path, found '{name}'"
+        ))),
+        DeltaDataType::Map(_) => Err(DeltaTableError::schema(format!(
+            "expected 'key' or 'value' for map column path, found '{name}'"
+        ))),
+        other => Err(DeltaTableError::schema(format!(
+            "cannot resolve ALTER COLUMN TYPE path segment '{name}' through {other}"
+        ))),
+    }
+}
+
+fn synthetic_operation_field(
+    name: &str,
+    data_type: &DeltaDataType,
+    nullable: bool,
+    nested_path: &[String],
+    full_path: &[String],
+) -> crate::spec::DeltaResult<StructField> {
+    if nested_path.is_empty() {
+        Ok(StructField::new(name, data_type.clone(), nullable))
+    } else {
+        resolve_operation_nested_field(data_type, nested_path, full_path)
+    }
+}
+
+fn protocol_without_feature(protocol: &Protocol, feature: TableFeature) -> Protocol {
+    let reader_features = protocol.reader_features().map(|features| {
+        features
+            .iter()
+            .filter(|item| **item != feature)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    let writer_features = protocol.writer_features().map(|features| {
+        features
+            .iter()
+            .filter(|item| **item != feature)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    Protocol::new(
+        protocol.min_reader_version(),
+        protocol.min_writer_version(),
+        reader_features,
+        writer_features,
+    )
+}
+
+fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+    existing: &Protocol,
+    desired: &Protocol,
+    configuration: &HashMap<String, String>,
+) -> Protocol {
+    let existing_supports_preview = existing.has_reader_feature(&TableFeature::TypeWideningPreview)
+        || existing.has_writer_feature(&TableFeature::TypeWideningPreview);
+    let stable_explicitly_requested = configuration
+        .keys()
+        .any(|key| key.eq_ignore_ascii_case("delta.feature.typeWidening"));
+
+    if existing_supports_preview && !stable_explicitly_requested {
+        protocol_without_feature(desired, TableFeature::TypeWidening)
+    } else {
+        desired.clone()
     }
 }
 

@@ -434,12 +434,24 @@ impl CatalogCommand {
                                 .await
                                 .map_err(|e| CatalogError::External(e.to_string()))?;
                         }
-                    }
+                        AlterTableOptions::AlterColumnType { name, data_type } => {
+                            table_format
+                                .alter_table_column_type(
+                                    runtime,
+                                    &location,
+                                    name.clone(),
+                                    data_type.clone(),
+                                )
+                                .await
+                                .map_err(|e| CatalogError::External(e.to_string()))?;
+                        }
+                    };
 
-                    // Storage is the source of truth for lakehouse table properties,
-                    // but current metadata reads still go through the catalog. Surface
-                    // catalog sync failures so callers do not observe a successful
-                    // ALTER TABLE followed by stale DESCRIBE/SHOW metadata.
+                    // Storage is the source of truth for lakehouse ALTER TABLE
+                    // operations, but metadata reads still flow through the
+                    // catalog. Surface catalog sync failures so callers do not
+                    // observe successful storage mutation followed by stale
+                    // DESCRIBE/SHOW metadata.
                     manager.alter_table(&table, options).await?;
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 }

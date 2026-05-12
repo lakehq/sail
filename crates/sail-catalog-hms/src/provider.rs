@@ -28,6 +28,7 @@ use crate::convert::{
     is_view_table, reject_spark_properties, reject_spark_property_keys, table_to_status,
     validate_namespace, view_to_status, GenericTableFormat,
 };
+use crate::data_type::arrow_to_hive_type;
 use crate::security::{KerberosMakeTransport, SaslQop};
 
 #[derive(Debug, Clone, Default)]
@@ -115,6 +116,34 @@ fn apply_alter_table_options(
                     )));
                 }
             }
+        }
+        AlterTableOptions::AlterColumnType { name, data_type } => {
+            let [column_name] = name.as_slice() else {
+                return Err(CatalogError::NotSupported(
+                    "Hive Metastore catalog does not support altering nested column types"
+                        .to_string(),
+                ));
+            };
+            let hive_type = arrow_to_hive_type(&data_type)?;
+            let storage = hms_table.sd.as_mut().ok_or_else(|| {
+                CatalogError::External(format!(
+                    "HMS table '{db_name}.{table_name}' is missing storage descriptor"
+                ))
+            })?;
+            let columns = storage.cols.as_mut().ok_or_else(|| {
+                CatalogError::External(format!(
+                    "HMS table '{db_name}.{table_name}' is missing column metadata"
+                ))
+            })?;
+            let Some(column) = columns
+                .iter_mut()
+                .find(|column| column.name.as_deref() == Some(column_name.as_str()))
+            else {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Column '{column_name}' does not exist on '{db_name}.{table_name}'"
+                )));
+            };
+            column.r#type = Some(FastStr::from(hive_type));
         }
     }
     Ok(())
