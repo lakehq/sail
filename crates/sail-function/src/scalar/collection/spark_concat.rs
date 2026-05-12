@@ -9,6 +9,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
 use datafusion_common::{plan_err, ExprSchema, Result};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -107,6 +108,15 @@ impl ScalarUDFImpl for SparkConcat {
                 .unwrap_or(&DataType::Utf8)
                 .clone())
         }
+    }
+
+    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if args.len() == 1 {
+            return Ok(ExprSimplifyResult::Simplified(
+                args.into_iter().next().unwrap(),
+            ));
+        }
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
