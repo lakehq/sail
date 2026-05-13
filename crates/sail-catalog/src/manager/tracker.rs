@@ -130,30 +130,3 @@ impl CatalogObjectTracker {
             .collect())
     }
 }
-
-impl Drop for CatalogObjectTracker {
-    /// Best-effort cleanup of any on-disk checkpoint storage for cached
-    /// relations that were never released via `RemoveCachedRemoteRelationCommand`.
-    /// This covers session timeouts, client disconnects, and any other path
-    /// where the catalog manager is dropped without explicit cleanup.
-    fn drop(&mut self) {
-        let Ok(state) = self.state.get_mut() else {
-            return;
-        };
-        for (_, relation) in state.cached_relations.drain() {
-            let Some(uri) = relation.storage_uri else {
-                continue;
-            };
-            if let Ok(url) = url::Url::parse(&uri) {
-                if url.scheme() == "file" {
-                    if let Ok(path) = url.to_file_path() {
-                        // `Drop` runs in a sync context, so we use blocking
-                        // filesystem calls for local checkpoint cleanup.
-                        // Errors are ignored because the caller cannot react.
-                        let _ = std::fs::remove_dir_all(path);
-                    }
-                }
-            }
-        }
-    }
-}

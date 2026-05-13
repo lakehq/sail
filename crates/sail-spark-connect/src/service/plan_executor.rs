@@ -15,13 +15,14 @@ use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use fastrace::Span;
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{stream, TryStreamExt};
 use log::{debug, warn};
 use object_store::path::Path as ObjectStorePath;
 use object_store::ObjectStoreScheme;
 use sail_catalog::manager::tracker::CatalogCachedRelation;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
+use sail_common_datafusion::checkpoint::cleanup_checkpoint_storage;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
@@ -556,7 +557,9 @@ pub(crate) async fn handle_execute_checkpoint_command(
         plan: logical_plan,
         fields,
     } = resolver.resolve_named_plan(plan).await?;
-    let fields = named_plan_fields(&logical_plan, fields);
+    let fields = fields.ok_or_else(|| {
+        SparkError::internal("resolved checkpoint query plan did not include field names")
+    })?;
 
     let use_disk = checkpoint_uses_disk(local, storage_level.as_ref());
     let (cached_plan, storage_uri) = if use_disk {
@@ -600,16 +603,6 @@ pub(crate) async fn handle_execute_checkpoint_command(
         metadata.operation_id,
         Box::pin(stream::iter(output)),
     ))
-}
-
-fn named_plan_fields(plan: &LogicalPlan, fields: Option<Vec<String>>) -> Vec<String> {
-    fields.unwrap_or_else(|| {
-        plan.schema()
-            .fields()
-            .iter()
-            .map(|field| field.name().to_string())
-            .collect()
-    })
 }
 
 /// Determines whether a checkpoint should be materialized to disk.
@@ -817,42 +810,7 @@ async fn materialize_logical_plan_to_disk(
 }
 
 async fn cleanup_checkpoint_path(ctx: &SessionContext, checkpoint_uri: &str) {
-    let Ok(checkpoint_url) = url::Url::parse(checkpoint_uri) else {
-        warn!("failed to parse checkpoint location for cleanup: {checkpoint_uri}");
-        return;
-    };
-    let Ok((object_store, checkpoint_path)) = checkpoint_store_and_path(ctx, &checkpoint_url)
-    else {
-        warn!("failed to resolve checkpoint object store for cleanup: {checkpoint_uri}");
-        return;
-    };
-    let locations = object_store
-        .list(Some(&checkpoint_path))
-        .map_ok(|meta| meta.location)
-        .boxed();
-    if let Err(e) = object_store
-        .delete_stream(locations)
-        .try_collect::<Vec<_>>()
-        .await
-    {
-        warn!("failed to remove checkpoint location {checkpoint_uri}: {e}");
-    }
-    cleanup_file_checkpoint_directory(&checkpoint_url, checkpoint_uri).await;
-}
-
-async fn cleanup_file_checkpoint_directory(checkpoint_url: &url::Url, checkpoint_uri: &str) {
-    if checkpoint_url.scheme() != "file" {
-        return;
-    }
-    let Ok(path) = checkpoint_url.to_file_path() else {
-        warn!("failed to convert checkpoint file URL to path for cleanup: {checkpoint_uri}");
-        return;
-    };
-    if let Err(e) = tokio::fs::remove_dir_all(&path).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            warn!("failed to remove checkpoint directory {checkpoint_uri}: {e}");
-        }
-    }
+    cleanup_checkpoint_storage(ctx.runtime_env().as_ref(), checkpoint_uri).await;
 }
 
 pub(crate) async fn handle_execute_remove_cached_remote_relation_command(

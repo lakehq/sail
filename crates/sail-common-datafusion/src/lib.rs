@@ -1,5 +1,6 @@
 pub mod array;
 pub mod catalog;
+pub mod checkpoint;
 pub mod column_features;
 pub mod datasource;
 pub mod display;

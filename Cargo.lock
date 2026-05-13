@@ -7152,6 +7152,8 @@ dependencies = [
  "futures",
  "lazy_static",
  "lexical-core",
+ "log",
+ "object_store",
  "parquet-variant-compute",
  "parquet-variant-json",
  "pin-project-lite",
@@ -7171,6 +7173,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+ "url",
 ]
 
 [[package]]
