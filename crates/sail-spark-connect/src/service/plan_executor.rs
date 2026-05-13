@@ -837,6 +837,22 @@ async fn cleanup_checkpoint_path(ctx: &SessionContext, checkpoint_uri: &str) {
     {
         warn!("failed to remove checkpoint location {checkpoint_uri}: {e}");
     }
+    cleanup_file_checkpoint_directory(&checkpoint_url, checkpoint_uri).await;
+}
+
+async fn cleanup_file_checkpoint_directory(checkpoint_url: &url::Url, checkpoint_uri: &str) {
+    if checkpoint_url.scheme() != "file" {
+        return;
+    }
+    let Ok(path) = checkpoint_url.to_file_path() else {
+        warn!("failed to convert checkpoint file URL to path for cleanup: {checkpoint_uri}");
+        return;
+    };
+    if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            warn!("failed to remove checkpoint directory {checkpoint_uri}: {e}");
+        }
+    }
 }
 
 pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
