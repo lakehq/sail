@@ -9,7 +9,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::execution_plan::CardinalityEffect;
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -17,7 +17,9 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::projection::ProjectionMapping;
+use datafusion_physical_expr::{Distribution, PhysicalExpr};
 use futures::StreamExt;
 use sail_common_datafusion::datasource::{RowLevelOperationType, OPERATION_COLUMN};
 
@@ -52,12 +54,13 @@ impl RowTrackingMaterializeExec {
             &row_id_column_name,
             &row_commit_version_column_name,
         );
-        let cache = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            input.output_partitioning().clone(),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        ));
+        let cache = Arc::new(compute_properties(
+            &input,
+            schema,
+            &metadata_column_name,
+            &row_id_column_name,
+            &row_commit_version_column_name,
+        )?);
         Ok(Self {
             input,
             metadata_column_name,
@@ -123,6 +126,14 @@ impl ExecutionPlan for RowTrackingMaterializeExec {
         vec![Distribution::UnspecifiedDistribution]
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -167,6 +178,29 @@ impl ExecutionPlan for RowTrackingMaterializeExec {
             stream,
         )))
     }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
+    }
+
+    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn ExecutionPlan>> {
+        self.input
+            .with_preserve_order(preserve_order)
+            .and_then(|input| {
+                Self::try_new(
+                    input,
+                    self.metadata_column_name.clone(),
+                    self.row_id_column_name.clone(),
+                    self.row_commit_version_column_name.clone(),
+                )
+                .map(|exec| Arc::new(exec) as Arc<dyn ExecutionPlan>)
+                .ok()
+            })
+    }
 }
 
 fn is_target_metadata_field(field: &Field, metadata_column_name: &str) -> bool {
@@ -202,6 +236,44 @@ fn materialized_schema(
         true,
     ));
     Arc::new(Schema::new(fields))
+}
+
+fn compute_properties(
+    input: &Arc<dyn ExecutionPlan>,
+    output_schema: SchemaRef,
+    metadata_column_name: &str,
+    row_id_column_name: &str,
+    row_commit_version_column_name: &str,
+) -> Result<PlanProperties> {
+    let input_schema = input.schema();
+    let projection_exprs = input_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, field)| {
+            (!is_target_metadata_field(field, metadata_column_name)
+                && field.name() != row_id_column_name
+                && field.name() != row_commit_version_column_name)
+                .then(|| {
+                    (
+                        Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>,
+                        field.name().clone(),
+                    )
+                })
+        });
+    let projection_mapping = ProjectionMapping::try_new(projection_exprs, &input_schema)?;
+    let input_eq_properties = input.equivalence_properties();
+    let eq_properties = input_eq_properties.project(&projection_mapping, output_schema);
+    let output_partitioning = input
+        .output_partitioning()
+        .project(&projection_mapping, input_eq_properties);
+
+    Ok(PlanProperties::new(
+        eq_properties,
+        output_partitioning,
+        input.pipeline_behavior(),
+        input.boundedness(),
+    ))
 }
 
 fn materialize_batch(
