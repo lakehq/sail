@@ -193,20 +193,34 @@ Feature: CTAS ORDER BY produces globally sorted output
       | Infinity |
       | NaN      |
 
-  Scenario: CTAS ORDER BY ASC preserves physical row order without re-sorting on read
-    Given variable location for temporary directory ctas_physical_asc
+  Scenario: CTAS ORDER BY ASC with multi-partition source preserves physical row order
+    Given variable location_src for temporary directory ctas_mp_asc_src
+    Given variable location_dst for temporary directory ctas_mp_asc_dst
     Given final statement
       """
-      DROP TABLE IF EXISTS ctas_physical_asc_t
+      DROP TABLE IF EXISTS ctas_mp_asc_src_t
+      """
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_mp_asc_dst_t
       """
     Given statement template
       """
-      CREATE TABLE ctas_physical_asc_t USING PARQUET LOCATION {{ location.sql }}
-      AS SELECT * FROM VALUES (5), (3), (1), (4), (2) AS t(col) ORDER BY col ASC
+      CREATE TABLE ctas_mp_asc_src_t USING PARQUET LOCATION {{ location_src.sql }}
+      AS SELECT * FROM VALUES (5), (3), (1) AS t(col)
+      """
+    Given statement template
+      """
+      INSERT INTO ctas_mp_asc_src_t SELECT * FROM VALUES (4), (2) AS t(col)
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_mp_asc_dst_t USING PARQUET LOCATION {{ location_dst.sql }}
+      AS SELECT col FROM ctas_mp_asc_src_t ORDER BY col ASC
       """
     When query
       """
-      SELECT col FROM ctas_physical_asc_t
+      SELECT col FROM ctas_mp_asc_dst_t
       """
     Then query result
       | col |
@@ -216,20 +230,34 @@ Feature: CTAS ORDER BY produces globally sorted output
       | 4   |
       | 5   |
 
-  Scenario: CTAS ORDER BY DESC preserves physical row order without re-sorting on read
-    Given variable location for temporary directory ctas_physical_desc
+  Scenario: CTAS ORDER BY DESC with multi-partition source preserves physical row order
+    Given variable location_src for temporary directory ctas_mp_desc_src
+    Given variable location_dst for temporary directory ctas_mp_desc_dst
     Given final statement
       """
-      DROP TABLE IF EXISTS ctas_physical_desc_t
+      DROP TABLE IF EXISTS ctas_mp_desc_src_t
+      """
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_mp_desc_dst_t
       """
     Given statement template
       """
-      CREATE TABLE ctas_physical_desc_t USING PARQUET LOCATION {{ location.sql }}
-      AS SELECT * FROM VALUES (5), (3), (1), (4), (2) AS t(col) ORDER BY col DESC
+      CREATE TABLE ctas_mp_desc_src_t USING PARQUET LOCATION {{ location_src.sql }}
+      AS SELECT * FROM VALUES (1), (3), (5) AS t(col)
+      """
+    Given statement template
+      """
+      INSERT INTO ctas_mp_desc_src_t SELECT * FROM VALUES (2), (4) AS t(col)
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_mp_desc_dst_t USING PARQUET LOCATION {{ location_dst.sql }}
+      AS SELECT col FROM ctas_mp_desc_src_t ORDER BY col DESC
       """
     When query
       """
-      SELECT col FROM ctas_physical_desc_t
+      SELECT col FROM ctas_mp_desc_dst_t
       """
     Then query result
       | col |
