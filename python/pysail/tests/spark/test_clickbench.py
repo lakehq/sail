@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pyspark.sql.functions as F  # noqa: N812
 import pytest
-import pyspark.sql.functions as F
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
