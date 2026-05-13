@@ -595,6 +595,10 @@ pub(crate) fn parse_unqualified_interval_string(
 
 #[cfg(test)]
 mod tests {
+    use sail_sql_parser::ast::literal::StringLiteral;
+    use sail_sql_parser::span::TokenSpan;
+    use sail_sql_parser::string::StringValue;
+
     use super::*;
 
     #[test]
@@ -679,6 +683,83 @@ mod tests {
         assert_eq!(
             parse_unqualified_interval_string("1 hour 2 seconds", false)?,
             parse_unqualified_interval_string("-1 hour -2 seconds", true)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_data_type_from_standard_interval_literal() -> SqlResult<()> {
+        assert_interval_data_type(
+            "'10' year",
+            spec::IntervalUnit::YearMonth,
+            Some(spec::IntervalFieldType::Year),
+            None,
+        )?;
+        assert_interval_data_type(
+            "'15' month",
+            spec::IntervalUnit::YearMonth,
+            Some(spec::IntervalFieldType::Month),
+            None,
+        )?;
+        assert_interval_data_type(
+            "'10-8' year to month",
+            spec::IntervalUnit::YearMonth,
+            Some(spec::IntervalFieldType::Year),
+            Some(spec::IntervalFieldType::Month),
+        )?;
+        assert_interval_data_type(
+            "'3' day",
+            spec::IntervalUnit::DayTime,
+            Some(spec::IntervalFieldType::Day),
+            None,
+        )?;
+        assert_interval_data_type(
+            "'1 02:03:04.123456' day to second",
+            spec::IntervalUnit::DayTime,
+            Some(spec::IntervalFieldType::Day),
+            Some(spec::IntervalFieldType::Second),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_data_type_from_interval_expr_literal() -> SqlResult<()> {
+        let expr = IntervalExpr::Literal(StringLiteral {
+            span: TokenSpan::default(),
+            tokens: vec![],
+            value: StringValue::valid("'10-8' year to month"),
+        });
+
+        assert_eq!(
+            data_type_from_ast_interval(&expr)?,
+            Some(spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::YearMonth,
+                start_field: Some(spec::IntervalFieldType::Year),
+                end_field: Some(spec::IntervalFieldType::Month),
+            })
+        );
+
+        Ok(())
+    }
+
+    fn assert_interval_data_type(
+        s: &str,
+        interval_unit: spec::IntervalUnit,
+        start_field: Option<spec::IntervalFieldType>,
+        end_field: Option<spec::IntervalFieldType>,
+    ) -> SqlResult<()> {
+        let IntervalLiteral {
+            interval: _,
+            value: interval,
+        } = parse_interval_literal(s)?;
+        assert_eq!(
+            data_type_from_ast_interval(&interval)?,
+            Some(spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            })
         );
         Ok(())
     }

@@ -108,6 +108,22 @@ Feature: Interval type qualifiers
 
   Rule: Interval qualifiers through projections
 
+    Scenario Outline: unaliased interval literal keeps literal column name
+      When query
+      """
+      SELECT <expression>
+      """
+      Then query result
+      | <expression> |
+      | <result>     |
+
+      Examples:
+      | expression                                  | result                                  |
+      | INTERVAL '10' YEAR                         | INTERVAL '10-0' YEAR TO MONTH           |
+      | INTERVAL '10-8' YEAR TO MONTH              | INTERVAL '10-8' YEAR TO MONTH           |
+      | INTERVAL '3' DAY                           | INTERVAL '3 00:00:00' DAY TO SECOND     |
+      | INTERVAL '1 02:03:04.123456' DAY TO SECOND | INTERVAL '1 02:03:04.123456' DAY TO SECOND |
+
     Scenario Outline: interval qualifier survives aliases and subqueries
       When query
       """

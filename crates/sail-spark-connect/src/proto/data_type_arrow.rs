@@ -530,6 +530,138 @@ mod tests {
     }
 
     #[test]
+    fn test_year_month_interval_field_to_proto_with_start_field() -> SparkResult<()> {
+        let metadata = HashMap::from([(
+            spec::SAIL_INTERVAL_START_FIELD_KEY.to_string(),
+            "0".to_string(),
+        )]);
+        let field = adt::Field::new(
+            "duration",
+            adt::DataType::Interval(adt::IntervalUnit::YearMonth),
+            true,
+        )
+        .with_metadata(metadata);
+
+        let proto_field: sdt::StructField = field.try_into()?;
+
+        assert_eq!(
+            proto_field.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
+                    start_field: Some(0),
+                    end_field: None,
+                    type_variation_reference: 0,
+                })),
+            })
+        );
+        assert_eq!(proto_field.metadata, Some("{}".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_year_month_interval_field_to_proto_with_start_and_end_fields() -> SparkResult<()> {
+        let metadata = HashMap::from([
+            (
+                spec::SAIL_INTERVAL_START_FIELD_KEY.to_string(),
+                "0".to_string(),
+            ),
+            (
+                spec::SAIL_INTERVAL_END_FIELD_KEY.to_string(),
+                "1".to_string(),
+            ),
+        ]);
+        let field = adt::Field::new(
+            "duration",
+            adt::DataType::Interval(adt::IntervalUnit::YearMonth),
+            false,
+        )
+        .with_metadata(metadata);
+
+        let proto_field: sdt::StructField = field.try_into()?;
+
+        assert_eq!(
+            proto_field.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
+                    start_field: Some(0),
+                    end_field: Some(1),
+                    type_variation_reference: 0,
+                })),
+            })
+        );
+        assert_eq!(proto_field.metadata, Some("{}".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_day_time_interval_field_to_proto_with_start_field() -> SparkResult<()> {
+        let metadata = HashMap::from([(
+            spec::SAIL_INTERVAL_START_FIELD_KEY.to_string(),
+            "0".to_string(),
+        )]);
+        let field = adt::Field::new(
+            "duration",
+            adt::DataType::Duration(adt::TimeUnit::Microsecond),
+            true,
+        )
+        .with_metadata(metadata);
+
+        let proto_field: sdt::StructField = field.try_into()?;
+
+        assert_eq!(
+            proto_field.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                    start_field: Some(0),
+                    end_field: None,
+                    type_variation_reference: 0,
+                })),
+            })
+        );
+        assert_eq!(proto_field.metadata, Some("{}".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_day_time_interval_field_to_proto_with_start_and_end_fields() -> SparkResult<()> {
+        let metadata = HashMap::from([
+            (
+                spec::SAIL_INTERVAL_START_FIELD_KEY.to_string(),
+                "0".to_string(),
+            ),
+            (
+                spec::SAIL_INTERVAL_END_FIELD_KEY.to_string(),
+                "3".to_string(),
+            ),
+        ]);
+        let field = adt::Field::new(
+            "duration",
+            adt::DataType::Duration(adt::TimeUnit::Microsecond),
+            false,
+        )
+        .with_metadata(metadata);
+
+        let proto_field: sdt::StructField = field.try_into()?;
+
+        assert_eq!(
+            proto_field.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                    start_field: Some(0),
+                    end_field: Some(3),
+                    type_variation_reference: 0,
+                })),
+            })
+        );
+        assert_eq!(proto_field.metadata, Some("{}".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
     fn test_geoarrow_field_mixed_srid() -> SparkResult<()> {
         // Test mixed SRID (-1): CRS and edges are omitted from metadata
         let metadata: HashMap<String, String> = [

@@ -40,7 +40,11 @@ impl PlanResolver<'_> {
         let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
         let expr = if let [n] = name.as_slice() {
             if let Some(metadata) = metadata {
-                resolved_metadata.extend(metadata);
+                resolved_metadata.extend(
+                    metadata
+                        .into_iter()
+                        .filter(|(key, _)| !is_reserved_field_metadata_key(key)),
+                );
             }
             if !resolved_metadata.is_empty() {
                 let metadata_map: HashMap<String, String> = resolved_metadata.into_iter().collect();
@@ -392,4 +396,8 @@ impl PlanResolver<'_> {
         };
         Ok(expr.transform(rewrite).data()?)
     }
+}
+
+fn is_reserved_field_metadata_key(key: &str) -> bool {
+    key == spec::SAIL_INTERVAL_START_FIELD_KEY || key == spec::SAIL_INTERVAL_END_FIELD_KEY
 }

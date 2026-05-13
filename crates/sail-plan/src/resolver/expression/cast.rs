@@ -28,7 +28,7 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         cast_to_type: spec::DataType,
-        _rename: bool,
+        rename: bool,
         is_try: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
@@ -38,7 +38,7 @@ impl PlanResolver<'_> {
         if matches!(cast_to_type, spec::DataType::Variant) {
             let NamedExpr { expr, name, .. } =
                 self.resolve_named_expression(expr, schema, state).await?;
-            let name = if need_rename_cast(&expr) {
+            let name = if rename && need_rename_cast(&expr) {
                 let prefix = if is_try { "TRY_" } else { "" };
                 vec![format!("{}CAST({} AS VARIANT)", prefix, name.one()?)]
             } else {
@@ -66,7 +66,7 @@ impl PlanResolver<'_> {
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let expr_type = expr.get_type(schema)?;
-        let name = if need_rename_cast(&expr) {
+        let name = if rename && need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
             let data_type_string = service
                 .plan_formatter()
