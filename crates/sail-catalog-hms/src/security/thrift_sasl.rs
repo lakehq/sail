@@ -94,7 +94,7 @@ impl MakeTransport for KerberosMakeTransport {
                     SaslWriteHalf::new(write_half, frame_protector),
                 )
             }
-            #[cfg_attr(windows, expect(unreachable_patterns))]
+            
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,
