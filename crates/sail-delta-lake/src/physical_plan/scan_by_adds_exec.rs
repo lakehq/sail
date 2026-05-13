@@ -44,15 +44,14 @@ use crate::datasource::{
     DeltaScanConfig, METADATA_COLUMN_NAME,
 };
 use crate::deletion_vector::DeletionVectorBitmap;
-use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
+use crate::physical_plan::{
+    decode_adds_from_batch, enabled_row_tracking_materialized_column_names, meta_adds, COL_ACTION,
+};
 use crate::schema::{arrow_field_physical_name, get_physical_schema};
 use crate::session_extension::{load_table_uncached, DeltaTableCache};
 use crate::spec::StructType;
 use crate::storage::LogStoreRef;
-use crate::table::{
-    enabled_row_tracking_materialized_column_names, DeltaSnapshot,
-    RowTrackingMaterializedColumnNames,
-};
+use crate::table::{DeltaSnapshot, RowTrackingMaterializedColumnNames};
 
 // TODO(dynamic-file-scheduling): Replace fixed file-count chunking with byte-aware chunking
 // and optional work-stealing so executors pull remaining file work dynamically under skew.
@@ -842,7 +841,6 @@ fn row_tracking_materialized_columns(
     snapshot: &DeltaSnapshot,
 ) -> Result<Option<RowTrackingMaterializedColumnNames>> {
     enabled_row_tracking_materialized_column_names(snapshot)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 fn file_schema_with_materialized_columns(

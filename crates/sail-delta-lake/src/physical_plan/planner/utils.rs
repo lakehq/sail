@@ -43,17 +43,15 @@ use crate::datasource::{
 };
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
+    create_projection, create_repartition, create_sort,
+    enabled_row_tracking_materialized_column_names, DeltaCommitExec, DeltaLogReplayExec,
     DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions,
     RowTrackingMaterializeExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH,
 };
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
 };
-use crate::table::{
-    enabled_row_tracking_materialized_column_names as table_enabled_row_tracking_materialized_column_names,
-    DeltaSnapshot, RowTrackingMaterializedColumnNames,
-};
+use crate::table::DeltaSnapshot;
 
 /// Options that control what the log replay pipeline materializes as payload columns.
 ///
@@ -176,13 +174,6 @@ pub fn build_standard_write_layers(
         sink_mode.clone(),
         ctx.options().user_metadata.clone(),
     )))
-}
-
-pub fn enabled_row_tracking_materialized_column_names(
-    snapshot: &DeltaSnapshot,
-) -> Result<Option<RowTrackingMaterializedColumnNames>> {
-    table_enabled_row_tracking_materialized_column_names(snapshot)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 pub fn row_tracking_preserving_scan_schema(

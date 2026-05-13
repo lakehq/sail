@@ -63,6 +63,13 @@ pub use scan_by_adds_exec::DeltaScanByAddsExec;
 pub use writer_exec::DeltaWriterExec;
 pub use writer_options::DeltaWriterExecOptions;
 
+pub(crate) fn enabled_row_tracking_materialized_column_names(
+    snapshot: &crate::table::DeltaSnapshot,
+) -> Result<Option<crate::table::RowTrackingMaterializedColumnNames>> {
+    crate::table::enabled_row_tracking_materialized_column_names(snapshot)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
 /// Top-level derived column used to co-locate log actions by file path for parallel replay.
 pub const COL_REPLAY_PATH: &str = "__sail_delta_replay_path";
 

@@ -59,7 +59,10 @@ use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
-use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
+use crate::physical_plan::{
+    delta_action_schema, enabled_row_tracking_materialized_column_names, encode_actions,
+    ExecCommitMeta,
+};
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
     compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
@@ -72,7 +75,7 @@ use crate::spec::{
     ColumnMetadataKey, MetadataValue, StructField, StructType, TableProperties,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
-use crate::table::{enabled_row_tracking_materialized_column_names, open_table_with_object_store};
+use crate::table::open_table_with_object_store;
 
 /// Schema handling mode for Delta Lake writes
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1328,7 +1331,6 @@ impl DeltaWriterExec {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         enabled_row_tracking_materialized_column_names(snapshot)
             .map(|columns| columns.map(|columns| (columns.row_id, columns.row_commit_version)))
-            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     fn schema_with_materialized_row_tracking_columns(
