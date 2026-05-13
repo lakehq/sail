@@ -429,7 +429,24 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub join_reorder: JoinReorderConfig,
     pub expand_views_at_output: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JoinReorderConfig {
+    pub max_relations: usize,
+    pub emit_threshold: usize,
+    pub enable_non_inner: bool,
+    pub enable_fact_anchor_heuristic: bool,
+    pub fact_anchor_min_relations: usize,
+    pub fact_anchor_relative_threshold: f64,
+    pub fact_anchor_min_share: f64,
+    pub fact_anchor_penalty_multiplier: f64,
+    pub build_side_weight: f64,
+    pub probe_side_weight: f64,
+    pub output_weight: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

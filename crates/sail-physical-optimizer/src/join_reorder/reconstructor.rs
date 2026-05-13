@@ -226,6 +226,33 @@ impl<'a> PlanReconstructor<'a> {
         (join_set.bits() & Self::relation_bit(relation_id)) != 0
     }
 
+    fn join_output_map_for_type(
+        left_map: &ColumnMap,
+        right_map: &ColumnMap,
+        join_type: JoinType,
+    ) -> Result<ColumnMap> {
+        let mut output = Vec::new();
+        match join_type {
+            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                output.extend(left_map.iter().cloned());
+                output.extend(right_map.iter().cloned());
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                output.extend(left_map.iter().cloned());
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                output.extend(right_map.iter().cloned());
+            }
+            JoinType::LeftMark | JoinType::RightMark => {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: {:?} is not supported in non-inner join reorder",
+                    join_type
+                )));
+            }
+        }
+        Ok(output)
+    }
+
     fn compute_required_projection(
         &self,
         join_set: JoinSet,
@@ -362,51 +389,38 @@ impl<'a> PlanReconstructor<'a> {
             DataFusionError::Internal("Right subplan not found in DP table".to_string())
         })?;
 
-        // Determine join type from edge information before deciding whether we can swap sides.
+        // DPPlan stores the selected physical child order. For inner joins, PlanEnumerator may
+        // choose either side as the left/build input based on asymmetric cost. Non-inner joins keep
+        // their original semantic orientation via QueryGraph legality checks.
         let join_type = self.determine_join_type(edge_indices)?;
         let null_equality = self.determine_null_equality(edge_indices)?;
 
-        // Build/probe side reordering is semantics-preserving only for inner joins.
-        let should_swap_for_build =
-            join_type == JoinType::Inner && left_dp_plan.cardinality > right_dp_plan.cardinality;
-        let (build_set, probe_set, build_dp, probe_dp) = if should_swap_for_build {
-            (right_set, left_set, right_dp_plan, left_dp_plan)
-        } else {
-            (left_set, right_set, left_dp_plan, right_dp_plan)
-        };
-
-        // Recursively reconstruct build and probe subplans
-        let (build_plan, build_map) = self.reconstruct(build_dp)?;
-        let (probe_plan, probe_map) = self.reconstruct(probe_dp)?;
+        // Recursively reconstruct left(build) and right(probe) subplans.
+        let (left_plan, left_map) = self.reconstruct(left_dp_plan)?;
+        let (right_plan, right_map) = self.reconstruct(right_dp_plan)?;
 
         // Build physical join conditions
         let on_conditions = self.build_join_conditions(
             edge_indices,
-            &build_map,
-            &probe_map,
-            &build_plan,
-            &probe_plan,
+            &left_map,
+            &right_map,
+            &left_plan,
+            &right_plan,
         )?;
-
-        debug_assert!(
-            !should_swap_for_build || join_type == JoinType::Inner,
-            "JoinReorder must only swap build/probe sides for inner joins"
-        );
 
         // Build join filter for non-equi conditions
         let join_filter = self.build_join_filter(
             edge_indices,
-            &build_map,
-            &probe_map,
-            &build_plan,
-            &probe_plan,
-            build_set,
-            probe_set,
+            &left_map,
+            &right_map,
+            &left_plan,
+            &right_plan,
+            left_set,
+            right_set,
         )?;
 
         // Merge left and right ColumnMap to create output ColumnMap for new Join plan
-        let mut join_output_map = build_map;
-        join_output_map.extend(probe_map);
+        let mut join_output_map = Self::join_output_map_for_type(&left_map, &right_map, join_type)?;
         let projection = self.compute_required_projection(current_join_set, &join_output_map);
 
         // If there are no connecting edges, this is a cartesian product. HashJoinExec does not
@@ -416,8 +430,8 @@ impl<'a> PlanReconstructor<'a> {
                 // Theta join: no equi-join pairs were reconstructed, but we have a join predicate.
                 // Use NestedLoopJoinExec which supports joins without equi-keys.
                 let join_plan = Arc::new(NestedLoopJoinExec::try_new(
-                    build_plan,
-                    probe_plan,
+                    left_plan,
+                    right_plan,
                     Some(join_filter),
                     &join_type,
                     projection.clone(), // projection
@@ -431,7 +445,7 @@ impl<'a> PlanReconstructor<'a> {
                 }
                 return Ok((join_plan, join_output_map));
             }
-            let join_plan = Arc::new(CrossJoinExec::new(build_plan, probe_plan));
+            let join_plan = Arc::new(CrossJoinExec::new(left_plan, right_plan));
             // CrossJoinExec does not support a built-in projection; wrap with ProjectionExec if needed.
             if let Some(keep) = projection.clone() {
                 let exprs: Vec<ProjectionExpr> = keep
@@ -453,8 +467,8 @@ impl<'a> PlanReconstructor<'a> {
 
         // Otherwise, create HashJoinExec
         let join_plan = Arc::new(HashJoinExec::try_new(
-            build_plan,
-            probe_plan,
+            left_plan,
+            right_plan,
             on_conditions,
             join_filter,         // Use JoinEdge.filter for non-equi conditions
             &join_type,          // Use determined join type
@@ -546,17 +560,7 @@ impl<'a> PlanReconstructor<'a> {
 
     /// Determines join type from edge information.
     fn determine_join_type(&self, edge_indices: &[usize]) -> Result<JoinType> {
-        // Use the join type from the first edge, or default to Inner
-        if let Some(&edge_index) = edge_indices.iter().next() {
-            let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
-                DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
-            })?;
-
-            return Ok(edge.join_type);
-        }
-
-        // Default to Inner join if no edges found
-        Ok(JoinType::Inner)
+        self.query_graph.join_type_for_edges(edge_indices)
     }
 
     /// Determines null-equality semantics from edge information.
@@ -1232,9 +1236,8 @@ mod tests {
     }
 
     #[test]
-    fn test_hash_join_build_side_prefers_smaller_cardinality() -> Result<()> {
-        // Two relations with different estimated cardinalities. HashJoinExec hashes the LEFT side
-        // (build side), so we want the smaller input on the left.
+    fn test_hash_join_respects_dp_physical_order() -> Result<()> {
+        // DP, not reconstruction, is responsible for choosing the HashJoinExec left/build side.
 
         let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let schema_b = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
@@ -1283,7 +1286,7 @@ mod tests {
         ))?;
 
         // Build a DP table where the solver chose left={0}, right={1}.
-        // Reconstructor should swap to build on the smaller input ({1}).
+        // Reconstructor must respect that physical order.
         let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
         let leaf0 = Arc::new(DPPlan::new_leaf(0, 1_000_000.0)?);
         let leaf1 = Arc::new(DPPlan::new_leaf(1, 10.0)?);
@@ -1307,8 +1310,8 @@ mod tests {
             .downcast_ref::<HashJoinExec>()
             .expect("expected HashJoinExec");
 
-        assert_eq!(hj.left.schema().fields()[0].name(), "b");
-        assert_eq!(hj.right.schema().fields()[0].name(), "a");
+        assert_eq!(hj.left.schema().fields()[0].name(), "a");
+        assert_eq!(hj.right.schema().fields()[0].name(), "b");
 
         Ok(())
     }

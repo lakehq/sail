@@ -1,12 +1,28 @@
 use crate::join_reorder::dp_plan::DPPlan;
+use crate::join_reorder::JoinReorderOptions;
 
 /// Cost model for evaluating the quality of a join plan.
-/// Cost(AB) = Cost(A) + Cost(B) + Cardinality(AB)
-pub struct CostModel;
+///
+/// `HashJoinExec` builds its hash table from the left input and probes with the right input.
+/// The join-output term preserves the previous Cmout behavior, while build/probe terms let DP
+/// choose the physical child order that best matches execution cost.
+pub struct CostModel {
+    build_side_weight: f64,
+    probe_side_weight: f64,
+    output_weight: f64,
+}
 
 impl CostModel {
     pub fn new() -> Self {
-        Self
+        Self::with_options(&JoinReorderOptions::default())
+    }
+
+    pub fn with_options(options: &JoinReorderOptions) -> Self {
+        Self {
+            build_side_weight: options.build_side_weight,
+            probe_side_weight: options.probe_side_weight,
+            output_weight: options.output_weight,
+        }
     }
 
     /// Calculate the total cost of a new plan after joining two subplans.
@@ -16,7 +32,11 @@ impl CostModel {
         right_plan: &DPPlan,
         new_cardinality: f64,
     ) -> f64 {
-        left_plan.cost + right_plan.cost + new_cardinality
+        left_plan.cost
+            + right_plan.cost
+            + (new_cardinality * self.output_weight)
+            + (left_plan.cardinality * self.build_side_weight)
+            + (right_plan.cardinality * self.probe_side_weight)
     }
 }
 
@@ -34,7 +54,7 @@ mod tests {
     #[test]
     fn test_cost_model_creation() {
         let _model = CostModel::new();
-        let _default_model = CostModel;
+        let _default_model = CostModel::default();
     }
 
     #[test]
@@ -46,8 +66,8 @@ mod tests {
 
         let cost = model.compute_cost(&left_plan, &right_plan, 500.0);
 
-        // Cost = left_cost + right_cost + new_cardinality = 0 + 0 + 500 = 500
-        assert_eq!(cost, 500.0);
+        // Cost = output + build + probe = 500 + 1000 + 200 = 1700
+        assert_eq!(cost, 1700.0);
     }
 
     #[test]
@@ -62,7 +82,7 @@ mod tests {
 
         let cost = model.compute_cost(&left_plan, &right_plan, 500.0);
 
-        // Cost = 100 + 200 + 500 = 800
-        assert_eq!(cost, 800.0);
+        // Cost = child costs + output + build + probe = 100 + 200 + 500 + 1000 + 200
+        assert_eq!(cost, 2000.0);
     }
 }

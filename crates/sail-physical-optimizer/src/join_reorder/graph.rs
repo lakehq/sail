@@ -258,6 +258,90 @@ impl QueryGraph {
             .collect()
     }
 
+    /// Returns true when a candidate CSG-CMP pair can be emitted without crossing a
+    /// non-commutative join boundary.
+    pub fn is_join_pair_legal(
+        &self,
+        left: JoinSet,
+        right: JoinSet,
+        edge_indices: &[usize],
+    ) -> bool {
+        let parent = left | right;
+
+        for (edge_index, edge) in self.edges.iter().enumerate() {
+            if edge.join_type == JoinType::Inner {
+                continue;
+            }
+
+            let barrier = edge.join_set;
+            let overlaps_barrier = !parent.is_disjoint(&barrier);
+            if !overlaps_barrier {
+                continue;
+            }
+
+            // Do not join a partial non-inner region with outside relations. The non-inner join
+            // must be materialized as its original semantic unit before outside joins can use it.
+            if !parent.is_subset(&barrier) && !barrier.is_subset(&parent) {
+                return false;
+            }
+
+            let emits_this_edge = edge_indices.contains(&edge_index);
+            if parent == barrier {
+                // The plan for a non-inner join's full original region must be formed by that
+                // non-inner edge, not by an unrelated inner/cross edge over the same relation set.
+                if !emits_this_edge {
+                    return false;
+                }
+
+                // Preserve original left/right orientation for non-inner joins. Full joins are
+                // commutative in principle, but keeping the original orientation avoids output-map
+                // and null-supplying-side surprises in this conservative Phase 2 implementation.
+                if !(edge.left_endpoint.is_subset(&left) && edge.right_endpoint.is_subset(&right)) {
+                    return false;
+                }
+            } else if emits_this_edge {
+                // A non-inner edge must not be applied after outside relations have already been
+                // joined into either side.
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Returns true when DP may choose either physical child order for these edges.
+    pub fn can_swap_physical_order(&self, edge_indices: &[usize]) -> bool {
+        edge_indices.iter().all(|&idx| {
+            self.edges
+                .get(idx)
+                .is_some_and(|edge| edge.join_type == JoinType::Inner)
+        })
+    }
+
+    pub fn join_type_for_edges(&self, edge_indices: &[usize]) -> Result<JoinType> {
+        let Some(&first_index) = edge_indices.first() else {
+            return Ok(JoinType::Inner);
+        };
+        let first = self.edges.get(first_index).ok_or_else(|| {
+            DataFusionError::Internal(format!("Edge with index {} not found", first_index))
+        })?;
+        let join_type = first.join_type;
+
+        for &edge_index in edge_indices.iter().skip(1) {
+            let edge = self.edges.get(edge_index).ok_or_else(|| {
+                DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
+            })?;
+            if edge.join_type != join_type {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: mixed join types in one physical join: {:?} and {:?}",
+                    join_type, edge.join_type
+                )));
+            }
+        }
+
+        Ok(join_type)
+    }
+
     /// Gets the number of relations.
     pub fn relation_count(&self) -> usize {
         self.relations.len()
@@ -464,5 +548,58 @@ mod tests {
             connecting_edge_indices.is_empty(),
             "expected no connecting edges between {{0}} and {{1}} from a hyperedge {{0,1,2}}"
         );
+    }
+
+    #[test]
+    fn test_non_inner_join_legality_preserves_boundary_and_orientation() {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::Column;
+
+        let mut graph = QueryGraph::new();
+        for relation_id in 0..3 {
+            graph.add_relation(create_test_relation(relation_id));
+        }
+
+        let filter =
+            Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+        let left_join = JoinEdge::new_with_endpoints(
+            JoinSet::new_singleton(0).unwrap(),
+            JoinSet::new_singleton(1).unwrap(),
+            filter,
+            JoinType::Left,
+            vec![],
+        );
+        graph.add_edge(left_join).unwrap();
+
+        let filter =
+            Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+        let outside_inner = JoinEdge::new_with_endpoints(
+            JoinSet::from_iter([0, 1]).unwrap(),
+            JoinSet::new_singleton(2).unwrap(),
+            filter,
+            JoinType::Inner,
+            vec![],
+        );
+        graph.add_edge(outside_inner).unwrap();
+
+        let a = JoinSet::new_singleton(0).unwrap();
+        let b = JoinSet::new_singleton(1).unwrap();
+        let c = JoinSet::new_singleton(2).unwrap();
+        let ab = a | b;
+
+        assert!(graph.is_join_pair_legal(a, b, &[0]));
+        assert!(
+            !graph.is_join_pair_legal(b, a, &[0]),
+            "non-inner edge must keep original left/right orientation"
+        );
+        assert!(
+            !graph.is_join_pair_legal(a, b, &[]),
+            "the full non-inner boundary cannot be formed without the non-inner edge"
+        );
+        assert!(
+            !graph.is_join_pair_legal(a, c, &[1]),
+            "a partial non-inner boundary cannot join with outside relations"
+        );
+        assert!(graph.is_join_pair_legal(ab, c, &[1]));
     }
 }

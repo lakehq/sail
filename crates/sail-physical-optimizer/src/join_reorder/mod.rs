@@ -24,12 +24,56 @@ mod graph;
 mod join_set;
 mod reconstructor;
 
-#[derive(Default)]
-pub struct JoinReorder {}
+#[derive(Debug, Clone)]
+pub struct JoinReorderOptions {
+    pub max_relations: usize,
+    pub emit_threshold: usize,
+    pub enable_non_inner: bool,
+    pub enable_fact_anchor_heuristic: bool,
+    pub fact_anchor_min_relations: usize,
+    pub fact_anchor_relative_threshold: f64,
+    pub fact_anchor_min_share: f64,
+    pub fact_anchor_penalty_multiplier: f64,
+    pub build_side_weight: f64,
+    pub probe_side_weight: f64,
+    pub output_weight: f64,
+}
+
+impl Default for JoinReorderOptions {
+    fn default() -> Self {
+        Self {
+            max_relations: 12,
+            emit_threshold: 10_000,
+            enable_non_inner: false,
+            enable_fact_anchor_heuristic: true,
+            fact_anchor_min_relations: 5,
+            fact_anchor_relative_threshold: 0.25,
+            fact_anchor_min_share: 0.55,
+            fact_anchor_penalty_multiplier: 8.0,
+            build_side_weight: 1.0,
+            probe_side_weight: 0.1,
+            output_weight: 1.0,
+        }
+    }
+}
+
+pub struct JoinReorder {
+    options: JoinReorderOptions,
+}
 
 impl JoinReorder {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_options(JoinReorderOptions::default())
+    }
+
+    pub fn with_options(options: JoinReorderOptions) -> Self {
+        Self { options }
+    }
+}
+
+impl Default for JoinReorder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -107,7 +151,7 @@ impl JoinReorder {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // Attempt to build a query graph starting from the current node.
         // The GraphBuilder will traverse downwards to find a complete reorderable region.
-        let mut graph_builder = GraphBuilder::new();
+        let mut graph_builder = GraphBuilder::with_options(self.options.clone());
         let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? else {
             return Ok(None);
         };
@@ -123,7 +167,7 @@ impl JoinReorder {
             query_graph.edges.len()
         );
 
-        let mut enumerator = PlanEnumerator::new(query_graph);
+        let mut enumerator = PlanEnumerator::with_options(query_graph, self.options.clone());
         let best_plan = match enumerator.solve()? {
             Some(plan) => {
                 trace!("JoinReorder: DP optimization completed successfully");

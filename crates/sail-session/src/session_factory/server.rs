@@ -140,6 +140,35 @@ impl ServerSessionFactory {
             .with_optimizer_rules(default_optimizer_rules())
             .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
                 enable_join_reorder: self.config.optimizer.enable_join_reorder,
+                join_reorder: sail_physical_optimizer::JoinReorderOptions {
+                    max_relations: self.config.optimizer.join_reorder.max_relations,
+                    emit_threshold: self.config.optimizer.join_reorder.emit_threshold,
+                    enable_non_inner: self.config.optimizer.join_reorder.enable_non_inner,
+                    enable_fact_anchor_heuristic: self
+                        .config
+                        .optimizer
+                        .join_reorder
+                        .enable_fact_anchor_heuristic,
+                    fact_anchor_min_relations: self
+                        .config
+                        .optimizer
+                        .join_reorder
+                        .fact_anchor_min_relations,
+                    fact_anchor_relative_threshold: self
+                        .config
+                        .optimizer
+                        .join_reorder
+                        .fact_anchor_relative_threshold,
+                    fact_anchor_min_share: self.config.optimizer.join_reorder.fact_anchor_min_share,
+                    fact_anchor_penalty_multiplier: self
+                        .config
+                        .optimizer
+                        .join_reorder
+                        .fact_anchor_penalty_multiplier,
+                    build_side_weight: self.config.optimizer.join_reorder.build_side_weight,
+                    probe_side_weight: self.config.optimizer.join_reorder.probe_side_weight,
+                    output_weight: self.config.optimizer.join_reorder.output_weight,
+                },
             }))
             .with_query_planner(new_query_planner());
         let builder = self.mutator.mutate_state(builder, info)?;

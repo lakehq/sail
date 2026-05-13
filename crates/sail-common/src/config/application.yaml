@@ -710,6 +710,83 @@
     Whether to enable cost-based join reorder in the query optimizer.
   experimental: true
 
+- key: optimizer.join_reorder.max_relations
+  type: number
+  default: "12"
+  description: |
+    The maximum number of base relations in one join-reorder region.
+  experimental: true
+
+- key: optimizer.join_reorder.emit_threshold
+  type: number
+  default: "10000"
+  description: |
+    The maximum number of CSG-CMP pairs to emit before falling back to greedy join ordering.
+  experimental: true
+
+- key: optimizer.join_reorder.enable_non_inner
+  type: boolean
+  default: "false"
+  description: |
+    Whether to allow conservative join reorder regions that include outer, semi, or anti joins.
+  experimental: true
+
+- key: optimizer.join_reorder.enable_fact_anchor_heuristic
+  type: boolean
+  default: "true"
+  description: |
+    Whether to apply the guarded fact-anchor penalty for low-confidence star/snowflake joins.
+  experimental: true
+
+- key: optimizer.join_reorder.fact_anchor_min_relations
+  type: number
+  default: "5"
+  description: |
+    The minimum relation count before the fact-anchor heuristic can be applied.
+  experimental: true
+
+- key: optimizer.join_reorder.fact_anchor_relative_threshold
+  type: number
+  default: "0.25"
+  description: |
+    The fraction of the largest base cardinality used to identify fact-anchor candidates.
+  experimental: true
+
+- key: optimizer.join_reorder.fact_anchor_min_share
+  type: number
+  default: "0.55"
+  description: |
+    The minimum share of total base cardinality that fact-anchor candidates must cover.
+  experimental: true
+
+- key: optimizer.join_reorder.fact_anchor_penalty_multiplier
+  type: number
+  default: "8.0"
+  description: |
+    The multiplier applied to low-confidence joins that avoid all fact-anchor relations.
+  experimental: true
+
+- key: optimizer.join_reorder.build_side_weight
+  type: number
+  default: "1.0"
+  description: |
+    The cost weight for rows placed on the hash join build side during join-order DP.
+  experimental: true
+
+- key: optimizer.join_reorder.probe_side_weight
+  type: number
+  default: "0.1"
+  description: |
+    The cost weight for rows placed on the hash join probe side during join-order DP.
+  experimental: true
+
+- key: optimizer.join_reorder.output_weight
+  type: number
+  default: "1.0"
+  description: |
+    The cost weight for estimated join output rows during join-order DP.
+  experimental: true
+
 - key: optimizer.expand_views_at_output
   type: boolean
   default: "true"

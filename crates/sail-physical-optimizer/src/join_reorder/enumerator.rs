@@ -10,6 +10,7 @@ use crate::join_reorder::cost_model::CostModel;
 use crate::join_reorder::dp_plan::DPPlan;
 use crate::join_reorder::graph::QueryGraph;
 use crate::join_reorder::join_set::JoinSet;
+use crate::join_reorder::JoinReorderOptions;
 
 /// Plan enumerator that implements dynamic programming algorithm to find optimal join order.
 pub struct PlanEnumerator {
@@ -19,26 +20,18 @@ pub struct PlanEnumerator {
     cost_model: CostModel,
     /// Counter for tracking the number of plans generated/evaluated
     emit_count: usize,
+    options: JoinReorderOptions,
     /// Relations considered "fact anchors" in skewed star/snowflake shapes.
     anchor_relations: JoinSet,
     /// Whether guarded anchor penalties should participate in DP costing.
     enable_fact_anchor_heuristic: bool,
 }
 
-/// Threshold for maximum number of plans to generate before falling back to greedy algorithm
-const EMIT_THRESHOLD: usize = 10000;
-
-/// Minimum relation count before enabling guarded fact-anchor penalties.
-const FACT_ANCHOR_MIN_RELATIONS: usize = 5;
-/// A relation is considered an anchor when base_cardinality >= max_base * threshold.
-const FACT_ANCHOR_RELATIVE_THRESHOLD: f64 = 0.25;
-/// Anchor relations should dominate this share of total base cardinality.
-const FACT_ANCHOR_MIN_SHARE: f64 = 0.55;
-/// Penalty applied to low-confidence joins that avoid all anchor relations.
-const FACT_ANCHOR_PENALTY_MULTIPLIER: f64 = 8.0;
-
 impl PlanEnumerator {
-    fn derive_anchor_relations(query_graph: &QueryGraph) -> (JoinSet, bool) {
+    fn derive_anchor_relations(
+        query_graph: &QueryGraph,
+        options: &JoinReorderOptions,
+    ) -> (JoinSet, bool) {
         let relation_count = query_graph.relation_count();
         if relation_count == 0 {
             return (JoinSet::new(), false);
@@ -59,7 +52,7 @@ impl PlanEnumerator {
             return (JoinSet::new(), false);
         }
 
-        let threshold = max_base * FACT_ANCHOR_RELATIVE_THRESHOLD;
+        let threshold = max_base * options.fact_anchor_relative_threshold;
         let mut anchor_bits = 0u64;
         let mut anchor_total = 0.0;
         let mut total = 0.0;
@@ -100,10 +93,11 @@ impl PlanEnumerator {
             0.0
         };
         let max_allowed_anchor_count = (relation_count / 2).max(1);
-        let enabled = relation_count >= FACT_ANCHOR_MIN_RELATIONS
+        let enabled = options.enable_fact_anchor_heuristic
+            && relation_count >= options.fact_anchor_min_relations
             && anchor_count > 0
             && anchor_count <= max_allowed_anchor_count
-            && anchor_share >= FACT_ANCHOR_MIN_SHARE;
+            && anchor_share >= options.fact_anchor_min_share;
 
         (anchors, enabled)
     }
@@ -191,11 +185,16 @@ impl PlanEnumerator {
     }
 
     /// Creates a new plan enumerator.
+    #[cfg(test)]
     pub fn new(query_graph: QueryGraph) -> Self {
+        Self::with_options(query_graph, JoinReorderOptions::default())
+    }
+
+    pub fn with_options(query_graph: QueryGraph, options: JoinReorderOptions) -> Self {
         let (anchor_relations, enable_fact_anchor_heuristic) =
-            Self::derive_anchor_relations(&query_graph);
+            Self::derive_anchor_relations(&query_graph, &options);
         let cardinality_estimator = CardinalityEstimator::new(query_graph.clone());
-        let cost_model = CostModel::new();
+        let cost_model = CostModel::with_options(&options);
 
         Self {
             query_graph,
@@ -203,6 +202,7 @@ impl PlanEnumerator {
             cardinality_estimator,
             cost_model,
             emit_count: 0,
+            options,
             anchor_relations,
             enable_fact_anchor_heuristic,
         }
@@ -455,7 +455,7 @@ impl PlanEnumerator {
         edge_indices: Vec<usize>,
     ) -> Result<bool> {
         self.emit_count += 1;
-        if self.emit_count >= EMIT_THRESHOLD {
+        if self.emit_count >= self.options.emit_threshold {
             trace!(
                 "JoinReorder: DPhyp emit threshold exceeded at {} emits",
                 self.emit_count
@@ -485,22 +485,47 @@ impl PlanEnumerator {
             None => return Ok(f64::INFINITY),
         };
 
+        if !self
+            .query_graph
+            .is_join_pair_legal(left, right, edge_indices)
+        {
+            return Ok(f64::INFINITY);
+        }
+
         // Estimate join cardinality and cost
         let new_cardinality = self.cardinality_estimator.estimate_join_cardinality(
             left_plan.cardinality,
             right_plan.cardinality,
             edge_indices,
         );
-        let mut new_cost = self
-            .cost_model
-            .compute_cost(&left_plan, &right_plan, new_cardinality);
+        let (physical_left, physical_right, mut new_cost) =
+            if self.query_graph.can_swap_physical_order(edge_indices) {
+                let forward_cost =
+                    self.cost_model
+                        .compute_cost(&left_plan, &right_plan, new_cardinality);
+                let reverse_cost =
+                    self.cost_model
+                        .compute_cost(&right_plan, &left_plan, new_cardinality);
+                if reverse_cost < forward_cost {
+                    (right, left, reverse_cost)
+                } else {
+                    (left, right, forward_cost)
+                }
+            } else {
+                (
+                    left,
+                    right,
+                    self.cost_model
+                        .compute_cost(&left_plan, &right_plan, new_cardinality),
+                )
+            };
         if self.should_apply_fact_anchor_penalty(parent, edge_indices) {
-            new_cost += new_cardinality * FACT_ANCHOR_PENALTY_MULTIPLIER;
+            new_cost += new_cardinality * self.options.fact_anchor_penalty_multiplier;
         }
 
         let new_plan = Arc::new(DPPlan::new_join(
-            left,
-            right,
+            physical_left,
+            physical_right,
             edge_indices.to_vec(),
             new_cost,
             new_cardinality,
@@ -892,6 +917,36 @@ mod tests {
         let all_set = enumerator.create_all_relations_set()?;
         assert_eq!(all_set.bits(), 7); // 111 in binary = 7
         assert_eq!(all_set.cardinality(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dp_records_smaller_inner_join_build_side() -> Result<()> {
+        let mut graph = create_test_graph_with_relations(2);
+        graph.relations[0].initial_cardinality = 10_000.0;
+        graph.relations[0].base_cardinality = 10_000.0;
+        graph.relations[1].initial_cardinality = 10.0;
+        graph.relations[1].base_cardinality = 10.0;
+        add_equi_join_edge(&mut graph, 0, 1)?;
+
+        let mut enumerator = PlanEnumerator::new(graph);
+        let plan = enumerator
+            .solve()?
+            .ok_or_else(|| DataFusionError::Internal("expected two-way join plan".to_string()))?;
+
+        let PlanType::Join {
+            left_set,
+            right_set,
+            ..
+        } = &plan.plan_type
+        else {
+            return Err(DataFusionError::Internal(
+                "expected join plan type".to_string(),
+            ));
+        };
+
+        assert_eq!(*left_set, JoinSet::new_singleton(1)?);
+        assert_eq!(*right_set, JoinSet::new_singleton(0)?);
         Ok(())
     }
 

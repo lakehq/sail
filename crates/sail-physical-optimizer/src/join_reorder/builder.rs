@@ -19,14 +19,12 @@ use log::trace;
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
+use crate::join_reorder::JoinReorderOptions;
 
 type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 type EquiPair = (StableColumn, StableColumn);
 type PhysicalExprWithEquiPairs = (PhysicalExprRef, Vec<EquiPair>);
 type GroupedPredicates = HashMap<(JoinSet, JoinSet), Vec<PhysicalExprWithEquiPairs>>;
-
-/// Hard limit on the number of base relations in a single reorderable graph.
-const MAX_RELATIONS: usize = 12;
 
 /// Maps an output column from an ExecutionPlan back to a stable identifier.
 /// The vector is indexed by the column index in the plan's output schema.
@@ -59,14 +57,20 @@ pub struct GraphBuilder {
     /// This helps resolve join conditions that reference columns by their expression object.
     /// Key: A Column expression (which is hashable). Value: Stable ID.
     expr_to_stable_id: HashMap<Column, (usize, usize)>,
+    options: JoinReorderOptions,
 }
 
 impl GraphBuilder {
     pub fn new() -> Self {
+        Self::with_options(JoinReorderOptions::default())
+    }
+
+    pub fn with_options(options: JoinReorderOptions) -> Self {
         Self {
             graph: QueryGraph::new(),
             relation_counter: 0,
             expr_to_stable_id: HashMap::new(),
+            options,
         }
     }
 
@@ -105,16 +109,22 @@ impl GraphBuilder {
 
         // TODO: Extend to support `SortMergeJoinExec`.
         if let Some(join_plan) = any_plan.downcast_ref::<HashJoinExec>() {
-            if join_plan.join_type() == &JoinType::Inner {
-                trace!("Visiting inner join: {}", join_plan.name());
-                return self.visit_inner_join(join_plan);
-            } else {
+            if join_plan.join_type() == &JoinType::Inner
+                || (self.options.enable_non_inner
+                    && Self::is_supported_non_inner_join_type(*join_plan.join_type()))
+            {
                 trace!(
-                    "Skipping non-inner join ({:?}): {}",
+                    "Visiting hash join ({:?}): {}",
                     join_plan.join_type(),
                     join_plan.name()
                 );
+                return self.visit_hash_join(join_plan);
             }
+            trace!(
+                "Skipping non-inner join ({:?}): {}",
+                join_plan.join_type(),
+                join_plan.name()
+            );
         }
 
         if let Some(proj_plan) = any_plan.downcast_ref::<ProjectionExec>() {
@@ -127,11 +137,11 @@ impl GraphBuilder {
             // we can't reconstruct from stable base columns.
             if self.is_trivial_projection(proj_plan) {
                 //TODO: consider apply this limit in different levels of the plan.
-                if self.graph.relation_count() >= MAX_RELATIONS {
+                if self.graph.relation_count() >= self.options.max_relations {
                     trace!(
                         "GraphBuilder: relation_count={} >= MAX_RELATIONS={}, treating ProjectionExec as boundary leaf",
                         self.graph.relation_count(),
-                        MAX_RELATIONS
+                        self.options.max_relations
                     );
                     return self.visit_boundary_or_leaf(plan);
                 }
@@ -164,7 +174,7 @@ impl GraphBuilder {
         self.create_relation_node(plan)
     }
 
-    fn visit_inner_join(&mut self, join_plan: &HashJoinExec) -> Result<ColumnMap> {
+    fn visit_hash_join(&mut self, join_plan: &HashJoinExec) -> Result<ColumnMap> {
         // Recursively build the graph from both children.
         // This continues building the join chain or hits a boundary to create a RelationNode.
         let left_map = self.visit_plan(join_plan.left().clone())?;
@@ -229,36 +239,46 @@ impl GraphBuilder {
         let left_relations = self.relations_in_map(&left_map)?;
         let right_relations = self.relations_in_map(&right_map)?;
 
-        for (pred, pairs) in conjuncts {
-            let deps = self.relations_for_expr(&pred, &left_map, &right_map)?;
+        if join_plan.join_type() == &JoinType::Inner {
+            for (pred, pairs) in conjuncts {
+                let deps = self.relations_for_expr(&pred, &left_map, &right_map)?;
 
-            // NOTE: If a predicate depends on <2 base relations, keep it associated with the full
-            // join node so it is not lost (it may be a single-side residual predicate).
-            let deps = if deps.cardinality() < 2 {
-                self.all_relations_in_maps(&left_map, &right_map)?
-            } else {
-                deps
-            };
+                // NOTE: If a predicate depends on <2 base relations, keep it associated with the full
+                // join node so it is not lost (it may be a single-side residual predicate).
+                let deps = if deps.cardinality() < 2 {
+                    self.all_relations_in_maps(&left_map, &right_map)?
+                } else {
+                    deps
+                };
 
-            let mut left_endpoint = deps & left_relations;
-            let mut right_endpoint = deps & right_relations;
-            if left_endpoint.is_empty() || right_endpoint.is_empty() {
-                let fallback = self.all_relations_in_maps(&left_map, &right_map)?;
-                left_endpoint = fallback & left_relations;
-                right_endpoint = fallback & right_relations;
+                let mut left_endpoint = deps & left_relations;
+                let mut right_endpoint = deps & right_relations;
+                if left_endpoint.is_empty() || right_endpoint.is_empty() {
+                    let fallback = self.all_relations_in_maps(&left_map, &right_map)?;
+                    left_endpoint = fallback & left_relations;
+                    right_endpoint = fallback & right_relations;
+                }
+
+                if left_endpoint.is_empty() || right_endpoint.is_empty() {
+                    return Err(DataFusionError::Internal(
+                        "JoinReorder: predicate did not reference both sides of join region"
+                            .to_string(),
+                    ));
+                }
+
+                grouped
+                    .entry((left_endpoint, right_endpoint))
+                    .or_default()
+                    .push((pred, pairs));
             }
-
-            if left_endpoint.is_empty() || right_endpoint.is_empty() {
-                return Err(DataFusionError::Internal(
-                    "JoinReorder: predicate did not reference both sides of join region"
-                        .to_string(),
-                ));
+        } else {
+            if conjuncts.is_empty() {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: {:?} join without predicates is not supported",
+                    join_plan.join_type()
+                )));
             }
-
-            grouped
-                .entry((left_endpoint, right_endpoint))
-                .or_default()
-                .push((pred, pairs));
+            grouped.insert((left_relations, right_relations), conjuncts);
         }
 
         for ((left_endpoint, right_endpoint), preds) in grouped {
@@ -274,10 +294,9 @@ impl GraphBuilder {
             self.graph.add_edge(edge)?;
         }
 
-        // Build and return the output ColumnMap for current Join node
-        // Inner Join output is concatenation of left and right child outputs
-        let mut output_map = left_map;
-        output_map.extend(right_map);
+        // Build and return the output ColumnMap for current Join node.
+        let mut output_map =
+            Self::join_output_map_for_type(&left_map, &right_map, *join_plan.join_type())?;
         // A projection may be embedded into HashJoinExec; apply it so ColumnMap matches
         // the actual join output schema (reorder/drop columns).
         if let Some(projection) = join_plan.projection.as_ref() {
@@ -294,6 +313,46 @@ impl GraphBuilder {
             output_map = projected;
         }
         Ok(output_map)
+    }
+
+    fn is_supported_non_inner_join_type(join_type: JoinType) -> bool {
+        matches!(
+            join_type,
+            JoinType::Left
+                | JoinType::Right
+                | JoinType::Full
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+        )
+    }
+
+    fn join_output_map_for_type(
+        left_map: &ColumnMap,
+        right_map: &ColumnMap,
+        join_type: JoinType,
+    ) -> Result<ColumnMap> {
+        let mut output = Vec::new();
+        match join_type {
+            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                output.extend(left_map.iter().cloned());
+                output.extend(right_map.iter().cloned());
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                output.extend(left_map.iter().cloned());
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                output.extend(right_map.iter().cloned());
+            }
+            JoinType::LeftMark | JoinType::RightMark => {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: {:?} is not supported in non-inner join reorder",
+                    join_type
+                )));
+            }
+        }
+        Ok(output)
     }
 
     fn decompose_conjuncts(expr: &Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -552,11 +611,11 @@ impl GraphBuilder {
     }
 
     fn create_relation_node(&mut self, plan: Arc<dyn ExecutionPlan>) -> Result<ColumnMap> {
-        if self.graph.relation_count() >= MAX_RELATIONS {
+        if self.graph.relation_count() >= self.options.max_relations {
             return Err(DataFusionError::Internal(format!(
                 "JoinReorder: relation_count {} reached MAX_RELATIONS {}",
                 self.graph.relation_count(),
-                MAX_RELATIONS
+                self.options.max_relations
             )));
         }
 
@@ -1028,8 +1087,8 @@ mod tests {
             false, // null_aware
         )?);
 
-        // Test that visit_inner_join correctly handles HashJoinExec
-        let result = builder.visit_inner_join(&join_plan);
+        // Test that visit_hash_join correctly handles HashJoinExec
+        let result = builder.visit_hash_join(&join_plan);
         assert!(result.is_ok());
 
         // Check that an edge was created
@@ -1037,6 +1096,55 @@ mod tests {
         // Check that two relations were created (left and right)
         assert_eq!(builder.graph.relation_count(), 2);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_inner_join_requires_option_and_uses_full_endpoints() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let schema_left = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let schema_right = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let left_plan = Arc::new(EmptyExec::new(schema_left));
+        let right_plan = Arc::new(EmptyExec::new(schema_right));
+        let join_plan = Arc::new(HashJoinExec::try_new(
+            left_plan,
+            right_plan,
+            vec![(
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Left,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let mut disabled = GraphBuilder::new();
+        assert!(
+            disabled.build(join_plan.clone())?.is_none(),
+            "non-inner joins remain boundaries unless explicitly enabled"
+        );
+
+        let mut enabled = GraphBuilder::with_options(JoinReorderOptions {
+            enable_non_inner: true,
+            ..Default::default()
+        });
+        let Some((graph, output_map)) = enabled.build(join_plan)? else {
+            return Err(DataFusionError::Internal(
+                "expected left join graph when non-inner support is enabled".to_string(),
+            ));
+        };
+
+        assert_eq!(graph.relation_count(), 2);
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!(graph.edges[0].join_type, JoinType::Left);
+        assert_eq!(graph.edges[0].left_endpoint, JoinSet::new_singleton(0)?);
+        assert_eq!(graph.edges[0].right_endpoint, JoinSet::new_singleton(1)?);
+        assert_eq!(output_map.len(), 2);
         Ok(())
     }
 
@@ -1763,7 +1871,7 @@ mod tests {
             false, // null_aware
         )?);
 
-        let output_map = builder.visit_inner_join(&join_plan)?;
+        let output_map = builder.visit_hash_join(&join_plan)?;
 
         // After applying projection [3,0,2], output_map should have length 3.
         assert_eq!(output_map.len(), 3);
