@@ -339,6 +339,8 @@ pub struct CommitInfo {
     pub engine_info: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_commit_timestamp: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<HashMap<String, String>>,
     #[serde(flatten, default)]
     pub info: HashMap<String, serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

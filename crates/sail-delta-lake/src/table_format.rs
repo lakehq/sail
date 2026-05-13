@@ -389,7 +389,7 @@ impl TableFormat for DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
 
-        let row_tracking_enable_requires_files = {
+        let (row_tracking_enable_requires_files, row_tracking_suspend_requires_files) = {
             let mut metadata = snapshot.metadata().clone();
             for (key, value) in &validated_sets {
                 metadata = metadata.add_config_key(key.clone(), value.clone());
@@ -402,34 +402,37 @@ impl TableFormat for DeltaTableFormat {
                 &mut config,
                 Some(snapshot.metadata().configuration()),
             );
-            enables_row_tracking(snapshot.metadata().configuration(), &config)
-        };
-
-        // File-level actions are only needed when ALTER TABLE enables row tracking, because
-        // existing Add actions must be recommitted with baseRowId/defaultRowCommitVersion
-        // backfilled. Other property changes can keep the cheaper metadata-only snapshot.
-        // TODO(row-tracking): Move enablement backfill to Delta-compatible chunked backfill batches.
-        let (table, snapshot) = if row_tracking_enable_requires_files {
-            let table = open_table_with_object_store_and_table_config(
-                url,
-                object_store,
-                Default::default(),
-                DeltaSnapshotConfig {
-                    require_files: true,
-                    ..Default::default()
-                },
+            (
+                enables_row_tracking(snapshot.metadata().configuration(), &config),
+                suspends_row_tracking(snapshot.metadata().configuration(), &config),
             )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            let snapshot = table
-                .snapshot()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .clone();
-            (table, snapshot)
-        } else {
-            (table, snapshot)
         };
+
+        // File-level actions are only needed when ALTER TABLE enables or suspends row tracking,
+        // because existing Add actions must be recommitted to backfill or unbackfill row tracking.
+        // TODO(row-tracking): Move enablement backfill to Delta-compatible chunked backfill batches.
+        let (table, snapshot) =
+            if row_tracking_enable_requires_files || row_tracking_suspend_requires_files {
+                let table = open_table_with_object_store_and_table_config(
+                    url,
+                    object_store,
+                    Default::default(),
+                    DeltaSnapshotConfig {
+                        require_files: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                let snapshot = table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .clone();
+                (table, snapshot)
+            } else {
+                (table, snapshot)
+            };
 
         let existing_config = snapshot.metadata().configuration().clone();
 
@@ -468,7 +471,7 @@ impl TableFormat for DeltaTableFormat {
         // Derive the desired protocol from the new configuration and merge it with the
         // existing protocol. We only ever upgrade: features already present on the table
         // are preserved, and new feature requirements are added.
-        // TODO(row-tracking): Add downgrade cleanup with suspend, unbackfill, and domain removal.
+        // TODO(row-tracking): Add full DROP FEATURE downgrade cleanup after unbackfill.
         let desired_protocol = protocol_for_metadata(&new_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
@@ -499,6 +502,20 @@ impl TableFormat for DeltaTableFormat {
                         add.data_change = false;
                         add.base_row_id = None;
                         add.default_row_commit_version = None;
+                        CommitAction::Add(add)
+                    }),
+            );
+        } else if suspends_row_tracking(snapshot.metadata().configuration(), &new_config) {
+            actions.extend(
+                snapshot
+                    .adds()
+                    .iter()
+                    .filter(|add| {
+                        add.base_row_id.is_some() || add.default_row_commit_version.is_some()
+                    })
+                    .cloned()
+                    .map(|mut add| {
+                        add.data_change = false;
                         CommitAction::Add(add)
                     }),
             );
@@ -772,6 +789,14 @@ fn enables_row_tracking(
 ) -> bool {
     !config_enabled(existing, "delta.enableRowTracking")
         && config_enabled(updated, "delta.enableRowTracking")
+}
+
+fn suspends_row_tracking(
+    existing: &HashMap<String, String>,
+    updated: &HashMap<String, String>,
+) -> bool {
+    !config_enabled(existing, "delta.rowTrackingSuspended")
+        && config_enabled(updated, "delta.rowTrackingSuspended")
 }
 
 /// Merge an existing protocol with a desired one. The result preserves every feature and
