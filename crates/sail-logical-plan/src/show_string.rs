@@ -4,14 +4,86 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use comfy_table::{Cell, CellAlignment, ColumnConstraint, Table, Width};
-use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::array::{Array, PrimitiveArray, RecordBatch};
+use datafusion::arrow::datatypes::{
+    DataType, DurationMicrosecondType, Field, IntervalUnit, IntervalYearMonthType, TimeUnit,
+};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common::interval::{
+    format_day_time_interval, format_year_month_interval, IntervalQualifierMetadata,
+    SparkIntervalKind,
+};
+use sail_common::spec::{EXTENSION_TYPE_METADATA_KEY, SAIL_INTERVAL_EXTENSION_NAME};
 use sail_common::string::escape_meta_characters;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::utils::items::ItemTaker;
+
+/// Read the Spark interval extension metadata off a field and resolve the
+/// `(start_field, end_field)` pair to a `SparkIntervalKind`. Returns `None`
+/// when the field isn't a Spark interval column or the metadata is missing /
+/// invalid — both cases fall back to the default `ArrayFormatter`.
+fn interval_qualifier_kind(field: &Field) -> Option<SparkIntervalKind> {
+    if field.extension_type_name() != Some(SAIL_INTERVAL_EXTENSION_NAME) {
+        return None;
+    }
+    let meta: IntervalQualifierMetadata =
+        serde_json::from_str(field.metadata().get(EXTENSION_TYPE_METADATA_KEY)?).ok()?;
+    let (start, end) = (meta.start_field?, meta.end_field?);
+    match field.data_type() {
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            SparkIntervalKind::from_year_month_fields(start, end)
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            SparkIntervalKind::from_day_time_fields(start, end)
+        }
+        _ => None,
+    }
+}
+
+/// If `field` is a Spark interval column with qualifier metadata, pre-format
+/// every row of `array`. Null cells get `""` to match the default
+/// `FormatOptions` null string. Returns `None` to signal "use the default
+/// ArrayFormatter for this column".
+fn try_format_interval_column(field: &Field, array: &dyn Array) -> Option<Vec<String>> {
+    let kind = interval_qualifier_kind(field)?;
+    match field.data_type() {
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            let a = array
+                .as_any()
+                .downcast_ref::<PrimitiveArray<IntervalYearMonthType>>()?;
+            Some(
+                (0..a.len())
+                    .map(|i| {
+                        if a.is_null(i) {
+                            String::new()
+                        } else {
+                            format_year_month_interval(a.value(i), kind).unwrap_or_default()
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            let a = array
+                .as_any()
+                .downcast_ref::<PrimitiveArray<DurationMicrosecondType>>()?;
+            Some(
+                (0..a.len())
+                    .map(|i| {
+                        if a.is_null(i) {
+                            String::new()
+                        } else {
+                            format_day_time_interval(a.value(i), kind).unwrap_or_default()
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
+}
 
 fn truncate_string(s: &str, n: usize) -> String {
     if n == 0 || s.len() <= n {
@@ -68,6 +140,19 @@ impl ShowStringFormat {
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// Per-column override strings for Spark interval columns that carry the
+    /// qualifier extension metadata. `None` at index i means "use the default
+    /// `ArrayFormatter` for column i".
+    fn get_interval_overrides(&self, batch: &RecordBatch) -> Vec<Option<Vec<String>>> {
+        batch
+            .schema()
+            .fields()
+            .iter()
+            .zip(batch.columns().iter())
+            .map(|(f, c)| try_format_interval_column(f, c.as_ref()))
+            .collect()
+    }
+
     fn show_footer(&self, num_rows: usize, has_more: bool) -> String {
         match (has_more, num_rows) {
             (true, 1) => "only showing top 1 row\n".to_string(),
@@ -104,14 +189,23 @@ impl ShowStringFormat {
         });
 
         let formatters = self.get_formatters(batch)?;
+        let interval_overrides = self.get_interval_overrides(batch);
         for row in 0..batch.num_rows() {
             let row = formatters
                 .iter()
-                .map(|f| {
-                    f.value(row)
-                        .try_to_string()
-                        .map(|s| escape_meta_characters(&s))
-                        .map(|s| truncate_string(&s, self.truncate))
+                .enumerate()
+                .map(|(col, f)| {
+                    if let Some(strs) = &interval_overrides[col] {
+                        Ok(truncate_string(
+                            &escape_meta_characters(&strs[row]),
+                            self.truncate,
+                        ))
+                    } else {
+                        f.value(row)
+                            .try_to_string()
+                            .map(|s| escape_meta_characters(&s))
+                            .map(|s| truncate_string(&s, self.truncate))
+                    }
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             table.add_row(row);
@@ -128,13 +222,22 @@ impl ShowStringFormat {
         let mut table = Table::new();
         table.load_preset("        |          ");
         let formatters = self.get_formatters(batch)?;
+        let interval_overrides = self.get_interval_overrides(batch);
         for row in 0..batch.num_rows() {
-            for (formatter, field) in formatters.iter().zip(batch.schema().fields.iter()) {
-                let value = formatter
-                    .value(row)
-                    .try_to_string()
-                    .map(|s| escape_meta_characters(&s))
-                    .map(|s| truncate_string(&s, self.truncate))?;
+            for (col, (formatter, field)) in formatters
+                .iter()
+                .zip(batch.schema().fields.iter())
+                .enumerate()
+            {
+                let value = if let Some(strs) = &interval_overrides[col] {
+                    truncate_string(&escape_meta_characters(&strs[row]), self.truncate)
+                } else {
+                    formatter
+                        .value(row)
+                        .try_to_string()
+                        .map(|s| escape_meta_characters(&s))
+                        .map(|s| truncate_string(&s, self.truncate))?
+                };
                 table.add_row(vec![field.name().clone(), value]);
             }
         }
@@ -179,6 +282,7 @@ impl ShowStringFormat {
 
     fn show_html(&self, batch: &RecordBatch, has_more: bool) -> Result<String> {
         let formatters = self.get_formatters(batch)?;
+        let interval_overrides = self.get_interval_overrides(batch);
         let mut table = vec!["<table border='1'>".to_string()];
         let header = batch
             .schema()
@@ -191,11 +295,15 @@ impl ShowStringFormat {
         for row in 0..batch.num_rows() {
             let row = formatters
                 .iter()
-                .map(|f| {
-                    f.value(row).try_to_string().map(|s| {
-                        let s = truncate_string(&s, self.truncate);
-                        format!("<td>{}</td>", html_escape::encode_text(s.as_str()))
-                    })
+                .enumerate()
+                .map(|(col, f)| -> std::result::Result<String, datafusion::arrow::error::ArrowError> {
+                    let s = if let Some(strs) = &interval_overrides[col] {
+                        strs[row].clone()
+                    } else {
+                        f.value(row).try_to_string()?
+                    };
+                    let s = truncate_string(&s, self.truncate);
+                    Ok(format!("<td>{}</td>", html_escape::encode_text(s.as_str())))
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             table.push(format!("<tr>{}</tr>", row.join("")));

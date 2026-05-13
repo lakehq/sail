@@ -4,10 +4,12 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, AsArray};
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, TimeUnit,
+    DurationSecondType, Field, FieldRef, TimeUnit,
 };
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NegateDuration {
@@ -43,6 +45,25 @@ impl ScalarUDFImpl for NegateDuration {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
+    }
+
+    /// Unary negation preserves the input's data type *and* its Field metadata
+    /// (e.g. the Spark interval qualifier extension metadata on a typed
+    /// `DayTimeIntervalType` column). The default `return_field_from_args`
+    /// drops the metadata, which causes `-INTERVAL '3' DAY` to render via the
+    /// canonical "INTERVAL '0 00:00:00' DAY TO SECOND" formatter instead of
+    /// "INTERVAL '-3' DAY".
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [input] = args.arg_fields else {
+            return exec_err!(
+                "`negate_duration` function requires 1 argument, got {}",
+                args.arg_fields.len()
+            );
+        };
+        Ok(Arc::new(
+            Field::new(self.name(), input.data_type().clone(), true)
+                .with_metadata(input.metadata().clone()),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

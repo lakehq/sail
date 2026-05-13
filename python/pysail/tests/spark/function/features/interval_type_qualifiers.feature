@@ -194,6 +194,24 @@ Feature: Interval type qualifiers
       | INTERVAL '0' YEAR  | INTERVAL '0' YEAR  | INTERVAL '0' YEAR  |
       | INTERVAL '100' DAY | INTERVAL '100' DAY | INTERVAL '100' DAY |
 
+      Examples: Unqualified string literals normalize to the canonical typed form
+      | expression                              | column_name                        | result                             |
+      | INTERVAL '1 month'                      | INTERVAL '1' MONTH                 | INTERVAL '1' MONTH                 |
+      | INTERVAL '1 day'                        | INTERVAL '1' DAY                   | INTERVAL '1' DAY                   |
+      | INTERVAL '5.5 seconds'                  | INTERVAL '05.5' SECOND             | INTERVAL '05.5' SECOND             |
+      | INTERVAL '1 hour'                       | INTERVAL '01' HOUR                 | INTERVAL '01' HOUR                 |
+      | INTERVAL '1 minute'                     | INTERVAL '01' MINUTE               | INTERVAL '01' MINUTE               |
+      | INTERVAL '2 years 3 months'             | INTERVAL '2-3' YEAR TO MONTH       | INTERVAL '2-3' YEAR TO MONTH       |
+      | INTERVAL '1 day 2 hours'                | INTERVAL '1 02' DAY TO HOUR        | INTERVAL '1 02' DAY TO HOUR        |
+      | INTERVAL '1 day 2 hours 30 minutes'     | INTERVAL '1 02:30' DAY TO MINUTE   | INTERVAL '1 02:30' DAY TO MINUTE   |
+      | INTERVAL '1 hour 30 minutes 15 seconds' | INTERVAL '01:30:15' HOUR TO SECOND | INTERVAL '01:30:15' HOUR TO SECOND |
+      | INTERVAL '1 week'                       | INTERVAL '7' DAY                   | INTERVAL '7' DAY                   |
+      | INTERVAL '100 milliseconds'             | INTERVAL '00.1' SECOND             | INTERVAL '00.1' SECOND             |
+      | INTERVAL '100 microseconds'             | INTERVAL '00.0001' SECOND          | INTERVAL '00.0001' SECOND          |
+      | INTERVAL '-1 day'                       | INTERVAL '-1' DAY                  | INTERVAL '-1' DAY                  |
+      | INTERVAL '-2 years 3 months'            | INTERVAL '-1-9' YEAR TO MONTH      | INTERVAL '-1-9' YEAR TO MONTH      |
+      | INTERVAL '0 day'                        | INTERVAL '0' DAY                   | INTERVAL '0' DAY                   |
+
       Examples: Outer unary minus wraps the column in parens and moves the sign inside the value
       | expression                                  | column_name                                   | result                                      |
       | -INTERVAL '10' YEAR                         | (- INTERVAL '10' YEAR)                        | INTERVAL '-10' YEAR                         |
@@ -202,6 +220,269 @@ Feature: Interval type qualifiers
       | -INTERVAL '1 02:03:04.123456' DAY TO SECOND | (- INTERVAL '1 02:03:04.123456' DAY TO SECOND)| INTERVAL '-1 02:03:04.123456' DAY TO SECOND |
       | -INTERVAL 10 YEARS                          | (- INTERVAL '10' YEAR)                        | INTERVAL '-10' YEAR                         |
       | -INTERVAL 10 YEARS 8 MONTHS                 | (- INTERVAL '10-8' YEAR TO MONTH)             | INTERVAL '-10-8' YEAR TO MONTH              |
+      | -INTERVAL 1 WEEK                            | (- INTERVAL '7' DAY)                          | INTERVAL '-7' DAY                           |
+      | -INTERVAL 5 MINUTE                          | (- INTERVAL '05' MINUTE)                      | INTERVAL '-05' MINUTE                       |
+      | -INTERVAL 100 MILLISECOND                   | (- INTERVAL '00.1' SECOND)                    | INTERVAL '-00.1' SECOND                     |
+      | -INTERVAL '1 day'                           | (- INTERVAL '1' DAY)                          | INTERVAL '-1' DAY                           |
+      | -INTERVAL '5.5 seconds'                     | (- INTERVAL '05.5' SECOND)                    | INTERVAL '-05.5' SECOND                     |
+      | -INTERVAL '2 years 3 months'                | (- INTERVAL '2-3' YEAR TO MONTH)              | INTERVAL '-2-3' YEAR TO MONTH               |
+
+  Rule: Operations on intervals preserve qualifier metadata
+
+    Scenario Outline: binary arithmetic on intervals normalizes to the widest covering qualifier
+      When query
+      """
+      SELECT <expression>
+      """
+      Then query result
+      | <column_name> |
+      | <result>      |
+
+      Examples: Year-month +/- widens to YEAR TO MONTH when start/end differ
+      | expression                                | column_name                                 | result                        |
+      | INTERVAL '10' YEAR + INTERVAL '5' MONTH   | (INTERVAL '10' YEAR + INTERVAL '5' MONTH)   | INTERVAL '10-5' YEAR TO MONTH |
+      | INTERVAL '10' YEAR + INTERVAL '5' YEAR    | (INTERVAL '10' YEAR + INTERVAL '5' YEAR)    | INTERVAL '15' YEAR            |
+      | INTERVAL '10' MONTH + INTERVAL '5' MONTH  | (INTERVAL '10' MONTH + INTERVAL '5' MONTH)  | INTERVAL '15' MONTH           |
+      | INTERVAL '10' YEAR - INTERVAL '5' MONTH   | (INTERVAL '10' YEAR - INTERVAL '5' MONTH)   | INTERVAL '9-7' YEAR TO MONTH  |
+
+      Examples: Day-time +/- widens to the broadest range; HOUR literals format as zero-padded in the column header
+      | expression                                            | column_name                                              | result                              |
+      | INTERVAL '1' DAY + INTERVAL '2' HOUR                  | (INTERVAL '1' DAY + INTERVAL '02' HOUR)                  | INTERVAL '1 02' DAY TO HOUR         |
+      | INTERVAL '1' DAY + INTERVAL '5' SECOND                | (INTERVAL '1' DAY + INTERVAL '05' SECOND)                | INTERVAL '1 00:00:05' DAY TO SECOND |
+      | INTERVAL '01:02' HOUR TO MINUTE + INTERVAL '5' SECOND | (INTERVAL '01:02' HOUR TO MINUTE + INTERVAL '05' SECOND) | INTERVAL '01:02:05' HOUR TO SECOND  |
+
+    Scenario Outline: interval times/divided by numeric widens to the widest range qualifier
+      When query
+      """
+      SELECT <expression>
+      """
+      Then query result
+      | <column_name> |
+      | <result>      |
+
+      Examples:
+      | expression                              | column_name                               | result                              |
+      | INTERVAL '10' YEAR * 2                  | (INTERVAL '10' YEAR * 2)                  | INTERVAL '20-0' YEAR TO MONTH       |
+      | 2 * INTERVAL '10' YEAR                  | (INTERVAL '10' YEAR * 2)                  | INTERVAL '20-0' YEAR TO MONTH       |
+      | INTERVAL '10' YEAR / 2                  | (INTERVAL '10' YEAR / 2)                  | INTERVAL '5-0' YEAR TO MONTH        |
+      | INTERVAL '3' DAY * 4                    | (INTERVAL '3' DAY * 4)                    | INTERVAL '12 00:00:00' DAY TO SECOND|
+      | INTERVAL '1 02:03:04' DAY TO SECOND * 2 | (INTERVAL '1 02:03:04' DAY TO SECOND * 2) | INTERVAL '2 04:06:08' DAY TO SECOND |
+
+    Scenario: SUM / MIN / MAX preserve the input qualifier; AVG widens to the broadest range
+      When query
+      """
+      SELECT SUM(c) AS sum_c, MIN(c) AS min_c, MAX(c) AS max_c, AVG(c) AS avg_c
+      FROM VALUES (INTERVAL '1' DAY), (INTERVAL '2' DAY), (INTERVAL '3' DAY) AS t(c)
+      """
+      Then query result
+      | sum_c            | min_c            | max_c            | avg_c                               |
+      | INTERVAL '6' DAY | INTERVAL '1' DAY | INTERVAL '3' DAY | INTERVAL '2 00:00:00' DAY TO SECOND |
+
+    Scenario: SUM over typed YEAR intervals stays as YEAR
+      When query
+      """
+      SELECT SUM(c) AS s
+      FROM VALUES (INTERVAL '1' YEAR), (INTERVAL '2' YEAR), (INTERVAL '3' YEAR) AS t(c)
+      """
+      Then query result
+      | s                |
+      | INTERVAL '6' YEAR |
+
+    Scenario: SUM over YEAR TO MONTH stays as YEAR TO MONTH
+      When query
+      """
+      SELECT SUM(c)
+      FROM VALUES (INTERVAL '1-2' YEAR TO MONTH), (INTERVAL '3-4' YEAR TO MONTH) AS t(c)
+      """
+      Then query result
+      | sum(c)                       |
+      | INTERVAL '4-6' YEAR TO MONTH |
+
+    Scenario: window MIN / MAX preserve the input qualifier
+      When query
+      """
+      SELECT c, MIN(c) OVER () AS mn, MAX(c) OVER () AS mx
+      FROM VALUES (INTERVAL '1' DAY), (INTERVAL '5' DAY) AS t(c)
+      """
+      Then query result
+      | c                | mn               | mx               |
+      | INTERVAL '1' DAY | INTERVAL '1' DAY | INTERVAL '5' DAY |
+      | INTERVAL '5' DAY | INTERVAL '1' DAY | INTERVAL '5' DAY |
+
+    Scenario: running window SUM over YEAR intervals preserves the YEAR qualifier
+      When query
+      """
+      SELECT c, SUM(c) OVER (ORDER BY c) AS running
+      FROM VALUES (INTERVAL '1' YEAR), (INTERVAL '2' YEAR), (INTERVAL '3' YEAR) AS t(c)
+      """
+      Then query result ordered
+      | c                 | running           |
+      | INTERVAL '1' YEAR | INTERVAL '1' YEAR |
+      | INTERVAL '2' YEAR | INTERVAL '3' YEAR |
+      | INTERVAL '3' YEAR | INTERVAL '6' YEAR |
+
+    Scenario Outline: CAST between qualified interval types follows the target qualifier
+      When query
+      """
+      SELECT <expression>
+      """
+      Then query result
+      | <column_name> |
+      | <result>      |
+
+      Examples:
+      | expression                                                           | column_name                                                                | result                          |
+      | CAST(INTERVAL '10' YEAR AS INTERVAL MONTH)                           | CAST(INTERVAL '10' YEAR AS INTERVAL MONTH)                                 | INTERVAL '120' MONTH            |
+      | CAST(INTERVAL '10-8' YEAR TO MONTH AS INTERVAL YEAR)                 | CAST(INTERVAL '10-8' YEAR TO MONTH AS INTERVAL YEAR)                       | INTERVAL '10' YEAR              |
+      | CAST(INTERVAL '10-8' YEAR TO MONTH AS INTERVAL MONTH)                | CAST(INTERVAL '10-8' YEAR TO MONTH AS INTERVAL MONTH)                      | INTERVAL '128' MONTH            |
+      | CAST(INTERVAL '1' DAY AS INTERVAL HOUR)                              | CAST(INTERVAL '1' DAY AS INTERVAL HOUR)                                    | INTERVAL '24' HOUR              |
+      | CAST(INTERVAL '1' DAY AS INTERVAL SECOND)                            | CAST(INTERVAL '1' DAY AS INTERVAL SECOND)                                  | INTERVAL '86400' SECOND         |
+      | CAST(INTERVAL '1 02:03:04.123456' DAY TO SECOND AS INTERVAL HOUR)    | CAST(INTERVAL '1 02:03:04.123456' DAY TO SECOND AS INTERVAL HOUR)          | INTERVAL '26' HOUR              |
+      | CAST(INTERVAL '1 02:03:04.123456' DAY TO SECOND AS INTERVAL HOUR TO MINUTE) | CAST(INTERVAL '1 02:03:04.123456' DAY TO SECOND AS INTERVAL HOUR TO MINUTE) | INTERVAL '26:03' HOUR TO MINUTE |
+
+    Scenario Outline: column references to typed interval columns preserve the qualifier
+      When query
+      """
+      SELECT <projection> FROM VALUES (<value>) AS t(c)
+      """
+      Then query result
+      | <header>  |
+      | <result>  |
+
+      Examples:
+      | projection      | value                       | header                      | result                      |
+      | c               | INTERVAL '10' YEAR          | c                           | INTERVAL '10' YEAR          |
+      | c AS aliased    | INTERVAL '10' YEAR          | aliased                     | INTERVAL '10' YEAR          |
+      | c               | INTERVAL '1' DAY            | c                           | INTERVAL '1' DAY            |
+      | c               | INTERVAL '1 02' DAY TO HOUR | c                           | INTERVAL '1 02' DAY TO HOUR |
+
+    Scenario Outline: IF / CASE / COALESCE widen to the broadest covering interval qualifier
+      When query
+      """
+      SELECT <expression>
+      """
+      Then query result
+      | <column_name> |
+      | <result>      |
+
+      Examples:
+      | expression                                                            | column_name                                                             | result                       |
+      | IF(true, INTERVAL '10' YEAR, INTERVAL '5' YEAR)                       | (IF(true, INTERVAL '10' YEAR, INTERVAL '5' YEAR))                       | INTERVAL '10' YEAR           |
+      | IF(false, INTERVAL '10' YEAR, INTERVAL '5' MONTH)                     | (IF(false, INTERVAL '10' YEAR, INTERVAL '5' MONTH))                     | INTERVAL '0-5' YEAR TO MONTH |
+      | CASE WHEN 1=1 THEN INTERVAL '10' YEAR ELSE INTERVAL '5' YEAR END      | CASE WHEN (1 = 1) THEN INTERVAL '10' YEAR ELSE INTERVAL '5' YEAR END    | INTERVAL '10' YEAR           |
+      | CASE WHEN 1=1 THEN INTERVAL '10' YEAR ELSE INTERVAL '5' MONTH END     | CASE WHEN (1 = 1) THEN INTERVAL '10' YEAR ELSE INTERVAL '5' MONTH END   | INTERVAL '10-0' YEAR TO MONTH |
+      | COALESCE(NULL, INTERVAL '10' YEAR)                                    | coalesce(NULL, INTERVAL '10' YEAR)                                      | INTERVAL '10' YEAR           |
+
+    Scenario: SELECT * preserves the qualifier of each typed interval column through a subquery
+      When query
+      """
+      SELECT * FROM (
+        SELECT INTERVAL '10' YEAR AS a, INTERVAL '5' DAY AS b
+      )
+      """
+      Then query result
+      | a                  | b                |
+      | INTERVAL '10' YEAR | INTERVAL '5' DAY |
+
+    Scenario: binary `+` on subquery columns preserves each side's qualifier
+      When query
+      """
+      SELECT t.a + t.a, t.b + t.b FROM (
+        SELECT INTERVAL '10' YEAR AS a, INTERVAL '5' DAY AS b
+      ) t
+      """
+      Then query result
+      | (a + a)            | (b + b)           |
+      | INTERVAL '20' YEAR | INTERVAL '10' DAY |
+
+    Scenario: CTE preserves the qualifier on the underlying interval literal
+      When query
+      """
+      WITH t AS (SELECT INTERVAL '10' YEAR AS x)
+      SELECT x FROM t
+      """
+      Then query result
+      | x                  |
+      | INTERVAL '10' YEAR |
+
+    Scenario: doubly-nested subquery rename preserves the qualifier
+      When query
+      """
+      SELECT inner_col FROM (
+        SELECT renamed AS inner_col FROM (
+          SELECT INTERVAL '10' YEAR AS renamed
+        )
+      )
+      """
+      Then query result
+      | inner_col          |
+      | INTERVAL '10' YEAR |
+
+    Scenario: schema reflects the widened YEAR TO MONTH qualifier for year-month addition
+      When query
+      """
+      SELECT INTERVAL '10' YEAR + INTERVAL '5' MONTH
+      """
+      Then query schema
+      """
+      root
+       |-- (INTERVAL '10' YEAR + INTERVAL '5' MONTH): interval year to month (nullable = false)
+      """
+
+    Scenario: schema reflects the widened YEAR TO MONTH qualifier for year-month multiplication
+      When query
+      """
+      SELECT INTERVAL '10' YEAR * 2
+      """
+      Then query schema
+      """
+      root
+       |-- (INTERVAL '10' YEAR * 2): interval year to month (nullable = false)
+      """
+
+    Scenario: schema reflects the preserved YEAR qualifier on SUM
+      When query
+      """
+      SELECT SUM(c) FROM VALUES (INTERVAL '1' YEAR), (INTERVAL '2' YEAR) AS t(c)
+      """
+      Then query schema
+      """
+      root
+       |-- sum(c): interval year (nullable = true)
+      """
+
+    Scenario: schema reflects the preserved DAY qualifier on a window MIN
+      When query
+      """
+      SELECT MIN(c) OVER () FROM VALUES (INTERVAL '1' DAY) AS t(c)
+      """
+      Then query schema
+      """
+      root
+       |-- min(c) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING): interval day (nullable = true)
+      """
+
+    Scenario: schema reflects the preserved YEAR qualifier on IF with matching branches
+      When query
+      """
+      SELECT IF(true, INTERVAL '10' YEAR, INTERVAL '5' YEAR)
+      """
+      Then query schema
+      """
+      root
+       |-- (IF(true, INTERVAL '10' YEAR, INTERVAL '5' YEAR)): interval year (nullable = false)
+      """
+
+    Scenario: schema reflects the target MONTH qualifier of a CAST
+      When query
+      """
+      SELECT CAST(INTERVAL '10' YEAR AS INTERVAL MONTH)
+      """
+      Then query schema
+      """
+      root
+       |-- CAST(INTERVAL '10' YEAR AS INTERVAL MONTH): interval month (nullable = false)
+      """
 
     Scenario Outline: interval qualifier survives aliases and subqueries
       When query

@@ -7434,6 +7434,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-function",
+ "serde_json",
 ]
 
 [[package]]

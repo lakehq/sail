@@ -81,12 +81,37 @@ impl PlanResolver<'_> {
         // to a string literal before resolution.
         let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
 
-        let (argument_display_names, arguments) = if canonical_function_name == "struct" {
-            self.resolve_struct_expressions_and_names(arguments, schema, state)
-                .await?
-        } else {
-            self.resolve_expressions_and_names(arguments, schema, state)
-                .await?
+        let (argument_display_names, arguments, argument_metadatas) =
+            if canonical_function_name == "struct" {
+                let (names, exprs) = self
+                    .resolve_struct_expressions_and_names(arguments, schema, state)
+                    .await?;
+                // TODO: Surface per-argument metadata for struct and attach it to
+                // each inner Field of the resulting Struct Arrow type, so e.g.
+                // `struct(INTERVAL '10' YEAR)` keeps its inner field's interval
+                // qualifier extension metadata. The propagation rule below cannot
+                // express this because the function's output type (Struct{...})
+                // never equals a single argument's type — struct metadata flows
+                // into *inner* fields, not the outer Field.
+                (names, exprs, None)
+            } else {
+                let named = self
+                    .resolve_named_expressions(arguments, schema, state)
+                    .await?;
+                let mut names = Vec::with_capacity(named.len());
+                let mut exprs = Vec::with_capacity(named.len());
+                let mut metadatas = Vec::with_capacity(named.len());
+                for n in named {
+                    names.push(n.name.one()?);
+                    exprs.push(n.expr);
+                    metadatas.push(n.metadata);
+                }
+                (names, exprs, Some(metadatas))
+            };
+
+        let argument_types: Vec<Option<datafusion::arrow::datatypes::DataType>> = {
+            use datafusion_expr::ExprSchemable;
+            arguments.iter().map(|a| a.get_type(schema).ok()).collect()
         };
 
         // FIXME: `is_user_defined_function` is always false,
@@ -225,15 +250,52 @@ impl PlanResolver<'_> {
             is_distinct,
         )?;
 
-        // Extract metadata from UDF if it implements return_field_from_args
-        let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {
-            func: udf, args, ..
-        }) = &func
-        {
-            extract_metadata_from_udf(udf, args)?
-        } else {
-            vec![]
-        };
+        // Extract metadata from UDF if it implements return_field_from_args.
+        let mut metadata =
+            if let expr::Expr::ScalarFunction(ScalarFunction {
+                func: udf, args, ..
+            }) = &func
+            {
+                extract_metadata_from_udf(udf, args, schema, argument_metadatas.as_deref())?
+            } else {
+                vec![]
+            };
+
+        // Fall back to propagating a single argument's metadata when the
+        // function's output Arrow type matches that argument's type. This is
+        // how qualifier extension metadata on interval literals survives
+        // type-preserving operations like unary minus (`-INTERVAL '10' YEAR`,
+        // which lowers to `Expr::Negative` for year-month and to the
+        // `NegateDuration` UDF — neither of which currently sets output
+        // metadata on its own) — the inner Cast attaches the metadata to its
+        // NamedExpr and without this fallback the call would drop it.
+        //
+        // FIXME: When multiple arguments share the function's output type
+        // (e.g. `INTERVAL '10' YEAR + INTERVAL '5' MONTH` — both args are
+        // `Interval(YearMonth)`) but carry different metadata, we
+        // conservatively skip propagation. The right behavior depends on the
+        // operation (e.g. Spark widens `YEAR + MONTH` to `YEAR TO MONTH`),
+        // which this generic rule cannot express. The output column falls
+        // back to the default formatter; not incorrect, just lossy.
+        if metadata.is_empty() {
+            use datafusion_expr::ExprSchemable;
+            if let (Some(metas), Ok(output_type)) = (&argument_metadatas, func.get_type(schema)) {
+                let matching: Vec<&Vec<(String, String)>> = argument_types
+                    .iter()
+                    .zip(metas.iter())
+                    .filter_map(|(arg_type, meta)| {
+                        if !meta.is_empty() && arg_type.as_ref() == Some(&output_type) {
+                            Some(meta)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if let [single] = matching.as_slice() {
+                    metadata = (*single).clone();
+                }
+            }
+        }
 
         if !metadata.is_empty() {
             Ok(NamedExpr::new(vec![name], func).with_metadata(metadata))
@@ -374,25 +436,39 @@ impl PlanResolver<'_> {
     }
 }
 
-/// Extract metadata from a UDF by calling return_field_from_args with real argument information
+/// Extract metadata from a UDF by calling `return_field_from_args` with real
+/// argument information. `schema` is the schema in scope so column references
+/// resolve to their actual types (rather than defaulting to `Null` under an
+/// empty schema), and `arg_metadatas` carries each argument's `NamedExpr`
+/// metadata — without it, a UDF that wants to propagate input field metadata
+/// (e.g. interval qualifier extension metadata through `NegateDuration`) sees
+/// empty input fields and has nothing to forward.
 fn extract_metadata_from_udf(
     udf: &std::sync::Arc<datafusion_expr::ScalarUDF>,
     args: &[expr::Expr],
+    schema: &datafusion_common::DFSchemaRef,
+    arg_metadatas: Option<&[Vec<(String, String)>]>,
 ) -> PlanResult<Vec<(String, String)>> {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ExprSchemable, ReturnFieldArgs};
 
-    // Extract real field types from the resolved expressions
-    let empty_schema = datafusion_common::DFSchema::empty();
     let arg_fields: Vec<Arc<Field>> = args
         .iter()
         .enumerate()
         .map(|(i, arg)| {
-            let data_type = arg.get_type(&empty_schema).unwrap_or(DataType::Null);
-            Arc::new(Field::new(format!("arg_{}", i), data_type, true))
+            let data_type = arg.get_type(schema.as_ref()).unwrap_or(DataType::Null);
+            let mut field = Field::new(format!("arg_{}", i), data_type, true);
+            if let Some(meta) = arg_metadatas.and_then(|m| m.get(i)) {
+                if !meta.is_empty() {
+                    let map: HashMap<String, String> = meta.iter().cloned().collect();
+                    field = field.with_metadata(map);
+                }
+            }
+            Arc::new(field)
         })
         .collect();
 

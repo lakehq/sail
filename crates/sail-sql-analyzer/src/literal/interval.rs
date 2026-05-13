@@ -98,101 +98,23 @@ impl From<IntervalValue> for spec::Literal {
 
 /// Format an `IntervalValue` as Spark's canonical SQL literal column name
 /// (e.g. `"INTERVAL '7' DAY"`, `"INTERVAL '01:02:03.456789' HOUR TO SECOND"`).
-/// Returns `None` if the value cannot be expressed under the requested kind
-/// (e.g. a mixed `MonthDayNanosecond` with no single ANSI qualifier).
+/// Delegates the value-by-kind logic to the shared formatters in
+/// `sail_common::interval` so the show-string runtime path produces the same
+/// strings. Returns `None` when the value/kind combination has no canonical
+/// form (e.g. a mixed `MonthDayNanosecond`).
 fn format_interval_column_name(
     value: &IntervalValue,
     kind: &StandardIntervalKind,
 ) -> Option<String> {
-    use StandardIntervalKind as K;
-    let body = match (value, kind) {
-        (IntervalValue::YearMonth { months }, K::Year) => format!("{}", months / 12),
-        (IntervalValue::YearMonth { months }, K::Month) => format!("{months}"),
-        (IntervalValue::YearMonth { months }, K::YearToMonth) => {
-            let sign = if *months < 0 { "-" } else { "" };
-            let abs_months = months.unsigned_abs();
-            format!("{sign}{}-{}", abs_months / 12, abs_months % 12)
+    match value {
+        IntervalValue::YearMonth { months } => {
+            sail_common::interval::format_year_month_interval(*months, *kind)
         }
-        (IntervalValue::Microsecond { microseconds }, kind) => {
-            format_day_time(*microseconds, kind)?
+        IntervalValue::Microsecond { microseconds } => {
+            sail_common::interval::format_day_time_interval(*microseconds, *kind)
         }
-        _ => return None,
-    };
-    Some(format!("INTERVAL '{body}' {kind}"))
-}
-
-/// Format a day-time interval (signed microseconds) under a specific ANSI
-/// `StandardIntervalKind`. Larger fields are unbounded; smaller fields are
-/// zero-padded to 2 digits. Fractional seconds get up to 6 digits with
-/// trailing zeros stripped. Returns `None` if `kind` is not a day-time kind.
-fn format_day_time(microseconds: i64, kind: &StandardIntervalKind) -> Option<String> {
-    const US_PER_SECOND: u64 = 1_000_000;
-    const US_PER_MINUTE: u64 = 60 * US_PER_SECOND;
-    const US_PER_HOUR: u64 = 60 * US_PER_MINUTE;
-    const US_PER_DAY: u64 = 24 * US_PER_HOUR;
-    let sign = if microseconds < 0 { "-" } else { "" };
-    let abs_us = microseconds.unsigned_abs();
-    let fraction = |us: u64| -> String {
-        let f = us % US_PER_SECOND;
-        if f == 0 {
-            String::new()
-        } else {
-            format!(".{}", format!("{f:06}").trim_end_matches('0'))
-        }
-    };
-    use StandardIntervalKind as K;
-    Some(match kind {
-        K::Day => format!("{sign}{}", abs_us / US_PER_DAY),
-        K::DayToHour => {
-            let d = abs_us / US_PER_DAY;
-            let h = (abs_us % US_PER_DAY) / US_PER_HOUR;
-            format!("{sign}{d} {h:02}")
-        }
-        K::DayToMinute => {
-            let d = abs_us / US_PER_DAY;
-            let rem = abs_us % US_PER_DAY;
-            let h = rem / US_PER_HOUR;
-            let m = (rem % US_PER_HOUR) / US_PER_MINUTE;
-            format!("{sign}{d} {h:02}:{m:02}")
-        }
-        K::DayToSecond => {
-            let d = abs_us / US_PER_DAY;
-            let rem = abs_us % US_PER_DAY;
-            let h = rem / US_PER_HOUR;
-            let rem = rem % US_PER_HOUR;
-            let m = rem / US_PER_MINUTE;
-            let rem = rem % US_PER_MINUTE;
-            let s = rem / US_PER_SECOND;
-            format!("{sign}{d} {h:02}:{m:02}:{s:02}{}", fraction(abs_us))
-        }
-        K::Hour => format!("{sign}{:02}", abs_us / US_PER_HOUR),
-        K::HourToMinute => {
-            let h = abs_us / US_PER_HOUR;
-            let m = (abs_us % US_PER_HOUR) / US_PER_MINUTE;
-            format!("{sign}{h:02}:{m:02}")
-        }
-        K::HourToSecond => {
-            let h = abs_us / US_PER_HOUR;
-            let rem = abs_us % US_PER_HOUR;
-            let m = rem / US_PER_MINUTE;
-            let rem = rem % US_PER_MINUTE;
-            let s = rem / US_PER_SECOND;
-            format!("{sign}{h:02}:{m:02}:{s:02}{}", fraction(abs_us))
-        }
-        K::Minute => format!("{sign}{:02}", abs_us / US_PER_MINUTE),
-        K::MinuteToSecond => {
-            let m = abs_us / US_PER_MINUTE;
-            let rem = abs_us % US_PER_MINUTE;
-            let s = rem / US_PER_SECOND;
-            format!("{sign}{m:02}:{s:02}{}", fraction(abs_us))
-        }
-        K::Second => {
-            let s = abs_us / US_PER_SECOND;
-            format!("{sign}{s:02}{}", fraction(abs_us))
-        }
-        // Not a day-time kind.
-        K::Year | K::YearToMonth | K::Month => return None,
-    })
+        IntervalValue::MonthDayNanosecond { .. } => None,
+    }
 }
 
 fn standard_interval_kind_to_spec_type(kind: &StandardIntervalKind) -> spec::DataType {
@@ -476,42 +398,10 @@ fn parse_interval_day_time_string(
     Ok(IntervalValue::Microsecond { microseconds: n })
 }
 
-#[derive(Clone, Copy)]
-enum StandardIntervalKind {
-    Year,
-    YearToMonth,
-    Month,
-    Day,
-    DayToHour,
-    DayToMinute,
-    DayToSecond,
-    Hour,
-    HourToMinute,
-    HourToSecond,
-    Minute,
-    MinuteToSecond,
-    Second,
-}
-
-impl std::fmt::Display for StandardIntervalKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            StandardIntervalKind::Year => "YEAR",
-            StandardIntervalKind::YearToMonth => "YEAR TO MONTH",
-            StandardIntervalKind::Month => "MONTH",
-            StandardIntervalKind::Day => "DAY",
-            StandardIntervalKind::DayToHour => "DAY TO HOUR",
-            StandardIntervalKind::DayToMinute => "DAY TO MINUTE",
-            StandardIntervalKind::DayToSecond => "DAY TO SECOND",
-            StandardIntervalKind::Hour => "HOUR",
-            StandardIntervalKind::HourToMinute => "HOUR TO MINUTE",
-            StandardIntervalKind::HourToSecond => "HOUR TO SECOND",
-            StandardIntervalKind::Minute => "MINUTE",
-            StandardIntervalKind::MinuteToSecond => "MINUTE TO SECOND",
-            StandardIntervalKind::Second => "SECOND",
-        })
-    }
-}
+// `StandardIntervalKind` lives in `sail-common::interval` so the show-string
+// runtime path can reuse the same enum + Display + formatters when rendering
+// interval cells back to Spark's canonical literal text.
+use sail_common::interval::SparkIntervalKind as StandardIntervalKind;
 
 fn from_ast_interval_qualifier(qualifier: IntervalQualifier) -> SqlResult<StandardIntervalKind> {
     match qualifier {
