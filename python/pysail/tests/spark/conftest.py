@@ -242,3 +242,14 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
             # Note: pytest-bdd preserves the hyphen in marker names
             elif item.get_closest_marker("sail-only"):
                 item.add_marker(skip_sail_only)
+
+    # Deselect catalog integration tests by default unless user passed -m.
+    # This allows slower catalog tests outside dedicated directories to use
+    # the same marker-driven runner pattern.
+    markexpr = config.getoption("markexpr") or ""
+    if not markexpr:
+        deselected = [item for item in items if item.get_closest_marker("catalog_integration")]
+        if deselected:
+            remaining = [item for item in items if item not in deselected]
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = remaining
