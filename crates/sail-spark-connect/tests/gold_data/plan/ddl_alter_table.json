@@ -804,7 +804,16 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "a",
+                    "b",
+                    "c"
+                  ],
+                  "data_type": "int64"
+                }
+              }
             },
             "planId": null
           }
@@ -876,7 +885,16 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "a",
+                    "b",
+                    "c"
+                  ],
+                  "data_type": "int64"
+                }
+              }
             },
             "planId": null
           }

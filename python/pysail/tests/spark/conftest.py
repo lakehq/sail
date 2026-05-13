@@ -63,7 +63,7 @@ def remote():
 
 
 @pytest.fixture(scope="module")
-def spark(remote):
+def default_spark(remote):
     """Create and configure a Spark Session to be used in the tests.
     After the tests are finished, the Spark Session is stopped.
 
@@ -75,6 +75,11 @@ def spark(remote):
     patch_spark_connect_session(spark)
     yield spark
     spark.stop()
+
+
+@pytest.fixture(scope="module")
+def spark(default_spark):
+    return default_spark
 
 
 @pytest.fixture

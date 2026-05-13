@@ -21,7 +21,9 @@ use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
-use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
+use datafusion::logical_expr::{
+    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
+};
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
@@ -202,6 +204,7 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
+use sail_function::window::SparkNtile;
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec, IcebergManifestScanExec,
     IcebergScanByDataFilesExec, IcebergWriterExec,
@@ -237,9 +240,10 @@ use crate::plan::gen::extended_physical_expr_node::ExprKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
+use crate::plan::gen::extended_window_udf::UdwfKind;
 use crate::plan::gen::{
     DeltaCastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode,
-    ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
+    ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf,
 };
 use crate::plan::{gen, StageInputExec};
 
@@ -796,9 +800,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let stats_schema = Arc::new(self.try_decode_schema(&stats_schema)?);
                 Ok(Arc::new(DeltaMetadataStatsExec::new(input, stats_schema)))
             }
-            NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input }) => {
+            NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode {
+                input,
+                partition_value_columns_json,
+            }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
-                Ok(Arc::new(DeltaRemoveActionsExec::new(input)?))
+                let partition_value_columns = partition_value_columns_json
+                    .as_deref()
+                    .map(serde_json::from_str::<Vec<(String, String)>>)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
+                Ok(Arc::new(DeltaRemoveActionsExec::try_new(
+                    input,
+                    partition_value_columns,
+                )?))
             }
             NodeKind::DeltaLogReplay(gen::DeltaLogReplayExecNode {
                 input,
@@ -1024,6 +1039,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_schema,
                 version,
                 operation_json,
+                partition_value_columns_json,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
@@ -1043,12 +1059,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     None
                 };
+                let partition_value_columns = partition_value_columns_json
+                    .as_deref()
+                    .map(serde_json::from_str::<Vec<(String, String)>>)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
                 Ok(Arc::new(DeletionVectorWriterExec::new(
                     input,
                     table_url,
                     condition,
                     table_schema,
                     version,
+                    partition_value_columns,
                     operation,
                 )?))
             }
@@ -1060,6 +1082,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 row_index_column,
                 version,
                 operation_json,
+                partition_value_columns_json,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let adds_input = self.try_decode_plan(&adds_input, ctx)?;
@@ -1073,6 +1096,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     None
                 };
+                let partition_value_columns = partition_value_columns_json
+                    .as_deref()
+                    .map(serde_json::from_str::<Vec<(String, String)>>)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
                 Ok(Arc::new(DeletionVectorRowsWriterExec::new(
                     input,
                     adds_input,
@@ -1080,6 +1108,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     path_column,
                     row_index_column,
                     version,
+                    partition_value_columns,
                     operation,
                 )?))
             }
@@ -1629,7 +1658,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             node.as_any().downcast_ref::<DeltaRemoveActionsExec>()
         {
             let input = self.try_encode_plan(delta_remove_actions_exec.children()[0].clone())?;
-            NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input })
+            let partition_value_columns_json = delta_remove_actions_exec
+                .partition_value_columns()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| plan_datafusion_err!("{e}"))?;
+            NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode {
+                input,
+                partition_value_columns_json,
+            })
         } else if let Some(delta_log_replay_exec) =
             node.as_any().downcast_ref::<DeltaLogReplayExec>()
         {
@@ -1823,6 +1860,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_schema,
                 version: dv_writer_exec.version(),
                 operation_json,
+                partition_value_columns_json: dv_writer_exec
+                    .partition_value_columns()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(dv_rows_writer_exec) =
             node.as_any().downcast_ref::<DeletionVectorRowsWriterExec>()
@@ -1842,6 +1884,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 row_index_column: dv_rows_writer_exec.row_index_column().to_string(),
                 version: dv_rows_writer_exec.version(),
                 operation_json,
+                partition_value_columns_json: dv_rows_writer_exec
+                    .partition_value_columns()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
@@ -2078,6 +2125,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = StructFunction::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::ArraysZip(gen::ArraysZipUdf { field_names }) => {
+                let udf = ArraysZip::new(field_names);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names }) => {
                 let udf = UpdateStructField::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2123,7 +2174,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
-            "arrays_zip" => Ok(Arc::new(ScalarUDF::from(ArraysZip::new()))),
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "convert_tz" => Ok(Arc::new(ScalarUDF::from(ConvertTz::new()))),
@@ -2301,7 +2351,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
-            || node_inner.is::<ArraysZip>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<ConvertTz>()
@@ -2475,6 +2524,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<StructFunction>() {
             let field_names = func.field_names().to_vec();
             UdfKind::StructFunction(gen::StructFunctionUdf { field_names })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<ArraysZip>() {
+            let field_names = func.field_names().to_vec();
+            UdfKind::ArraysZip(gen::ArraysZipUdf { field_names })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<UpdateStructField>() {
             let field_names = func.field_names().to_vec();
             UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names })
@@ -2712,6 +2764,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         };
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode udaf: {e}"))
+    }
+
+    fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
+        let udwf = ExtendedWindowUdf::decode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to decode udwf: {e}"))?;
+        let ExtendedWindowUdf { udwf_kind } = udwf;
+        match udwf_kind {
+            Some(UdwfKind::Standard(gen::StandardUdwf {})) => match name {
+                "ntile" => Ok(Arc::new(WindowUDF::from(SparkNtile::new()))),
+                _ => plan_err!("Could not find Window Function: {name}"),
+            },
+            None => plan_err!("ExtendedWindowUdf: no UDWF found for {name}"),
+        }
+    }
+
+    fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
+        if !node.inner().as_any().is::<SparkNtile>() {
+            return Ok(());
+        }
+        let node = ExtendedWindowUdf {
+            udwf_kind: Some(UdwfKind::Standard(gen::StandardUdwf {})),
+        };
+        node.encode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to encode udwf: {e}"))
     }
 
     fn try_decode_expr(
