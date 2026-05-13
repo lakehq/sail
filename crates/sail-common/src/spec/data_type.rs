@@ -19,6 +19,11 @@ pub use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 /// Arrow extension type name for Variant.
 pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
 
+/// Arrow field metadata key for Spark interval start fields.
+pub const SAIL_INTERVAL_START_FIELD_KEY: &str = "sail.internal.interval.start_field";
+/// Arrow field metadata key for Spark interval end fields.
+pub const SAIL_INTERVAL_END_FIELD_KEY: &str = "sail.internal.interval.end_field";
+
 /// Field name for list type.
 pub const SAIL_LIST_FIELD_NAME: &str = "item";
 /// Field name for map type's entries.

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use datafusion::arrow::datatypes as adt;
+use sail_common::spec::{SAIL_INTERVAL_END_FIELD_KEY, SAIL_INTERVAL_START_FIELD_KEY};
 use serde::Deserialize;
 
 use crate::error::{SparkError, SparkResult};
@@ -86,6 +87,22 @@ fn crs_value_to_srid(value: &serde_json::Value) -> SparkResult<i32> {
     }
 }
 
+fn parse_interval_field_metadata(
+    metadata: &HashMap<String, String>,
+    key: &str,
+) -> SparkResult<Option<i32>> {
+    metadata
+        .get(key)
+        .map(|value| {
+            value.parse::<i32>().map_err(|e| {
+                SparkError::invalid(format!(
+                    "invalid interval field metadata {key}={value}: {e}"
+                ))
+            })
+        })
+        .transpose()
+}
+
 impl GeoArrowMetadata {
     /// Parse GeoArrow metadata from JSON string.
     fn from_json(metadata: &str) -> SparkResult<Self> {
@@ -124,6 +141,14 @@ impl TryFrom<adt::Field> for sdt::StructField {
         let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
         let is_variant =
             field.extension_type_name() == Some(sail_common::spec::VARIANT_EXTENSION_NAME);
+        let interval_start_field =
+            parse_interval_field_metadata(field.metadata(), SAIL_INTERVAL_START_FIELD_KEY)?;
+        let interval_end_field =
+            parse_interval_field_metadata(field.metadata(), SAIL_INTERVAL_END_FIELD_KEY)?;
+        let is_interval = matches!(
+            field.data_type(),
+            adt::DataType::Interval(_) | adt::DataType::Duration(adt::TimeUnit::Microsecond)
+        ) && (interval_start_field.is_some() || interval_end_field.is_some());
 
         let data_type = if is_udt {
             DataType {
@@ -168,6 +193,28 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     type_variation_reference: 0,
                 })),
             }
+        } else if is_interval {
+            match field.data_type() {
+                adt::DataType::Interval(adt::IntervalUnit::YearMonth) => DataType {
+                    kind: Some(sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
+                        start_field: interval_start_field,
+                        end_field: interval_end_field,
+                        type_variation_reference: 0,
+                    })),
+                },
+                adt::DataType::Duration(adt::TimeUnit::Microsecond)
+                | adt::DataType::Interval(adt::IntervalUnit::DayTime) => DataType {
+                    kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                        start_field: interval_start_field,
+                        end_field: interval_end_field,
+                        type_variation_reference: 0,
+                    })),
+                },
+                _ => {
+                    // Unreachable.
+                    field.data_type().clone().try_into()?
+                }
+            }
         } else {
             field.data_type().clone().try_into()?
         };
@@ -176,7 +223,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
         let metadata = &field
             .metadata()
             .iter()
-            .filter(|(k, _)| !k.starts_with("udt.") && !k.starts_with("ARROW:extension:"))
+            .filter(|(k, _)| {
+                !k.starts_with("udt.")
+                    && !k.starts_with("ARROW:extension:")
+                    && k.as_str() != SAIL_INTERVAL_START_FIELD_KEY
+                    && k.as_str() != SAIL_INTERVAL_END_FIELD_KEY
+            })
             .map(|(k, v)| {
                 let parsed = serde_json::from_str::<serde_json::Value>(v)
                     .unwrap_or_else(|_| serde_json::Value::String(v.clone()));
