@@ -138,9 +138,3 @@ def unity_spark(
     with contextlib.suppress(Exception):
         spark.stop()
     stop_sail_server(server, saved_env)
-
-
-@pytest.fixture(scope="module")
-def spark(unity_spark: SparkSession) -> SparkSession:
-    """Alias for unity_spark, used by BDD step definitions."""
-    return unity_spark
