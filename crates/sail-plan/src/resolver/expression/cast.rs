@@ -288,7 +288,7 @@ fn day_time_interval_literal(
         }
         (spec::IntervalFieldType::Day, Some(spec::IntervalFieldType::Second)) => Some(format!(
             "{sign}{days} {hours:02}:{minutes:02}:{}",
-            second_literal(minute_remainder)
+            second_literal(minute_remainder, true)
         )),
         (spec::IntervalFieldType::Hour, None) => Some(format!("{sign}{total_hours}")),
         (spec::IntervalFieldType::Hour, Some(spec::IntervalFieldType::Minute)) => {
@@ -296,25 +296,30 @@ fn day_time_interval_literal(
         }
         (spec::IntervalFieldType::Hour, Some(spec::IntervalFieldType::Second)) => Some(format!(
             "{sign}{total_hours}:{minutes:02}:{}",
-            second_literal(minute_remainder)
+            second_literal(minute_remainder, true)
         )),
         (spec::IntervalFieldType::Minute, None) => Some(format!("{sign}{total_minutes}")),
         (spec::IntervalFieldType::Minute, Some(spec::IntervalFieldType::Second)) => Some(format!(
             "{sign}{total_minutes}:{}",
-            second_literal(minute_remainder)
+            second_literal(minute_remainder, true)
         )),
         (spec::IntervalFieldType::Second, None) => {
-            Some(format!("{sign}{}", second_literal(microseconds)))
+            Some(format!("{sign}{}", second_literal(microseconds, false)))
         }
         _ => None,
     }
 }
 
-fn second_literal(microseconds: i128) -> String {
+fn second_literal(microseconds: i128, pad_seconds: bool) -> String {
     let seconds = microseconds / 1_000_000;
     let fraction = microseconds % 1_000_000;
-    if fraction == 0 {
+    let seconds = if pad_seconds {
+        format!("{seconds:02}")
+    } else {
         seconds.to_string()
+    };
+    if fraction == 0 {
+        seconds
     } else {
         format!("{seconds}.{fraction:06}")
             .trim_end_matches('0')
