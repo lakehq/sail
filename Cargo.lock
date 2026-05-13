@@ -7612,6 +7612,7 @@ dependencies = [
  "futures",
  "indexmap 2.14.0",
  "log",
+ "object_store",
  "readonly",
  "sail-cache",
  "sail-catalog",
@@ -7642,6 +7643,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tonic",
+ "url",
 ]
 
 [[package]]

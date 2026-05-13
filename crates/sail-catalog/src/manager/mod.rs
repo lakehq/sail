@@ -168,6 +168,10 @@ impl CatalogManager {
     ) -> CatalogResult<Option<CatalogCachedRelation>> {
         self.tracker.remove_cached_relation(relation_id)
     }
+
+    pub fn drain_cached_relation_storage_uris(&self) -> CatalogResult<Vec<String>> {
+        self.tracker.drain_cached_relation_storage_uris()
+    }
 }
 
 impl CatalogManagerState {

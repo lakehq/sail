@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::SessionContext;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
+use futures::{StreamExt, TryStreamExt};
 use log::{info, warn};
+use object_store::ObjectStoreScheme;
+use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::JobService;
@@ -326,11 +330,27 @@ impl SessionManagerActor {
             warn!("job service not found for session {session_id}");
             return;
         };
+        let checkpoint_storage_uris = match context.extension::<CatalogManager>() {
+            Ok(manager) => match manager.drain_cached_relation_storage_uris() {
+                Ok(uris) => uris,
+                Err(e) => {
+                    warn!("failed to drain cached relation checkpoint locations for session {session_id}: {e}");
+                    vec![]
+                }
+            },
+            Err(e) => {
+                warn!("catalog manager not found for session {session_id}: {e}");
+                vec![]
+            }
+        };
+        let runtime_env = context.runtime_env();
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
         ctx.spawn(async move {
             service.runner().stop(tx).await;
-            let message = match rx.await {
+            let history = rx.await;
+            cleanup_cached_relation_storage(runtime_env, checkpoint_storage_uris).await;
+            let message = match history {
                 Ok(x) => SessionManagerEvent::SetSessionHistory {
                     session_id,
                     history: SessionHistory { job_runner: x },
@@ -339,5 +359,37 @@ impl SessionManagerActor {
             };
             let _ = handle.send(message).await;
         });
+    }
+}
+
+async fn cleanup_cached_relation_storage(runtime_env: Arc<RuntimeEnv>, storage_uris: Vec<String>) {
+    for uri in storage_uris {
+        cleanup_checkpoint_storage(&runtime_env, &uri).await;
+    }
+}
+
+async fn cleanup_checkpoint_storage(runtime_env: &RuntimeEnv, storage_uri: &str) {
+    let Ok(url) = url::Url::parse(storage_uri) else {
+        warn!("failed to parse checkpoint location for cleanup: {storage_uri}");
+        return;
+    };
+    let Ok((_, checkpoint_path)) = ObjectStoreScheme::parse(&url) else {
+        warn!("failed to parse checkpoint object-store path for cleanup: {storage_uri}");
+        return;
+    };
+    let Ok(object_store) = runtime_env.object_store_registry.get_store(&url) else {
+        warn!("failed to resolve checkpoint object store for cleanup: {storage_uri}");
+        return;
+    };
+    let locations = object_store
+        .list(Some(&checkpoint_path))
+        .map_ok(|meta| meta.location)
+        .boxed();
+    if let Err(e) = object_store
+        .delete_stream(locations)
+        .try_collect::<Vec<_>>()
+        .await
+    {
+        warn!("failed to remove checkpoint location {storage_uri}: {e}");
     }
 }

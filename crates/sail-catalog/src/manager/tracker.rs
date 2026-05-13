@@ -120,6 +120,15 @@ impl CatalogObjectTracker {
         let mut state = self.state()?;
         Ok(state.cached_relations.remove(relation_id))
     }
+
+    pub fn drain_cached_relation_storage_uris(&self) -> CatalogResult<Vec<String>> {
+        let mut state = self.state()?;
+        Ok(state
+            .cached_relations
+            .drain()
+            .filter_map(|(_, relation)| relation.storage_uri)
+            .collect())
+    }
 }
 
 impl Drop for CatalogObjectTracker {

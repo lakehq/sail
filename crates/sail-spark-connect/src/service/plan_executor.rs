@@ -1,11 +1,13 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::MemTable;
 use datafusion::datasource::provider_as_source;
+use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use datafusion::parquet::arrow::async_writer::ParquetObjectWriter;
 use datafusion::parquet::arrow::AsyncArrowWriter;
@@ -632,13 +634,10 @@ fn checkpoint_uses_disk(
 /// regular query execution.  This ensures checkpoint materialization runs on
 /// the same execution path as user queries (including in cluster mode) and
 /// participates in job tracking and cancellation.
-async fn execute_plan_via_runner(
+async fn execute_plan_via_runner_stream(
     ctx: &SessionContext,
     plan: LogicalPlan,
-) -> SparkResult<(
-    datafusion::arrow::datatypes::SchemaRef,
-    Vec<datafusion::arrow::array::RecordBatch>,
-)> {
+) -> SparkResult<(SchemaRef, SendableRecordBatchStream)> {
     let arrow_schema = plan.schema().inner().clone();
     let df = ctx.execute_logical_plan(plan).await?;
     let (session_state, plan) = df.into_parts();
@@ -649,6 +648,14 @@ async fn execute_plan_via_runner(
         .await?;
     let service = ctx.extension::<JobService>()?;
     let stream = service.runner().execute(ctx, physical_plan).await?;
+    Ok((arrow_schema, stream))
+}
+
+async fn collect_plan_via_runner(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+) -> SparkResult<(SchemaRef, Vec<datafusion::arrow::array::RecordBatch>)> {
+    let (arrow_schema, stream) = execute_plan_via_runner_stream(ctx, plan).await?;
     let batches = read_stream(stream).await?;
     Ok((arrow_schema, batches))
 }
@@ -659,7 +666,7 @@ async fn materialize_logical_plan_to_memory(
     ctx: &SessionContext,
     plan: LogicalPlan,
 ) -> SparkResult<LogicalPlan> {
-    let (arrow_schema, batches) = execute_plan_via_runner(ctx, plan).await?;
+    let (arrow_schema, batches) = collect_plan_via_runner(ctx, plan).await?;
     let table = Arc::new(MemTable::try_new(arrow_schema, vec![batches])?);
     let scan = LogicalPlanBuilder::scan(
         datafusion::common::TableReference::bare(UNNAMED_TABLE),
@@ -692,6 +699,18 @@ fn ensure_directory_url(mut url: url::Url) -> SparkResult<url::Url> {
     Ok(url)
 }
 
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+fn is_uri_like(path: &str) -> bool {
+    path.contains("://")
+}
+
 /// Returns the configured checkpoint root location.  When the configuration
 /// option is empty, falls back to a `sail-checkpoints/` subdirectory of the
 /// system temporary directory.
@@ -706,7 +725,11 @@ fn resolve_checkpoint_root(spark: &SparkSession) -> SparkResult<url::Url> {
     let configured = spark.options().checkpoint_dir.trim();
     if configured.is_empty() {
         directory_file_url(std::env::temp_dir().join("sail-checkpoints"))
-    } else if let Ok(url) = url::Url::parse(configured) {
+    } else if Path::new(configured).is_absolute() || is_windows_drive_path(configured) {
+        directory_file_url(PathBuf::from(configured))
+    } else if is_uri_like(configured) {
+        let url = url::Url::parse(configured)
+            .map_err(|e| SparkError::invalid(format!("invalid checkpoint URI: {e}")))?;
         ensure_directory_url(url)
     } else {
         directory_file_url(PathBuf::from(configured))
@@ -752,18 +775,7 @@ async fn materialize_logical_plan_to_disk(
     let checkpoint_uri = checkpoint_url.to_string();
     let (object_store, checkpoint_path) = checkpoint_store_and_path(ctx, &checkpoint_url)?;
 
-    // Plan and execute via the `JobService` runner so checkpoint
-    // materialization goes through the same execution path as user queries.
-    let arrow_schema = plan.schema().inner().clone();
-    let df = ctx.execute_logical_plan(plan).await?;
-    let (session_state, plan) = df.into_parts();
-    let plan = session_state.optimize(&plan)?;
-    let physical_plan = session_state
-        .query_planner()
-        .create_physical_plan(&plan, &session_state)
-        .await?;
-    let service = ctx.extension::<JobService>()?;
-    let mut stream = service.runner().execute(ctx, physical_plan).await?;
+    let (arrow_schema, mut stream) = execute_plan_via_runner_stream(ctx, plan).await?;
 
     // Stream batches directly to a single Parquet file inside the checkpoint
     // directory without collecting them all into memory first.
