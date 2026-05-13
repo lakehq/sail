@@ -2,6 +2,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when, ScalarUDF};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
+use datafusion_spark::expr_fn::json_tuple;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::json::{
     json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf, SparkFromJson,
@@ -18,7 +19,6 @@ fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr>
         {
             Ok::<_, DataFusionError>(value.replacen("$.", "", 1).split(".").map(lit).collect())
         }
-        // FIXME: json_as_text_udf for array of paths with subpaths is not implemented, so only top level keys supported
         _ => Ok(vec![when(
             path.clone().like(lit("$.%")),
             unicode_fn::substr(path, lit(3)),
@@ -41,12 +41,6 @@ fn json_object_keys(json_data: expr::Expr) -> expr::Expr {
 }
 
 fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    // to_json accepts 1 or 2 arguments:
-    // - to_json(expr) - convert expr to JSON string
-    // - to_json(expr, options) - convert expr to JSON string with options
-    // Note: the SparkToJson UDF detects Variant inputs and delegates to variant_to_json,
-    // which ignores any options provided.
-    // See: https://docs.databricks.com/en/sql/language-manual/functions/to_json.html
     match args.len() {
         1 | 2 => Ok(to_json_udf().call(args)),
         n => Err(PlanError::invalid(format!(
@@ -62,9 +56,6 @@ fn from_json(
     }: ScalarFunctionInput,
 ) -> PlanResult<expr::Expr> {
     let tz = function_context.plan_config.session_timezone.clone();
-    // Try to constant-fold the schema argument (index 1) if it's not already a literal.
-    // This handles cases like `from_json(col, schema_of_json(lit(...)))` where the schema
-    // is a constant expression that can be evaluated at planning time.
     if arguments.len() >= 2 && !matches!(&arguments[1], expr::Expr::Literal(_, _)) {
         let evaluator = LiteralEvaluator::new();
         if let Ok(scalar) = evaluator.evaluate(&arguments[1]) {
@@ -75,25 +66,13 @@ fn from_json(
     Ok(udf.call(arguments))
 }
 
-fn json_tuple(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    // Spark's json_tuple expects (json_string, key1, key2, ...)
-    if args.len() < 2 {
-        return Err(PlanError::invalid(format!(
-            "json_tuple expects at least 2 arguments, got {}",
-            args.len()
-        )));
-    }
-    // This calls the DataFusion JSON logic already present in Sail
-    Ok(json_as_text_udf().call(args))
-}
-
 pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
     vec![
         ("from_json", F::custom(from_json)),
         ("get_json_object", F::binary(get_json_object)),
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
-        ("json_tuple", F::var_arg(json_tuple)), 
+        ("json_tuple", F::var_arg(|args| Ok(json_tuple(args)))),
         ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
         ("to_json", F::var_arg(to_json)),
     ]
