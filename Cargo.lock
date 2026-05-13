@@ -6984,6 +6984,7 @@ dependencies = [
  "serde_arrow",
  "thiserror 2.0.18",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -7160,6 +7161,8 @@ dependencies = [
  "futures",
  "lazy_static",
  "lexical-core",
+ "log",
+ "object_store",
  "parquet-variant-compute",
  "parquet-variant-json",
  "pin-project-lite",
@@ -7179,6 +7182,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+ "url",
 ]
 
 [[package]]
@@ -7620,6 +7624,7 @@ dependencies = [
  "futures",
  "indexmap 2.14.0",
  "log",
+ "object_store",
  "readonly",
  "sail-cache",
  "sail-catalog",
@@ -7650,6 +7655,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tonic",
+ "url",
 ]
 
 [[package]]
@@ -7663,6 +7669,7 @@ dependencies = [
  "lazy_static",
  "log",
  "monostate",
+ "object_store",
  "pbjson",
  "pbjson-build",
  "pbjson-types",
@@ -7675,6 +7682,7 @@ dependencies = [
  "quote",
  "regex",
  "sail-cache",
+ "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
@@ -7693,6 +7701,7 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tonic-types",
+ "url",
  "uuid",
 ]
 

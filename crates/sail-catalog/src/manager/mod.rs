@@ -5,7 +5,9 @@ use datafusion_expr::{LogicalPlan, ScalarUDF};
 use sail_common_datafusion::extension::SessionExtension;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
-use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker};
+use crate::manager::tracker::{
+    CatalogCachedRelation, CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker,
+};
 use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
@@ -146,6 +148,29 @@ impl CatalogManager {
         id: CatalogLogicalPlanId,
     ) -> CatalogResult<Arc<LogicalPlan>> {
         self.tracker.get_tracked_logical_plan(id)
+    }
+
+    pub fn track_cached_relation(
+        &self,
+        relation_id: String,
+        relation: CatalogCachedRelation,
+    ) -> CatalogResult<()> {
+        self.tracker.track_cached_relation(relation_id, relation)
+    }
+
+    pub fn get_cached_relation(&self, relation_id: &str) -> CatalogResult<CatalogCachedRelation> {
+        self.tracker.get_cached_relation(relation_id)
+    }
+
+    pub fn remove_cached_relation(
+        &self,
+        relation_id: &str,
+    ) -> CatalogResult<Option<CatalogCachedRelation>> {
+        self.tracker.remove_cached_relation(relation_id)
+    }
+
+    pub fn drain_cached_relation_storage_uris(&self) -> CatalogResult<Vec<String>> {
+        self.tracker.drain_cached_relation_storage_uris()
     }
 }
 

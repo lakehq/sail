@@ -42,9 +42,11 @@ datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+object_store = { workspace = true }
 secrecy = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
 futures = { workspace = true }
+url = { workspace = true }

@@ -1,17 +1,33 @@
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
-use datafusion::prelude::SessionContext;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::catalog::MemTable;
+use datafusion::datasource::provider_as_source;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion::parquet::arrow::async_writer::ParquetObjectWriter;
+use datafusion::parquet::arrow::AsyncArrowWriter;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use fastrace::Span;
-use futures::stream;
+use futures::{stream, TryStreamExt};
 use log::{debug, warn};
+use object_store::path::Path as ObjectStorePath;
+use object_store::ObjectStoreScheme;
+use sail_catalog::manager::tracker::CatalogCachedRelation;
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
+use sail_common_datafusion::checkpoint::cleanup_checkpoint_storage;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
+use sail_plan::resolver::plan::NamedPlan;
+use sail_plan::resolver::PlanResolver;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -26,10 +42,11 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedDataSource,
-    CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation,
-    MergeIntoTableCommand, Relation, SqlCommand, StreamingQueryCommand,
+    relation, CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
+    CommonInlineUserDefinedDataSource, CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
+    GetResourcesCommand, LocalRelation, MergeIntoTableCommand, Relation,
+    RemoveCachedRemoteRelationCommand, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
@@ -515,16 +532,306 @@ pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
 
 pub(crate) async fn handle_execute_checkpoint_command(
     ctx: &SessionContext,
-    _checkpoint: CheckpointCommand,
+    checkpoint: CheckpointCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    // TODO: Implement
-    warn!("Checkpoint operation is not yet supported and is a no-op");
+    let CheckpointCommand {
+        relation,
+        local,
+        // The `eager` flag is a Spark hint requesting that materialization be
+        // deferred until the cached relation is first used.  Sail does not
+        // implement deferred materialization (which would require intercepting
+        // `CachedRemoteRelation` reads and updating the cached entry on first
+        // use), so we always materialize eagerly.  This is a correctness-
+        // preserving choice: lineage is truncated and the checkpoint exists
+        // immediately, matching Spark's observable semantics for `eager=true`.
+        eager: _,
+        storage_level,
+    } = checkpoint;
+    let relation = relation.required("checkpoint relation")?;
+    let plan = spec::Plan::Query((relation).try_into()?);
+
     let spark = ctx.extension::<SparkSession>()?;
-    let result = CheckpointCommandResult { relation: None };
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let NamedPlan {
+        plan: logical_plan,
+        fields,
+    } = resolver.resolve_named_plan(plan).await?;
+    let fields = fields.ok_or_else(|| {
+        SparkError::internal("resolved checkpoint query plan did not include field names")
+    })?;
+
+    let use_disk = checkpoint_uses_disk(local, storage_level.as_ref());
+    let (cached_plan, storage_uri) = if use_disk {
+        materialize_logical_plan_to_disk(ctx, logical_plan).await?
+    } else {
+        (
+            materialize_logical_plan_to_memory(ctx, logical_plan).await?,
+            None,
+        )
+    };
+
+    let relation_id = uuid::Uuid::new_v4().to_string();
+    let manager = ctx.extension::<CatalogManager>()?;
+    if let Err(error) = manager.track_cached_relation(
+        relation_id.clone(),
+        CatalogCachedRelation {
+            plan: Arc::new(cached_plan),
+            fields,
+            storage_uri: storage_uri.clone(),
+        },
+    ) {
+        if let Some(uri) = storage_uri {
+            cleanup_checkpoint_path(ctx, &uri).await;
+        }
+        return Err(SparkError::internal(format!(
+            "failed to track cached relation: {error}"
+        )));
+    }
+
+    let result = CheckpointCommandResult {
+        relation: Some(CachedRemoteRelation { relation_id }),
+    };
     let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
         Box::new(result),
     ))];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
+    ))
+}
+
+/// Determines whether a checkpoint should be materialized to disk.
+///
+/// Non-local (reliable) checkpoints always use disk.  For local checkpoints
+/// the decision follows the explicit `StorageLevel` when provided.  When the
+/// client omits the storage level (which is the common case – PySpark's
+/// `localCheckpoint()` defaults to `MEMORY_AND_DISK` but does **not** send the
+/// level over the wire), we default to **disk** to avoid collecting the entire
+/// DataFrame into server memory, which could easily OOM for large datasets.
+fn checkpoint_uses_disk(
+    local: bool,
+    storage_level: Option<&crate::spark::connect::StorageLevel>,
+) -> bool {
+    if !local {
+        return true;
+    }
+    storage_level.map(|level| level.use_disk).unwrap_or(true)
+}
+
+/// Eagerly executes a logical plan via the [`JobService`] runner used by
+/// regular query execution.  This ensures checkpoint materialization runs on
+/// the same execution path as user queries (including in cluster mode) and
+/// participates in job tracking and cancellation.
+async fn execute_plan_via_runner_stream(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+) -> SparkResult<(SchemaRef, SendableRecordBatchStream)> {
+    let arrow_schema = plan.schema().inner().clone();
+    let df = ctx.execute_logical_plan(plan).await?;
+    let (session_state, plan) = df.into_parts();
+    let plan = session_state.optimize(&plan)?;
+    let physical_plan = session_state
+        .query_planner()
+        .create_physical_plan(&plan, &session_state)
+        .await?;
+    let service = ctx.extension::<JobService>()?;
+    let stream = service.runner().execute(ctx, physical_plan).await?;
+    Ok((arrow_schema, stream))
+}
+
+async fn collect_plan_via_runner(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+) -> SparkResult<(SchemaRef, Vec<datafusion::arrow::array::RecordBatch>)> {
+    let (arrow_schema, stream) = execute_plan_via_runner_stream(ctx, plan).await?;
+    let batches = read_stream(stream).await?;
+    Ok((arrow_schema, batches))
+}
+
+/// Eagerly executes the resolved logical plan and returns a new logical plan
+/// that scans the materialized data from an in-memory table.
+async fn materialize_logical_plan_to_memory(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+) -> SparkResult<LogicalPlan> {
+    let (arrow_schema, batches) = collect_plan_via_runner(ctx, plan).await?;
+    let table = Arc::new(MemTable::try_new(arrow_schema, vec![batches])?);
+    let scan = LogicalPlanBuilder::scan(
+        datafusion::common::TableReference::bare(UNNAMED_TABLE),
+        provider_as_source(table),
+        None,
+    )?
+    .build()?;
+    Ok(scan)
+}
+
+fn directory_file_url(path: PathBuf) -> SparkResult<url::Url> {
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    url::Url::from_directory_path(&path).map_err(|_| {
+        SparkError::invalid(format!(
+            "checkpoint directory is not a valid file path: {}",
+            path.display()
+        ))
+    })
+}
+
+fn ensure_directory_url(mut url: url::Url) -> SparkResult<url::Url> {
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    Ok(url)
+}
+
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+fn is_uri_like(path: &str) -> bool {
+    path.contains("://")
+}
+
+/// Returns the configured checkpoint root location.  When the configuration
+/// option is empty, falls back to a `sail-checkpoints/` subdirectory of the
+/// system temporary directory.
+///
+/// In cluster deployments the operator should configure `spark.checkpoint_dir`
+/// to a location that is shared and readable by all workers, such as an
+/// object-store URI or a shared filesystem path.  The default node-local path
+/// is suitable for single-node deployments and tests but will not work
+/// correctly for distributed execution since remote workers cannot read from
+/// the driver's local temporary directory.
+fn resolve_checkpoint_root(spark: &SparkSession) -> SparkResult<url::Url> {
+    let configured = spark.options().checkpoint_dir.trim();
+    if configured.is_empty() {
+        directory_file_url(std::env::temp_dir().join("sail-checkpoints"))
+    } else if Path::new(configured).is_absolute() || is_windows_drive_path(configured) {
+        directory_file_url(PathBuf::from(configured))
+    } else if is_uri_like(configured) {
+        let url = url::Url::parse(configured)
+            .map_err(|e| SparkError::invalid(format!("invalid checkpoint URI: {e}")))?;
+        ensure_directory_url(url)
+    } else {
+        directory_file_url(PathBuf::from(configured))
+    }
+}
+
+fn checkpoint_store_and_path(
+    ctx: &SessionContext,
+    checkpoint_url: &url::Url,
+) -> SparkResult<(Arc<dyn object_store::ObjectStore>, ObjectStorePath)> {
+    let (_, checkpoint_path) = ObjectStoreScheme::parse(checkpoint_url)
+        .map_err(|e| SparkError::invalid(format!("invalid checkpoint location: {e}")))?;
+    let object_store = ctx
+        .runtime_env()
+        .object_store_registry
+        .get_store(checkpoint_url)?;
+    Ok((object_store, checkpoint_path))
+}
+
+/// Eagerly executes the resolved logical plan, streaming the result directly
+/// to a checkpoint Parquet file on disk, and returns a new logical plan that
+/// scans those files.
+///
+/// Streaming the physical plan output through an `AsyncArrowWriter` avoids
+/// buffering the entire materialized DataFrame in driver memory, which is
+/// the whole point of using the on-disk checkpoint path.  Execution still
+/// goes through the [`JobService`] runner so that the work participates in
+/// distributed execution, job tracking, and cancellation.
+async fn materialize_logical_plan_to_disk(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+) -> SparkResult<(LogicalPlan, Option<String>)> {
+    // Spark Connect does not send a user checkpoint directory with this command,
+    // so Sail uses the directory configured by `spark.checkpoint_dir` (or a
+    // server-local temporary area if unset).  Files are best-effort cleaned
+    // up when the client releases the cached remote relation or when the
+    // session ends.
+    let spark = ctx.extension::<SparkSession>()?;
+    let checkpoint_root = resolve_checkpoint_root(&spark)?;
+    let checkpoint_url = checkpoint_root
+        .join(&format!("{}/", uuid::Uuid::new_v4()))
+        .map_err(|e| SparkError::invalid(format!("invalid checkpoint location: {e}")))?;
+    let checkpoint_uri = checkpoint_url.to_string();
+    let (object_store, checkpoint_path) = checkpoint_store_and_path(ctx, &checkpoint_url)?;
+
+    let (arrow_schema, mut stream) = execute_plan_via_runner_stream(ctx, plan).await?;
+
+    // Stream batches directly to a single Parquet file inside the checkpoint
+    // directory without collecting them all into memory first.
+    let write_result: SparkResult<()> = async {
+        let parquet_path = ObjectStorePath::from(format!("{checkpoint_path}/part-0.parquet"));
+        let object_writer = ParquetObjectWriter::new(object_store.clone(), parquet_path);
+        let mut writer = AsyncArrowWriter::try_new(object_writer, arrow_schema, None)
+            .map_err(|e| SparkError::internal(format!("failed to create parquet writer: {e}")))?;
+        while let Some(batch) = stream.try_next().await? {
+            writer
+                .write(&batch)
+                .await
+                .map_err(|e| SparkError::internal(format!("failed to write parquet batch: {e}")))?;
+        }
+        writer
+            .close()
+            .await
+            .map_err(|e| SparkError::internal(format!("failed to close parquet writer: {e}")))?;
+        Ok(())
+    }
+    .await;
+
+    if let Err(error) = write_result {
+        cleanup_checkpoint_path(ctx, &checkpoint_uri).await;
+        return Err(error);
+    }
+
+    let df = match ctx
+        .read_parquet(&checkpoint_uri, ParquetReadOptions::default())
+        .await
+    {
+        Ok(df) => df,
+        Err(error) => {
+            cleanup_checkpoint_path(ctx, &checkpoint_uri).await;
+            return Err(error.into());
+        }
+    };
+    Ok((df.into_unoptimized_plan(), Some(checkpoint_uri)))
+}
+
+async fn cleanup_checkpoint_path(ctx: &SessionContext, checkpoint_uri: &str) {
+    cleanup_checkpoint_storage(ctx.runtime_env().as_ref(), checkpoint_uri).await;
+}
+
+pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
+    ctx: &SessionContext,
+    command: RemoveCachedRemoteRelationCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    let RemoveCachedRemoteRelationCommand { relation } = command;
+    let relation = relation.required("remove cached remote relation")?;
+    let manager = ctx.extension::<CatalogManager>()?;
+    // Removing a relation that does not exist is treated as a no-op to match
+    // Spark Connect, which tolerates duplicate or out-of-order cleanup calls.
+    let removed = manager
+        .remove_cached_relation(&relation.relation_id)
+        .map_err(|e| SparkError::internal(format!("failed to remove cached relation: {e}")))?;
+    if let Some(uri) = removed.and_then(|relation| relation.storage_uri) {
+        cleanup_checkpoint_path(ctx, &uri).await;
+    }
+
+    let spark = ctx.extension::<SparkSession>()?;
+    let mut output = Vec::new();
     if metadata.reattachable {
         output.push(ExecutorOutput::complete());
     }

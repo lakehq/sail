@@ -5,9 +5,13 @@ use datafusion::catalog::MemTable;
 use datafusion_common::{DFSchema, DFSchemaRef, ParamValues};
 use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
 use log::warn;
+use sail_catalog::error::{CatalogError, CatalogObject};
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_logical_plan::range::RangeNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -136,6 +140,33 @@ impl PlanResolver<'_> {
             None,
             state,
         )
+    }
+
+    /// Resolves a query that refers to a cached remote relation by looking up
+    /// the previously checkpointed logical plan from the catalog manager. The
+    /// cached plan was stored with internal field IDs and its user-facing field
+    /// names, so we register fresh field IDs in the current resolver state and
+    /// rename the plan accordingly. This preserves duplicate user-facing names
+    /// without relying on them as `Expr::Column` references inside the cached
+    /// plan.
+    pub(super) async fn resolve_query_cached_remote_relation(
+        &self,
+        relation_id: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let relation = match manager.get_cached_relation(&relation_id) {
+            Ok(relation) => relation,
+            Err(CatalogError::NotFound(CatalogObject::CachedRelation, _)) => {
+                return Err(PlanError::AnalysisError(format!(
+                    "cached remote relation not found: {relation_id}"
+                )));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let names = state.register_field_names(relation.fields.clone());
+        let plan = rename_logical_plan((*relation.plan).clone(), &names)?;
+        Ok(plan)
     }
 
     pub(super) async fn resolve_query_hint(

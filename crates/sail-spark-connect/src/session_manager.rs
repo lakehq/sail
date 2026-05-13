@@ -41,6 +41,7 @@ impl ServerSessionMutator for SparkSessionMutator {
                 execution_heartbeat_interval: Duration::from_secs(
                     self.config.spark.execution_heartbeat_interval_secs,
                 ),
+                checkpoint_dir: self.config.spark.checkpoint_dir.clone(),
             },
         )
         .map_err(|e| internal_datafusion_err!("{e}"))?;

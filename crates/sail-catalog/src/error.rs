@@ -16,6 +16,7 @@ pub enum CatalogObject {
     Function,
     TemporaryView,
     LogicalPlan,
+    CachedRelation,
 }
 
 impl fmt::Display for CatalogObject {
@@ -30,6 +31,7 @@ impl fmt::Display for CatalogObject {
             CatalogObject::Function => "Function",
             CatalogObject::TemporaryView => "Temporary View",
             CatalogObject::LogicalPlan => "Logical Plan",
+            CatalogObject::CachedRelation => "Cached Relation",
         };
         write!(f, "{name}")
     }

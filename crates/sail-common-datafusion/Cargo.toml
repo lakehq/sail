@@ -18,6 +18,8 @@ thiserror = { workspace = true }
 either = { workspace = true }
 lexical-core = { workspace = true }
 futures = { workspace = true }
+log = { workspace = true }
+object_store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
@@ -27,6 +29,7 @@ pin-project-lite = { workspace = true }
 parquet-variant-compute = { workspace = true }
 parquet-variant-json = { workspace = true }
 tokio = { workspace = true }
+url = { workspace = true }
 serde_arrow = { workspace = true }
 
 [build-dependencies]
