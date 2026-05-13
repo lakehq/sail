@@ -205,7 +205,7 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 Ok(spec::DataType::Interval {
                     interval_unit: spec::IntervalUnit::YearMonth,
                     start_field: Some(start),
-                    end_field: end,
+                    end_field: Some(end.unwrap_or(start)),
                 })
             }
             IntervalType::DayTime(_, start, end) => {
@@ -222,7 +222,7 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 Ok(spec::DataType::Interval {
                     interval_unit: spec::IntervalUnit::DayTime,
                     start_field: Some(start),
-                    end_field: end,
+                    end_field: Some(end.unwrap_or(start)),
                 })
             }
             IntervalType::Default(_) => Ok(spec::DataType::Interval {

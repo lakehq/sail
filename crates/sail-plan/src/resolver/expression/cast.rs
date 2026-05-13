@@ -18,6 +18,7 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::data_type::spark_interval_qualifier_metadata;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -60,9 +61,23 @@ impl PlanResolver<'_> {
             } => end_field.or(*start_field),
             _ => None,
         };
+        // Capture interval qualifier metadata before lowering to Arrow type, so
+        // the output column's Field carries the start/end qualifier (otherwise
+        // the Spark client defaults missing qualifiers to (YEAR, MONTH) / (DAY, SECOND)).
+        let interval_metadata = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            } => spark_interval_qualifier_metadata(interval_unit, start_field, end_field)?,
+            _ => vec![],
+        };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
-        let NamedExpr { expr, name, .. } =
-            self.resolve_named_expression(expr, schema, state).await?;
+        let NamedExpr {
+            expr,
+            name,
+            metadata: inner_metadata,
+        } = self.resolve_named_expression(expr, schema, state).await?;
         let expr_type = expr.get_type(schema)?;
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
@@ -163,7 +178,10 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(NamedExpr::new(name, expr))
+        let mut expr = NamedExpr::new(name, expr);
+        expr.metadata.extend(inner_metadata);
+        expr.metadata.extend(interval_metadata);
+        Ok(expr)
     }
 }
 

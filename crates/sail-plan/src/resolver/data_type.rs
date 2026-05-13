@@ -75,6 +75,35 @@ fn spark_interval_field_value(
     }
 }
 
+/// Build the Arrow extension metadata that encodes a Spark interval qualifier.
+/// Returns an empty Vec when neither start nor end field is present.
+pub(super) fn spark_interval_qualifier_metadata(
+    interval_unit: &spec::IntervalUnit,
+    start_field: &Option<spec::IntervalFieldType>,
+    end_field: &Option<spec::IntervalFieldType>,
+) -> PlanResult<Vec<(String, String)>> {
+    if start_field.is_none() && end_field.is_none() {
+        return Ok(vec![]);
+    }
+    let mut ext = json!({});
+    if let Some(start_field) = start_field {
+        ext["start_field"] = json!(spark_interval_field_value(interval_unit, start_field)?);
+    }
+    if let Some(end_field) = end_field {
+        ext["end_field"] = json!(spark_interval_field_value(interval_unit, end_field)?);
+    }
+    Ok(vec![
+        (
+            spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+            spec::SAIL_INTERVAL_EXTENSION_NAME.to_string(),
+        ),
+        (
+            spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+            ext.to_string(),
+        ),
+    ])
+}
+
 impl PlanResolver<'_> {
     fn arrow_binary_type(&self, state: &mut PlanResolverState) -> adt::DataType {
         if self.config.arrow_use_large_var_types && state.config().arrow_allow_large_var_types {
@@ -392,25 +421,11 @@ impl PlanResolver<'_> {
                 start_field,
                 end_field,
             } => {
-                if start_field.is_some() || end_field.is_some() {
-                    metadata.insert(
-                        spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                        spec::SAIL_INTERVAL_EXTENSION_NAME.to_string(),
-                    );
-                    let mut ext = json!({});
-                    if let Some(start_field) = start_field {
-                        ext["start_field"] =
-                            json!(spark_interval_field_value(interval_unit, start_field)?);
-                    }
-                    if let Some(end_field) = end_field {
-                        ext["end_field"] =
-                            json!(spark_interval_field_value(interval_unit, end_field)?);
-                    }
-                    metadata.insert(
-                        spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
-                        ext.to_string(),
-                    );
-                }
+                metadata.extend(spark_interval_qualifier_metadata(
+                    interval_unit,
+                    start_field,
+                    end_field,
+                )?);
                 data_type
             }
             x => x,

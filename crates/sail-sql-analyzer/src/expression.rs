@@ -951,9 +951,20 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::NumberLiteral(value) => from_ast_number_literal(value),
         AtomExpr::BooleanLiteral(value) => from_ast_boolean_literal(value),
         AtomExpr::Null(_) => Ok(spec::Expr::Literal(spec::Literal::Null)),
-        AtomExpr::Interval(_, value) => Ok(spec::Expr::Literal(
-            from_ast_signed_interval(Signed::Positive(*value))?.into(),
-        )),
+        AtomExpr::Interval(_, value) => {
+            let (interval_value, qualified_type) =
+                from_ast_signed_interval(Signed::Positive(*value))?;
+            let literal = spec::Expr::Literal(interval_value.into());
+            Ok(match qualified_type {
+                Some(cast_to_type) => spec::Expr::Cast {
+                    expr: Box::new(literal),
+                    cast_to_type,
+                    rename: false,
+                    is_try: false,
+                },
+                None => literal,
+            })
+        }
         AtomExpr::Placeholder(variable) => Ok(spec::Expr::Placeholder(variable.value)),
         AtomExpr::Identifier(x) => Ok(spec::Expr::UnresolvedAttribute {
             name: spec::ObjectName::bare(x.value),

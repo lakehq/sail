@@ -96,54 +96,105 @@ impl From<IntervalValue> for spec::Literal {
     }
 }
 
-pub fn from_ast_signed_interval(value: Signed<IntervalExpr>) -> SqlResult<IntervalValue> {
+fn standard_interval_kind_to_spec_type(kind: &StandardIntervalKind) -> spec::DataType {
+    use spec::IntervalFieldType::{Day, Hour, Minute, Month, Second, Year};
+    use spec::IntervalUnit::{DayTime, YearMonth};
+    let (interval_unit, start, end) = match kind {
+        StandardIntervalKind::Year => (YearMonth, Year, Year),
+        StandardIntervalKind::YearToMonth => (YearMonth, Year, Month),
+        StandardIntervalKind::Month => (YearMonth, Month, Month),
+        StandardIntervalKind::Day => (DayTime, Day, Day),
+        StandardIntervalKind::DayToHour => (DayTime, Day, Hour),
+        StandardIntervalKind::DayToMinute => (DayTime, Day, Minute),
+        StandardIntervalKind::DayToSecond => (DayTime, Day, Second),
+        StandardIntervalKind::Hour => (DayTime, Hour, Hour),
+        StandardIntervalKind::HourToMinute => (DayTime, Hour, Minute),
+        StandardIntervalKind::HourToSecond => (DayTime, Hour, Second),
+        StandardIntervalKind::Minute => (DayTime, Minute, Minute),
+        StandardIntervalKind::MinuteToSecond => (DayTime, Minute, Second),
+        StandardIntervalKind::Second => (DayTime, Second, Second),
+    };
+    spec::DataType::Interval {
+        interval_unit,
+        start_field: Some(start),
+        end_field: Some(end),
+    }
+}
+
+pub fn from_ast_signed_interval(
+    value: Signed<IntervalExpr>,
+) -> SqlResult<(IntervalValue, Option<spec::DataType>)> {
     // TODO: support the legacy calendar interval when `spark.sql.legacy.interval.enabled` is `true`
     let negated = value.is_negative();
     let interval = value.into_inner();
     match interval.clone() {
         IntervalExpr::Standard { value, qualifier } => {
             let kind = from_ast_interval_qualifier(qualifier)?;
-            from_ast_standard_interval(value, kind, negated)
+            let ty = standard_interval_kind_to_spec_type(&kind);
+            Ok((from_ast_standard_interval(value, kind, negated)?, Some(ty)))
         }
         IntervalExpr::MultiUnit { head, tail } => {
             if tail.is_empty() {
                 match head.unit {
                     IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
-                        from_ast_standard_interval(head.value, StandardIntervalKind::Year, negated)
+                        let kind = StandardIntervalKind::Year;
+                        let ty = standard_interval_kind_to_spec_type(&kind);
+                        Ok((
+                            from_ast_standard_interval(head.value, kind, negated)?,
+                            Some(ty),
+                        ))
                     }
                     IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
-                        from_ast_standard_interval(head.value, StandardIntervalKind::Month, negated)
+                        let kind = StandardIntervalKind::Month;
+                        let ty = standard_interval_kind_to_spec_type(&kind);
+                        Ok((
+                            from_ast_standard_interval(head.value, kind, negated)?,
+                            Some(ty),
+                        ))
                     }
                     IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
-                        from_ast_standard_interval(head.value, StandardIntervalKind::Day, negated)
+                        let kind = StandardIntervalKind::Day;
+                        let ty = standard_interval_kind_to_spec_type(&kind);
+                        Ok((
+                            from_ast_standard_interval(head.value, kind, negated)?,
+                            Some(ty),
+                        ))
                     }
                     IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
-                        from_ast_standard_interval(head.value, StandardIntervalKind::Hour, negated)
+                        let kind = StandardIntervalKind::Hour;
+                        let ty = standard_interval_kind_to_spec_type(&kind);
+                        Ok((
+                            from_ast_standard_interval(head.value, kind, negated)?,
+                            Some(ty),
+                        ))
                     }
                     IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
-                        from_ast_standard_interval(
-                            head.value,
-                            StandardIntervalKind::Minute,
-                            negated,
-                        )
+                        let kind = StandardIntervalKind::Minute;
+                        let ty = standard_interval_kind_to_spec_type(&kind);
+                        Ok((
+                            from_ast_standard_interval(head.value, kind, negated)?,
+                            Some(ty),
+                        ))
                     }
                     IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
-                        from_ast_standard_interval(
-                            head.value,
-                            StandardIntervalKind::Second,
-                            negated,
-                        )
+                        let kind = StandardIntervalKind::Second;
+                        let ty = standard_interval_kind_to_spec_type(&kind);
+                        Ok((
+                            from_ast_standard_interval(head.value, kind, negated)?,
+                            Some(ty),
+                        ))
                     }
-                    _ => from_ast_multi_unit_interval(vec![head], negated),
+                    _ => Ok((from_ast_multi_unit_interval(vec![head], negated)?, None)),
                 }
             } else {
                 let values = once(head).chain(tail).collect();
-                from_ast_multi_unit_interval(values, negated)
+                Ok((from_ast_multi_unit_interval(values, negated)?, None))
             }
         }
-        IntervalExpr::Literal(value) => {
-            parse_unqualified_interval_string(&from_ast_string(value)?, negated)
-        }
+        IntervalExpr::Literal(value) => Ok((
+            parse_unqualified_interval_string(&from_ast_string(value)?, negated)?,
+            None,
+        )),
     }
 }
 
@@ -478,7 +529,11 @@ pub(crate) fn parse_unqualified_interval_string(
     } else {
         Signed::Positive(interval)
     };
-    from_ast_signed_interval(value)
+    // Unqualified strings (e.g. `INTERVAL '1 month'`) carry no qualifier by
+    // definition, and all external callers (`parse_interval`, runtime UDFs,
+    // delta property parsing) only need the numeric value — so we drop the
+    // qualifier type.
+    from_ast_signed_interval(value).map(|(v, _)| v)
 }
 
 #[cfg(test)]
