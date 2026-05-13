@@ -54,6 +54,11 @@ impl PlanResolver<'_> {
         // to interpret the numeric value: e.g. DayTimeIntervalType(DAY, DAY) treats
         // the value as days, while DayTimeIntervalType(DAY, SECOND) treats it as seconds.
         let interval_metadata = interval_field_metadata(&cast_to_type)?;
+        let interval_literal_name = if !rename {
+            interval_literal_display_name(&expr, &cast_to_type)
+        } else {
+            None
+        };
         let day_time_interval_field = match &cast_to_type {
             spec::DataType::Interval {
                 interval_unit: spec::IntervalUnit::DayTime,
@@ -66,7 +71,9 @@ impl PlanResolver<'_> {
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let expr_type = expr.get_type(schema)?;
-        let name = if rename && need_rename_cast(&expr) {
+        let name = if let Some(name) = interval_literal_name {
+            vec![name]
+        } else if rename && need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
             let data_type_string = service
                 .plan_formatter()
@@ -198,6 +205,152 @@ fn interval_field_metadata(data_type: &spec::DataType) -> PlanResult<Vec<(String
         ));
     }
     Ok(metadata)
+}
+
+fn interval_literal_display_name(expr: &spec::Expr, data_type: &spec::DataType) -> Option<String> {
+    let spec::Expr::Literal(literal) = expr else {
+        return None;
+    };
+    let spec::DataType::Interval {
+        interval_unit,
+        start_field: Some(start_field),
+        end_field,
+    } = data_type
+    else {
+        return None;
+    };
+    let value = match (literal, interval_unit) {
+        (
+            spec::Literal::IntervalYearMonth {
+                months: Some(months),
+            },
+            spec::IntervalUnit::YearMonth,
+        ) => year_month_interval_literal(*months, start_field, end_field.as_ref())?,
+        (
+            spec::Literal::DurationMicrosecond {
+                microseconds: Some(microseconds),
+            },
+            spec::IntervalUnit::DayTime,
+        ) => day_time_interval_literal(*microseconds, start_field, end_field.as_ref())?,
+        _ => return None,
+    };
+    let qualifier = interval_qualifier(start_field, end_field.as_ref());
+    Some(format!("INTERVAL '{value}' {qualifier}"))
+}
+
+fn year_month_interval_literal(
+    months: i32,
+    start_field: &spec::IntervalFieldType,
+    end_field: Option<&spec::IntervalFieldType>,
+) -> Option<String> {
+    let negative = months < 0;
+    let months = i64::from(months).abs();
+    let sign = if negative { "-" } else { "" };
+    match (start_field, end_field) {
+        (spec::IntervalFieldType::Year, None) => Some(format!("{sign}{}", months / 12)),
+        (spec::IntervalFieldType::Year, Some(spec::IntervalFieldType::Month)) => {
+            Some(format!("{sign}{}-{}", months / 12, months % 12))
+        }
+        (spec::IntervalFieldType::Month, None) => Some(format!("{sign}{months}")),
+        _ => None,
+    }
+}
+
+fn day_time_interval_literal(
+    microseconds: i64,
+    start_field: &spec::IntervalFieldType,
+    end_field: Option<&spec::IntervalFieldType>,
+) -> Option<String> {
+    const MICROS_PER_SECOND: i128 = 1_000_000;
+    const MICROS_PER_MINUTE: i128 = 60 * MICROS_PER_SECOND;
+    const MICROS_PER_HOUR: i128 = 60 * MICROS_PER_MINUTE;
+    const MICROS_PER_DAY: i128 = 24 * MICROS_PER_HOUR;
+
+    let negative = microseconds < 0;
+    let microseconds = i128::from(microseconds).abs();
+    let sign = if negative { "-" } else { "" };
+    let days = microseconds / MICROS_PER_DAY;
+    let day_remainder = microseconds % MICROS_PER_DAY;
+    let hours = day_remainder / MICROS_PER_HOUR;
+    let hour_remainder = day_remainder % MICROS_PER_HOUR;
+    let minutes = hour_remainder / MICROS_PER_MINUTE;
+    let minute_remainder = hour_remainder % MICROS_PER_MINUTE;
+    let total_hours = microseconds / MICROS_PER_HOUR;
+    let total_minutes = microseconds / MICROS_PER_MINUTE;
+
+    match (start_field, end_field) {
+        (spec::IntervalFieldType::Day, None) => Some(format!("{sign}{days}")),
+        (spec::IntervalFieldType::Day, Some(spec::IntervalFieldType::Hour)) => {
+            Some(format!("{sign}{days} {hours:02}"))
+        }
+        (spec::IntervalFieldType::Day, Some(spec::IntervalFieldType::Minute)) => {
+            Some(format!("{sign}{days} {hours:02}:{minutes:02}"))
+        }
+        (spec::IntervalFieldType::Day, Some(spec::IntervalFieldType::Second)) => Some(format!(
+            "{sign}{days} {hours:02}:{minutes:02}:{}",
+            second_literal(minute_remainder, true)
+        )),
+        (spec::IntervalFieldType::Hour, None) => Some(format!("{sign}{total_hours}")),
+        (spec::IntervalFieldType::Hour, Some(spec::IntervalFieldType::Minute)) => {
+            Some(format!("{sign}{total_hours}:{minutes:02}"))
+        }
+        (spec::IntervalFieldType::Hour, Some(spec::IntervalFieldType::Second)) => Some(format!(
+            "{sign}{total_hours}:{minutes:02}:{}",
+            second_literal(minute_remainder, true)
+        )),
+        (spec::IntervalFieldType::Minute, None) => Some(format!("{sign}{total_minutes}")),
+        (spec::IntervalFieldType::Minute, Some(spec::IntervalFieldType::Second)) => Some(format!(
+            "{sign}{total_minutes}:{}",
+            second_literal(minute_remainder, true)
+        )),
+        (spec::IntervalFieldType::Second, None) => {
+            Some(format!("{sign}{}", second_literal(microseconds, false)))
+        }
+        _ => None,
+    }
+}
+
+fn second_literal(microseconds: i128, pad_seconds: bool) -> String {
+    const MICROS_PER_SECOND: i128 = 1_000_000;
+    const FRACTION_DIGITS: usize = 6;
+
+    let seconds = microseconds / MICROS_PER_SECOND;
+    let fraction = microseconds % MICROS_PER_SECOND;
+    let seconds = if pad_seconds {
+        format!("{seconds:02}")
+    } else {
+        seconds.to_string()
+    };
+    if fraction == 0 {
+        seconds
+    } else {
+        format!("{seconds}.{fraction:0FRACTION_DIGITS$}")
+            .trim_end_matches('0')
+            .to_string()
+    }
+}
+
+fn interval_qualifier(
+    start_field: &spec::IntervalFieldType,
+    end_field: Option<&spec::IntervalFieldType>,
+) -> String {
+    let start = interval_field_name(start_field);
+    if let Some(end_field) = end_field {
+        format!("{start} TO {}", interval_field_name(end_field))
+    } else {
+        start.to_string()
+    }
+}
+
+fn interval_field_name(field: &spec::IntervalFieldType) -> &'static str {
+    match field {
+        spec::IntervalFieldType::Year => "YEAR",
+        spec::IntervalFieldType::Month => "MONTH",
+        spec::IntervalFieldType::Day => "DAY",
+        spec::IntervalFieldType::Hour => "HOUR",
+        spec::IntervalFieldType::Minute => "MINUTE",
+        spec::IntervalFieldType::Second => "SECOND",
+    }
 }
 
 fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {

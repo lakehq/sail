@@ -96,6 +96,127 @@ impl From<IntervalValue> for spec::Literal {
     }
 }
 
+fn data_type_from_standard_interval_kind(kind: StandardIntervalKind) -> spec::DataType {
+    let (interval_unit, start_field, end_field) = match kind {
+        StandardIntervalKind::Year => (
+            spec::IntervalUnit::YearMonth,
+            spec::IntervalFieldType::Year,
+            None,
+        ),
+        StandardIntervalKind::YearToMonth => (
+            spec::IntervalUnit::YearMonth,
+            spec::IntervalFieldType::Year,
+            Some(spec::IntervalFieldType::Month),
+        ),
+        StandardIntervalKind::Month => (
+            spec::IntervalUnit::YearMonth,
+            spec::IntervalFieldType::Month,
+            None,
+        ),
+        StandardIntervalKind::Day => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Day,
+            None,
+        ),
+        StandardIntervalKind::DayToHour => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Day,
+            Some(spec::IntervalFieldType::Hour),
+        ),
+        StandardIntervalKind::DayToMinute => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Day,
+            Some(spec::IntervalFieldType::Minute),
+        ),
+        StandardIntervalKind::DayToSecond => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Day,
+            Some(spec::IntervalFieldType::Second),
+        ),
+        StandardIntervalKind::Hour => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Hour,
+            None,
+        ),
+        StandardIntervalKind::HourToMinute => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Hour,
+            Some(spec::IntervalFieldType::Minute),
+        ),
+        StandardIntervalKind::HourToSecond => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Hour,
+            Some(spec::IntervalFieldType::Second),
+        ),
+        StandardIntervalKind::Minute => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Minute,
+            None,
+        ),
+        StandardIntervalKind::MinuteToSecond => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Minute,
+            Some(spec::IntervalFieldType::Second),
+        ),
+        StandardIntervalKind::Second => (
+            spec::IntervalUnit::DayTime,
+            spec::IntervalFieldType::Second,
+            None,
+        ),
+    };
+    spec::DataType::Interval {
+        interval_unit,
+        start_field: Some(start_field),
+        end_field,
+    }
+}
+
+/// Infers the Spark interval data type represented by an interval expression.
+///
+/// Returns an interval type with Spark qualifier fields for standard interval literals
+/// and single-unit interval expressions. Returns `None` for legacy multi-unit intervals
+/// whose fields cannot be represented by `YearMonthIntervalType` or `DayTimeIntervalType`.
+pub fn data_type_from_ast_interval(value: &IntervalExpr) -> SqlResult<Option<spec::DataType>> {
+    let kind = match value {
+        IntervalExpr::Standard { qualifier, .. } => {
+            Some(from_ast_interval_qualifier(qualifier.clone())?)
+        }
+        IntervalExpr::MultiUnit { head, tail } if tail.is_empty() => {
+            standard_interval_kind_from_unit(&head.unit)
+        }
+        IntervalExpr::Literal(value) => {
+            let IntervalLiteral {
+                interval: _,
+                value: interval,
+            } = parse_interval_literal(&from_ast_string(value.clone())?)?;
+            return data_type_from_ast_interval(&interval);
+        }
+        _ => None,
+    };
+    Ok(kind.map(data_type_from_standard_interval_kind))
+}
+
+/// Maps a single interval unit to the corresponding standard interval kind.
+///
+/// Spark standard interval types do not have qualifiers for weeks, milliseconds,
+/// or microseconds, so those units return `None` and remain legacy intervals.
+fn standard_interval_kind_from_unit(unit: &IntervalUnit) -> Option<StandardIntervalKind> {
+    match unit {
+        IntervalUnit::Year(_) | IntervalUnit::Years(_) => Some(StandardIntervalKind::Year),
+        IntervalUnit::Month(_) | IntervalUnit::Months(_) => Some(StandardIntervalKind::Month),
+        IntervalUnit::Day(_) | IntervalUnit::Days(_) => Some(StandardIntervalKind::Day),
+        IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => Some(StandardIntervalKind::Hour),
+        IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => Some(StandardIntervalKind::Minute),
+        IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => Some(StandardIntervalKind::Second),
+        IntervalUnit::Week(_)
+        | IntervalUnit::Weeks(_)
+        | IntervalUnit::Millisecond(_)
+        | IntervalUnit::Milliseconds(_)
+        | IntervalUnit::Microsecond(_)
+        | IntervalUnit::Microseconds(_) => None,
+    }
+}
+
 pub fn from_ast_signed_interval(value: Signed<IntervalExpr>) -> SqlResult<IntervalValue> {
     // TODO: support the legacy calendar interval when `spark.sql.legacy.interval.enabled` is `true`
     let negated = value.is_negative();
@@ -483,6 +604,10 @@ pub(crate) fn parse_unqualified_interval_string(
 
 #[cfg(test)]
 mod tests {
+    use sail_sql_parser::ast::literal::StringLiteral;
+    use sail_sql_parser::span::TokenSpan;
+    use sail_sql_parser::string::StringValue;
+
     use super::*;
 
     #[test]
@@ -567,6 +692,83 @@ mod tests {
         assert_eq!(
             parse_unqualified_interval_string("1 hour 2 seconds", false)?,
             parse_unqualified_interval_string("-1 hour -2 seconds", true)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_data_type_from_standard_interval_literal() -> SqlResult<()> {
+        assert_interval_data_type(
+            "'10' year",
+            spec::IntervalUnit::YearMonth,
+            Some(spec::IntervalFieldType::Year),
+            None,
+        )?;
+        assert_interval_data_type(
+            "'15' month",
+            spec::IntervalUnit::YearMonth,
+            Some(spec::IntervalFieldType::Month),
+            None,
+        )?;
+        assert_interval_data_type(
+            "'10-8' year to month",
+            spec::IntervalUnit::YearMonth,
+            Some(spec::IntervalFieldType::Year),
+            Some(spec::IntervalFieldType::Month),
+        )?;
+        assert_interval_data_type(
+            "'3' day",
+            spec::IntervalUnit::DayTime,
+            Some(spec::IntervalFieldType::Day),
+            None,
+        )?;
+        assert_interval_data_type(
+            "'1 02:03:04.123456' day to second",
+            spec::IntervalUnit::DayTime,
+            Some(spec::IntervalFieldType::Day),
+            Some(spec::IntervalFieldType::Second),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_data_type_from_interval_expr_literal() -> SqlResult<()> {
+        let expr = IntervalExpr::Literal(StringLiteral {
+            span: TokenSpan::default(),
+            tokens: vec![],
+            value: StringValue::valid("'10-8' year to month"),
+        });
+
+        assert_eq!(
+            data_type_from_ast_interval(&expr)?,
+            Some(spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::YearMonth,
+                start_field: Some(spec::IntervalFieldType::Year),
+                end_field: Some(spec::IntervalFieldType::Month),
+            })
+        );
+
+        Ok(())
+    }
+
+    fn assert_interval_data_type(
+        s: &str,
+        interval_unit: spec::IntervalUnit,
+        start_field: Option<spec::IntervalFieldType>,
+        end_field: Option<spec::IntervalFieldType>,
+    ) -> SqlResult<()> {
+        let IntervalLiteral {
+            interval: _,
+            value: interval,
+        } = parse_interval_literal(s)?;
+        assert_eq!(
+            data_type_from_ast_interval(&interval)?,
+            Some(spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            })
         );
         Ok(())
     }
