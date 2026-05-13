@@ -74,10 +74,11 @@ def test_dataframe_checkpoint_with_duplicate_columns(spark, method, eager):
     df = spark.createDataFrame([(1, 2), (3, 4)], ["left", "right"]).selectExpr("left as id", "right as id")
     checkpointed = getattr(df, method)(eager)
     pdf = checkpointed.toPandas()
+    rows = sorted(pdf.values.tolist())
 
     assert checkpointed.columns == ["id", "id"]
     assert pdf.columns.tolist() == ["id", "id"]
-    assert pdf.values.tolist() == [[1, 2], [3, 4]]
+    assert rows == [[1, 2], [3, 4]]
 
 
 def test_dataframe_checkpoint_after_transformation(spark):
