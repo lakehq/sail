@@ -19,6 +19,7 @@ use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::function::user_defined_type_metadata;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -90,7 +91,7 @@ impl PlanResolver<'_> {
                     "cannot cast between different user-defined data types".to_string(),
                 ));
             }
-            user_defined_type_metadata(jvm_class, python_class, serialized_python_class)
+            user_defined_type_metadata(&cast_to_type)
         } else {
             vec![]
         };
@@ -230,22 +231,4 @@ fn udt_metadata_matches(
         (None, None) => true,
         _ => false,
     }
-}
-
-fn user_defined_type_metadata(
-    jvm_class: &Option<String>,
-    python_class: &Option<String>,
-    serialized_python_class: &Option<String>,
-) -> Vec<(String, String)> {
-    [
-        ("udt.jvm_class", jvm_class.as_ref()),
-        ("udt.python_class", python_class.as_ref()),
-        (
-            "udt.serialized_python_class",
-            serialized_python_class.as_ref(),
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(key, value)| value.map(|value| (key.to_string(), value.to_string())))
-    .collect()
 }

@@ -88,7 +88,7 @@ impl PlanResolver<'_> {
     }
 }
 
-fn user_defined_type_metadata(data_type: &spec::DataType) -> Vec<(String, String)> {
+pub(super) fn user_defined_type_metadata(data_type: &spec::DataType) -> Vec<(String, String)> {
     match data_type {
         spec::DataType::UserDefined {
             jvm_class,
