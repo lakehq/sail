@@ -75,13 +75,25 @@ fn from_json(
     Ok(udf.call(arguments))
 }
 
+fn json_tuple(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    // Spark's json_tuple expects (json_string, key1, key2, ...)
+    if args.len() < 2 {
+        return Err(PlanError::invalid(format!(
+            "json_tuple expects at least 2 arguments, got {}",
+            args.len()
+        )));
+    }
+    // This calls the DataFusion JSON logic already present in Sail
+    Ok(json_as_text_udf().call(args))
+}
+
 pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
     vec![
         ("from_json", F::custom(from_json)),
         ("get_json_object", F::binary(get_json_object)),
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
-        ("json_tuple", F::unknown("json_tuple")),
+        ("json_tuple", F::var_arg(json_tuple)), 
         ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
         ("to_json", F::var_arg(to_json)),
     ]
