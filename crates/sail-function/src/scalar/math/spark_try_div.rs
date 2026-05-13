@@ -1,6 +1,7 @@
 use std::any::Any;
 
 use datafusion::arrow::array::{Array, AsArray};
+use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{
     DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
@@ -53,11 +54,10 @@ impl ScalarUDFImpl for SparkTryDiv {
             | [DataType::Int64, DataType::Int64]
             | [DataType::Int32, DataType::Int64]
             | [DataType::Int64, DataType::Int32] => Ok(DataType::Float64),
-            [DataType::Interval(YearMonth), DataType::Int32] => Ok(DataType::Interval(YearMonth)),
-            [DataType::Interval(MonthDayNano), DataType::Int32] => {
-                Ok(DataType::Interval(MonthDayNano))
+            [DataType::Interval(YearMonth), DataType::Int32 | DataType::Int64] => {
+                Ok(DataType::Interval(YearMonth))
             }
-            [DataType::Interval(MonthDayNano), DataType::Int64] => {
+            [DataType::Interval(MonthDayNano), DataType::Int32 | DataType::Int64] => {
                 Ok(DataType::Interval(MonthDayNano))
             }
             _ => Err(unsupported_data_types_exec_err(
@@ -116,7 +116,15 @@ impl ScalarUDFImpl for SparkTryDiv {
 
                 binary_op_scalar_or_array(left, right, result)
             }
-            (DataType::Interval(YearMonth), DataType::Int32) => {
+            (DataType::Interval(YearMonth), DataType::Int32 | DataType::Int64) => {
+                // try_op_interval_yearmonth_i32 only accepts Int32 divisors;
+                // narrow Int64 with the default (non-safe) cast so an out-of-range
+                // value surfaces as an error rather than silently NULL-ing.
+                let right_arr = if matches!(right_arr.data_type(), DataType::Int32) {
+                    right_arr.clone()
+                } else {
+                    cast_with_options(&right_arr, &DataType::Int32, &CastOptions::default())?
+                };
                 let l = left_arr.as_primitive::<IntervalYearMonthType>();
                 let r = right_arr.as_primitive::<Int32Type>();
                 let result = try_op_interval_yearmonth_i32(l, r, i32::checked_div);
@@ -169,25 +177,38 @@ impl ScalarUDFImpl for SparkTryDiv {
 
         if matches!(
             (left, right),
-            (DataType::Interval(YearMonth), DataType::Int32)
-                | (DataType::Int32, DataType::Interval(YearMonth))
+            (
+                DataType::Interval(YearMonth),
+                DataType::Int32 | DataType::Int64,
+            ) | (
+                DataType::Int32 | DataType::Int64,
+                DataType::Interval(YearMonth),
+            )
         ) {
-            return Ok(vec![DataType::Interval(YearMonth), DataType::Int32]);
+            let scalar = if matches!(left, DataType::Int64) || matches!(right, DataType::Int64) {
+                DataType::Int64
+            } else {
+                DataType::Int32
+            };
+            return Ok(vec![DataType::Interval(YearMonth), scalar]);
         }
 
         if matches!(
             (left, right),
-            (DataType::Interval(MonthDayNano), DataType::Int32)
-                | (DataType::Int32, DataType::Interval(MonthDayNano))
+            (
+                DataType::Interval(MonthDayNano),
+                DataType::Int32 | DataType::Int64,
+            ) | (
+                DataType::Int32 | DataType::Int64,
+                DataType::Interval(MonthDayNano),
+            )
         ) {
-            return Ok(vec![DataType::Interval(MonthDayNano), DataType::Int32]);
-        }
-        if matches!(
-            (left, right),
-            (DataType::Interval(MonthDayNano), DataType::Int64)
-                | (DataType::Int64, DataType::Interval(MonthDayNano))
-        ) {
-            return Ok(vec![DataType::Interval(MonthDayNano), DataType::Int64]);
+            let scalar = if matches!(left, DataType::Int64) || matches!(right, DataType::Int64) {
+                DataType::Int64
+            } else {
+                DataType::Int32
+            };
+            return Ok(vec![DataType::Interval(MonthDayNano), scalar]);
         }
         if matches!(
             (left, right),

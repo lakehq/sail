@@ -1,12 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -17,17 +19,51 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let schema = Arc::new(DFSchema::empty());
-        let values = async {
-            let mut results: Vec<Vec<Expr>> = Vec::with_capacity(values.len());
-            for value in values {
-                let value = self.resolve_expressions(value, &schema, state).await?;
-                results.push(value);
+        // Preserve per-value extension metadata (e.g. Spark interval qualifier
+        // on `INTERVAL '10' YEAR`) alongside the raw exprs. DataFusion's
+        // `Cast` carries no metadata field, so without this the qualifier
+        // would only live on `NamedExpr` and get dropped before the schema
+        // is built — yielding a `Interval(YearMonth)` column whose value
+        // formatter falls back to the default `YEAR TO MONTH` rendering.
+        let (mut values, value_metadata): (Vec<Vec<Expr>>, Vec<Vec<Option<FieldMetadata>>>) =
+            async {
+                let mut rows = Vec::with_capacity(values.len());
+                let mut metas = Vec::with_capacity(values.len());
+                for value in values {
+                    let named = self
+                        .resolve_named_expressions(value, &schema, state)
+                        .await?;
+                    let mut row = Vec::with_capacity(named.len());
+                    let mut meta_row = Vec::with_capacity(named.len());
+                    for NamedExpr { expr, metadata, .. } in named {
+                        row.push(expr);
+                        meta_row.push(if metadata.is_empty() {
+                            None
+                        } else {
+                            let map: HashMap<String, String> = metadata.into_iter().collect();
+                            Some(FieldMetadata::from(map))
+                        });
+                    }
+                    rows.push(row);
+                    metas.push(meta_row);
+                }
+                Ok::<_, PlanError>((rows, metas))
             }
-            let _nan_column_indices = Self::resolve_values_nan_types(&mut results, &schema)?;
-            let _map_column_indices = Self::resolve_values_map_types(&mut results, &schema)?;
-            Ok(results) as PlanResult<_>
+            .await?;
+        // Run before the alias-wrap below: these match on raw `Expr::Cast` /
+        // `DataType::Map` shapes that an outer alias would hide.
+        let _nan_column_indices = Self::resolve_values_nan_types(&mut values, &schema)?;
+        let _map_column_indices = Self::resolve_values_map_types(&mut values, &schema)?;
+        for (row, meta_row) in values.iter_mut().zip(value_metadata) {
+            let mut new_row = Vec::with_capacity(row.len());
+            for (expr, meta) in std::mem::take(row).into_iter().zip(meta_row) {
+                new_row.push(match meta {
+                    Some(m) => expr.alias_with_metadata("col", Some(m)),
+                    None => expr,
+                });
+            }
+            *row = new_row;
         }
-        .await?;
         let plan = LogicalPlanBuilder::values(values)?.build()?;
         let expr = plan
             .schema()

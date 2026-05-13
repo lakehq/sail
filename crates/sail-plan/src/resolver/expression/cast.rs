@@ -5,6 +5,7 @@ use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
 use sail_common::datetime::time_unit_to_multiplier;
+use sail_common::interval::SparkIntervalKind;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -28,7 +29,7 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         cast_to_type: spec::DataType,
-        _rename: bool,
+        rename: bool,
         is_try: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
@@ -38,7 +39,7 @@ impl PlanResolver<'_> {
         if matches!(cast_to_type, spec::DataType::Variant) {
             let NamedExpr { expr, name, .. } =
                 self.resolve_named_expression(expr, schema, state).await?;
-            let name = if need_rename_cast(&expr) {
+            let name = if rename || need_rename_cast(&expr) {
                 let prefix = if is_try { "TRY_" } else { "" };
                 vec![format!("{}CAST({} AS VARIANT)", prefix, name.one()?)]
             } else {
@@ -72,6 +73,20 @@ impl PlanResolver<'_> {
             } => spark_interval_qualifier_metadata(interval_unit, start_field, end_field)?,
             _ => vec![],
         };
+        // Capture the user's qualifier-aware SQL form (e.g. `INTERVAL MONTH`,
+        // `INTERVAL DAY TO HOUR`) before lowering. The Arrow type loses the
+        // exact qualifier — `Interval(YearMonth)` is the same Arrow type for
+        // `INTERVAL YEAR`, `INTERVAL MONTH`, and `INTERVAL YEAR TO MONTH` —
+        // so `data_type_to_simple_string` always renders the widest form.
+        let interval_cast_target = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit,
+                start_field: Some(start),
+                end_field: Some(end),
+            } => SparkIntervalKind::from_spec_fields(*interval_unit, *start, *end)
+                .map(|k| format!("INTERVAL {k}")),
+            _ => None,
+        };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr {
             expr,
@@ -79,16 +94,21 @@ impl PlanResolver<'_> {
             metadata: inner_metadata,
         } = self.resolve_named_expression(expr, schema, state).await?;
         let expr_type = expr.get_type(schema)?;
-        let name = if need_rename_cast(&expr) {
-            let service = self.ctx.extension::<PlanService>()?;
-            let data_type_string = service
-                .plan_formatter()
-                .data_type_to_simple_string(&cast_to_type)?;
+        let name = if rename || need_rename_cast(&expr) {
+            let target_string = if let Some(s) = interval_cast_target {
+                s
+            } else {
+                let service = self.ctx.extension::<PlanService>()?;
+                service
+                    .plan_formatter()
+                    .data_type_to_simple_string(&cast_to_type)?
+                    .to_ascii_uppercase()
+            };
             vec![format!(
                 "{}CAST({} AS {})",
                 if is_try { "TRY_" } else { "" },
                 name.one()?,
-                data_type_string.to_ascii_uppercase()
+                target_string,
             )]
         } else {
             name

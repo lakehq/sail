@@ -2313,10 +2313,31 @@
             ],
             "arguments": [
               {
-                "literal": {
-                  "durationMicrosecond": {
-                    "microseconds": 93784005006
-                  }
+                "cast": {
+                  "expr": {
+                    "alias": {
+                      "expr": {
+                        "literal": {
+                          "durationMicrosecond": {
+                            "microseconds": 93784005006
+                          }
+                        }
+                      },
+                      "name": [
+                        "INTERVAL '1 02:03:04.005006' DAY TO SECOND"
+                      ],
+                      "metadata": null
+                    }
+                  },
+                  "castToType": {
+                    "interval": {
+                      "intervalUnit": "dayTime",
+                      "startField": "day",
+                      "endField": "second"
+                    }
+                  },
+                  "rename": false,
+                  "isTry": false
                 }
               }
             ],
@@ -2341,10 +2362,31 @@
             ],
             "arguments": [
               {
-                "literal": {
-                  "intervalYearMonth": {
-                    "months": 14
-                  }
+                "cast": {
+                  "expr": {
+                    "alias": {
+                      "expr": {
+                        "literal": {
+                          "intervalYearMonth": {
+                            "months": 14
+                          }
+                        }
+                      },
+                      "name": [
+                        "INTERVAL '1-2' YEAR TO MONTH"
+                      ],
+                      "metadata": null
+                    }
+                  },
+                  "castToType": {
+                    "interval": {
+                      "intervalUnit": "yearMonth",
+                      "startField": "year",
+                      "endField": "month"
+                    }
+                  },
+                  "rename": false,
+                  "isTry": false
                 }
               }
             ],
@@ -8307,10 +8349,31 @@
       "input": "INTERVAL '1 day 2 hour 3 minute 4.005006 second'",
       "output": {
         "success": {
-          "literal": {
-            "durationMicrosecond": {
-              "microseconds": 93784005006
-            }
+          "cast": {
+            "expr": {
+              "alias": {
+                "expr": {
+                  "literal": {
+                    "durationMicrosecond": {
+                      "microseconds": 93784005006
+                    }
+                  }
+                },
+                "name": [
+                  "INTERVAL '1 02:03:04.005006' DAY TO SECOND"
+                ],
+                "metadata": null
+              }
+            },
+            "castToType": {
+              "interval": {
+                "intervalUnit": "dayTime",
+                "startField": "day",
+                "endField": "second"
+              }
+            },
+            "rename": false,
+            "isTry": false
           }
         }
       }
@@ -8319,10 +8382,31 @@
       "input": "INTERVAL '1 year 2 month'",
       "output": {
         "success": {
-          "literal": {
-            "intervalYearMonth": {
-              "months": 14
-            }
+          "cast": {
+            "expr": {
+              "alias": {
+                "expr": {
+                  "literal": {
+                    "intervalYearMonth": {
+                      "months": 14
+                    }
+                  }
+                },
+                "name": [
+                  "INTERVAL '1-2' YEAR TO MONTH"
+                ],
+                "metadata": null
+              }
+            },
+            "castToType": {
+              "interval": {
+                "intervalUnit": "yearMonth",
+                "startField": "year",
+                "endField": "month"
+              }
+            },
+            "rename": false,
+            "isTry": false
           }
         }
       }
@@ -8364,10 +8448,31 @@
       "input": "InterVal 'interval 1 day 2 hour 3 minute 4.005006 second'",
       "output": {
         "success": {
-          "literal": {
-            "durationMicrosecond": {
-              "microseconds": 93784005006
-            }
+          "cast": {
+            "expr": {
+              "alias": {
+                "expr": {
+                  "literal": {
+                    "durationMicrosecond": {
+                      "microseconds": 93784005006
+                    }
+                  }
+                },
+                "name": [
+                  "INTERVAL '1 02:03:04.005006' DAY TO SECOND"
+                ],
+                "metadata": null
+              }
+            },
+            "castToType": {
+              "interval": {
+                "intervalUnit": "dayTime",
+                "startField": "day",
+                "endField": "second"
+              }
+            },
+            "rename": false,
+            "isTry": false
           }
         }
       }
@@ -8376,10 +8481,31 @@
       "input": "InterVal 'interval 1 year 2 month'",
       "output": {
         "success": {
-          "literal": {
-            "intervalYearMonth": {
-              "months": 14
-            }
+          "cast": {
+            "expr": {
+              "alias": {
+                "expr": {
+                  "literal": {
+                    "intervalYearMonth": {
+                      "months": 14
+                    }
+                  }
+                },
+                "name": [
+                  "INTERVAL '1-2' YEAR TO MONTH"
+                ],
+                "metadata": null
+              }
+            },
+            "castToType": {
+              "interval": {
+                "intervalUnit": "yearMonth",
+                "startField": "year",
+                "endField": "month"
+              }
+            },
+            "rename": false,
+            "isTry": false
           }
         }
       }

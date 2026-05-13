@@ -243,6 +243,27 @@ impl PlanResolver<'_> {
             } else {
                 argument_display_names
             };
+        // Spark canonicalizes `Numeric * Interval` to `Interval * Numeric` in
+        // the column header (multiplication is commutative). The expression
+        // itself stays unswapped — the SparkTryMult / Duration paths in
+        // `spark_multiply` handle either operand order — but the display name
+        // must match Spark's normalized form.
+        let argument_display_names = if canonical_function_name == "*"
+            && argument_types.len() == 2
+            && argument_types[0].as_ref().is_some_and(|t| t.is_numeric())
+            && argument_types[1].as_ref().is_some_and(|t| {
+                matches!(
+                    t,
+                    datafusion::arrow::datatypes::DataType::Interval(_)
+                        | datafusion::arrow::datatypes::DataType::Duration(_)
+                )
+            }) {
+            let mut swapped = argument_display_names;
+            swapped.swap(0, 1);
+            swapped
+        } else {
+            argument_display_names
+        };
         let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             &function_name,
@@ -291,8 +312,34 @@ impl PlanResolver<'_> {
                         }
                     })
                     .collect();
-                if let [single] = matching.as_slice() {
-                    metadata = (*single).clone();
+                match matching.as_slice() {
+                    [single] => {
+                        // `Interval × Numeric` / `Interval / Numeric` widens the
+                        // result to the broadest qualifier in the input's family
+                        // (Spark semantics), unlike type-preserving ops like
+                        // unary minus which keep the input qualifier as-is.
+                        let widens_to_broadest =
+                            matches!(canonical_function_name.as_str(), "*" | "/");
+                        if widens_to_broadest {
+                            if let Some(widened) =
+                                broadest_interval_qualifier_metadata(&output_type)
+                            {
+                                metadata = widened;
+                            } else {
+                                metadata = (*single).clone();
+                            }
+                        } else {
+                            metadata = (*single).clone();
+                        }
+                    }
+                    multi if multi.len() > 1 => {
+                        if let Some(widened) =
+                            widen_interval_qualifier_metadata(multi, &output_type)
+                        {
+                            metadata = widened;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -503,4 +550,107 @@ fn extract_metadata_from_udf(
     } else {
         Ok(vec![])
     }
+}
+
+/// Widen multiple `spark.interval` qualifier metadatas to the broadest
+/// covering `(start_field, end_field)` pair within a single qualifier family
+/// (year-month or day-time). Used when a type-preserving function call has
+/// more than one input argument that shares the output Arrow type *and*
+/// carries interval qualifier metadata — e.g. `INTERVAL '10' YEAR + INTERVAL
+/// '5' MONTH` should widen to `YEAR TO MONTH`. The family is determined by
+/// `output_type` so the numeric `(start, end)` encoding is interpreted in the
+/// right namespace (the same `(0, 0)` pair means `YEAR` for year-month and
+/// `DAY` for day-time). Returns `None` if any input isn't a valid Spark
+/// interval qualifier in the chosen family, in which case the caller leaves
+/// output metadata empty and the default formatter takes over.
+fn widen_interval_qualifier_metadata(
+    metas: &[&Vec<(String, String)>],
+    output_type: &datafusion::arrow::datatypes::DataType,
+) -> Option<Vec<(String, String)>> {
+    use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+    use sail_common::interval::{IntervalQualifierMetadata, SparkIntervalKind};
+    use sail_common::spec::{
+        EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, SAIL_INTERVAL_EXTENSION_NAME,
+    };
+
+    let from_fields: fn(i32, i32) -> Option<SparkIntervalKind> = match output_type {
+        DataType::Interval(IntervalUnit::YearMonth) => SparkIntervalKind::from_year_month_fields,
+        DataType::Duration(TimeUnit::Microsecond) => SparkIntervalKind::from_day_time_fields,
+        _ => return None,
+    };
+
+    let mut min_start: Option<i32> = None;
+    let mut max_end: Option<i32> = None;
+    for meta in metas {
+        let name = meta
+            .iter()
+            .find(|(k, _)| k == EXTENSION_TYPE_NAME_KEY)
+            .map(|(_, v)| v.as_str());
+        if name != Some(SAIL_INTERVAL_EXTENSION_NAME) {
+            return None;
+        }
+        let json = meta
+            .iter()
+            .find(|(k, _)| k == EXTENSION_TYPE_METADATA_KEY)
+            .map(|(_, v)| v.as_str())?;
+        let parsed: IntervalQualifierMetadata = serde_json::from_str(json).ok()?;
+        let (start, end) = (parsed.start_field?, parsed.end_field?);
+        // Reject inputs that don't form a valid kind in the chosen family —
+        // arithmetic typing should already reject mixed kinds upstream, but
+        // we validate so an upstream bug can't produce an invalid qualifier.
+        from_fields(start, end)?;
+        min_start = Some(min_start.map_or(start, |s| s.min(start)));
+        max_end = Some(max_end.map_or(end, |e| e.max(end)));
+    }
+    let start = min_start?;
+    let end = max_end?;
+    // Year-month and day-time qualifier sets are both closed under widening,
+    // so this can only fail if an earlier `from_fields` accepted something
+    // malformed.
+    from_fields(start, end)?;
+    let widened = IntervalQualifierMetadata {
+        start_field: Some(start),
+        end_field: Some(end),
+    };
+    let json = serde_json::to_string(&widened).ok()?;
+    Some(vec![
+        (
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            SAIL_INTERVAL_EXTENSION_NAME.to_string(),
+        ),
+        (EXTENSION_TYPE_METADATA_KEY.to_string(), json),
+    ])
+}
+
+/// The broadest `spark.interval` qualifier metadata for the given output Arrow
+/// type — `YEAR TO MONTH` for `Interval(YearMonth)`, `DAY TO SECOND` for
+/// `Duration(Microsecond)`. Used for operations like `Interval × Numeric` and
+/// `Interval / Numeric`, where Spark always widens the result regardless of
+/// the input qualifier (e.g. `INTERVAL '3' DAY * 4` → `DAY TO SECOND`).
+fn broadest_interval_qualifier_metadata(
+    output_type: &datafusion::arrow::datatypes::DataType,
+) -> Option<Vec<(String, String)>> {
+    use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+    use sail_common::interval::IntervalQualifierMetadata;
+    use sail_common::spec::{
+        EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, SAIL_INTERVAL_EXTENSION_NAME,
+    };
+
+    let (start, end) = match output_type {
+        DataType::Interval(IntervalUnit::YearMonth) => (0, 1),
+        DataType::Duration(TimeUnit::Microsecond) => (0, 3),
+        _ => return None,
+    };
+    let widened = IntervalQualifierMetadata {
+        start_field: Some(start),
+        end_field: Some(end),
+    };
+    let json = serde_json::to_string(&widened).ok()?;
+    Some(vec![
+        (
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            SAIL_INTERVAL_EXTENSION_NAME.to_string(),
+        ),
+        (EXTENSION_TYPE_METADATA_KEY.to_string(), json),
+    ])
 }

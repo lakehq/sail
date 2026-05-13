@@ -278,6 +278,12 @@ Feature: Interval type qualifiers
       | sum_c            | min_c            | max_c            | avg_c                               |
       | INTERVAL '6' DAY | INTERVAL '1' DAY | INTERVAL '3' DAY | INTERVAL '2 00:00:00' DAY TO SECOND |
 
+    @sail-bug
+    # Sail's SUM signature does not yet accept Interval(YearMonth) — DataFusion's
+    # built-in `sum` rejects it, and Arrow's `Interval(YearMonth) -> Int*` cast
+    # is declared in `can_cast_types` but not actually implemented, so the usual
+    # bridge-through-int trick doesn't work. A custom UDAF (similar to the one
+    # in `aggregate/try_avg.rs`) is the cleanest path forward.
     Scenario: SUM over typed YEAR intervals stays as YEAR
       When query
       """
@@ -309,6 +315,10 @@ Feature: Interval type qualifiers
       | INTERVAL '1' DAY | INTERVAL '1' DAY | INTERVAL '5' DAY |
       | INTERVAL '5' DAY | INTERVAL '1' DAY | INTERVAL '5' DAY |
 
+    @sail-bug
+    # Same root cause as `SUM over typed YEAR intervals stays as YEAR` above —
+    # Sail's SUM does not yet accept Interval(YearMonth). The window form fails
+    # the same way as the non-window form.
     Scenario: running window SUM over YEAR intervals preserves the YEAR qualifier
       When query
       """

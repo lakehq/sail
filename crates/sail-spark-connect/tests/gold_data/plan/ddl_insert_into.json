@@ -660,10 +660,31 @@
                 [
                   "part",
                   {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 93784128462
-                      }
+                    "cast": {
+                      "expr": {
+                        "alias": {
+                          "expr": {
+                            "literal": {
+                              "durationMicrosecond": {
+                                "microseconds": 93784128462
+                              }
+                            }
+                          },
+                          "name": [
+                            "INTERVAL '1 02:03:04.128462' DAY TO SECOND"
+                          ],
+                          "metadata": null
+                        }
+                      },
+                      "castToType": {
+                        "interval": {
+                          "intervalUnit": "dayTime",
+                          "startField": "day",
+                          "endField": "second"
+                        }
+                      },
+                      "rename": false,
+                      "isTry": false
                     }
                   }
                 ]
@@ -707,10 +728,31 @@
                 [
                   "part",
                   {
-                    "literal": {
-                      "intervalYearMonth": {
-                        "months": 14
-                      }
+                    "cast": {
+                      "expr": {
+                        "alias": {
+                          "expr": {
+                            "literal": {
+                              "intervalYearMonth": {
+                                "months": 14
+                              }
+                            }
+                          },
+                          "name": [
+                            "INTERVAL '1-2' YEAR TO MONTH"
+                          ],
+                          "metadata": null
+                        }
+                      },
+                      "castToType": {
+                        "interval": {
+                          "intervalUnit": "yearMonth",
+                          "startField": "year",
+                          "endField": "month"
+                        }
+                      },
+                      "rename": false,
+                      "isTry": false
                     }
                   }
                 ]

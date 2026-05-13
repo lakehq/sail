@@ -174,6 +174,17 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 DataType::Duration(TimeUnit::Microsecond),
             )
         }
+        // Arrow's interval kernels don't support Mul on `Interval(YearMonth)`,
+        // and despite `can_cast_types` claiming `Interval(YearMonth) -> Int64`
+        // is supported, the cast implementation does not actually exist
+        // (Arrow inconsistency). Route through `SparkTryMult` instead, which
+        // multiplies the underlying month count directly on the typed array.
+        // Slight semantic difference: this returns NULL on overflow rather
+        // than Spark's wrap/error semantics.
+        (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_))
+        | (Ok(_), Ok(DataType::Interval(IntervalUnit::YearMonth))) => {
+            ScalarUDF::new_from_impl(SparkTryMult::new()).call(vec![left, right])
+        }
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
         (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left * right,
@@ -312,7 +323,6 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         | (Ok(_), Ok(DataType::Decimal128(_, _)))
         | (Ok(DataType::Decimal256(_, _)), Ok(_))
         | (Ok(_), Ok(DataType::Decimal256(_, _)))
-        | (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_))
         | (Ok(DataType::Interval(IntervalUnit::DayTime)), Ok(_)) => dividend / divisor,
         (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
             // Match duration because we cast Spark's DayTime interval to Duration.
@@ -320,6 +330,16 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 cast(dividend, DataType::Int64) / divisor,
                 DataType::Duration(TimeUnit::Microsecond),
             )
+        }
+        // Arrow's interval kernels don't support Div on `Interval(YearMonth)`,
+        // and despite `can_cast_types` claiming `Interval(YearMonth) -> Int64`
+        // is supported, the cast implementation does not actually exist
+        // (Arrow inconsistency). Route through `SparkTryDiv` instead, which
+        // divides the underlying month count directly. Slight semantic
+        // difference: this returns NULL on overflow rather than Spark's
+        // wrap/error semantics.
+        (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_)) => {
+            ScalarUDF::new_from_impl(SparkTryDiv::new()).call(vec![dividend, divisor])
         }
         (Ok(_), Ok(_)) => cast(dividend, DataType::Float64) / cast(divisor, DataType::Float64),
         // TODO: In case getting the type fails, we don't want to fail the query.

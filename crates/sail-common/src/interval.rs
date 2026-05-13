@@ -10,7 +10,9 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::spec::{IntervalFieldType, IntervalUnit};
 
 /// One of Spark's 13 ANSI interval qualifier kinds.
 ///
@@ -81,13 +83,46 @@ impl SparkIntervalKind {
             _ => None,
         }
     }
+
+    /// Map a `spec`-level `(unit, start, end)` triple to a kind. Returns
+    /// `None` if the field is foreign to the unit's family (e.g. `DAY` under
+    /// `YearMonth`) or if `start > end`.
+    pub fn from_spec_fields(
+        unit: IntervalUnit,
+        start: IntervalFieldType,
+        end: IntervalFieldType,
+    ) -> Option<Self> {
+        match unit {
+            IntervalUnit::YearMonth => {
+                let local = |f| match f {
+                    IntervalFieldType::Year => Some(0),
+                    IntervalFieldType::Month => Some(1),
+                    _ => None,
+                };
+                Self::from_year_month_fields(local(start)?, local(end)?)
+            }
+            IntervalUnit::DayTime => {
+                let local = |f| match f {
+                    IntervalFieldType::Day => Some(0),
+                    IntervalFieldType::Hour => Some(1),
+                    IntervalFieldType::Minute => Some(2),
+                    IntervalFieldType::Second => Some(3),
+                    _ => None,
+                };
+                Self::from_day_time_fields(local(start)?, local(end)?)
+            }
+            IntervalUnit::MonthDayNano => None,
+        }
+    }
 }
 
-/// Deserialization shape for the JSON payload Sail writes to
+/// Round-trip shape for the JSON payload Sail writes to
 /// `ARROW:extension:metadata` for `SAIL_INTERVAL_EXTENSION_NAME` columns.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct IntervalQualifierMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub start_field: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub end_field: Option<i32>,
 }
 

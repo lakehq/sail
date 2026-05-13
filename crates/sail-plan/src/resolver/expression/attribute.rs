@@ -32,10 +32,10 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        if let Some((name, expr)) =
+        if let Some((name, expr, metadata)) =
             self.resolve_field_or_nested_field(&name, plan_id, schema, state)?
         {
-            return Ok(NamedExpr::new(vec![name], expr));
+            return Ok(NamedExpr::new(vec![name], expr).with_metadata(metadata));
         }
         if let Some((name, expr)) =
             self.resolve_aggregate_field(&name, state.get_projections_for_grouping())?
@@ -60,13 +60,14 @@ impl PlanResolver<'_> {
         }
     }
 
+    #[expect(clippy::type_complexity)]
     fn resolve_field_or_nested_field(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Option<(String, expr::Expr)>> {
+    ) -> PlanResult<Option<(String, expr::Expr, Vec<(String, String)>)>> {
         let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
         let mut candidates = schema
             .iter()
@@ -89,7 +90,22 @@ impl PlanResolver<'_> {
                                 inner,
                             )?;
                             let name = inner.last().unwrap_or(name).as_ref().to_string();
-                            Some((name, expr))
+                            // Top-level refs surface the field's extension
+                            // metadata so qualifier info reaches downstream
+                            // resolvers.
+                            // FIXME: nested-field metadata is a follow-up —
+                            // a struct/list of intervals would need leaf
+                            // metadata lookup, not the outer field's.
+                            let metadata = if inner.is_empty() {
+                                field
+                                    .metadata()
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                            Some((name, expr, metadata))
                         } else {
                             None
                         }

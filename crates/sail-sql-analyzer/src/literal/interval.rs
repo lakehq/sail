@@ -308,11 +308,12 @@ pub fn from_ast_signed_interval(
                 Ok((value, ty, name))
             }
         }
-        IntervalExpr::Literal(value) => Ok((
-            parse_unqualified_interval_string(&from_ast_string(value)?, negated)?,
-            None,
-            None,
-        )),
+        // Unqualified literal (e.g. `INTERVAL '1 day'`) — defer to the shared
+        // parser so the qualifier inference and column-name formatting match
+        // the typed multi-unit path.
+        IntervalExpr::Literal(value) => {
+            parse_unqualified_interval(&from_ast_string(value)?, negated)
+        }
     }
 }
 
@@ -623,10 +624,13 @@ fn from_ast_multi_unit_interval(
     }
 }
 
-pub(crate) fn parse_unqualified_interval_string(
+/// Parse an unqualified interval string (e.g. `"1 month"`, `"01:02:03"`) and
+/// run it through `from_ast_signed_interval` so the qualifier inference and
+/// column-name formatting see the same input as the typed multi-unit path.
+pub(crate) fn parse_unqualified_interval(
     s: &str,
     negated: bool,
-) -> SqlResult<IntervalValue> {
+) -> SqlResult<(IntervalValue, Option<spec::DataType>, Option<String>)> {
     let IntervalLiteral {
         interval: _,
         value: interval,
@@ -636,11 +640,17 @@ pub(crate) fn parse_unqualified_interval_string(
     } else {
         Signed::Positive(interval)
     };
-    // Unqualified strings (e.g. `INTERVAL '1 month'`) carry no qualifier by
-    // definition, and all external callers (`parse_interval`, runtime UDFs,
-    // delta property parsing) only need the numeric value — so we drop the
-    // qualifier type.
-    from_ast_signed_interval(value).map(|(v, _, _)| v)
+    from_ast_signed_interval(value)
+}
+
+/// External callers (`parse_interval`, runtime UDFs, delta property parsing)
+/// only need the numeric `IntervalValue` — the qualifier and column name are
+/// irrelevant outside SQL analysis.
+pub(crate) fn parse_unqualified_interval_string(
+    s: &str,
+    negated: bool,
+) -> SqlResult<IntervalValue> {
+    parse_unqualified_interval(s, negated).map(|(v, _, _)| v)
 }
 
 #[cfg(test)]
