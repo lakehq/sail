@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
@@ -90,9 +91,15 @@ impl PlanResolver<'_> {
                     serialized_python_class,
                 );
             if is_source_udt && !is_same_udt {
-                return Err(PlanError::AnalysisError(
-                    "cannot cast between different user-defined data types".to_string(),
-                ));
+                let source_udt = udt_metadata_display_name(metadata);
+                let target_udt = udt_display_name(
+                    jvm_class.as_deref(),
+                    python_class.as_deref(),
+                    serialized_python_class.as_deref(),
+                );
+                return Err(PlanError::AnalysisError(format!(
+                    "cannot cast between different user-defined data types: source {source_udt}, target {target_udt}"
+                )));
             }
             user_defined_type_metadata(&cast_to_type)
         } else {
@@ -225,7 +232,7 @@ fn need_rename_cast(expr: &expr::Expr) -> bool {
 }
 
 fn udt_metadata_matches(
-    metadata: &std::collections::HashMap<String, String>,
+    metadata: &HashMap<String, String>,
     key: &str,
     expected: &Option<String>,
 ) -> bool {
@@ -234,4 +241,27 @@ fn udt_metadata_matches(
         (None, None) => true,
         _ => false,
     }
+}
+
+fn udt_metadata_display_name(metadata: &HashMap<String, String>) -> &str {
+    udt_display_name(
+        metadata.get(UDT_JVM_CLASS_METADATA_KEY).map(String::as_str),
+        metadata
+            .get(UDT_PYTHON_CLASS_METADATA_KEY)
+            .map(String::as_str),
+        metadata
+            .get(UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY)
+            .map(String::as_str),
+    )
+}
+
+fn udt_display_name<'a>(
+    jvm_class: Option<&'a str>,
+    python_class: Option<&'a str>,
+    serialized_python_class: Option<&'a str>,
+) -> &'a str {
+    python_class
+        .or(jvm_class)
+        .or(serialized_python_class)
+        .unwrap_or("<unknown>")
 }
