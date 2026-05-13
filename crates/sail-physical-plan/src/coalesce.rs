@@ -386,12 +386,10 @@ mod tests {
         ));
         let exec = CoalesceExec::new(input, 2);
 
-        let error = match exec.execute(2, Arc::new(TaskContext::default())) {
-            Ok(_) => panic!("expected out-of-range coalesce execution to fail"),
-            Err(error) => error,
-        };
-
-        assert!(error.to_string().contains("out of range"));
+        assert!(matches!(
+            exec.execute(2, Arc::new(TaskContext::default())),
+            Err(error) if error.to_string().contains("out of range")
+        ));
     }
 
     #[test]
@@ -402,13 +400,9 @@ mod tests {
         ));
         let exec = CoalesceExec::new(input, 3);
 
-        let error = match exec.execute(0, Arc::new(TaskContext::default())) {
-            Ok(_) => panic!("expected coalesce partition increase to fail"),
-            Err(error) => error,
-        };
-
-        assert!(error
-            .to_string()
-            .contains("cannot increase partition count"));
+        assert!(matches!(
+            exec.execute(0, Arc::new(TaskContext::default())),
+            Err(error) if error.to_string().contains("cannot increase partition count")
+        ));
     }
 }
