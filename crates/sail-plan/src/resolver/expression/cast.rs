@@ -256,16 +256,17 @@ fn year_month_interval_literal(
     }
 }
 
+const MICROS_PER_SECOND: i128 = 1_000_000;
+const MICROS_PER_MINUTE: i128 = 60 * MICROS_PER_SECOND;
+const MICROS_PER_HOUR: i128 = 60 * MICROS_PER_MINUTE;
+const MICROS_PER_DAY: i128 = 24 * MICROS_PER_HOUR;
+const FRACTION_DIGITS: usize = 6;
+
 fn day_time_interval_literal(
     microseconds: i64,
     start_field: &spec::IntervalFieldType,
     end_field: Option<&spec::IntervalFieldType>,
 ) -> Option<String> {
-    const MICROS_PER_SECOND: i128 = 1_000_000;
-    const MICROS_PER_MINUTE: i128 = 60 * MICROS_PER_SECOND;
-    const MICROS_PER_HOUR: i128 = 60 * MICROS_PER_MINUTE;
-    const MICROS_PER_DAY: i128 = 24 * MICROS_PER_HOUR;
-
     let negative = microseconds < 0;
     let microseconds = i128::from(microseconds).abs();
     let sign = if negative { "-" } else { "" };
@@ -311,9 +312,6 @@ fn day_time_interval_literal(
 }
 
 fn second_literal(microseconds: i128, pad_seconds: bool) -> String {
-    const MICROS_PER_SECOND: i128 = 1_000_000;
-    const FRACTION_DIGITS: usize = 6;
-
     let seconds = microseconds / MICROS_PER_SECOND;
     let fraction = microseconds % MICROS_PER_SECOND;
     let seconds = if pad_seconds {
