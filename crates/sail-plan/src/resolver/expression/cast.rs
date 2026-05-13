@@ -171,6 +171,10 @@ impl PlanResolver<'_> {
     }
 }
 
+/// Extracts Spark interval qualifier metadata from an interval data type.
+///
+/// The returned key-value pairs use Sail's reserved Arrow field metadata keys and
+/// Spark's numeric interval field representation for start and end qualifiers.
 fn interval_field_metadata(data_type: &spec::DataType) -> PlanResult<Vec<(String, String)>> {
     let spec::DataType::Interval {
         interval_unit,

@@ -171,6 +171,11 @@ fn data_type_from_standard_interval_kind(kind: StandardIntervalKind) -> spec::Da
     }
 }
 
+/// Infers the Spark interval data type represented by an interval expression.
+///
+/// Returns an interval type with Spark qualifier fields for standard interval literals
+/// and single-unit interval expressions. Returns `None` for legacy multi-unit intervals
+/// whose fields cannot be represented by `YearMonthIntervalType` or `DayTimeIntervalType`.
 pub fn data_type_from_ast_interval(value: &IntervalExpr) -> SqlResult<Option<spec::DataType>> {
     let kind = match value {
         IntervalExpr::Standard { qualifier, .. } => {
@@ -191,6 +196,10 @@ pub fn data_type_from_ast_interval(value: &IntervalExpr) -> SqlResult<Option<spe
     Ok(kind.map(data_type_from_standard_interval_kind))
 }
 
+/// Maps a single interval unit to the corresponding standard interval kind.
+///
+/// Spark standard interval types do not have qualifiers for weeks, milliseconds,
+/// or microseconds, so those units return `None` and remain legacy intervals.
 fn standard_interval_kind_from_unit(unit: &IntervalUnit) -> Option<StandardIntervalKind> {
     match unit {
         IntervalUnit::Year(_) | IntervalUnit::Years(_) => Some(StandardIntervalKind::Year),

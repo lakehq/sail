@@ -58,6 +58,10 @@ fn validate_geography_srid(srid: i32) -> PlanResult<()> {
     Ok(())
 }
 
+/// Returns Spark's numeric representation for an interval qualifier field.
+///
+/// Spark numbers year-month fields as year = 0 and month = 1, while day-time
+/// fields are numbered day = 0, hour = 1, minute = 2, and second = 3.
 pub(super) fn spark_interval_field_value(
     interval_unit: &spec::IntervalUnit,
     field: &spec::IntervalFieldType,

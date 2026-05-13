@@ -398,6 +398,10 @@ impl PlanResolver<'_> {
     }
 }
 
+/// Returns whether the metadata key is reserved for Sail-managed field metadata.
+///
+/// These keys are filtered from user-supplied alias metadata so clients cannot
+/// override interval qualifier metadata resolved from the expression itself.
 fn is_reserved_field_metadata_key(key: &str) -> bool {
     key == spec::SAIL_INTERVAL_START_FIELD_KEY || key == spec::SAIL_INTERVAL_END_FIELD_KEY
 }
