@@ -52,7 +52,7 @@ jobs:
 
       - name: Run Catalog Integration Tests
         run: |
-          hatch run pytest -m catalog_integration --pyargs pysail.tests.spark.catalog_integration -v
+          hatch run pytest -m catalog_integration --pyargs pysail.tests.spark -v
 
       # Generate coverage report after catalog IT tests
       - name: Generate coverage report

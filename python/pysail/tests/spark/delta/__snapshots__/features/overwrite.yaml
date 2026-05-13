@@ -16,6 +16,8 @@ data:
     numOutputRows: 2
     numRemovedBytes: 1093
     numRemovedFiles: 1
+    numTouchedRows: 4
+    scanTimeMs: <time_ms>
     writeTimeMs: <time_ms>
   operationParameters:
     mode: Overwrite
@@ -38,6 +40,8 @@ data:
     numOutputRows: 4
     numRemovedBytes: 1093
     numRemovedFiles: 1
+    numTouchedRows: 4
+    scanTimeMs: <time_ms>
     writeTimeMs: <time_ms>
   operationParameters:
     mode: Overwrite

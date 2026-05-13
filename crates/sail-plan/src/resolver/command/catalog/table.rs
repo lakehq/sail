@@ -58,6 +58,10 @@ impl PlanResolver<'_> {
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
+        let properties = properties
+            .into_iter()
+            .chain(options.into_iter().map(|(k, v)| (format!("option.{k}"), v)))
+            .collect();
 
         let command = CatalogCommand::CreateTable {
             table: table.into(),
@@ -72,7 +76,6 @@ impl PlanResolver<'_> {
                 bucket_by,
                 if_not_exists,
                 replace,
-                options,
                 properties,
             },
         };
@@ -412,7 +415,7 @@ impl PlanResolver<'_> {
         table: spec::ObjectName,
         if_exists: bool,
         operation: spec::AlterTableOperation,
-        _state: &mut PlanResolverState,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let options = match operation {
             spec::AlterTableOperation::SetTableProperties { properties } => {
@@ -420,6 +423,12 @@ impl PlanResolver<'_> {
             }
             spec::AlterTableOperation::UnsetTableProperties { keys, if_exists } => {
                 AlterTableOptions::UnsetTableProperties { keys, if_exists }
+            }
+            spec::AlterTableOperation::AlterColumnType { name, data_type } => {
+                AlterTableOptions::AlterColumnType {
+                    name: name.into(),
+                    data_type: self.resolve_data_type(&data_type, state)?,
+                }
             }
             spec::AlterTableOperation::Unknown => {
                 return Err(PlanError::todo("unsupported ALTER TABLE operation"));

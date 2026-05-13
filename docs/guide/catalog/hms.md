@@ -105,6 +105,17 @@ export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms1.internal:9083"
 - Delegation-token authentication is not supported.
 - Transactional Hive Metastore APIs are not used yet. Sail currently targets metadata CRUD rather than Hive ACID write coordination.
 
+## Table Types
+
+Sail distinguishes between **managed** and **external** tables based on the `table_type` field stored in HMS metadata:
+
+- **Managed tables** (created without `LOCATION`, e.g. by Spark) report `Type: MANAGED` in `DESCRIBE EXTENDED`.
+- **External tables** (created with `LOCATION` or by Sail itself) report `Type: EXTERNAL`.
+
+For `DROP TABLE`, Sail uses metadata-only semantics for HMS and does **not** request physical data deletion via the HMS `delete_data` flag, regardless of managed vs external type.
+
+Sail always creates its own tables as external (`EXTERNAL=TRUE`, `table_type = EXTERNAL_TABLE`). When reading tables created by other engines (e.g. Spark), Sail reflects the type recorded in HMS.
+
 ## Examples
 
 ```bash
