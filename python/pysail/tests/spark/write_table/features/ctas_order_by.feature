@@ -193,6 +193,52 @@ Feature: CTAS ORDER BY produces globally sorted output
       | Infinity |
       | NaN      |
 
+  Scenario: CTAS ORDER BY ASC preserves physical row order without re-sorting on read
+    Given variable location for temporary directory ctas_physical_asc
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_physical_asc_t
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_physical_asc_t USING PARQUET LOCATION {{ location.sql }}
+      AS SELECT * FROM VALUES (5), (3), (1), (4), (2) AS t(col) ORDER BY col ASC
+      """
+    When query
+      """
+      SELECT col FROM ctas_physical_asc_t
+      """
+    Then query result
+      | col |
+      | 1   |
+      | 2   |
+      | 3   |
+      | 4   |
+      | 5   |
+
+  Scenario: CTAS ORDER BY DESC preserves physical row order without re-sorting on read
+    Given variable location for temporary directory ctas_physical_desc
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_physical_desc_t
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_physical_desc_t USING PARQUET LOCATION {{ location.sql }}
+      AS SELECT * FROM VALUES (5), (3), (1), (4), (2) AS t(col) ORDER BY col DESC
+      """
+    When query
+      """
+      SELECT col FROM ctas_physical_desc_t
+      """
+    Then query result
+      | col |
+      | 5   |
+      | 4   |
+      | 3   |
+      | 2   |
+      | 1   |
+
   @sail-only
   Scenario: CTAS ORDER BY with multi-partition source writes physically sorted file
     Given variable location_src for temporary directory ctas_physical_src
