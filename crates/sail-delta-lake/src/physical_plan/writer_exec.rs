@@ -1343,6 +1343,7 @@ impl DeltaWriterExec {
             .collect::<Vec<_>>();
         for name in [row_id, row_commit_version] {
             if !fields.iter().any(|field| field.name() == name) {
+                // TODO(row-tracking): Attach IcebergCompatV3 reserved field IDs when enabled.
                 fields.push(Field::new(name.to_string(), DataType::Int64, true));
             }
         }

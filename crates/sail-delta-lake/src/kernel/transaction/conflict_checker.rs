@@ -319,6 +319,7 @@ impl<'a> ConflictChecker<'a> {
     /// `winning_commit_version` and returns an updated [`TransactionInfo`] that represents
     /// the transaction as if it had started while reading the `winning_commit_version`.
     pub fn check_conflicts(&self) -> Result<(), CommitConflictError> {
+        // TODO(row-tracking): Reassign overlapping row IDs and row commit versions on retries.
         self.check_protocol_compatibility()?;
         self.check_no_metadata_updates()?;
         self.check_no_domain_metadata_conflicts()?;
@@ -387,6 +388,7 @@ impl<'a> ConflictChecker<'a> {
         }
 
         let winning_domains = self.winning_commit_summary.domain_metadata_domains();
+        // TODO(row-tracking): Add backfill/unbackfill conflict resolution for this domain.
         if let Some(domain) = txn_domains
             .intersection(&winning_domains)
             .find(|domain| domain.as_str() != "delta.rowTracking")

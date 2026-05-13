@@ -408,6 +408,7 @@ impl TableFormat for DeltaTableFormat {
         // File-level actions are only needed when ALTER TABLE enables row tracking, because
         // existing Add actions must be recommitted with baseRowId/defaultRowCommitVersion
         // backfilled. Other property changes can keep the cheaper metadata-only snapshot.
+        // TODO(row-tracking): Move enablement backfill to Delta-compatible chunked backfill batches.
         let (table, snapshot) = if row_tracking_enable_requires_files {
             let table = open_table_with_object_store_and_table_config(
                 url,
@@ -467,6 +468,7 @@ impl TableFormat for DeltaTableFormat {
         // Derive the desired protocol from the new configuration and merge it with the
         // existing protocol. We only ever upgrade: features already present on the table
         // are preserved, and new feature requirements are added.
+        // TODO(row-tracking): Add downgrade cleanup with suspend, unbackfill, and domain removal.
         let desired_protocol = protocol_for_metadata(&new_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(

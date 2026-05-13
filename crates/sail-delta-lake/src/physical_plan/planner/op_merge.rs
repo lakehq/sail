@@ -131,6 +131,7 @@ pub async fn build_merge_plan(
 /// UPDATE clauses are intentionally rejected for now: they require writing changed rows
 /// while deleting the original target rows via DVs, which needs a separate "changed rows
 /// only" MERGE projection. INSERT-only and DELETE+INSERT MERGE are supported.
+/// TODO(row-tracking): Preserve row tracking for Merge-on-Read MERGE UPDATE.
 pub async fn build_merge_plan_mor(
     ctx: &PlannerContext<'_>,
     merge_info: RowLevelWriteInfo,

@@ -624,6 +624,7 @@ impl CommitData {
                 Value::Object(merged_operation_metrics.into_iter().collect()),
             );
         }
+        // TODO(row-tracking): Add commit tag helpers for preserved and enablement-only commits.
         commit_info.info = merged_info;
         actions.retain(|action| !matches!(action, CommitAction::CommitInfo(_)));
         actions.insert(0, CommitAction::CommitInfo(commit_info));
@@ -823,6 +824,7 @@ fn stamp_row_tracking_actions(
             CommitAction::DomainMetadata(dm) if dm.domain == "delta.rowTracking"
         )
     });
+    // FIXME(row-tracking): Reject manual rowTracking domain metadata during table creation too.
     if has_manual_row_tracking_domain && read_snapshot.is_some() {
         return Err(DeltaError::generic(
             "Manually setting the Row ID high water mark is not allowed",
