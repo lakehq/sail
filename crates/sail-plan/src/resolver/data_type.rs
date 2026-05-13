@@ -392,16 +392,23 @@ impl PlanResolver<'_> {
                 start_field,
                 end_field,
             } => {
-                if let Some(start_field) = start_field {
+                if start_field.is_some() || end_field.is_some() {
                     metadata.insert(
-                        spec::SAIL_INTERVAL_START_FIELD_KEY.to_string(),
-                        spark_interval_field_value(interval_unit, start_field)?.to_string(),
+                        spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                        spec::SAIL_INTERVAL_EXTENSION_NAME.to_string(),
                     );
-                }
-                if let Some(end_field) = end_field {
+                    let mut ext = json!({});
+                    if let Some(start_field) = start_field {
+                        ext["start_field"] =
+                            json!(spark_interval_field_value(interval_unit, start_field)?);
+                    }
+                    if let Some(end_field) = end_field {
+                        ext["end_field"] =
+                            json!(spark_interval_field_value(interval_unit, end_field)?);
+                    }
                     metadata.insert(
-                        spec::SAIL_INTERVAL_END_FIELD_KEY.to_string(),
-                        spark_interval_field_value(interval_unit, end_field)?.to_string(),
+                        spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                        ext.to_string(),
                     );
                 }
                 data_type
