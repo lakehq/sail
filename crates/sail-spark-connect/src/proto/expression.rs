@@ -145,7 +145,7 @@ impl TryFrom<Expression> for spec::Expr {
                 Ok(spec::Expr::Cast {
                     expr: Box::new((*expr).try_into()?),
                     cast_to_type,
-                    rename: false,
+                    rename: true,
                     is_try: matches!(EvalMode::try_from(eval_mode), Ok(EvalMode::Try)),
                 })
             }
