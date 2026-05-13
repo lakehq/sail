@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Decimal128Array, Float64Array, Int64Array, StringArray,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{self as datatypes, DataType};
 use datafusion_common::cast::as_float64_array;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -176,39 +176,52 @@ impl ScalarUDFImpl for SparkToChar {
         let format_scale = components.scale as usize;
         if let Some(in_scale) = input_scale {
             if in_scale > format_scale {
-                // Scale overflow is a per-row condition, but the current
-                // broadcast path can't cheaply thread each row's sign — and
-                // pre-fix this branch wasn't sign-aware at all. We pass
-                // `is_negative=false` (positive sign treatment) as a safe
-                // default; overflow values with negative inputs may still
-                // render a neutral overflow body. Known limitation tracked
-                // in `@sail-bug` scenarios for signed + scale-overflow
-                // combinations.
-                let overflow = build_overflow_string(false, &spec, &components);
+                let pos_overflow = build_overflow_string(false, &spec, &components);
+                let neg_overflow = build_overflow_string(true, &spec, &components);
+                let scalar_is_negative = |s: &ScalarValue| -> bool {
+                    match s {
+                        ScalarValue::Decimal128(Some(v), _, _) => *v < 0,
+                        ScalarValue::Decimal256(Some(v), _, _) => v.is_negative(),
+                        _ => false,
+                    }
+                };
                 return match &args[0] {
                     ColumnarValue::Scalar(s) => {
                         if s.is_null() {
                             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
                         } else {
+                            let overflow = if scalar_is_negative(s) {
+                                neg_overflow
+                            } else {
+                                pos_overflow
+                            };
                             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(overflow))))
                         }
                     }
                     ColumnarValue::Array(arr) => {
-                        let nulls = arr.logical_nulls();
-                        let result: StringArray =
-                            std::iter::repeat_n(Some(overflow.as_str()), arr.len()).collect();
-                        let result = match nulls {
-                            Some(n) => {
-                                let data = result
-                                    .to_data()
-                                    .into_builder()
-                                    .null_bit_buffer(Some(n.into_inner().into_inner()))
-                                    .build()?;
-                                StringArray::from(data)
-                            }
-                            None => result,
-                        };
-                        Ok(ColumnarValue::Array(Arc::new(result)))
+                        let values = (0..arr.len())
+                            .map(|i| {
+                                if arr.is_null(i) {
+                                    return Ok(None);
+                                }
+                                let is_neg = match arr.data_type() {
+                                    DataType::Decimal128(_, _) => {
+                                        arr.as_primitive::<datatypes::Decimal128Type>().value(i) < 0
+                                    }
+                                    DataType::Decimal256(_, _) => arr
+                                        .as_primitive::<datatypes::Decimal256Type>()
+                                        .value(i)
+                                        .is_negative(),
+                                    _ => false,
+                                };
+                                Ok(Some(if is_neg {
+                                    neg_overflow.as_str()
+                                } else {
+                                    pos_overflow.as_str()
+                                }))
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(ColumnarValue::Array(Arc::new(StringArray::from(values))))
                     }
                 };
             }

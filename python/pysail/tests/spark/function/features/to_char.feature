@@ -2311,3 +2311,131 @@ Feature: to_char and to_varchar comprehensive tests
       Then query result
         | result |
         | [  42] |
+
+  Rule: Decimal precision loss - f64 conversion bug
+
+    @sail-bug
+    # Sail converts i128 raw value via `x as f64 / 10^scale`, losing precision beyond ~15 significant digits.
+    # Spark uses exact BigDecimal arithmetic. Integer part is corrupted and fractional digits are zeroed.
+    Scenario: 20-digit decimal with 10 fractional digits loses integer precision
+      When query
+        """
+        SELECT to_char(CAST('12345678901234567890.123456789' AS DECIMAL(38,10)), '99999999999999999999.9999999999') AS result
+        """
+      Then query result
+        | result                          |
+        | 12345678901234567890.1234567890 |
+
+    @sail-bug
+    # Sail: '1234567890123456768.0' — last 2 significant digits corrupted by f64 rounding.
+    # The i128 raw value 12345678901234567890 cannot round-trip through f64 (53-bit mantissa).
+    Scenario: 19-digit decimal with 1 fractional digit loses last digits
+      When query
+        """
+        SELECT to_char(CAST('1234567890123456789.9' AS DECIMAL(38,1)), '9999999999999999999.9') AS result
+        """
+      Then query result
+        | result                |
+        | 1234567890123456789.9 |
+
+    @sail-bug
+    # Classic f64 precision boundary: 2^53 + 1 = 9007199254740993 cannot be represented exactly in f64.
+    # f64 rounds it to 9007199254740994, so the .01 fractional part is also lost.
+    # Sail: '9007199254740994.00', Spark: '9007199254740993.01'
+    Scenario: value at f64 2-power-53-plus-1 boundary loses last integer digit and fraction
+      When query
+        """
+        SELECT to_char(CAST('9007199254740993.01' AS DECIMAL(38,2)), '9999999999999999.99') AS result
+        """
+      Then query result
+        | result              |
+        | 9007199254740993.01 |
+
+    @sail-bug
+    # 19 significant digits with 2 fractional digits — f64 rounding corrupts both integer and fraction.
+    # Sail: '9999999999999997952.00', Spark: '9999999999999998765.43'
+    Scenario: 19-digit value with 2 fractional digits shows integer and fraction corruption
+      When query
+        """
+        SELECT to_char(CAST('9999999999999998765.43' AS DECIMAL(38,2)), '9999999999999999999.99') AS result
+        """
+      Then query result
+        | result                 |
+        | 9999999999999998765.43 |
+
+    @sail-bug
+    # 17 significant digits: f64 rounds 12345678901234567.8 to 12345678901234568.0 — off by one in
+    # the last integer digit and the fractional .8 is silently dropped.
+    # Sail: '12345678901234568.0', Spark: '12345678901234567.8'
+    Scenario: 17-digit decimal fractional part dropped by f64 rounding
+      When query
+        """
+        SELECT to_char(CAST('12345678901234567.8' AS DECIMAL(38,1)), '99999999999999999.9') AS result
+        """
+      Then query result
+        | result              |
+        | 12345678901234567.8 |
+
+    @sail-bug
+    # 18 significant digits: f64 rounds 123456789012345678.9 to 123456789012345680.0.
+    # Sail: '123456789012345680.0', Spark: '123456789012345678.9'
+    Scenario: 18-digit decimal last two digits corrupted and fraction dropped
+      When query
+        """
+        SELECT to_char(CAST('123456789012345678.9' AS DECIMAL(38,1)), '999999999999999999.9') AS result
+        """
+      Then query result
+        | result               |
+        | 123456789012345678.9 |
+
+    @sail-bug
+    # Sail overflows to '#' signs even though the integer part (9999999999999999999) fits exactly in the
+    # 19-digit format '9999999999999999999.99'. Spark uses exact arithmetic and produces the correct string.
+    # Sail: '###################.##', Spark: '9999999999999999999.99'
+    Scenario: 19-digit max value with 2 fractional digits overflows in Sail but not Spark
+      When query
+        """
+        SELECT to_char(CAST('9999999999999999999.99' AS DECIMAL(38,2)), '9999999999999999999.99') AS result
+        """
+      Then query result
+        | result                 |
+        | 9999999999999999999.99 |
+
+    @sail-bug
+    # Sail overflows to '#' signs for 17-digit integer with 2 fractional digits, despite the format
+    # '99999999999999999.99' having enough integer digits to hold 99999999999999999.
+    # Sail: '#################.##', Spark: '99999999999999999.99'
+    Scenario: 17-digit max value with 2 fractional digits overflows in Sail but not Spark
+      When query
+        """
+        SELECT to_char(CAST('99999999999999999.99' AS DECIMAL(38,2)), '99999999999999999.99') AS result
+        """
+      Then query result
+        | result              |
+        | 99999999999999999.99 |
+
+  Rule: Large Decimal precision (sail-bug — f64 path loses digits beyond ~15 significant figures)
+
+    @sail-bug
+    # Sail converts Decimal128 to f64 before formatting, losing precision beyond ~15 significant
+    # digits. Spark uses exact BigDecimal arithmetic.
+    # Sail: '12345678901234569216.000000000', Spark: '12345678901234567890.123456789'
+    Scenario: 29-significant-digit decimal loses precision via f64 path
+      When query
+        """
+        SELECT to_char(CAST('12345678901234567890.123456789' AS DECIMAL(38,9)), '99999999999999999999.999999999') AS result
+        """
+      Then query result
+        | result                         |
+        | 12345678901234567890.123456789 |
+
+    @sail-bug
+    # Sail: '1234567890123456768.0', Spark: '1234567890123456789.9'
+    Scenario: 20-significant-digit decimal loses last digits via f64 path
+      When query
+        """
+        SELECT to_char(CAST('1234567890123456789.9' AS DECIMAL(38,1)), '9999999999999999999.9') AS result
+        """
+      Then query result
+        | result              |
+        | 1234567890123456789.9 |
