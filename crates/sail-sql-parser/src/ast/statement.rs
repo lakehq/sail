@@ -522,7 +522,8 @@ pub enum CreateTableClause {
         Either<Clustered, Distributed>,
         By,
         IdentList,
-        Option<(Sorted, By, SortColumnList)>,
+        #[parser(function = |(e, q, d), o| compose((e, q, d), o).or_not())]
+        Option<SortColumnClause>,
         Into,
         IntegerLiteral,
         Buckets,
@@ -544,15 +545,28 @@ pub enum CreateTableClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Expr, Query, DataType)")]
+pub struct SortColumnClause {
+    pub sorted: Sorted,
+    pub by: By,
+    #[parser(function = |(e, q, d), o| compose((e, q, d), o))]
+    pub columns: SortColumnList,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Expr, Query, DataType)")]
 pub struct SortColumnList {
     pub left: LeftParenthesis,
+    #[parser(function = |(e, q, d), o| sequence(compose((e, q, d), o), unit(o)))]
     pub columns: Sequence<SortColumn, Comma>,
     pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Expr, Query, DataType)")]
 pub struct SortColumn {
-    pub column: Ident,
+    #[parser(function = |(e, q, d), o| compose((e, q, d), o))]
+    pub column: Expr,
     pub direction: Option<OrderDirection>,
 }
 
