@@ -158,11 +158,18 @@ impl ScalarUDFImpl for SparkToChar {
         let spec = RegexSpec::try_from(format_str.as_str())?;
         let components = NumberComponents::try_from(&spec)?;
 
-        // Use exact i128 path for integers and Decimal128 with scale=0 to avoid f64 precision loss.
-        // Decimal128 with scale>0 still uses f64 but only when format also has decimals.
+        // Exact integer path: integers with no fractional format, or Decimal128(_, 0).
         let use_integer_path = components.scale == 0
             && (args[0].data_type().is_integer()
                 || matches!(args[0].data_type(), DataType::Decimal128(_, 0)));
+
+        // Exact decimal path: Decimal128 with scale > 0 (avoids f64 precision loss for
+        // values with more than ~15 significant digits).
+        let decimal128_input_scale = if let DataType::Decimal128(_, s) = args[0].data_type() {
+            if s > 0 { Some(s as usize) } else { None }
+        } else {
+            None
+        };
 
         // Decimal overflow: Spark checks input type's scale vs format's scale.
         // Negative decimal scale (legal in Arrow: value is a multiple of 10^|s|)
@@ -254,6 +261,9 @@ impl ScalarUDFImpl for SparkToChar {
             ColumnarValue::Scalar(scalar) => {
                 let result = if use_integer_path {
                     scalar_to_i128(scalar)?.map(|v| format_spark_integer(v, &spec, &components))
+                } else if let Some(in_scale) = decimal128_input_scale {
+                    scalar_to_i128(scalar)?
+                        .map(|v| format_spark_decimal(v, in_scale, &spec, &components))
                 } else {
                     match scalar_to_f64(scalar)? {
                         None => None,
@@ -292,6 +302,23 @@ impl ScalarUDFImpl for SparkToChar {
                         .iter()
                         .map(|opt: Option<i64>| {
                             opt.map(|v| format_spark_integer(v as i128, &spec, &components))
+                        })
+                        .collect();
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                } else if let Some(in_scale) = decimal128_input_scale {
+                    let dec_arr = arr
+                        .as_any()
+                        .downcast_ref::<Decimal128Array>()
+                        .ok_or_else(|| {
+                            datafusion_common::DataFusionError::Internal(format!(
+                                "to_char: expected Decimal128Array, got {:?}",
+                                arr.data_type()
+                            ))
+                        })?;
+                    let result: StringArray = dec_arr
+                        .iter()
+                        .map(|opt: Option<i128>| {
+                            opt.map(|v| format_spark_decimal(v, in_scale, &spec, &components))
                         })
                         .collect();
                     Ok(ColumnarValue::Array(Arc::new(result)))
@@ -340,6 +367,59 @@ fn format_spark_integer(value: i128, spec: &RegexSpec, components: &NumberCompon
     let with_grouping = insert_grouping_separators(&formatted_int, &spec.numbers);
     // Currency inside sign — see ToNumberParser.scala::format() in Spark.
     let with_currency = apply_currency(&with_grouping, spec);
+    apply_sign(&with_currency, is_negative, spec)
+}
+
+/// Format a Decimal128 value using exact i128 arithmetic to avoid f64 precision loss.
+///
+/// The overflow case (input_scale > format_scale) is caught before this is called.
+fn format_spark_decimal(
+    value: i128,
+    input_scale: usize,
+    spec: &RegexSpec,
+    components: &NumberComponents,
+) -> String {
+    let is_negative = value < 0;
+    let abs_value = value.unsigned_abs();
+
+    let format_scale = components.scale as usize;
+    let int_slots = components.numbers.len();
+
+    // Split into exact integer and fractional parts (10^38 fits in u128).
+    let divisor = 10u128.pow(input_scale as u32);
+    let int_part = abs_value / divisor;
+    let frac_part = abs_value % divisor;
+
+    let int_str = if int_part == 0 {
+        String::new()
+    } else {
+        int_part.to_string()
+    };
+
+    if int_str.len() > int_slots {
+        return build_overflow_string(is_negative, spec, components);
+    }
+
+    let effective_int = if int_part == 0 && format_scale > 0 {
+        "0".to_string()
+    } else {
+        int_str
+    };
+    let formatted_int = format_integer_part(&effective_int, &components.numbers);
+    let with_grouping = insert_grouping_separators(&formatted_int, &spec.numbers);
+
+    let formatted_dec = if format_scale > 0 {
+        // Zero-pad frac to input_scale digits (left), then right-pad to format_scale with zeros.
+        // format_scale >= input_scale is guaranteed (overflow returned early if not).
+        let frac_str = format!("{frac_part:0>input_scale$}");
+        let padded = format!("{frac_str:0<format_scale$}");
+        format!(".{padded}")
+    } else {
+        String::new()
+    };
+
+    let number_str = format!("{with_grouping}{formatted_dec}");
+    let with_currency = apply_currency(&number_str, spec);
     apply_sign(&with_currency, is_negative, spec)
 }
 
