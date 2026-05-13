@@ -952,17 +952,43 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::BooleanLiteral(value) => from_ast_boolean_literal(value),
         AtomExpr::Null(_) => Ok(spec::Expr::Literal(spec::Literal::Null)),
         AtomExpr::Interval(_, value) => {
-            let (interval_value, qualified_type) =
+            // Build the spec representation of an interval literal. Two
+            // wrappers may be applied around the raw `spec::Literal`:
+            //
+            // 1. Alias — sets the column name to Spark's canonical literal
+            //    form (e.g. "INTERVAL '10' YEAR", "INTERVAL '7' DAY") so an
+            //    unaliased projection (`SELECT INTERVAL '10' YEAR`) reports
+            //    the literal text as the column name instead of falling back
+            //    to "CAST(... AS ...)". `need_rename_cast` in
+            //    `sail-plan::resolver::expression::cast` recurses through
+            //    Cast/TryCast, sees this inner Alias, and skips the rename.
+            //
+            // 2. Cast — carries the ANSI qualifier (start_field, end_field)
+            //    that the underlying `IntervalValue` cannot store on its
+            //    own. The cast resolver reads the qualified `cast_to_type`
+            //    and attaches the qualifier as Arrow field extension
+            //    metadata, which the Spark Connect client decodes back into
+            //    `YearMonthIntervalType(start, end)` /
+            //    `DayTimeIntervalType(start, end)`.
+            let (interval_value, qualified_type, column_name) =
                 from_ast_signed_interval(Signed::Positive(*value))?;
-            let literal = spec::Expr::Literal(interval_value.into());
+            let inner = if let Some(name) = column_name {
+                spec::Expr::Alias {
+                    expr: Box::new(spec::Expr::Literal(interval_value.into())),
+                    name: vec![name.into()],
+                    metadata: None,
+                }
+            } else {
+                spec::Expr::Literal(interval_value.into())
+            };
             Ok(match qualified_type {
                 Some(cast_to_type) => spec::Expr::Cast {
-                    expr: Box::new(literal),
+                    expr: Box::new(inner),
                     cast_to_type,
                     rename: false,
                     is_try: false,
                 },
-                None => literal,
+                None => inner,
             })
         }
         AtomExpr::Placeholder(variable) => Ok(spec::Expr::Placeholder(variable.value)),

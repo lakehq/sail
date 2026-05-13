@@ -96,6 +96,105 @@ impl From<IntervalValue> for spec::Literal {
     }
 }
 
+/// Format an `IntervalValue` as Spark's canonical SQL literal column name
+/// (e.g. `"INTERVAL '7' DAY"`, `"INTERVAL '01:02:03.456789' HOUR TO SECOND"`).
+/// Returns `None` if the value cannot be expressed under the requested kind
+/// (e.g. a mixed `MonthDayNanosecond` with no single ANSI qualifier).
+fn format_interval_column_name(
+    value: &IntervalValue,
+    kind: &StandardIntervalKind,
+) -> Option<String> {
+    use StandardIntervalKind as K;
+    let body = match (value, kind) {
+        (IntervalValue::YearMonth { months }, K::Year) => format!("{}", months / 12),
+        (IntervalValue::YearMonth { months }, K::Month) => format!("{months}"),
+        (IntervalValue::YearMonth { months }, K::YearToMonth) => {
+            let sign = if *months < 0 { "-" } else { "" };
+            let abs_months = months.unsigned_abs();
+            format!("{sign}{}-{}", abs_months / 12, abs_months % 12)
+        }
+        (IntervalValue::Microsecond { microseconds }, kind) => {
+            format_day_time(*microseconds, kind)?
+        }
+        _ => return None,
+    };
+    Some(format!("INTERVAL '{body}' {kind}"))
+}
+
+/// Format a day-time interval (signed microseconds) under a specific ANSI
+/// `StandardIntervalKind`. Larger fields are unbounded; smaller fields are
+/// zero-padded to 2 digits. Fractional seconds get up to 6 digits with
+/// trailing zeros stripped. Returns `None` if `kind` is not a day-time kind.
+fn format_day_time(microseconds: i64, kind: &StandardIntervalKind) -> Option<String> {
+    const US_PER_SECOND: u64 = 1_000_000;
+    const US_PER_MINUTE: u64 = 60 * US_PER_SECOND;
+    const US_PER_HOUR: u64 = 60 * US_PER_MINUTE;
+    const US_PER_DAY: u64 = 24 * US_PER_HOUR;
+    let sign = if microseconds < 0 { "-" } else { "" };
+    let abs_us = microseconds.unsigned_abs();
+    let fraction = |us: u64| -> String {
+        let f = us % US_PER_SECOND;
+        if f == 0 {
+            String::new()
+        } else {
+            format!(".{}", format!("{f:06}").trim_end_matches('0'))
+        }
+    };
+    use StandardIntervalKind as K;
+    Some(match kind {
+        K::Day => format!("{sign}{}", abs_us / US_PER_DAY),
+        K::DayToHour => {
+            let d = abs_us / US_PER_DAY;
+            let h = (abs_us % US_PER_DAY) / US_PER_HOUR;
+            format!("{sign}{d} {h:02}")
+        }
+        K::DayToMinute => {
+            let d = abs_us / US_PER_DAY;
+            let rem = abs_us % US_PER_DAY;
+            let h = rem / US_PER_HOUR;
+            let m = (rem % US_PER_HOUR) / US_PER_MINUTE;
+            format!("{sign}{d} {h:02}:{m:02}")
+        }
+        K::DayToSecond => {
+            let d = abs_us / US_PER_DAY;
+            let rem = abs_us % US_PER_DAY;
+            let h = rem / US_PER_HOUR;
+            let rem = rem % US_PER_HOUR;
+            let m = rem / US_PER_MINUTE;
+            let rem = rem % US_PER_MINUTE;
+            let s = rem / US_PER_SECOND;
+            format!("{sign}{d} {h:02}:{m:02}:{s:02}{}", fraction(abs_us))
+        }
+        K::Hour => format!("{sign}{:02}", abs_us / US_PER_HOUR),
+        K::HourToMinute => {
+            let h = abs_us / US_PER_HOUR;
+            let m = (abs_us % US_PER_HOUR) / US_PER_MINUTE;
+            format!("{sign}{h:02}:{m:02}")
+        }
+        K::HourToSecond => {
+            let h = abs_us / US_PER_HOUR;
+            let rem = abs_us % US_PER_HOUR;
+            let m = rem / US_PER_MINUTE;
+            let rem = rem % US_PER_MINUTE;
+            let s = rem / US_PER_SECOND;
+            format!("{sign}{h:02}:{m:02}:{s:02}{}", fraction(abs_us))
+        }
+        K::Minute => format!("{sign}{:02}", abs_us / US_PER_MINUTE),
+        K::MinuteToSecond => {
+            let m = abs_us / US_PER_MINUTE;
+            let rem = abs_us % US_PER_MINUTE;
+            let s = rem / US_PER_SECOND;
+            format!("{sign}{m:02}:{s:02}{}", fraction(abs_us))
+        }
+        K::Second => {
+            let s = abs_us / US_PER_SECOND;
+            format!("{sign}{s:02}{}", fraction(abs_us))
+        }
+        // Not a day-time kind.
+        K::Year | K::YearToMonth | K::Month => return None,
+    })
+}
+
 fn standard_interval_kind_to_spec_type(kind: &StandardIntervalKind) -> spec::DataType {
     use spec::IntervalFieldType::{Day, Hour, Minute, Month, Second, Year};
     use spec::IntervalUnit::{DayTime, YearMonth};
@@ -123,7 +222,7 @@ fn standard_interval_kind_to_spec_type(kind: &StandardIntervalKind) -> spec::Dat
 
 pub fn from_ast_signed_interval(
     value: Signed<IntervalExpr>,
-) -> SqlResult<(IntervalValue, Option<spec::DataType>)> {
+) -> SqlResult<(IntervalValue, Option<spec::DataType>, Option<String>)> {
     // TODO: support the legacy calendar interval when `spark.sql.legacy.interval.enabled` is `true`
     let negated = value.is_negative();
     let interval = value.into_inner();
@@ -131,7 +230,15 @@ pub fn from_ast_signed_interval(
         IntervalExpr::Standard { value, qualifier } => {
             let kind = from_ast_interval_qualifier(qualifier)?;
             let ty = standard_interval_kind_to_spec_type(&kind);
-            Ok((from_ast_standard_interval(value, kind, negated)?, Some(ty)))
+            // Preserve the original SQL form (e.g. "INTERVAL '10' YEAR") as the
+            // column name so unaliased literals match Spark's output.
+            let value_text: Signed<String> = parse_signed_value(value.clone())?;
+            let column_name = format!("INTERVAL '{}' {}", value_text.into_inner(), kind);
+            Ok((
+                from_ast_standard_interval(value, kind, negated)?,
+                Some(ty),
+                Some(column_name),
+            ))
         }
         IntervalExpr::MultiUnit { head, tail } => {
             if tail.is_empty() {
@@ -139,60 +246,149 @@ pub fn from_ast_signed_interval(
                     IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
                         let kind = StandardIntervalKind::Year;
                         let ty = standard_interval_kind_to_spec_type(&kind);
-                        Ok((
-                            from_ast_standard_interval(head.value, kind, negated)?,
-                            Some(ty),
-                        ))
+                        let value = from_ast_standard_interval(head.value, kind, negated)?;
+                        let name = format_interval_column_name(&value, &kind);
+                        Ok((value, Some(ty), name))
                     }
                     IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
                         let kind = StandardIntervalKind::Month;
                         let ty = standard_interval_kind_to_spec_type(&kind);
-                        Ok((
-                            from_ast_standard_interval(head.value, kind, negated)?,
-                            Some(ty),
-                        ))
+                        let value = from_ast_standard_interval(head.value, kind, negated)?;
+                        let name = format_interval_column_name(&value, &kind);
+                        Ok((value, Some(ty), name))
                     }
                     IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
                         let kind = StandardIntervalKind::Day;
                         let ty = standard_interval_kind_to_spec_type(&kind);
-                        Ok((
-                            from_ast_standard_interval(head.value, kind, negated)?,
-                            Some(ty),
-                        ))
+                        let value = from_ast_standard_interval(head.value, kind, negated)?;
+                        let name = format_interval_column_name(&value, &kind);
+                        Ok((value, Some(ty), name))
                     }
                     IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
                         let kind = StandardIntervalKind::Hour;
                         let ty = standard_interval_kind_to_spec_type(&kind);
-                        Ok((
-                            from_ast_standard_interval(head.value, kind, negated)?,
-                            Some(ty),
-                        ))
+                        let value = from_ast_standard_interval(head.value, kind, negated)?;
+                        let name = format_interval_column_name(&value, &kind);
+                        Ok((value, Some(ty), name))
                     }
                     IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
                         let kind = StandardIntervalKind::Minute;
                         let ty = standard_interval_kind_to_spec_type(&kind);
-                        Ok((
-                            from_ast_standard_interval(head.value, kind, negated)?,
-                            Some(ty),
-                        ))
+                        let value = from_ast_standard_interval(head.value, kind, negated)?;
+                        let name = format_interval_column_name(&value, &kind);
+                        Ok((value, Some(ty), name))
                     }
                     IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
                         let kind = StandardIntervalKind::Second;
                         let ty = standard_interval_kind_to_spec_type(&kind);
-                        Ok((
-                            from_ast_standard_interval(head.value, kind, negated)?,
-                            Some(ty),
-                        ))
+                        let value = from_ast_standard_interval(head.value, kind, negated)?;
+                        let name = format_interval_column_name(&value, &kind);
+                        Ok((value, Some(ty), name))
                     }
-                    _ => Ok((from_ast_multi_unit_interval(vec![head], negated)?, None)),
+                    // WEEK normalizes to DAY (1 week = 7 days).
+                    IntervalUnit::Week(_) | IntervalUnit::Weeks(_) => {
+                        let kind = StandardIntervalKind::Day;
+                        let ty = standard_interval_kind_to_spec_type(&kind);
+                        let value = from_ast_multi_unit_interval(vec![head], negated)?;
+                        let name = format_interval_column_name(&value, &kind);
+                        Ok((value, Some(ty), name))
+                    }
+                    // MILLISECOND / MICROSECOND normalize to fractional SECOND.
+                    IntervalUnit::Millisecond(_)
+                    | IntervalUnit::Milliseconds(_)
+                    | IntervalUnit::Microsecond(_)
+                    | IntervalUnit::Microseconds(_) => {
+                        let kind = StandardIntervalKind::Second;
+                        let ty = standard_interval_kind_to_spec_type(&kind);
+                        let value = from_ast_multi_unit_interval(vec![head], negated)?;
+                        let name = format_interval_column_name(&value, &kind);
+                        Ok((value, Some(ty), name))
+                    }
                 }
             } else {
-                let values = once(head).chain(tail).collect();
-                Ok((from_ast_multi_unit_interval(values, negated)?, None))
+                // Walk units to determine the canonical (start, end) qualifier.
+                // WEEK collapses to DAY, MILLI/MICROSECOND collapse to SECOND.
+                // Mixed year-month + day-time falls through to CalendarInterval (None).
+                let values: Vec<IntervalValueWithUnit> = once(head).chain(tail).collect();
+                use spec::IntervalFieldType::{Day, Hour, Minute, Second};
+                let (mut has_year, mut has_month) = (false, false);
+                let (mut has_day, mut has_hour, mut has_minute, mut has_second) =
+                    (false, false, false, false);
+                for u in &values {
+                    match u.unit {
+                        IntervalUnit::Year(_) | IntervalUnit::Years(_) => has_year = true,
+                        IntervalUnit::Month(_) | IntervalUnit::Months(_) => has_month = true,
+                        IntervalUnit::Week(_) | IntervalUnit::Weeks(_) => has_day = true,
+                        IntervalUnit::Day(_) | IntervalUnit::Days(_) => has_day = true,
+                        IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => has_hour = true,
+                        IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => has_minute = true,
+                        IntervalUnit::Second(_)
+                        | IntervalUnit::Seconds(_)
+                        | IntervalUnit::Millisecond(_)
+                        | IntervalUnit::Milliseconds(_)
+                        | IntervalUnit::Microsecond(_)
+                        | IntervalUnit::Microseconds(_) => has_second = true,
+                    }
+                }
+                let is_year_month = has_year || has_month;
+                let is_day_time = has_day || has_hour || has_minute || has_second;
+                let kind = if is_year_month && is_day_time {
+                    None
+                } else if is_year_month {
+                    match (has_year, has_month) {
+                        (true, true) => Some(StandardIntervalKind::YearToMonth),
+                        (true, false) => Some(StandardIntervalKind::Year),
+                        (false, true) => Some(StandardIntervalKind::Month),
+                        (false, false) => None,
+                    }
+                } else {
+                    let start = if has_day {
+                        Day
+                    } else if has_hour {
+                        Hour
+                    } else if has_minute {
+                        Minute
+                    } else {
+                        Second
+                    };
+                    let end = if has_second {
+                        Second
+                    } else if has_minute {
+                        Minute
+                    } else if has_hour {
+                        Hour
+                    } else {
+                        Day
+                    };
+                    Some(match (start, end) {
+                        (Day, Day) => StandardIntervalKind::Day,
+                        (Day, Hour) => StandardIntervalKind::DayToHour,
+                        (Day, Minute) => StandardIntervalKind::DayToMinute,
+                        (Day, Second) => StandardIntervalKind::DayToSecond,
+                        (Hour, Hour) => StandardIntervalKind::Hour,
+                        (Hour, Minute) => StandardIntervalKind::HourToMinute,
+                        (Hour, Second) => StandardIntervalKind::HourToSecond,
+                        (Minute, Minute) => StandardIntervalKind::Minute,
+                        (Minute, Second) => StandardIntervalKind::MinuteToSecond,
+                        (Second, Second) => StandardIntervalKind::Second,
+                        _ => {
+                            return Err(SqlError::InternalError(format!(
+                                "interval qualifier inference produced an invalid day-time field pair (start={start:?}, end={end:?}) while resolving a multi-unit interval literal in sail-sql-analyzer; this combination should be impossible — open an issue at https://github.com/lakehq/sail with the SQL query that triggered it"
+                            )));
+                        }
+                    })
+                };
+                let ty = kind.as_ref().map(standard_interval_kind_to_spec_type);
+                let value = from_ast_multi_unit_interval(values, negated)?;
+                let name = kind
+                    .as_ref()
+                    .and_then(|k| format_interval_column_name(&value, k));
+                Ok((value, ty, name))
             }
         }
         IntervalExpr::Literal(value) => Ok((
             parse_unqualified_interval_string(&from_ast_string(value)?, negated)?,
+            None,
             None,
         )),
     }
@@ -280,6 +476,7 @@ fn parse_interval_day_time_string(
     Ok(IntervalValue::Microsecond { microseconds: n })
 }
 
+#[derive(Clone, Copy)]
 enum StandardIntervalKind {
     Year,
     YearToMonth,
@@ -294,6 +491,26 @@ enum StandardIntervalKind {
     Minute,
     MinuteToSecond,
     Second,
+}
+
+impl std::fmt::Display for StandardIntervalKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            StandardIntervalKind::Year => "YEAR",
+            StandardIntervalKind::YearToMonth => "YEAR TO MONTH",
+            StandardIntervalKind::Month => "MONTH",
+            StandardIntervalKind::Day => "DAY",
+            StandardIntervalKind::DayToHour => "DAY TO HOUR",
+            StandardIntervalKind::DayToMinute => "DAY TO MINUTE",
+            StandardIntervalKind::DayToSecond => "DAY TO SECOND",
+            StandardIntervalKind::Hour => "HOUR",
+            StandardIntervalKind::HourToMinute => "HOUR TO MINUTE",
+            StandardIntervalKind::HourToSecond => "HOUR TO SECOND",
+            StandardIntervalKind::Minute => "MINUTE",
+            StandardIntervalKind::MinuteToSecond => "MINUTE TO SECOND",
+            StandardIntervalKind::Second => "SECOND",
+        })
+    }
 }
 
 fn from_ast_interval_qualifier(qualifier: IntervalQualifier) -> SqlResult<StandardIntervalKind> {
@@ -533,7 +750,7 @@ pub(crate) fn parse_unqualified_interval_string(
     // definition, and all external callers (`parse_interval`, runtime UDFs,
     // delta property parsing) only need the numeric value — so we drop the
     // qualifier type.
-    from_ast_signed_interval(value).map(|(v, _)| v)
+    from_ast_signed_interval(value).map(|(v, _, _)| v)
 }
 
 #[cfg(test)]
