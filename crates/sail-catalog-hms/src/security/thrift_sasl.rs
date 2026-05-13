@@ -94,7 +94,6 @@ impl MakeTransport for KerberosMakeTransport {
                     SaslWriteHalf::new(write_half, frame_protector),
                 )
             }
-            
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,
