@@ -19,6 +19,7 @@ fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr>
         {
             Ok::<_, DataFusionError>(value.replacen("$.", "", 1).split(".").map(lit).collect())
         }
+        // FIXME: json_as_text_udf for array of paths with subpaths is not implemented, so only top level keys supported
         _ => Ok(vec![when(
             path.clone().like(lit("$.%")),
             unicode_fn::substr(path, lit(3)),
@@ -41,6 +42,12 @@ fn json_object_keys(json_data: expr::Expr) -> expr::Expr {
 }
 
 fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    // to_json accepts 1 or 2 arguments:
+    // - to_json(expr) - convert expr to JSON string
+    // - to_json(expr, options) - convert expr to JSON string with options
+    // Note: the SparkToJson UDF detects Variant inputs and delegates to variant_to_json,
+    // which ignores any options provided.
+    // See: https://docs.databricks.com/en/sql/language-manual/functions/to_json.html
     match args.len() {
         1 | 2 => Ok(to_json_udf().call(args)),
         n => Err(PlanError::invalid(format!(
@@ -56,6 +63,9 @@ fn from_json(
     }: ScalarFunctionInput,
 ) -> PlanResult<expr::Expr> {
     let tz = function_context.plan_config.session_timezone.clone();
+    // Try to constant-fold the schema argument (index 1) if it's not already a literal.
+    // This handles cases like `from_json(col, schema_of_json(lit(...)))` where the schema
+    // is a constant expression that can be evaluated at planning time.
     if arguments.len() >= 2 && !matches!(&arguments[1], expr::Expr::Literal(_, _)) {
         let evaluator = LiteralEvaluator::new();
         if let Ok(scalar) = evaluator.evaluate(&arguments[1]) {
