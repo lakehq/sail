@@ -82,6 +82,7 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::config::ConfigOptions;
+    use datafusion::physical_optimizer::PhysicalOptimizerRule;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::union::UnionExec;
@@ -127,14 +128,12 @@ mod tests {
 
     #[test]
     fn test_rewrites_unknown_partitioning_reduction_to_coalesce_exec() {
-        let input = Arc::new(
-            UnionExec::try_new(vec![
-                Arc::new(EmptyExec::new(schema())) as Arc<dyn ExecutionPlan>,
-                Arc::new(EmptyExec::new(schema())) as Arc<dyn ExecutionPlan>,
-                Arc::new(EmptyExec::new(schema())) as Arc<dyn ExecutionPlan>,
-            ])
-            .unwrap(),
-        ) as Arc<dyn ExecutionPlan>;
+        let input = UnionExec::try_new(vec![
+            Arc::new(EmptyExec::new(schema())) as Arc<dyn ExecutionPlan>,
+            Arc::new(EmptyExec::new(schema())) as Arc<dyn ExecutionPlan>,
+            Arc::new(EmptyExec::new(schema())) as Arc<dyn ExecutionPlan>,
+        ])
+        .unwrap();
         let plan = Arc::new(ExplicitRepartitionExec::new(
             input,
             Partitioning::UnknownPartitioning(2),
