@@ -250,17 +250,12 @@ fn compute_properties(
         .fields()
         .iter()
         .enumerate()
-        .filter_map(|(index, field)| {
-            (!is_target_metadata_field(field, metadata_column_name)
+        .filter(|&(_index, field)| !is_target_metadata_field(field, metadata_column_name)
                 && field.name() != row_id_column_name
-                && field.name() != row_commit_version_column_name)
-                .then(|| {
-                    (
+                && field.name() != row_commit_version_column_name ).map(|(index, field)| (
                         Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>,
                         field.name().clone(),
-                    )
-                })
-        });
+                    ));
     let projection_mapping = ProjectionMapping::try_new(projection_exprs, &input_schema)?;
     let input_eq_properties = input.equivalence_properties();
     let eq_properties = input_eq_properties.project(&projection_mapping, output_schema);
