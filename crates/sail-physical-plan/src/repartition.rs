@@ -16,8 +16,12 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, plan_err, Result, Statistics};
 use futures::StreamExt;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::repartition::{
+    RepartitionBufferConfig, DEFAULT_REPARTITION_BUFFER_SIZE,
+};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio_stream::wrappers::ReceiverStream;
 
 #[derive(Debug, Clone)]
 pub struct RowRoundRobinPartitioner {
@@ -80,7 +84,7 @@ impl RowRoundRobinPartitioner {
 
 #[derive(Debug, Default)]
 struct ExplicitRepartitionState {
-    receivers: Option<Vec<Option<UnboundedReceiver<Result<RecordBatch>>>>>,
+    receivers: Option<Vec<Option<Receiver<Result<RecordBatch>>>>>,
 }
 
 /// A physical plan node for explicit repartitioning in the query.
@@ -134,11 +138,12 @@ impl ExplicitRepartitionExec {
             return Ok(());
         }
 
+        let buffer_size = round_robin_buffer_size(context.as_ref());
         let input_partition_count = self.input.output_partitioning().partition_count();
         let mut senders = Vec::with_capacity(output_partitions);
         let mut receivers = Vec::with_capacity(output_partitions);
         for _ in 0..output_partitions {
-            let (sender, receiver) = unbounded_channel::<Result<RecordBatch>>();
+            let (sender, receiver) = channel::<Result<RecordBatch>>(buffer_size);
             senders.push(sender);
             receivers.push(Some(receiver));
         }
@@ -162,10 +167,7 @@ impl ExplicitRepartitionExec {
         Ok(())
     }
 
-    fn take_round_robin_receiver(
-        &self,
-        partition: usize,
-    ) -> Result<UnboundedReceiver<Result<RecordBatch>>> {
+    fn take_round_robin_receiver(&self, partition: usize) -> Result<Receiver<Result<RecordBatch>>> {
         let mut state = self.state.lock().map_err(|_| {
             datafusion_common::DataFusionError::Execution(
                 "round-robin repartition state lock poisoned".to_string(),
@@ -188,13 +190,90 @@ impl ExplicitRepartitionExec {
     }
 }
 
+fn round_robin_buffer_size(context: &TaskContext) -> usize {
+    context
+        .extension::<RepartitionBufferConfig>()
+        .map(|config| config.buffer_size())
+        .unwrap_or(DEFAULT_REPARTITION_BUFFER_SIZE)
+}
+
+fn partition_round_robin_batch(
+    partitioner: &mut RowRoundRobinPartitioner,
+    batch: RecordBatch,
+    output_partitions: usize,
+) -> Result<Vec<Option<RecordBatch>>> {
+    let mut partitions = vec![None; output_partitions];
+    partitioner.partition(batch, |partition, batch| {
+        partitions[partition] = Some(batch);
+        Ok(())
+    })?;
+    Ok(partitions)
+}
+
+fn prune_closed_round_robin_senders(
+    output_senders: &mut [Option<Sender<Result<RecordBatch>>>],
+) -> bool {
+    let mut active = false;
+    for sender in output_senders.iter_mut() {
+        if sender.as_ref().is_some_and(Sender::is_closed) {
+            *sender = None;
+        }
+        if sender.is_some() {
+            active = true;
+        }
+    }
+    active
+}
+
+async fn send_round_robin_partitions(
+    output_senders: &mut [Option<Sender<Result<RecordBatch>>>],
+    partitions: Vec<Option<RecordBatch>>,
+) -> bool {
+    let mut active = 0;
+    for (partition, batch) in partitions.into_iter().enumerate() {
+        let Some(sender) = output_senders[partition].as_ref().cloned() else {
+            continue;
+        };
+        if sender.is_closed() {
+            output_senders[partition] = None;
+            continue;
+        }
+        match batch {
+            Some(batch) => {
+                if sender.send(Ok(batch)).await.is_ok() {
+                    active += 1;
+                } else {
+                    output_senders[partition] = None;
+                }
+            }
+            None => {
+                active += 1;
+            }
+        }
+    }
+    active > 0
+}
+
+async fn wait_for_all_round_robin_outputs_closed(
+    output_senders: &[Option<Sender<Result<RecordBatch>>>],
+) {
+    futures::future::join_all(
+        output_senders
+            .iter()
+            .filter_map(|sender| sender.as_ref())
+            .map(|sender| sender.closed()),
+    )
+    .await;
+}
+
 async fn execute_round_robin_input_partition(
     mut input: SendableRecordBatchStream,
-    output_senders: Vec<tokio::sync::mpsc::UnboundedSender<Result<RecordBatch>>>,
+    output_senders: Vec<Sender<Result<RecordBatch>>>,
     input_partition: usize,
     input_partition_count: usize,
     output_partitions: usize,
 ) {
+    let mut output_senders = output_senders.into_iter().map(Some).collect::<Vec<_>>();
     let mut partitioner = match RowRoundRobinPartitioner::new(
         output_partitions,
         input_partition,
@@ -203,44 +282,77 @@ async fn execute_round_robin_input_partition(
         Ok(partitioner) => partitioner,
         Err(error) => {
             broadcast_round_robin_error(
-                &output_senders,
+                &mut output_senders,
                 format!("failed to initialize round-robin repartition: {error}"),
-            );
+            )
+            .await;
             return;
         }
     };
 
-    while let Some(item) = input.next().await {
+    while prune_closed_round_robin_senders(&mut output_senders) {
+        let item = tokio::select! {
+            biased;
+            _ = wait_for_all_round_robin_outputs_closed(&output_senders) => return,
+            item = input.next() => item,
+        };
+        let Some(item) = item else {
+            return;
+        };
         match item {
             Ok(batch) => {
-                if let Err(error) = partitioner.partition(batch, |partition, batch| {
-                    let _ = output_senders[partition].send(Ok(batch));
-                    Ok(())
-                }) {
-                    broadcast_round_robin_error(&output_senders, format!(
-                        "round-robin repartition failed on input partition {input_partition}: {error}"
-                    ));
+                let partitions = match partition_round_robin_batch(
+                    &mut partitioner,
+                    batch,
+                    output_partitions,
+                ) {
+                    Ok(partitions) => partitions,
+                    Err(error) => {
+                        broadcast_round_robin_error(
+                            &mut output_senders,
+                            format!(
+                                "round-robin repartition failed on input partition {input_partition}: {error}"
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+                if !send_round_robin_partitions(&mut output_senders, partitions).await {
                     return;
                 }
             }
             Err(error) => {
-                broadcast_round_robin_error(&output_senders, format!(
-                    "round-robin repartition failed while reading input partition {input_partition}: {error}"
-                ));
+                broadcast_round_robin_error(
+                    &mut output_senders,
+                    format!(
+                        "round-robin repartition failed while reading input partition {input_partition}: {error}"
+                    ),
+                )
+                .await;
                 return;
             }
         }
     }
 }
 
-fn broadcast_round_robin_error(
-    output_senders: &[tokio::sync::mpsc::UnboundedSender<Result<RecordBatch>>],
+async fn broadcast_round_robin_error(
+    output_senders: &mut [Option<Sender<Result<RecordBatch>>>],
     message: String,
 ) {
-    for sender in output_senders {
-        let _ = sender.send(Err(datafusion_common::DataFusionError::Execution(
-            message.clone(),
-        )));
+    for sender in output_senders.iter_mut() {
+        let Some(current_sender) = sender.as_ref().cloned() else {
+            continue;
+        };
+        if current_sender
+            .send(Err(datafusion_common::DataFusionError::Execution(
+                message.clone(),
+            )))
+            .await
+            .is_err()
+        {
+            *sender = None;
+        }
     }
 }
 
@@ -301,7 +413,7 @@ impl ExecutionPlan for ExplicitRepartitionExec {
             Partitioning::RoundRobinBatch(output_partitions) => {
                 self.initialize_round_robin(*output_partitions, context)?;
                 let receiver = self.take_round_robin_receiver(partition)?;
-                let stream = UnboundedReceiverStream::new(receiver);
+                let stream = ReceiverStream::new(receiver);
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     stream,
