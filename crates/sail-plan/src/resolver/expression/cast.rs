@@ -311,8 +311,11 @@ fn day_time_interval_literal(
 }
 
 fn second_literal(microseconds: i128, pad_seconds: bool) -> String {
-    let seconds = microseconds / 1_000_000;
-    let fraction = microseconds % 1_000_000;
+    const MICROS_PER_SECOND: i128 = 1_000_000;
+    const FRACTION_DIGITS: usize = 6;
+
+    let seconds = microseconds / MICROS_PER_SECOND;
+    let fraction = microseconds % MICROS_PER_SECOND;
     let seconds = if pad_seconds {
         format!("{seconds:02}")
     } else {
@@ -321,7 +324,7 @@ fn second_literal(microseconds: i128, pad_seconds: bool) -> String {
     if fraction == 0 {
         seconds
     } else {
-        format!("{seconds}.{fraction:06}")
+        format!("{seconds}.{fraction:0FRACTION_DIGITS$}")
             .trim_end_matches('0')
             .to_string()
     }
