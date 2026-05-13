@@ -521,8 +521,6 @@ message DeltaWriteContextNode {
 }
 
 message DeltaWriterExecNode {
-  reserved 8;
-
   bytes input = 1;
   string table_url = 2;
   string options = 3;
@@ -530,8 +528,8 @@ message DeltaWriterExecNode {
   repeated string partition_columns = 5;
   bool table_exists = 6;
   PhysicalSinkMode sink_mode = 7;
-  map<string, string> metadata_configuration = 9;
-  DeltaWriteContextNode write_context = 10;
+  map<string, string> metadata_configuration = 8;
+  DeltaWriteContextNode write_context = 9;
 }
 
 message DeltaCommitExecNode {
