@@ -62,7 +62,7 @@ impl PlanResolver<'_> {
         };
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
-        if let spec::DataType::UserDefined {
+        let output_metadata = if let spec::DataType::UserDefined {
             jvm_class,
             python_class,
             serialized_python_class,
@@ -90,7 +90,10 @@ impl PlanResolver<'_> {
                     "cannot cast between different user-defined data types".to_string(),
                 ));
             }
-        }
+            user_defined_type_metadata(jvm_class, python_class, serialized_python_class)
+        } else {
+            vec![]
+        };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let expr_type = expr.get_type(schema)?;
         let name = if need_rename_cast(&expr) {
@@ -192,7 +195,7 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(NamedExpr::new(name, expr))
+        Ok(NamedExpr::new(name, expr).with_metadata(output_metadata))
     }
 }
 
@@ -227,4 +230,22 @@ fn udt_metadata_matches(
         (None, None) => true,
         _ => false,
     }
+}
+
+fn user_defined_type_metadata(
+    jvm_class: &Option<String>,
+    python_class: &Option<String>,
+    serialized_python_class: &Option<String>,
+) -> Vec<(String, String)> {
+    [
+        ("udt.jvm_class", jvm_class.as_ref()),
+        ("udt.python_class", python_class.as_ref()),
+        (
+            "udt.serialized_python_class",
+            serialized_python_class.as_ref(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| value.map(|value| (key.to_string(), value.to_string())))
+    .collect()
 }
