@@ -29,11 +29,6 @@ CATALOG_SPARK_FIXTURES = {
 }
 
 
-# We skip the tests for now since it may cause issues
-# when running the tests in installed packages.
-pytest.skip("not working", allow_module_level=True)
-
-
 def start_sail_server(
     catalog_list: str,
     extra_env: dict[str, str] | None = None,
