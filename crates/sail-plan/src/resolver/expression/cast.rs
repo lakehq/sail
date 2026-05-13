@@ -19,7 +19,10 @@ use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::function::user_defined_type_metadata;
+use crate::resolver::function::{
+    user_defined_type_metadata, UDT_JVM_CLASS_METADATA_KEY, UDT_PYTHON_CLASS_METADATA_KEY,
+    UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY,
+};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -70,20 +73,20 @@ impl PlanResolver<'_> {
             ..
         } = &cast_to_type
         {
-            let field = expr.to_field(schema)?.1;
+            let (_, field) = expr.to_field(schema)?;
             let metadata = field.metadata();
             let is_source_udt = [
-                "udt.jvm_class",
-                "udt.python_class",
-                "udt.serialized_python_class",
+                UDT_JVM_CLASS_METADATA_KEY,
+                UDT_PYTHON_CLASS_METADATA_KEY,
+                UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY,
             ]
             .into_iter()
             .any(|key| metadata.contains_key(key));
-            let is_same_udt = udt_metadata_matches(metadata, "udt.jvm_class", jvm_class)
-                && udt_metadata_matches(metadata, "udt.python_class", python_class)
+            let is_same_udt = udt_metadata_matches(metadata, UDT_JVM_CLASS_METADATA_KEY, jvm_class)
+                && udt_metadata_matches(metadata, UDT_PYTHON_CLASS_METADATA_KEY, python_class)
                 && udt_metadata_matches(
                     metadata,
-                    "udt.serialized_python_class",
+                    UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY,
                     serialized_python_class,
                 );
             if is_source_udt && !is_same_udt {

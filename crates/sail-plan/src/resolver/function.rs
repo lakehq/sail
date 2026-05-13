@@ -23,6 +23,10 @@ pub(super) struct PythonUdtf {
     pub return_type: Option<DataType>,
 }
 
+pub(super) const UDT_JVM_CLASS_METADATA_KEY: &str = "udt.jvm_class";
+pub(super) const UDT_PYTHON_CLASS_METADATA_KEY: &str = "udt.python_class";
+pub(super) const UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY: &str = "udt.serialized_python_class";
+
 impl PlanResolver<'_> {
     pub(super) fn resolve_python_udf(
         &self,
@@ -96,10 +100,10 @@ pub(super) fn user_defined_type_metadata(data_type: &spec::DataType) -> Vec<(Str
             serialized_python_class,
             ..
         } => [
-            ("udt.jvm_class", jvm_class.as_ref()),
-            ("udt.python_class", python_class.as_ref()),
+            (UDT_JVM_CLASS_METADATA_KEY, jvm_class.as_ref()),
+            (UDT_PYTHON_CLASS_METADATA_KEY, python_class.as_ref()),
             (
-                "udt.serialized_python_class",
+                UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY,
                 serialized_python_class.as_ref(),
             ),
         ]
