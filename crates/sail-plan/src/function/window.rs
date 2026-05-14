@@ -29,6 +29,7 @@ use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
+use sail_function::aggregate::preserve_input_metadata::PreserveInputMetadataAggregate;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::window::spark_ntile_udwf;
@@ -553,14 +554,28 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),
         ("listagg", F::custom(listagg)),
-        ("max", F::aggregate(min_max::max_udaf)),
+        (
+            "max",
+            F::aggregate(|| {
+                Arc::new(AggregateUDF::from(PreserveInputMetadataAggregate::new(
+                    min_max::max_udaf(),
+                )))
+            }),
+        ),
         (
             "max_by",
             F::aggregate(|| Arc::new(AggregateUDF::from(MaxByFunction::new()))),
         ),
         ("mean", F::aggregate(average::avg_udaf)),
         ("median", F::custom(median)),
-        ("min", F::aggregate(min_max::min_udaf)),
+        (
+            "min",
+            F::aggregate(|| {
+                Arc::new(AggregateUDF::from(PreserveInputMetadataAggregate::new(
+                    min_max::min_udaf(),
+                )))
+            }),
+        ),
         (
             "min_by",
             F::aggregate(|| Arc::new(AggregateUDF::from(MinByFunction::new()))),
@@ -592,7 +607,14 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("stddev_pop", F::aggregate(stddev::stddev_pop_udaf)),
         ("stddev_samp", F::aggregate(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
-        ("sum", F::aggregate(sum::sum_udaf)),
+        (
+            "sum",
+            F::aggregate(|| {
+                Arc::new(AggregateUDF::from(PreserveInputMetadataAggregate::new(
+                    sum::sum_udaf(),
+                )))
+            }),
+        ),
         (
             "try_avg",
             F::aggregate(|| Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
