@@ -613,10 +613,10 @@ Feature: abs comprehensive tests
 
     @sail-bug
     # Vectorized abs path is correct — same root cause as the scalar interval
-    # scenarios above (see `Rule: Interval values` comment at L457): Sail
-    # widens Spark interval subranges to DAY TO SECOND at the type layer.
-    # The vectorized kernel succeeds; the rendered/expected interval format
-    # diverges. Fix path: preserve subrange in Spark→Arrow Field metadata.
+    # scenarios in `Rule: Interval values`: Sail widens Spark interval subranges
+    # to DAY TO SECOND at the type layer. The vectorized kernel succeeds; the
+    # rendered/expected interval format diverges.
+    # Fix path: preserve subrange in Spark→Arrow Field metadata (see #1895).
     Scenario: abs INTERVAL DAY column with NULL mix
       When query
         """
