@@ -7351,6 +7351,7 @@ dependencies = [
  "datafusion-functions-nested",
  "datafusion-physical-expr",
  "half",
+ "iri-string",
  "jiter",
  "lazy_static",
  "num",
