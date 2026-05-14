@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
@@ -131,7 +132,10 @@ def data(spark, tmp_path_factory):
     table = pa.Table.from_arrays(data, schema=_CLICKBENCH_SCHEMA)
     data_path = str(tmp_dir / "hits.parquet")
     pq.write_table(table, data_path)
-    spark.read.parquet(data_path).createOrReplaceTempView("hits")
+    df = spark.read.parquet(data_path)
+    df = df.withColumn("EventTime", F.col("EventTime").cast("timestamp"))
+    df = df.withColumn("EventDate", F.date_add(F.lit("1970-01-01"), F.col("EventDate")))
+    df.createOrReplaceTempView("hits")
     yield
     spark.catalog.dropTempView("hits")
 

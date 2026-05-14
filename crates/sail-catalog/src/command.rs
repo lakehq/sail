@@ -1,7 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::datasource::TableFormatRegistry;
+use sail_common_datafusion::datasource::{is_lakehouse_format, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -395,6 +395,15 @@ impl CatalogCommand {
                 // update the catalog metadata, so we never end up with the two layers
                 // out of sync.
                 if let (Some(location), Some(format)) = (location, format) {
+                    // Non-lakehouse formats (e.g., plain Parquet/Hive tables) have no
+                    // storage-layer metadata — the catalog is the sole source of truth.
+                    // Skip straight to catalog-only update.
+                    // This mirrors Spark+Delta where DeltaCatalog intercepts ALTER TABLE
+                    // for Delta tables but plain tables fall through to SessionCatalog.
+                    if !is_lakehouse_format(&format) {
+                        manager.alter_table(&table, options).await?;
+                        return Ok(display.bools().to_record_batch(vec![true])?);
+                    }
                     let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
                         CatalogError::External(format!(
                             "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
@@ -437,6 +446,14 @@ impl CatalogCommand {
                                 .map_err(|e| CatalogError::External(e.to_string()))?;
                         }
                     };
+
+                    // Storage is the source of truth for lakehouse ALTER TABLE
+                    // operations, but metadata reads still flow through the
+                    // catalog. Surface catalog sync failures so callers do not
+                    // observe successful storage mutation followed by stale
+                    // DESCRIBE/SHOW metadata.
+                    manager.alter_table(&table, options).await?;
+                    return Ok(display.bools().to_record_batch(vec![true])?);
                 }
 
                 manager.alter_table(&table, options).await?;
@@ -652,4 +669,348 @@ struct ShowTableExtendedRow {
     table_name: String,
     is_temporary: bool,
     information: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use datafusion::catalog::Session;
+    use datafusion::execution::context::SessionConfig;
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::not_impl_err;
+    use datafusion_expr::TableSource;
+    use sail_common_datafusion::catalog::display::{CatalogObjectDisplay, DefaultCatalogDisplay};
+    use sail_common_datafusion::catalog::{
+        DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    };
+    use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+    use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+    use crate::provider::CatalogProvider;
+
+    #[derive(Serialize, Deserialize)]
+    struct TestCatalogOutput {
+        value: String,
+    }
+
+    #[derive(Default)]
+    struct TestCatalogObjectDisplay;
+
+    impl CatalogObjectDisplay for TestCatalogObjectDisplay {
+        type Catalog = TestCatalogOutput;
+        type Database = TestCatalogOutput;
+        type Table = TestCatalogOutput;
+        type TableColumn = TestCatalogOutput;
+        type Function = TestCatalogOutput;
+
+        fn catalog(name: String) -> Self::Catalog {
+            TestCatalogOutput { value: name }
+        }
+
+        fn database(status: DatabaseStatus) -> Self::Database {
+            TestCatalogOutput {
+                value: status.database.join("."),
+            }
+        }
+
+        fn table(status: TableStatus) -> Self::Table {
+            TestCatalogOutput { value: status.name }
+        }
+
+        fn table_column(status: TableColumnStatus) -> Self::TableColumn {
+            TestCatalogOutput { value: status.name }
+        }
+
+        fn function(name: String) -> Self::Function {
+            TestCatalogOutput { value: name }
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+    struct TestPlanFormatter;
+
+    impl PlanFormatter for TestPlanFormatter {
+        fn data_type_to_simple_string(
+            &self,
+            _data_type: &datafusion::arrow::datatypes::DataType,
+        ) -> datafusion_common::Result<String> {
+            Ok("int".to_string())
+        }
+
+        fn literal_to_string(
+            &self,
+            _literal: &datafusion_common::ScalarValue,
+            _display_timezone: &str,
+        ) -> datafusion_common::Result<String> {
+            not_impl_err!("unused in test")
+        }
+
+        fn function_to_string(
+            &self,
+            _name: &str,
+            _arguments: Vec<&str>,
+            _is_distinct: bool,
+        ) -> datafusion_common::Result<String> {
+            not_impl_err!("unused in test")
+        }
+    }
+
+    struct TestProvider {
+        table_status: TableStatus,
+        alter_error: Option<String>,
+    }
+
+    #[async_trait]
+    impl CatalogProvider for TestProvider {
+        fn get_name(&self) -> &str {
+            "test"
+        }
+
+        async fn create_database(
+            &self,
+            _database: &crate::provider::Namespace,
+            _options: CreateDatabaseOptions,
+        ) -> CatalogResult<sail_common_datafusion::catalog::DatabaseStatus> {
+            unreachable!()
+        }
+
+        async fn get_database(
+            &self,
+            _database: &crate::provider::Namespace,
+        ) -> CatalogResult<sail_common_datafusion::catalog::DatabaseStatus> {
+            unreachable!()
+        }
+
+        async fn list_databases(
+            &self,
+            _prefix: Option<&crate::provider::Namespace>,
+        ) -> CatalogResult<Vec<sail_common_datafusion::catalog::DatabaseStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_database(
+            &self,
+            _database: &crate::provider::Namespace,
+            _options: DropDatabaseOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn create_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _options: CreateTableOptions,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+        ) -> CatalogResult<TableStatus> {
+            Ok(self.table_status.clone())
+        }
+
+        async fn list_tables(
+            &self,
+            _database: &crate::provider::Namespace,
+        ) -> CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _options: DropTableOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn alter_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _options: AlterTableOptions,
+        ) -> CatalogResult<()> {
+            match &self.alter_error {
+                Some(message) => Err(CatalogError::External(message.clone())),
+                None => Ok(()),
+            }
+        }
+
+        async fn create_view(
+            &self,
+            _database: &crate::provider::Namespace,
+            _view: &str,
+            _options: CreateViewOptions,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_view(
+            &self,
+            _database: &crate::provider::Namespace,
+            _view: &str,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn list_views(
+            &self,
+            _database: &crate::provider::Namespace,
+        ) -> CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_view(
+            &self,
+            _database: &crate::provider::Namespace,
+            _view: &str,
+            _options: DropViewOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+    }
+
+    struct TestTableFormat;
+
+    #[async_trait]
+    impl TableFormat for TestTableFormat {
+        fn name(&self) -> &str {
+            "delta"
+        }
+
+        async fn create_source(
+            &self,
+            _ctx: &dyn Session,
+            _info: SourceInfo,
+        ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+            not_impl_err!("unused in test")
+        }
+
+        async fn create_writer(
+            &self,
+            _ctx: &dyn Session,
+            _info: SinkInfo,
+        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+            not_impl_err!("unused in test")
+        }
+
+        async fn alter_table_properties(
+            &self,
+            _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+            _path: &str,
+            _changes: Vec<(String, Option<String>)>,
+            _if_exists: bool,
+        ) -> datafusion_common::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_session_context() -> SessionContext {
+        let registry = Arc::new(TableFormatRegistry::new());
+        let register_result = registry.register(Arc::new(TestTableFormat));
+        assert!(
+            register_result.is_ok(),
+            "failed to register test table format: {register_result:?}"
+        );
+        let plan_service = Arc::new(PlanService::new(
+            Box::new(DefaultCatalogDisplay::<TestCatalogObjectDisplay>::default()),
+            Box::new(TestPlanFormatter),
+        ));
+        let config = SessionConfig::new()
+            .with_extension(registry)
+            .with_extension(plan_service);
+        SessionContext::new_with_config(config)
+    }
+
+    fn test_manager(alter_error: Option<&str>) -> CatalogManager {
+        let table_status = TableStatus {
+            catalog: Some("test".to_string()),
+            database: vec!["default".to_string()],
+            name: "items".to_string(),
+            kind: TableKind::Table {
+                columns: vec![TableColumnStatus {
+                    name: "id".to_string(),
+                    data_type: datafusion::arrow::datatypes::DataType::Int32,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                    is_partition: false,
+                    is_bucket: false,
+                    is_cluster: false,
+                }],
+                comment: None,
+                constraints: vec![],
+                location: Some("s3://bucket/items".to_string()),
+                format: "delta".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                properties: vec![],
+                is_external: true,
+            },
+        };
+        let manager = CatalogManager::try_new(crate::manager::CatalogManagerOptions {
+            catalogs: std::iter::once((
+                "test".to_string(),
+                Arc::new(TestProvider {
+                    table_status,
+                    alter_error: alter_error.map(ToString::to_string),
+                }) as Arc<dyn CatalogProvider>,
+            ))
+            .collect(),
+            default_catalog: "test".to_string(),
+            default_database: vec!["default".to_string()],
+            global_temporary_database: vec!["global_temp".to_string()],
+        });
+        assert!(
+            manager.is_ok(),
+            "failed to construct test catalog manager: {}",
+            manager
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        );
+        let Ok(manager) = manager else {
+            unreachable!();
+        };
+        manager
+    }
+
+    #[tokio::test]
+    async fn alter_table_returns_error_when_catalog_sync_fails() {
+        let ctx = test_session_context();
+        let manager = test_manager(Some("catalog sync failed"));
+        let command = CatalogCommand::AlterTable {
+            table: vec!["items".to_string()],
+            if_exists: false,
+            options: AlterTableOptions::SetTableProperties {
+                properties: vec![("owner".to_string(), "alice".to_string())],
+            },
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_err(),
+            "expected catalog sync failure, got success: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(
+            matches!(error, CatalogError::External(message) if message.contains("catalog sync failed"))
+        );
+    }
 }

@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::DeltaSnapshot;
@@ -47,7 +48,7 @@ pub struct EnabledRowTrackingToken {
     pub next_row_id: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RowTrackingMaterializedColumnNames {
     pub row_id: String,
     pub row_commit_version: String,

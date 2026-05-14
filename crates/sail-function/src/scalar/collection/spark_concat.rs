@@ -1,16 +1,18 @@
 use std::any::Any;
 use std::cmp::Ordering;
+use std::sync::Arc;
 
-use datafusion::arrow::array::BooleanArray;
+use datafusion::arrow::array::{BooleanArray, StringArray};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::compute::kernels::boolean::{is_null, or};
 use datafusion::arrow::compute::kernels::nullif::nullif;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
-use datafusion_common::{plan_err, ExprSchema, Result};
+use datafusion_common::{plan_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Expr, ExprSchemable, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ExprSchemable, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_functions_nested::concat::ArrayConcat;
 
@@ -28,7 +30,10 @@ impl Default for SparkConcat {
 impl SparkConcat {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::Exact(vec![]), TypeSignature::VariadicAny],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -48,6 +53,9 @@ impl ScalarUDFImpl for SparkConcat {
 
     /// [Credit]: <https://github.com/apache/datafusion/blob/7ccc6d7c55ae9dbcb7dee031f394bf11a03000ba/datafusion/functions-nested/src/concat.rs#L276-L310>
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.is_empty() {
+            return Ok(DataType::Utf8);
+        }
         if arg_types
             .iter()
             .any(|arg_type| matches!(arg_type, DataType::List(_)))
@@ -84,7 +92,12 @@ impl ScalarUDFImpl for SparkConcat {
                     }
                 }
             }
-            Ok(expr_type)
+            // All arrays had Null element type (e.g. array() + array()) — keep as List(Null)
+            if expr_type == DataType::Null {
+                Ok(arg_types[0].clone())
+            } else {
+                Ok(expr_type)
+            }
         } else if arg_types
             .iter()
             .all(|arg_type| matches!(arg_type, DataType::Binary))
@@ -118,11 +131,17 @@ impl ScalarUDFImpl for SparkConcat {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.is_empty() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                Some(String::new()),
+            )));
+        }
+        let return_type = args.return_field.data_type().clone();
         let mut null_mask = None;
         for arg in args.args.clone() {
             match arg {
                 ColumnarValue::Scalar(s) if s.is_null() => {
-                    return Ok(ColumnarValue::Scalar(s.clone()));
+                    return Ok(ColumnarValue::Scalar(ScalarValue::try_from(&return_type)?));
                 }
                 ColumnarValue::Array(a) => {
                     let mask = is_null(&a)?;
@@ -195,16 +214,82 @@ fn cast_columnar_values(
 ) -> Result<Vec<ColumnarValue>> {
     values
         .into_iter()
-        .map(|value| match value {
-            ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar(scalar.cast_to(target_type)?))
-            }
-            ColumnarValue::Array(array) => {
-                let cast_array = cast(&array, target_type)?;
-                Ok(ColumnarValue::Array(cast_array))
+        .map(|value| {
+            let is_timestamp = matches!(value.data_type(), DataType::Timestamp(_, _));
+            match value {
+                ColumnarValue::Scalar(scalar) => {
+                    let casted = scalar.cast_to(target_type)?;
+                    if is_timestamp {
+                        Ok(ColumnarValue::Scalar(spark_format_timestamp_scalar(
+                            casted,
+                        )?))
+                    } else {
+                        Ok(ColumnarValue::Scalar(casted))
+                    }
+                }
+                ColumnarValue::Array(array) => {
+                    let cast_array = cast(&array, target_type)?;
+                    if is_timestamp {
+                        Ok(ColumnarValue::Array(spark_format_timestamp_array(
+                            cast_array,
+                        )?))
+                    } else {
+                        Ok(ColumnarValue::Array(cast_array))
+                    }
+                }
             }
         })
         .collect()
+}
+
+/// Arrow formats timestamps as ISO 8601 (e.g. "2024-01-15T12:00:00Z" or
+/// "2024-01-15 12:00:00+08:00"). Spark uses a space separator and no timezone
+/// suffix (e.g. "2024-01-15 12:00:00").
+fn spark_format_timestamp_str(s: &str) -> String {
+    // Replace ISO 8601 'T' separator with a space
+    let s = s.replace('T', " ");
+    // Strip timezone suffix (Z, +HH:MM, -HH:MM) that starts after the seconds
+    // part. "YYYY-MM-DD HH:MM:SS" is 19 chars, so search from position 19 to
+    // avoid matching the '-' in the date portion.
+    let cutoff = s
+        .char_indices()
+        .skip_while(|(i, _)| *i < 19)
+        .find(|(_, c)| matches!(c, 'Z' | '+' | '-'))
+        .map(|(i, _)| i);
+    if let Some(idx) = cutoff {
+        s[..idx].to_string()
+    } else {
+        s
+    }
+}
+
+fn spark_format_timestamp_scalar(scalar: ScalarValue) -> Result<ScalarValue> {
+    match scalar {
+        ScalarValue::Utf8(Some(s)) => Ok(ScalarValue::Utf8(Some(spark_format_timestamp_str(&s)))),
+        ScalarValue::LargeUtf8(Some(s)) => {
+            Ok(ScalarValue::LargeUtf8(Some(spark_format_timestamp_str(&s))))
+        }
+        other => Ok(other),
+    }
+}
+
+fn spark_format_timestamp_array(
+    array: Arc<dyn datafusion::arrow::array::Array>,
+) -> Result<Arc<dyn datafusion::arrow::array::Array>> {
+    use datafusion::arrow::array::Array;
+    let string_array = array
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| {
+            datafusion_common::DataFusionError::Internal(
+                "expected StringArray after timestamp cast".to_string(),
+            )
+        })?;
+    let result: StringArray = string_array
+        .iter()
+        .map(|opt| opt.map(spark_format_timestamp_str))
+        .collect();
+    Ok(Arc::new(result))
 }
 
 /// Cast list arrays with Null element type to the target list type.

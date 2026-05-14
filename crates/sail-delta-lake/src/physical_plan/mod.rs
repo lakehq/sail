@@ -38,6 +38,7 @@ mod relaxed_tz_exec;
 mod remove_actions_exec;
 mod row_tracking_materialize_exec;
 mod scan_by_adds_exec;
+mod write_context;
 mod writer_exec;
 mod writer_options;
 
@@ -60,6 +61,9 @@ pub use relaxed_tz_exec::RelaxedTzCastExec;
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use row_tracking_materialize_exec::RowTrackingMaterializeExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
+pub use write_context::{
+    prepare_delta_write_context, DeltaCommitContext, DeltaSnapshotContext, DeltaWriteContext,
+};
 pub use writer_exec::DeltaWriterExec;
 pub use writer_options::DeltaWriterExecOptions;
 

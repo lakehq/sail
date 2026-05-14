@@ -92,11 +92,13 @@ use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
-    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCastColumnExpr, DeltaCommitExec,
-    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
-    DeltaScanByAddsExec, DeltaWriterExec, RelaxedTzCastExec, RowTrackingMaterializeExec,
+    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCastColumnExpr,
+    DeltaCommitContext, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
+    DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaSnapshotContext,
+    DeltaWriteContext, DeltaWriterExec, RelaxedTzCastExec, RowTrackingMaterializeExec,
 };
-use sail_delta_lake::spec::DeltaOperation;
+use sail_delta_lake::spec::{Action, ColumnMappingMode, DeltaOperation, StructType};
+use sail_delta_lake::table::RowTrackingMaterializedColumnNames;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -200,6 +202,7 @@ use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
 use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;
 use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjectUdf;
+use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -233,6 +236,8 @@ use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapI
 use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use url::Url;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
@@ -605,17 +610,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     null_equality,
                 )?))
             }
-            NodeKind::DeltaWriter(gen::DeltaWriterExecNode {
-                input,
-                table_url,
-                options,
-                sink_schema,
-                partition_columns,
-                table_exists,
-                sink_mode,
-                operation_override_json,
-                metadata_configuration,
-            }) => {
+            NodeKind::DeltaWriter(delta_writer) => {
+                let gen::DeltaWriterExecNode {
+                    input,
+                    table_url,
+                    options,
+                    sink_schema,
+                    partition_columns,
+                    table_exists,
+                    sink_mode,
+                    metadata_configuration,
+                    write_context,
+                } = *delta_writer;
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
                 let sink_mode = match sink_mode {
@@ -629,17 +635,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let options =
                     serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
-                let metadata_configuration = serde_json::from_str(&metadata_configuration)
-                    .map_err(|e| plan_datafusion_err!("{e}"))?;
-
-                let operation_override = if let Some(s) = operation_override_json.as_ref() {
-                    Some(
-                        serde_json::from_str::<DeltaOperation>(s)
-                            .map_err(|e| plan_datafusion_err!("{e}"))?,
-                    )
-                } else {
-                    None
+                let write_context = match write_context {
+                    Some(write_context) => self.try_decode_delta_write_context(write_context)?,
+                    None => return plan_err!("Missing write_context for DeltaWriterExec"),
                 };
+
                 Ok(Arc::new(DeltaWriterExec::new(
                     input,
                     table_url,
@@ -649,7 +649,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     table_exists,
                     Arc::new(sink_schema),
-                    operation_override,
+                    write_context,
                 )?))
             }
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
@@ -660,6 +660,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_schema,
                 sink_mode,
                 user_metadata,
+                commit_context,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -671,6 +672,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     return plan_err!("Missing sink_mode for DeltaCommitExec");
                 };
+                let commit_context = match commit_context {
+                    Some(commit_context) => self.try_decode_delta_commit_context(commit_context)?,
+                    None => return plan_err!("Missing commit_context for DeltaCommitExec"),
+                };
 
                 Ok(Arc::new(DeltaCommitExec::new(
                     input,
@@ -680,6 +685,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(sink_schema),
                     sink_mode,
                     user_metadata,
+                    commit_context,
                 )))
             }
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
@@ -1564,12 +1570,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(delta_writer_exec) = node.as_any().downcast_ref::<DeltaWriterExec>() {
             let input = self.try_encode_plan(delta_writer_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(delta_writer_exec.sink_mode())?;
-            let operation_override_json = if let Some(op) = delta_writer_exec.operation_override() {
-                Some(serde_json::to_string(op).map_err(|e| plan_datafusion_err!("{e}"))?)
-            } else {
-                None
-            };
-            NodeKind::DeltaWriter(gen::DeltaWriterExecNode {
+            NodeKind::DeltaWriter(Box::new(gen::DeltaWriterExecNode {
                 input,
                 table_url: delta_writer_exec.table_url().to_string(),
                 options: serde_json::to_string(delta_writer_exec.options())
@@ -1578,12 +1579,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns: delta_writer_exec.partition_columns().to_vec(),
                 table_exists: delta_writer_exec.table_exists(),
                 sink_mode: Some(sink_mode),
-                operation_override_json,
-                metadata_configuration: serde_json::to_string(
-                    delta_writer_exec.metadata_configuration(),
-                )
-                .map_err(|e| plan_datafusion_err!("{e}"))?,
-            })
+                metadata_configuration: delta_writer_exec.metadata_configuration().clone(),
+                write_context: Some(
+                    self.try_encode_delta_write_context(delta_writer_exec.write_context())?,
+                ),
+            }))
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(delta_commit_exec.sink_mode())?;
@@ -1595,6 +1595,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
                 sink_mode: Some(sink_mode),
                 user_metadata: delta_commit_exec.user_metadata().map(str::to_owned),
+                commit_context: Some(
+                    self.try_encode_delta_commit_context(delta_commit_exec.commit_context())?,
+                ),
             })
         } else if let Some(delta_scan_by_adds_exec) =
             node.as_any().downcast_ref::<DeltaScanByAddsExec>()
@@ -2217,6 +2220,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
             "parse_json" => Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
+            "spark_variant_explode" => Ok(Arc::new(ScalarUDF::from(SparkVariantExplodeUdf::new()))),
             "to_variant_object" => Ok(Arc::new(ScalarUDF::from(SparkToVariantObjectUdf::new()))),
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
@@ -2428,6 +2432,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkJsonToVariantUdf>()
+            || node_inner.is::<SparkVariantExplodeUdf>()
             || node_inner.is::<SparkToVariantObjectUdf>()
             || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkLastDay>()
@@ -2939,6 +2944,198 @@ impl RemoteExecutionCodec {
             }
         };
         Ok(gen::PhysicalSinkMode { mode: Some(mode) })
+    }
+
+    fn try_decode_delta_snapshot_context(
+        &self,
+        context: gen::DeltaSnapshotContext,
+    ) -> Result<DeltaSnapshotContext> {
+        Ok(DeltaSnapshotContext {
+            version: context.version,
+            protocol: self.try_decode_json(&context.protocol_json, "Delta protocol")?,
+            metadata: self.try_decode_json(&context.metadata_json, "Delta metadata")?,
+            txns: self.try_decode_json(&context.txns_json, "Delta transactions")?,
+            domain_metadata: self
+                .try_decode_json(&context.domain_metadata_json, "Delta domain metadata")?,
+            commit_timestamps: self
+                .try_decode_json(&context.commit_timestamps_json, "Delta commit timestamps")?,
+        })
+    }
+
+    fn try_encode_delta_snapshot_context(
+        &self,
+        context: &DeltaSnapshotContext,
+    ) -> Result<gen::DeltaSnapshotContext> {
+        Ok(gen::DeltaSnapshotContext {
+            version: context.version,
+            protocol_json: self.try_encode_json(&context.protocol, "Delta protocol")?,
+            metadata_json: self.try_encode_json(&context.metadata, "Delta metadata")?,
+            txns_json: self.try_encode_json(&context.txns, "Delta transactions")?,
+            domain_metadata_json: self
+                .try_encode_json(&context.domain_metadata, "Delta domain metadata")?,
+            commit_timestamps_json: self
+                .try_encode_json(&context.commit_timestamps, "Delta commit timestamps")?,
+        })
+    }
+
+    fn try_decode_delta_commit_context(
+        &self,
+        context: gen::DeltaCommitContext,
+    ) -> Result<DeltaCommitContext> {
+        let base_snapshot = context
+            .base_snapshot
+            .map(|context| self.try_decode_delta_snapshot_context(context))
+            .transpose()?;
+        Ok(DeltaCommitContext { base_snapshot })
+    }
+
+    fn try_encode_delta_commit_context(
+        &self,
+        context: &DeltaCommitContext,
+    ) -> Result<gen::DeltaCommitContext> {
+        let base_snapshot = context
+            .base_snapshot
+            .as_ref()
+            .map(|context| self.try_encode_delta_snapshot_context(context))
+            .transpose()?;
+        Ok(gen::DeltaCommitContext { base_snapshot })
+    }
+
+    fn try_decode_delta_write_context(
+        &self,
+        context: gen::DeltaWriteContext,
+    ) -> Result<DeltaWriteContext> {
+        let commit_context = match context.commit_context {
+            Some(context) => self.try_decode_delta_commit_context(context)?,
+            None => return plan_err!("Missing commit_context for DeltaWriteContext"),
+        };
+        let initial_actions = context
+            .initial_actions_json
+            .iter()
+            .map(|action| self.try_decode_json::<Action>(action, "Delta initial action"))
+            .collect::<Result<Vec<_>>>()?;
+        let schema_actions = context
+            .schema_actions_json
+            .iter()
+            .map(|action| self.try_decode_json::<Action>(action, "Delta schema action"))
+            .collect::<Result<Vec<_>>>()?;
+        let operation = context
+            .operation_json
+            .as_deref()
+            .map(|operation| self.try_decode_json::<DeltaOperation>(operation, "Delta operation"))
+            .transpose()?;
+        let logical_kernel_for_mapping = context
+            .logical_kernel_for_mapping_json
+            .as_deref()
+            .map(|schema| self.try_decode_json::<StructType>(schema, "Delta logical schema"))
+            .transpose()?;
+        let materialized_row_tracking_columns = match (
+            context.row_tracking_materialized_row_id_column,
+            context.row_tracking_materialized_row_commit_version_column,
+        ) {
+            (Some(row_id), Some(row_commit_version)) => Some(RowTrackingMaterializedColumnNames {
+                row_id,
+                row_commit_version,
+            }),
+            (None, None) => None,
+            _ => {
+                return plan_err!(
+                    "Incomplete row tracking materialized columns for DeltaWriteContext"
+                )
+            }
+        };
+
+        Ok(DeltaWriteContext {
+            commit_context,
+            final_schema: self.try_decode_json(&context.final_schema_json, "Delta final schema")?,
+            effective_column_mapping_mode: self
+                .try_decode_delta_column_mapping_mode(context.effective_column_mapping_mode)?,
+            initial_actions,
+            schema_actions,
+            operation,
+            logical_kernel_for_mapping,
+            physical_partition_columns: context.physical_partition_columns,
+            materialized_row_tracking_columns,
+        })
+    }
+
+    fn try_encode_delta_write_context(
+        &self,
+        context: &DeltaWriteContext,
+    ) -> Result<gen::DeltaWriteContext> {
+        let initial_actions_json = context
+            .initial_actions
+            .iter()
+            .map(|action| self.try_encode_json(action, "Delta initial action"))
+            .collect::<Result<Vec<_>>>()?;
+        let schema_actions_json = context
+            .schema_actions
+            .iter()
+            .map(|action| self.try_encode_json(action, "Delta schema action"))
+            .collect::<Result<Vec<_>>>()?;
+        let operation_json = context
+            .operation
+            .as_ref()
+            .map(|operation| self.try_encode_json(operation, "Delta operation"))
+            .transpose()?;
+        let logical_kernel_for_mapping_json = context
+            .logical_kernel_for_mapping
+            .as_ref()
+            .map(|schema| self.try_encode_json(schema, "Delta logical schema"))
+            .transpose()?;
+        let (
+            row_tracking_materialized_row_id_column,
+            row_tracking_materialized_row_commit_version_column,
+        ) = match context.materialized_row_tracking_columns.as_ref() {
+            Some(columns) => (
+                Some(columns.row_id.clone()),
+                Some(columns.row_commit_version.clone()),
+            ),
+            None => (None, None),
+        };
+
+        Ok(gen::DeltaWriteContext {
+            commit_context: Some(self.try_encode_delta_commit_context(&context.commit_context)?),
+            final_schema_json: self.try_encode_json(&context.final_schema, "Delta final schema")?,
+            effective_column_mapping_mode: Self::try_encode_delta_column_mapping_mode(
+                context.effective_column_mapping_mode,
+            ),
+            initial_actions_json,
+            schema_actions_json,
+            operation_json,
+            logical_kernel_for_mapping_json,
+            physical_partition_columns: context.physical_partition_columns.clone(),
+            row_tracking_materialized_row_id_column,
+            row_tracking_materialized_row_commit_version_column,
+        })
+    }
+
+    fn try_decode_delta_column_mapping_mode(&self, mode: i32) -> Result<ColumnMappingMode> {
+        match gen::DeltaColumnMappingMode::try_from(mode)
+            .map_err(|_| plan_datafusion_err!("invalid Delta column mapping mode"))?
+        {
+            gen::DeltaColumnMappingMode::None => Ok(ColumnMappingMode::None),
+            gen::DeltaColumnMappingMode::Name => Ok(ColumnMappingMode::Name),
+            gen::DeltaColumnMappingMode::Id => Ok(ColumnMappingMode::Id),
+        }
+    }
+
+    fn try_encode_delta_column_mapping_mode(mode: ColumnMappingMode) -> i32 {
+        (match mode {
+            ColumnMappingMode::None => gen::DeltaColumnMappingMode::None,
+            ColumnMappingMode::Name => gen::DeltaColumnMappingMode::Name,
+            ColumnMappingMode::Id => gen::DeltaColumnMappingMode::Id,
+        }) as i32
+    }
+
+    fn try_decode_json<T: DeserializeOwned>(&self, value: &str, description: &str) -> Result<T> {
+        serde_json::from_str(value)
+            .map_err(|e| plan_datafusion_err!("failed to decode {description}: {e}"))
+    }
+
+    fn try_encode_json<T: Serialize>(&self, value: &T, description: &str) -> Result<String> {
+        serde_json::to_string(value)
+            .map_err(|e| plan_datafusion_err!("failed to encode {description}: {e}"))
     }
 
     fn try_decode_catalog_partition_field(
@@ -3678,5 +3875,28 @@ impl RemoteExecutionCodec {
         M: Message,
     {
         Ok(message.encode_to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
+        let codec = RemoteExecutionCodec;
+        let name = udf.name().to_string();
+        let mut buf = vec![];
+        codec.try_encode_udf(&udf, &mut buf)?;
+        codec.try_decode_udf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_spark_variant_explode_helper_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkVariantExplodeUdf::new()))?;
+
+        assert!(decoded.inner().as_any().is::<SparkVariantExplodeUdf>());
+        assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
     }
 }
