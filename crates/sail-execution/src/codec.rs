@@ -201,6 +201,7 @@ use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
 use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;
 use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjectUdf;
+use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -2193,6 +2194,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
             "parse_json" => Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
+            "spark_variant_explode" => Ok(Arc::new(ScalarUDF::from(SparkVariantExplodeUdf::new()))),
             "to_variant_object" => Ok(Arc::new(ScalarUDF::from(SparkToVariantObjectUdf::new()))),
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
@@ -2404,6 +2406,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkJsonToVariantUdf>()
+            || node_inner.is::<SparkVariantExplodeUdf>()
             || node_inner.is::<SparkToVariantObjectUdf>()
             || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkLastDay>()
@@ -3818,5 +3821,28 @@ impl RemoteExecutionCodec {
         M: Message,
     {
         Ok(message.encode_to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
+        let codec = RemoteExecutionCodec;
+        let name = udf.name().to_string();
+        let mut buf = vec![];
+        codec.try_encode_udf(&udf, &mut buf)?;
+        codec.try_decode_udf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_spark_variant_explode_helper_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkVariantExplodeUdf::new()))?;
+
+        assert!(decoded.inner().as_any().is::<SparkVariantExplodeUdf>());
+        assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
     }
 }
