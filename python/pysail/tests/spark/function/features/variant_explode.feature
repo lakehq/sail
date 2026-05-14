@@ -3,6 +3,26 @@ Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode analysis and schema
 
+    @sail-only
+    Scenario: EXPLAIN variant_explode shows physical plan
+      When query
+        """
+        EXPLAIN SELECT pos, key, value
+        FROM (SELECT parse_json('[1, 2]') AS v) t
+        LATERAL VIEW variant_explode(v) ve AS pos, key, value
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN variant_explode_outer shows physical plan
+      When query
+        """
+        EXPLAIN SELECT pos, key, value
+        FROM (SELECT parse_json('{"a": 1}') AS v) t
+        LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
+        """
+      Then query plan matches snapshot
+
     Scenario: variant_explode returns pos key value columns
       When query
         """
@@ -18,14 +38,14 @@ Feature: variant_explode and variant_explode_outer
          |-- value: variant (nullable = true)
         """
 
-    Scenario: variant_explode_outer rejects non-variant input during analysis
+    Scenario: variant_explode_outer rejects non-variant input
       When query
         """
         SELECT pos, key, value
         FROM (SELECT array(1, 2, 3) AS v) t
         LATERAL VIEW variant_explode_outer(v) ve AS pos, key, value
         """
-      Then query error (?s).*variant_explode_outer expects a VARIANT input.*
+      Then query error (?s).*VariantType.*
 
   Rule: variant_explode with array input
 

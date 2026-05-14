@@ -7,6 +7,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 
 use crate::error::PlanError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -86,6 +87,13 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![cast(zipped, res_type)]))
 }
 
+fn variant_explode(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let arg = arguments.one()?;
+    let explode_arr = ScalarUDF::from(SparkVariantExplodeUdf::new()).call(vec![arg]);
+    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![explode_arr]))
+}
+
 pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -106,14 +114,8 @@ pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFu
             F::udf(Explode::new(ExplodeKind::PosExplodeOuter)),
         ),
         ("stack", F::custom(stack)),
-        (
-            "variant_explode",
-            F::udf(Explode::new(ExplodeKind::VariantExplode)),
-        ),
-        (
-            "variant_explode_outer",
-            F::udf(Explode::new(ExplodeKind::VariantExplodeOuter)),
-        ),
+        ("variant_explode", F::custom(variant_explode)),
+        ("variant_explode_outer", F::custom(variant_explode)),
     ]
 }
 
