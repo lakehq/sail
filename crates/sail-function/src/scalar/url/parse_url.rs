@@ -65,9 +65,25 @@ impl ParseUrl {
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
         match Url::parse(value) {
             Ok(url) => Ok(match part {
-                "HOST" => url.host_str().map(String::from),
+                "HOST" => {
+                    // java.net.URI returns null for percent-encoded hostnames (e.g.
+                    // "http://ex%61mple.com"). The WHATWG url crate decodes them, so
+                    // we reject any host containing a raw '%' in the original string.
+                    if host_is_percent_encoded(value) {
+                        None
+                    } else {
+                        url.host_str().map(String::from)
+                    }
+                }
                 "PATH" => {
-                    let path = url.path().to_string();
+                    let path = url.path();
+                    // Opaque URIs (e.g. "mailto:user@example.com", "tel:+1-816-555-1212")
+                    // have no authority and a path that doesn't start with '/'.
+                    // java.net.URI returns null for PATH on opaque URIs; we match that.
+                    if !url.has_authority() && !path.starts_with('/') {
+                        return Ok(None);
+                    }
+                    let path = path.to_string();
                     // Spark: "https://example.com" → empty PATH, "https://example.com/" → "/"
                     // The url crate always returns "/" when there is no path, so we use
                     // has_explicit_path to distinguish "http://ex.com" from "http://ex.com/".
@@ -131,7 +147,12 @@ impl ParseUrl {
                         auth.push(':');
                         auth.push_str(&port.to_string());
                     }
-                    Some(auth)
+                    // java.net.URI returns null for an empty authority (e.g. "file:///path").
+                    if auth.is_empty() {
+                        None
+                    } else {
+                        Some(auth)
+                    }
                 }
                 "USERINFO" => {
                     let username = url.username();
@@ -263,6 +284,26 @@ impl ScalarUDFImpl for ParseUrl {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(move |a| spark_parse_url_impl(a, safe, &name), vec![])(&args)
     }
+}
+
+/// Returns true if the host portion of the URL contains a percent-encoded character.
+/// java.net.URI returns null for `getHost()` when the host is percent-encoded
+/// (e.g. "http://ex%61mple.com"), while the WHATWG url crate decodes it.
+fn host_is_percent_encoded(url: &str) -> bool {
+    let after_scheme = match url.find("://") {
+        Some(i) => i + 3,
+        None => return false,
+    };
+    // Skip userinfo
+    let host_start = url[after_scheme..]
+        .find('@')
+        .map(|i| after_scheme + i + 1)
+        .unwrap_or(after_scheme);
+    let host_end = url[host_start..]
+        .find(['/', '?', '#', ':'])
+        .map(|i| host_start + i)
+        .unwrap_or(url.len());
+    url[host_start..host_end].contains('%')
 }
 
 /// Returns true if the URL has an explicit path segment (a `/` immediately after the authority).

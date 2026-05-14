@@ -779,3 +779,117 @@ Feature: parse_url() extracts URL component
       Then query result
         | result     |
         | /root/path |
+
+    Scenario: parse_url file triple slash HOST returns NULL
+      When query
+        """
+        SELECT parse_url('file:///etc/hosts', 'HOST') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url file triple slash AUTHORITY returns NULL
+      When query
+        """
+        SELECT parse_url('file:///etc/hosts', 'AUTHORITY') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url custom authority-less scheme QUERY
+      When query
+        """
+        SELECT parse_url('custom:/root/path?q=1', 'QUERY') AS result
+        """
+      Then query result
+        | result |
+        | q=1    |
+
+    Scenario: parse_url custom authority-less scheme REF
+      When query
+        """
+        SELECT parse_url('custom:/root/path#frag', 'REF') AS result
+        """
+      Then query result
+        | result |
+        | frag   |
+
+  Rule: Opaque URIs
+
+    Scenario: parse_url opaque mailto PATH returns NULL
+      When query
+        """
+        SELECT parse_url('mailto:user@example.com', 'PATH') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url opaque mailto HOST returns NULL
+      When query
+        """
+        SELECT parse_url('mailto:user@example.com', 'HOST') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url opaque mailto PROTOCOL returns scheme
+      When query
+        """
+        SELECT parse_url('mailto:user@example.com', 'PROTOCOL') AS result
+        """
+      Then query result
+        | result |
+        | mailto |
+
+    Scenario: parse_url opaque tel PATH returns NULL
+      When query
+        """
+        SELECT parse_url('tel:+1-816-555-1212', 'PATH') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url opaque urn PATH returns NULL
+      When query
+        """
+        SELECT parse_url('urn:isbn:0451450523', 'PATH') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Percent-encoded host
+
+    Scenario: parse_url percent-encoded host returns NULL
+      When query
+        """
+        SELECT parse_url('http://ex%61mple.com/path', 'HOST') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: IPv6
+
+    Scenario: parse_url IPv6 HOST returns bracketed form
+      When query
+        """
+        SELECT parse_url('http://[::1]/path', 'HOST') AS result
+        """
+      Then query result
+        | result |
+        | [::1]  |
+
+    Scenario: parse_url IPv6 with port AUTHORITY
+      When query
+        """
+        SELECT parse_url('http://[::1]:8080/path', 'AUTHORITY') AS result
+        """
+      Then query result
+        | result       |
+        | [::1]:8080   |
