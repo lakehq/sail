@@ -37,6 +37,8 @@ Hive Metastore can be configured using the following options:
 - `min_sasl_qop` (optional): Minimum Kerberos SASL QOP when `auth = "kerberos"`. Valid values are `auth`, `auth_int`, and `auth_conf`. The default is `auth`.
 - `connect_timeout_secs` (optional): Per-endpoint connect timeout in seconds. The default is `5`.
 
+See [Common Options](./index.md#common-options) for caching configuration.
+
 Failover behavior:
 
 - Sail attempts endpoints in configured order.
@@ -105,6 +107,17 @@ export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms1.internal:9083"
 - Delegation-token authentication is not supported.
 - Transactional Hive Metastore APIs are not used yet. Sail currently targets metadata CRUD rather than Hive ACID write coordination.
 
+## Table Types
+
+Sail distinguishes between **managed** and **external** tables based on the `table_type` field stored in HMS metadata:
+
+- **Managed tables** (created without `LOCATION`, e.g. by Spark) report `Type: MANAGED` in `DESCRIBE EXTENDED`.
+- **External tables** (created with `LOCATION` or by Sail itself) report `Type: EXTERNAL`.
+
+For `DROP TABLE`, Sail uses metadata-only semantics for HMS and does **not** request physical data deletion via the HMS `delete_data` flag, regardless of managed vs external type.
+
+Sail always creates its own tables as external (`EXTERNAL=TRUE`, `table_type = EXTERNAL_TABLE`). When reading tables created by other engines (e.g. Spark), Sail reflects the type recorded in HMS.
+
 ## Examples
 
 ```bash
@@ -113,4 +126,7 @@ export SAIL_CATALOG__LIST='[{type="hive_metastore", name="sail", uris=["127.0.0.
 export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms1.internal:9083","hms2.internal:9083"], thrift_transport="framed", connect_timeout_secs=10}]'
 
 export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["hms.internal:9083"], auth="kerberos", kerberos_service_principal="hive-metastore/_HOST@EXAMPLE.COM", min_sasl_qop="auth_int", thrift_transport="framed"}]'
+
+# Enabling caching for database and table listings
+export SAIL_CATALOG__LIST='[{type="hms", name="sail", uris=["127.0.0.1:9083"], database_cache_type="global", database_cache_ttl_secs=3600, table_cache_type="global", table_cache_size=1000}]'
 ```
