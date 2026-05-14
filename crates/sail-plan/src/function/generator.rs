@@ -10,7 +10,7 @@ use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 
 use crate::error::PlanError;
-use crate::function::common::{ScalarFunction, ScalarFunctionBuilder as F, ScalarFunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::PlanResult;
 
 fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
