@@ -630,13 +630,22 @@ data:
   operationMetrics:
     executionTimeMs: <time_ms>
     numAddedBytes: 1837
+    numAddedChangeFiles: 0
     numAddedFiles: 1
+    numCopiedRows: 5
+    numDeletedRows: 3
+    numDeletionVectorsAdded: 0
+    numDeletionVectorsRemoved: 0
+    numDeletionVectorsUpdated: 0
     numFiles: 1
     numOutputBytes: 1837
     numOutputFiles: 1
     numOutputRows: 5
     numRemovedBytes: 1941
     numRemovedFiles: 1
+    numTouchedRows: 8
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
     writeTimeMs: <time_ms>
   operationParameters:
     predicate: 'department = ''Engineering'' '

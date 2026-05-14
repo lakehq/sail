@@ -737,10 +737,44 @@ struct ShowTableExtendedRow {
 fn create_table_schema_from_columns(
     columns: &[crate::provider::CreateTableColumnOptions],
 ) -> SchemaRef {
-    use datafusion::arrow::datatypes::{Field, Schema};
+    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
+    use sail_common::spec::{EXTENSION_TYPE_NAME_KEY, VARIANT_EXTENSION_NAME};
+
+    fn is_variant_struct(dt: &ArrowDataType) -> bool {
+        // TODO: consider storing field-level metadata in `CreateTableColumnOptions`
+        //   so that extension types (e.g. Variant) do not need to be re-detected here.
+        // Variant columns are resolved to Struct(metadata: Binary NOT NULL,
+        // value: Binary NOT NULL) by the plan resolver.  The field-level
+        // extension metadata that marks the field as a variant type is stored
+        // on the ArrowField, not on the ArrowDataType, so it is lost when only
+        // the data type is stored in CreateTableColumnOptions.  Detect the
+        // canonical variant struct shape here and restore the metadata.
+        if let ArrowDataType::Struct(fields) = dt {
+            fields.len() == 2
+                && fields[0].name() == "metadata"
+                && *fields[0].data_type() == ArrowDataType::Binary
+                && !fields[0].is_nullable()
+                && fields[1].name() == "value"
+                && *fields[1].data_type() == ArrowDataType::Binary
+                && !fields[1].is_nullable()
+        } else {
+            false
+        }
+    }
+
     let fields: Vec<Field> = columns
         .iter()
-        .map(|c| Field::new(&c.name, c.data_type.clone(), c.nullable))
+        .map(|c| {
+            let field = Field::new(&c.name, c.data_type.clone(), c.nullable);
+            if is_variant_struct(&c.data_type) {
+                field.with_metadata(std::collections::HashMap::from([(
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    VARIANT_EXTENSION_NAME.to_string(),
+                )]))
+            } else {
+                field
+            }
+        })
         .collect();
     std::sync::Arc::new(Schema::new(fields))
 }
