@@ -2339,10 +2339,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
             "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
-            "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new(false)))),
-            "try_parse_url" | "spark_try_parse_url" => {
-                Ok(Arc::new(ScalarUDF::from(ParseUrl::new(true))))
-            }
             "try_url_decode" => Ok(Arc::new(ScalarUDF::from(TryUrlDecode::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
