@@ -777,11 +777,11 @@ impl TableFormat for DeltaTableFormat {
 
 /// Returns true if the declared `new` Arrow schema is compatible with the
 /// `existing` Delta table schema. Two schemas are considered compatible when
-/// they have the same top-level columns with matching names (case-sensitive) and
-/// matching data types. Nullability of declared fields may be looser than the
-/// on-disk fields (Spark allows declaring a NOT NULL column as nullable and
-/// vice versa at `CREATE TABLE` time). Nested struct fields and partitioning
-/// checks are deferred to future iterations.
+/// they have the same top-level columns with matching names (case-sensitive),
+/// matching data types, and matching Arrow extension type markers. Nullability of
+/// declared fields may be looser than the on-disk fields (Spark allows declaring
+/// a NOT NULL column as nullable and vice versa at `CREATE TABLE` time). Nested
+/// struct fields and partitioning checks are deferred to future iterations.
 fn delta_schemas_compatible(
     existing: &datafusion::arrow::datatypes::Schema,
     declared: &datafusion::arrow::datatypes::Schema,
@@ -796,8 +796,22 @@ fn delta_schemas_compatible(
         if a.data_type() != b.data_type() {
             return false;
         }
+        if !extension_metadata_compatible(a.metadata(), b.metadata()) {
+            return false;
+        }
     }
     true
+}
+
+fn extension_metadata_compatible(
+    existing: &std::collections::HashMap<String, String>,
+    declared: &std::collections::HashMap<String, String>,
+) -> bool {
+    use sail_common::spec::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+
+    [EXTENSION_TYPE_NAME_KEY, EXTENSION_TYPE_METADATA_KEY]
+        .into_iter()
+        .all(|key| existing.get(key) == declared.get(key))
 }
 
 fn operation_column_json(
@@ -1138,6 +1152,11 @@ fn split_delta_write_options_and_table_properties(
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use sail_common::spec::{
+        EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, VARIANT_EXTENSION_NAME,
+    };
+
     use super::*;
 
     #[test]
@@ -1238,5 +1257,76 @@ mod tests {
             }
             _ => unreachable!("expected OptionList"),
         }
+    }
+
+    fn variant_physical_shape() -> DataType {
+        DataType::Struct(
+            vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, false),
+            ]
+            .into(),
+        )
+    }
+
+    fn schema_with_payload(field: Field) -> Schema {
+        Schema::new(vec![field])
+    }
+
+    #[test]
+    fn delta_schemas_compatible_rejects_extension_metadata_mismatch() {
+        let variant_field = Field::new("payload", variant_physical_shape(), true).with_metadata(
+            std::collections::HashMap::from([(
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                VARIANT_EXTENSION_NAME.to_string(),
+            )]),
+        );
+        let plain_struct_field = Field::new("payload", variant_physical_shape(), true);
+
+        assert!(!delta_schemas_compatible(
+            &schema_with_payload(variant_field.clone()),
+            &schema_with_payload(plain_struct_field.clone()),
+        ));
+        assert!(!delta_schemas_compatible(
+            &schema_with_payload(plain_struct_field),
+            &schema_with_payload(variant_field),
+        ));
+    }
+
+    #[test]
+    fn delta_schemas_compatible_requires_matching_extension_metadata_value() {
+        let existing = Field::new("payload", DataType::Binary, true).with_metadata(
+            std::collections::HashMap::from([
+                (
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    "geoarrow.wkb".to_string(),
+                ),
+                (
+                    EXTENSION_TYPE_METADATA_KEY.to_string(),
+                    r#"{"edges":"planar"}"#.to_string(),
+                ),
+            ]),
+        );
+        let declared = Field::new("payload", DataType::Binary, true).with_metadata(
+            std::collections::HashMap::from([
+                (
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    "geoarrow.wkb".to_string(),
+                ),
+                (
+                    EXTENSION_TYPE_METADATA_KEY.to_string(),
+                    r#"{"edges":"spherical"}"#.to_string(),
+                ),
+            ]),
+        );
+
+        assert!(!delta_schemas_compatible(
+            &schema_with_payload(existing.clone()),
+            &schema_with_payload(declared),
+        ));
+        assert!(delta_schemas_compatible(
+            &schema_with_payload(existing.clone()),
+            &schema_with_payload(existing),
+        ));
     }
 }

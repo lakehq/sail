@@ -41,3 +41,30 @@ Feature: Delta Lake Variant support
     Then query result ordered
       | id | a | b     | payload_json        |
       | 1  | 1 | delta | {"a":1,"b":"delta"} |
+
+  Scenario: Existing Variant table is not adopted as a plain struct
+    Given variable location for temporary directory delta_variant_adoption
+    Given final statement
+      """
+      DROP TABLE IF EXISTS delta_variant_source_table
+      """
+    Given final statement
+      """
+      DROP TABLE IF EXISTS delta_variant_plain_struct_table
+      """
+    Given statement template
+      """
+      CREATE TABLE delta_variant_source_table (
+        payload VARIANT
+      )
+      USING DELTA
+      LOCATION {{ location.sql }}
+      """
+    Given statement template with error different schema
+      """
+      CREATE TABLE delta_variant_plain_struct_table (
+        payload STRUCT<metadata: BINARY NOT NULL, value: BINARY NOT NULL>
+      )
+      USING DELTA
+      LOCATION {{ location.sql }}
+      """
