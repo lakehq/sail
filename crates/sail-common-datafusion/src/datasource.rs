@@ -293,6 +293,47 @@ pub struct RowLevelWriteInfo {
 // - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
 // - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
 
+/// Physical storage action for a CREATE OR REPLACE TABLE request.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CreateTableStorageAction {
+    /// Create storage metadata, or adopt/validate compatible metadata that
+    /// already exists at the target location.
+    CreateOrAdopt,
+    /// Replace existing storage metadata/data when a physical table already
+    /// exists at the target location.
+    Replace,
+}
+
+/// User-facing CREATE TABLE operation plus the storage action selected by the
+/// owning catalog.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CreateTableOperation {
+    Create,
+    CreateIfNotExists,
+    CreateOrReplace {
+        storage_action: CreateTableStorageAction,
+    },
+}
+
+impl CreateTableOperation {
+    pub fn is_if_not_exists(self) -> bool {
+        matches!(self, Self::CreateIfNotExists)
+    }
+
+    pub fn is_create_or_replace(self) -> bool {
+        matches!(self, Self::CreateOrReplace { .. })
+    }
+
+    pub fn replaces_existing_storage(self) -> bool {
+        matches!(
+            self,
+            Self::CreateOrReplace {
+                storage_action: CreateTableStorageAction::Replace,
+            }
+        )
+    }
+}
+
 /// Information passed to [`TableFormat::create_table`] so a format implementation
 /// can materialize the physical table.
 #[derive(Debug, Clone)]
@@ -307,10 +348,8 @@ pub struct CreateTableInfo {
     pub partition_by: Vec<CatalogPartitionField>,
     /// Table properties/configuration (e.g. `delta.*` keys).
     pub properties: HashMap<String, String>,
-    /// CREATE TABLE IF NOT EXISTS.
-    pub if_not_exists: bool,
-    /// CREATE OR REPLACE TABLE.
-    pub replace: bool,
+    /// CREATE TABLE operation semantics and selected physical storage action.
+    pub operation: CreateTableOperation,
     /// Per-column generation expressions by column name. Used for GENERATED
     /// ALWAYS AS columns (Delta generated columns table feature).
     pub generated_columns: HashMap<String, String>,

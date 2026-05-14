@@ -501,8 +501,7 @@ impl TableFormat for DeltaTableFormat {
             schema,
             partition_by,
             properties,
-            if_not_exists,
-            replace,
+            operation,
             generated_columns,
         } = info;
 
@@ -515,8 +514,9 @@ impl TableFormat for DeltaTableFormat {
         // Detect whether a Delta table already exists at this location.
         // When REPLACE is requested, load the full snapshot so we can tombstone
         // the existing file actions.
+        let replace_existing_storage = operation.replaces_existing_storage();
         let existing_snapshot_config = DeltaSnapshotConfig {
-            require_files: replace,
+            require_files: replace_existing_storage,
             ..Default::default()
         };
         let existing_table = match open_table_with_object_store_and_table_config(
@@ -544,8 +544,8 @@ impl TableFormat for DeltaTableFormat {
         // (external table with no column list). If a schema IS declared,
         // validate that it matches the on-disk schema and partition layout.
         if let Some(table) = &existing_table {
-            if !replace {
-                if !if_not_exists && !schema.fields().is_empty() {
+            if !replace_existing_storage {
+                if !operation.is_if_not_exists() && !schema.fields().is_empty() {
                     let snapshot = table
                         .snapshot()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -627,7 +627,7 @@ impl TableFormat for DeltaTableFormat {
         // REPLACE: tombstone all existing active files before writing the new metadata.
         let mut actions: Vec<CommitAction> = Vec::new();
         let (save_mode, reference, log_store, protocol) = match existing_table {
-            Some(table) if replace => {
+            Some(table) if replace_existing_storage => {
                 let snapshot = table
                     .snapshot()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
@@ -667,7 +667,7 @@ impl TableFormat for DeltaTableFormat {
                 )
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let save_mode = if replace {
+                let save_mode = if operation.is_create_or_replace() {
                     SaveMode::Overwrite
                 } else {
                     SaveMode::ErrorIfExists

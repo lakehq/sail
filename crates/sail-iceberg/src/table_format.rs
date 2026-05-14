@@ -72,8 +72,7 @@ impl TableFormat for IcebergTableFormat {
             schema,
             partition_by,
             mut properties,
-            if_not_exists,
-            replace,
+            operation,
             generated_columns: _,
         } = info;
 
@@ -94,10 +93,14 @@ impl TableFormat for IcebergTableFormat {
             Err(e) => return Err(e),
         };
 
-        match (&existing_metadata, replace, if_not_exists) {
-            (Some(_), false, true) => return Ok(()),
-            (Some(_), false, false) if schema.fields().is_empty() => return Ok(()),
-            (Some(_), false, false) => {
+        match (&existing_metadata, operation) {
+            (Some(_), operation) if operation.is_if_not_exists() => return Ok(()),
+            (Some(_), operation)
+                if !operation.replaces_existing_storage() && schema.fields().is_empty() =>
+            {
+                return Ok(());
+            }
+            (Some(_), operation) if !operation.replaces_existing_storage() => {
                 return plan_err!("Iceberg table already exists at path: {table_url}");
             }
             _ => {}
@@ -617,6 +620,8 @@ fn alter_table_properties_conflict_error() -> DataFusionError {
 
 #[cfg(test)]
 mod tests {
+    use sail_common_datafusion::datasource::CreateTableOperation;
+
     use super::*;
 
     #[test]
@@ -711,8 +716,7 @@ mod tests {
                             ("option.metadataAsDataRead".to_string(), "true".to_string()),
                             ("custom.key".to_string(), "custom-value".to_string()),
                         ]),
-                        if_not_exists: false,
-                        replace: false,
+                        operation: CreateTableOperation::Create,
                         generated_columns: std::collections::HashMap::new(),
                     },
                 )
@@ -771,8 +775,7 @@ mod tests {
                     schema: Arc::new(schema),
                     partition_by: vec![],
                     properties: std::collections::HashMap::new(),
-                    if_not_exists: false,
-                    replace: false,
+                    operation: CreateTableOperation::Create,
                     generated_columns: std::collections::HashMap::new(),
                 }
             };
@@ -813,7 +816,7 @@ mod tests {
                     true,
                 ),
             ]));
-            second_info.if_not_exists = true;
+            second_info.operation = CreateTableOperation::CreateIfNotExists;
             IcebergTableFormat
                 .create_table(ctx.runtime_env(), second_info)
                 .await?;

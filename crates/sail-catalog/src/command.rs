@@ -1,7 +1,9 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::datasource::{is_lakehouse_format, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    is_lakehouse_format, CreateTableOperation, CreateTableStorageAction, TableFormatRegistry,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -343,8 +345,20 @@ impl CatalogCommand {
                     match (options.location.clone(), materialization_mode) {
                         (_, CreateTableMaterialization::Skip) | (None, _) => None,
                         (Some(location), materialization_mode) => {
-                            let physical_replace =
-                                matches!(materialization_mode, CreateTableMaterialization::Replace);
+                            let operation = match (options.replace, options.if_not_exists) {
+                                (true, _) => CreateTableOperation::CreateOrReplace {
+                                    storage_action: if matches!(
+                                        materialization_mode,
+                                        CreateTableMaterialization::Replace
+                                    ) {
+                                        CreateTableStorageAction::Replace
+                                    } else {
+                                        CreateTableStorageAction::CreateOrAdopt
+                                    },
+                                },
+                                (false, true) => CreateTableOperation::CreateIfNotExists,
+                                (false, false) => CreateTableOperation::Create,
+                            };
                             let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
                                 CatalogError::External(format!(
                                     "missing TableFormatRegistry for storage-backed CREATE TABLE on format '{format}': {e}"
@@ -373,8 +387,7 @@ impl CatalogCommand {
                                 schema,
                                 partition_by,
                                 properties,
-                                if_not_exists: options.if_not_exists,
-                                replace: physical_replace,
+                                operation,
                                 generated_columns,
                             };
                             Some((table_format, info))
@@ -384,7 +397,7 @@ impl CatalogCommand {
                     None
                 };
                 if let Some((table_format, info)) = materialization {
-                    if info.replace {
+                    if info.operation.replaces_existing_storage() {
                         let physical_location = info.path.clone();
                         table_format
                             .create_table(ctx.runtime_env(), info)
@@ -1071,8 +1084,14 @@ mod tests {
     struct TestTableFormat {
         create_table_calls: Arc<AtomicUsize>,
         create_error: Option<String>,
-        replace_flags: Arc<Mutex<Vec<bool>>>,
+        operations: Arc<Mutex<Vec<CreateTableOperation>>>,
     }
+
+    type TestFormatRecorder = (
+        SessionContext,
+        Arc<AtomicUsize>,
+        Arc<Mutex<Vec<CreateTableOperation>>>,
+    );
 
     #[async_trait]
     impl TableFormat for TestTableFormat {
@@ -1112,10 +1131,10 @@ mod tests {
             info: sail_common_datafusion::datasource::CreateTableInfo,
         ) -> datafusion_common::Result<()> {
             self.create_table_calls.fetch_add(1, Ordering::SeqCst);
-            self.replace_flags
+            self.operations
                 .lock()
                 .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))?
-                .push(info.replace);
+                .push(info.operation);
             match &self.create_error {
                 Some(message) => Err(datafusion_common::DataFusionError::Plan(message.clone())),
                 None => Ok(()),
@@ -1138,16 +1157,14 @@ mod tests {
         (ctx, create_table_calls)
     }
 
-    fn test_session_context_with_format_recorder(
-        create_error: Option<&str>,
-    ) -> (SessionContext, Arc<AtomicUsize>, Arc<Mutex<Vec<bool>>>) {
+    fn test_session_context_with_format_recorder(create_error: Option<&str>) -> TestFormatRecorder {
         let create_table_calls = Arc::new(AtomicUsize::new(0));
-        let replace_flags = Arc::new(Mutex::new(Vec::new()));
+        let operations = Arc::new(Mutex::new(Vec::new()));
         let registry = Arc::new(TableFormatRegistry::new());
         let register_result = registry.register(Arc::new(TestTableFormat {
             create_table_calls: create_table_calls.clone(),
             create_error: create_error.map(ToString::to_string),
-            replace_flags: replace_flags.clone(),
+            operations: operations.clone(),
         }));
         assert!(
             register_result.is_ok(),
@@ -1156,7 +1173,7 @@ mod tests {
         (
             test_session_context_with_registry(Some(registry)),
             create_table_calls,
-            replace_flags,
+            operations,
         )
     }
 
@@ -1316,10 +1333,12 @@ mod tests {
         }
     }
 
-    fn recorded_replace_flags(flags: &Arc<Mutex<Vec<bool>>>) -> Result<Vec<bool>, String> {
-        flags
+    fn recorded_operations(
+        operations: &Arc<Mutex<Vec<CreateTableOperation>>>,
+    ) -> Result<Vec<CreateTableOperation>, String> {
+        operations
             .lock()
-            .map(|flags| flags.clone())
+            .map(|operations| operations.clone())
             .map_err(|e| e.to_string())
     }
 
@@ -1524,8 +1543,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_or_replace_without_catalog_entry_uses_physical_create() {
-        let (ctx, materialize_calls, replace_flags) =
-            test_session_context_with_format_recorder(None);
+        let (ctx, materialize_calls, operations) = test_session_context_with_format_recorder(None);
         let create_table_calls = Arc::new(AtomicUsize::new(0));
         let manager = test_manager_with_options(false, None, None, create_table_calls.clone());
         let mut options = test_create_table_options();
@@ -1542,13 +1560,17 @@ mod tests {
         );
         assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
         assert_eq!(materialize_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(recorded_replace_flags(&replace_flags), Ok(vec![false]));
+        assert_eq!(
+            recorded_operations(&operations),
+            Ok(vec![CreateTableOperation::CreateOrReplace {
+                storage_action: CreateTableStorageAction::CreateOrAdopt
+            }])
+        );
     }
 
     #[tokio::test]
     async fn create_or_replace_table_reports_catalog_failure_after_materialization() {
-        let (ctx, materialize_calls, replace_flags) =
-            test_session_context_with_format_recorder(None);
+        let (ctx, materialize_calls, operations) = test_session_context_with_format_recorder(None);
         let create_table_calls = Arc::new(AtomicUsize::new(0));
         let manager = test_manager_with_options(
             true,
@@ -1578,7 +1600,12 @@ mod tests {
                     && message.contains("storage and catalog out of sync")));
         assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
         assert_eq!(materialize_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(recorded_replace_flags(&replace_flags), Ok(vec![true]));
+        assert_eq!(
+            recorded_operations(&operations),
+            Ok(vec![CreateTableOperation::CreateOrReplace {
+                storage_action: CreateTableStorageAction::Replace
+            }])
+        );
     }
 
     #[tokio::test]
