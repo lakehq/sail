@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{DFSchema, DFSchemaRef, ExprSchema};
-use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection};
+use datafusion_expr::{
+    cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, Values,
+};
 use sail_common::spec;
 use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 
@@ -70,7 +72,50 @@ impl PlanResolver<'_> {
             }
             *row = new_row;
         }
-        let plan = LogicalPlanBuilder::values(values)?.build()?;
+        // DataFusion's `LogicalPlanBuilder::values` hard-codes every inferred
+        // field as `nullable=true` (see `infer_data` in
+        // `datafusion-expr/src/logical_plan/builder.rs`), regardless of
+        // whether the row exprs are actually nullable. Spark reports `c:
+        // interval day (nullable = false)` for `VALUES (INTERVAL '1' DAY),
+        // (INTERVAL '2' DAY) AS t(c)` because both literals are non-null.
+        // Build the plan via the helper to reuse its type-union + cast
+        // inference, then rebuild the `Values` node with a schema whose
+        // per-column nullability reflects the actual row expressions while
+        // preserving the inferred types and extension metadata.
+        // (`values_with_schema` drops field metadata in its own
+        // `infer_values_from_schema`, so we can't use it directly.)
+        let initial_plan = LogicalPlanBuilder::values(values)?.build()?;
+        let LogicalPlan::Values(Values {
+            schema: initial_schema,
+            values: cast_values,
+        }) = initial_plan
+        else {
+            return Err(PlanError::internal(
+                "LogicalPlanBuilder::values produced a non-Values plan",
+            ));
+        };
+        let mut corrected_fields: Vec<Field> = Vec::with_capacity(initial_schema.fields().len());
+        for (j, field) in initial_schema.fields().iter().enumerate() {
+            let mut nullable = false;
+            for row in &cast_values {
+                if row[j].nullable(initial_schema.as_ref())? {
+                    nullable = true;
+                    break;
+                }
+            }
+            corrected_fields.push(
+                Field::new(field.name(), field.data_type().clone(), nullable)
+                    .with_metadata(field.metadata().clone()),
+            );
+        }
+        let corrected_schema = Arc::new(DFSchema::from_unqualified_fields(
+            Fields::from(corrected_fields),
+            DFSchema::metadata(&initial_schema).clone(),
+        )?);
+        let plan = LogicalPlan::Values(Values {
+            schema: corrected_schema,
+            values: cast_values,
+        });
         let plan_schema = plan.schema();
         let expr = plan_schema
             .columns()
