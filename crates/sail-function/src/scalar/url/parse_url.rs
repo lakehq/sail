@@ -268,16 +268,20 @@ impl ScalarUDFImpl for ParseUrl {
 /// Returns true if the URL has an explicit path segment (a `/` immediately after the authority).
 /// Distinguishes `http://ex.com` (no path, url crate returns "/") from `http://ex.com/`
 /// and `http://ex.com/?` (both have explicit "/").
+/// Authority-less URLs (e.g. `file:/path`, `custom:/root`) always have an explicit path.
 fn has_explicit_path(url: &str) -> bool {
-    let after_scheme = match url.find("://") {
-        Some(i) => i + 3,
-        None => return false,
-    };
-    let after_authority = url[after_scheme..]
-        .find(['/', '?', '#'])
-        .map(|i| after_scheme + i)
-        .unwrap_or(url.len());
-    url[after_authority..].starts_with('/')
+    match url.find("://") {
+        Some(i) => {
+            let after_scheme = i + 3;
+            let after_authority = url[after_scheme..]
+                .find(['/', '?', '#'])
+                .map(|j| after_scheme + j)
+                .unwrap_or(url.len());
+            url[after_authority..].starts_with('/')
+        }
+        // No authority section — the path after the colon is always explicit.
+        None => true,
+    }
 }
 
 /// Extract the explicit port string from a raw URL, even if it's a default port.
@@ -809,5 +813,9 @@ mod tests {
         assert!(has_explicit_path("http://ex.com/?"));
         assert!(has_explicit_path("http://ex.com/?q=1"));
         assert!(has_explicit_path("http://ex.com/path"));
+        // Authority-less URLs always have an explicit path
+        assert!(has_explicit_path("file:/"));
+        assert!(has_explicit_path("file:/etc/hosts"));
+        assert!(has_explicit_path("custom:/root/path"));
     }
 }

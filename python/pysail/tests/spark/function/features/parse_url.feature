@@ -741,3 +741,41 @@ Feature: parse_url() extracts URL component
       Then query result
         | result                        |
         | user:pwd@ftp.example.com:21   |
+
+  Rule: Authority-less URLs
+
+    Scenario: parse_url file colon slash PATH returns slash
+      When query
+        """
+        SELECT parse_url('file:/', 'PATH') AS result
+        """
+      Then query result
+        | result |
+        | /      |
+
+    Scenario: parse_url file triple slash PATH returns path
+      When query
+        """
+        SELECT parse_url('file:///etc/hosts', 'PATH') AS result
+        """
+      Then query result
+        | result     |
+        | /etc/hosts |
+
+    Scenario: parse_url file colon slash HOST returns NULL
+      When query
+        """
+        SELECT parse_url('file:/', 'HOST') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url custom authority-less scheme PATH
+      When query
+        """
+        SELECT parse_url('custom:/root/path', 'PATH') AS result
+        """
+      Then query result
+        | result     |
+        | /root/path |
