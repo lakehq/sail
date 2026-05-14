@@ -5,6 +5,13 @@ use crate::manager::CatalogManager;
 use crate::provider::{AlterTableOptions, CreateTableOptions, DropTableOptions};
 use crate::utils::match_pattern;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CreateTableMaterialization {
+    Skip,
+    Create,
+    Replace,
+}
+
 impl CatalogManager {
     pub async fn create_table<T: AsRef<str>>(
         &self,
@@ -18,24 +25,29 @@ impl CatalogManager {
     /// Performs lightweight catalog checks before a caller initializes
     /// storage-layer metadata for `CREATE TABLE`.
     ///
-    /// Returns `false` when `CREATE TABLE IF NOT EXISTS` is already satisfied
-    /// by an existing catalog table, so the storage hook should be skipped.
-    pub async fn should_materialize_create_table<T: AsRef<str>>(
+    /// Classifies the storage-layer materialization needed for `CREATE TABLE`.
+    ///
+    /// `CREATE OR REPLACE TABLE` only maps to physical replacement when the
+    /// catalog table already exists. If the catalog entry is absent, the
+    /// command is a create from the catalog's point of view; an existing
+    /// physical table at the target location should be adopted/validated by the
+    /// table format rather than blindly overwritten.
+    pub async fn create_table_materialization<T: AsRef<str>>(
         &self,
         table: &[T],
         if_not_exists: bool,
         replace: bool,
-    ) -> CatalogResult<bool> {
+    ) -> CatalogResult<CreateTableMaterialization> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.get_database(&database).await?;
         match provider.get_table(&database, &table).await {
-            Ok(_) if if_not_exists => Ok(false),
-            Ok(_) if replace => Ok(true),
+            Ok(_) if if_not_exists => Ok(CreateTableMaterialization::Skip),
+            Ok(_) if replace => Ok(CreateTableMaterialization::Replace),
             Ok(_) => Err(CatalogError::AlreadyExists(
                 CatalogObject::Table,
                 table.to_string(),
             )),
-            Err(CatalogError::NotFound(_, _)) => Ok(true),
+            Err(CatalogError::NotFound(_, _)) => Ok(CreateTableMaterialization::Create),
             Err(e) => Err(e),
         }
     }

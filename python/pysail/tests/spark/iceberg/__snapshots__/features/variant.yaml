@@ -25,7 +25,7 @@ data:
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     schema-id: 0
     type: struct
@@ -73,14 +73,14 @@ data:
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     schema-id: 0
     type: struct
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     - id: 2
       name: payload
@@ -178,11 +178,11 @@ data:
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     - id: 2
       name: payload
-      required: true
+      required: false
       type: variant
     schema-id: 0
     type: struct
