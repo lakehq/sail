@@ -2213,12 +2213,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
-            "spark_to_number" | "to_number" => {
-                Ok(Arc::new(ScalarUDF::from(SparkToNumber::new(false))))
-            }
-            "spark_try_to_number" | "try_to_number" => {
-                Ok(Arc::new(ScalarUDF::from(SparkToNumber::new(true))))
-            }
             "spark_split" | "split" => Ok(Arc::new(ScalarUDF::from(SparkSplit::new()))),
             "regexp_extract_all" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtractAll::new()))),
             "sentences" => Ok(Arc::new(ScalarUDF::from(SparkSentences::new()))),
