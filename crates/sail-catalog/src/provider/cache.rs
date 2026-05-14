@@ -200,6 +200,10 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.get_name()
     }
 
+    fn manages_physical_storage(&self) -> bool {
+        self.inner.manages_physical_storage()
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

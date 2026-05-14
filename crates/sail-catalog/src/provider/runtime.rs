@@ -31,6 +31,10 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
         self.inner.get_name()
     }
 
+    fn manages_physical_storage(&self) -> bool {
+        self.inner.manages_physical_storage()
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
