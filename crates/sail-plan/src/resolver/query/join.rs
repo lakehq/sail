@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use datafusion_common::{Column, JoinType, NullEquality};
+use datafusion_common::{Column, ExprSchema, JoinType, NullEquality};
 use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{build_join_schema, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_functions::expr_fn::coalesce;
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
@@ -207,6 +208,7 @@ impl PlanResolver<'_> {
         )?;
         // Re-register join key columns as hidden fields so that subsequent
         // attribute resolution (by plan_id) can still find them.
+        let builder_schema = builder.schema().clone();
         let hidden_columns = builder
             .schema()
             .columns()
@@ -220,7 +222,16 @@ impl PlanResolver<'_> {
                     for plan_id in info.plan_ids() {
                         state.register_plan_id_for_field(&field_id, plan_id)?;
                     }
-                    Ok(Expr::Column(col).alias(field_id))
+                    let metadata = builder_schema
+                        .field_from_column(&col)
+                        .ok()
+                        .map(|f| f.metadata().clone())
+                        .unwrap_or_default();
+                    Ok(alias_preserving_metadata(
+                        Expr::Column(col),
+                        field_id,
+                        metadata,
+                    ))
                 } else {
                     Ok(Expr::Column(col))
                 }
@@ -231,8 +242,27 @@ impl PlanResolver<'_> {
                 let projections = join_columns
                     .into_iter()
                     .map(|(name, (left, right))| {
-                        coalesce(vec![Expr::Column(left), Expr::Column(right)])
-                            .alias(state.register_field_name(name))
+                        // For USING/NATURAL joins both sides have the same
+                        // type; pick whichever side carries Field metadata
+                        // (e.g. Spark interval qualifier) and surface it on
+                        // the coalesced output column.
+                        let metadata = builder_schema
+                            .field_from_column(&left)
+                            .ok()
+                            .map(|f| f.metadata().clone())
+                            .filter(|m| !m.is_empty())
+                            .or_else(|| {
+                                builder_schema
+                                    .field_from_column(&right)
+                                    .ok()
+                                    .map(|f| f.metadata().clone())
+                            })
+                            .unwrap_or_default();
+                        alias_preserving_metadata(
+                            coalesce(vec![Expr::Column(left), Expr::Column(right)]),
+                            state.register_field_name(name),
+                            metadata,
+                        )
                     })
                     .chain(hidden_columns);
                 builder.project(projections)?
@@ -251,7 +281,16 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|(name, (left, right))| {
                         let col = if uses_right { right } else { left };
-                        Expr::Column(col).alias(state.register_field_name(name))
+                        let metadata = builder_schema
+                            .field_from_column(&col)
+                            .ok()
+                            .map(|f| f.metadata().clone())
+                            .unwrap_or_default();
+                        alias_preserving_metadata(
+                            Expr::Column(col),
+                            state.register_field_name(name),
+                            metadata,
+                        )
                     })
                     .chain(hidden_columns);
                 builder.project(projections)?

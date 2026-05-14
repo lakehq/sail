@@ -4,10 +4,13 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::select_expr::SelectExpr;
-use datafusion_expr::{col, lit, Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
+use datafusion_expr::{
+    col, lit, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+};
 use rand::{rng, RngExt};
 use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::random::Random;
@@ -151,7 +154,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let rand_column_name: String = state.register_field_name("rand_value");
-        let rand_expr: Expr = if with_replacement {
+        let rand_inner: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(RandPoisson::new())),
                 args: vec![
@@ -159,14 +162,19 @@ impl PlanResolver<'_> {
                     Expr::Literal(ScalarValue::Int64(Some(seed)), None),
                 ],
             })
-            .alias(&rand_column_name)
         } else {
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(Random::new())),
                 args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
             })
-            .alias(&rand_column_name)
         };
+        let rand_metadata = rand_inner
+            .to_field(input.schema().as_ref())?
+            .1
+            .metadata()
+            .clone();
+        let rand_expr =
+            alias_preserving_metadata(rand_inner, rand_column_name.as_str(), rand_metadata);
         let init_exprs: Vec<Expr> = input
             .schema()
             .columns()
@@ -229,14 +237,20 @@ impl PlanResolver<'_> {
             .map(|col| Expr::Column(col.clone()))
             .collect();
         let array_column_name: String = state.register_field_name("array_value");
-        let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+        let arr_inner = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::from(SparkSequence::new())),
             args: vec![
                 Expr::Literal(ScalarValue::Int64(Some(1)), None),
                 col(rand_column_name),
             ],
-        })
-        .alias(&array_column_name);
+        });
+        let arr_metadata = arr_inner
+            .to_field(plan_with_rand.schema().as_ref())?
+            .1
+            .metadata()
+            .clone();
+        let arr_expr =
+            alias_preserving_metadata(arr_inner, array_column_name.as_str(), arr_metadata);
         let plan = LogicalPlanBuilder::from(plan_with_rand)
             .project(
                 init_exprs_aux

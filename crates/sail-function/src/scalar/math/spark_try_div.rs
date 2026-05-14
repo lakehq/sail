@@ -73,10 +73,12 @@ impl ScalarUDFImpl for SparkTryDiv {
         }
     }
 
-    /// Propagate input nullability to the output field and attach Spark's
-    /// broadest interval qualifier metadata when the result is an interval
-    /// type. Mirrors `SparkTryMult::return_field_from_args` — see that impl
-    /// for the rationale on overriding the default ScalarUDF return field.
+    /// Always-nullable return field with the broadest Spark interval
+    /// qualifier metadata attached for interval results. `try_divide` returns
+    /// `NULL` on divide-by-zero / overflow regardless of input nullability,
+    /// so the output Field MUST be nullable — otherwise downstream consumers
+    /// (e.g. the Spark Connect client) reject the result with
+    /// `Column '...' is declared as non-nullable but contains null values`.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [left, right] = args.arg_fields else {
             return Err(invalid_arg_count_exec_err(
@@ -87,11 +89,10 @@ impl ScalarUDFImpl for SparkTryDiv {
         };
         let return_type =
             self.return_type(&[left.data_type().clone(), right.data_type().clone()])?;
-        let nullable = left.is_nullable() || right.is_nullable();
         Ok(Arc::new(widen_interval_qualifier_field(Field::new(
             self.name(),
             return_type,
-            nullable,
+            true,
         ))))
     }
 

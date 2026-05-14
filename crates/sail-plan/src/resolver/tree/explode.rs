@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use datafusion_expr::{ident, when};
 use datafusion_functions_nested::expr_fn as nested_fn;
 use either::Either;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
@@ -78,6 +80,40 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
         let arg = args.one()?;
         let arg_type = arg.get_type(self.plan.schema())?;
+        // Capture metadata of the inner element of the list/map argument so that
+        // the unpacked columns (e.g. `col`, `key`, `value`) can carry it forward
+        // (e.g. Spark interval qualifiers on the element type).
+        let element_metadata: HashMap<String, String> = match &arg_type {
+            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+                f.metadata().clone()
+            }
+            _ => HashMap::new(),
+        };
+        // Capture metadata of the array/map column itself, so the intermediate
+        // alias used as input to `unnest_with_options` carries any outer-field
+        // metadata (e.g. an interval qualifier on the array column).
+        let arg_metadata: HashMap<String, String> = match &arg {
+            Expr::Column(c) => self
+                .plan
+                .schema()
+                .field_from_column(c)
+                .ok()
+                .map(|f| f.metadata().clone())
+                .unwrap_or_default(),
+            _ => HashMap::new(),
+        };
+        let (map_key_metadata, map_value_metadata): (
+            HashMap<String, String>,
+            HashMap<String, String>,
+        ) = match &arg_type {
+            DataType::Map(entry, _) => match entry.data_type() {
+                DataType::Struct(fields) if fields.len() == 2 => {
+                    (fields[0].metadata().clone(), fields[1].metadata().clone())
+                }
+                _ => (HashMap::new(), HashMap::new()),
+            },
+            _ => (HashMap::new(), HashMap::new()),
+        };
         let return_type = func.return_type(&[arg_type])?;
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
         let arg = match data_type {
@@ -95,20 +131,30 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
 
         let name = self.state.register_field_name("");
         let out = match (data_type, with_position, is_inline) {
-            (ExplodeDataType::List, false, false) => vec![ident(&name).alias("col")],
+            (ExplodeDataType::List, false, false) => vec![alias_preserving_metadata(
+                ident(&name),
+                "col",
+                element_metadata.clone(),
+            )],
             (ExplodeDataType::List, true, false) => {
                 vec![
-                    ident(&name).field("pos").alias("pos"),
-                    ident(&name).field("col").alias("col"),
+                    alias_preserving_metadata(ident(&name).field("pos"), "pos", HashMap::new()),
+                    alias_preserving_metadata(
+                        ident(&name).field("col"),
+                        "col",
+                        element_metadata.clone(),
+                    ),
                 ]
             }
             (ExplodeDataType::List, _, true) => match return_type {
                 DataType::Struct(fields) => Ok(fields
                     .into_iter()
                     .map(|field| {
-                        ident(&name)
-                            .field(field.name().as_str())
-                            .alias(field.name().as_str())
+                        alias_preserving_metadata(
+                            ident(&name).field(field.name().as_str()),
+                            field.name().as_str(),
+                            field.metadata().clone(),
+                        )
                     })
                     .collect::<Vec<_>>()),
                 wrong_type => plan_err!(
@@ -117,20 +163,30 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             }?,
             (ExplodeDataType::Map, false, _) => {
                 vec![
-                    ident(&name).field(SAIL_MAP_KEY_FIELD_NAME).alias("key"),
-                    ident(&name).field(SAIL_MAP_VALUE_FIELD_NAME).alias("value"),
+                    alias_preserving_metadata(
+                        ident(&name).field(SAIL_MAP_KEY_FIELD_NAME),
+                        "key",
+                        map_key_metadata.clone(),
+                    ),
+                    alias_preserving_metadata(
+                        ident(&name).field(SAIL_MAP_VALUE_FIELD_NAME),
+                        "value",
+                        map_value_metadata.clone(),
+                    ),
                 ]
             }
             (ExplodeDataType::Map, true, _) => vec![
-                ident(&name).field("pos").alias("pos"),
-                ident(&name)
-                    .field("col")
-                    .field(SAIL_MAP_KEY_FIELD_NAME)
-                    .alias("key"),
-                ident(&name)
-                    .field("col")
-                    .field(SAIL_MAP_VALUE_FIELD_NAME)
-                    .alias("value"),
+                alias_preserving_metadata(ident(&name).field("pos"), "pos", HashMap::new()),
+                alias_preserving_metadata(
+                    ident(&name).field("col").field(SAIL_MAP_KEY_FIELD_NAME),
+                    "key",
+                    map_key_metadata.clone(),
+                ),
+                alias_preserving_metadata(
+                    ident(&name).field("col").field(SAIL_MAP_VALUE_FIELD_NAME),
+                    "value",
+                    map_value_metadata.clone(),
+                ),
             ],
         };
 
@@ -141,7 +197,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             .into_iter()
             .map(Expr::Column)
             .collect::<Vec<_>>();
-        projections.push(arg.alias(&name));
+        projections.push(alias_preserving_metadata(arg, &name, arg_metadata));
 
         let plan = mem::replace(&mut self.plan, empty_logical_plan());
         // TODO: If specific columns need to be unnested multiple times (e. g at different depth), declare them here.

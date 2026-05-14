@@ -5,7 +5,9 @@ use std::sync::Arc;
 use datafusion::common::Result;
 use datafusion::logical_expr::logical_plan::Window;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion_common::{Column, ExprSchema};
 use datafusion_expr::{ident, Expr, LogicalPlan};
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
@@ -47,7 +49,14 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                 let plan = mem::replace(&mut self.plan, empty_logical_plan());
                 self.plan = LogicalPlan::Window(Window::try_new(vec![node], Arc::new(plan))?);
                 let alias = self.state.register_field_name(&name);
-                let replacement = ident(name.clone()).alias(alias);
+                let metadata = self
+                    .plan
+                    .schema()
+                    .field_from_column(&Column::from_name(&name))
+                    .ok()
+                    .map(|f| f.metadata().clone())
+                    .unwrap_or_default();
+                let replacement = alias_preserving_metadata(ident(name.clone()), alias, metadata);
                 self.seen.insert(name, replacement.clone());
                 Ok(Transformed::yes(replacement))
             }

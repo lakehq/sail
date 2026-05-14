@@ -9,6 +9,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
@@ -246,7 +247,7 @@ impl PlanResolver<'_> {
                     .map(|f| {
                         let expr = Expr::Column(output_col.clone()).field(f.name());
                         let name = state.register_field(f);
-                        Ok(expr.alias(name))
+                        Ok(alias_preserving_metadata(expr, name, f.metadata().clone()))
                     })
                     .collect::<PlanResult<Vec<_>>>()?,
             )?
@@ -375,7 +376,7 @@ impl PlanResolver<'_> {
                     .map(|f| {
                         let expr = Expr::Column(output_col.clone()).field(f.name());
                         let name = state.register_field(f);
-                        Ok(expr.alias(name))
+                        Ok(alias_preserving_metadata(expr, name, f.metadata().clone()))
                     })
                     .collect::<PlanResult<Vec<_>>>()?,
             )?
@@ -415,7 +416,11 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|x| {
                 let name = x.name.clone().one()?;
-                Ok(x.expr.clone().alias(state.register_field_name(name)))
+                Ok(alias_preserving_metadata(
+                    x.expr.clone(),
+                    state.register_field_name(name),
+                    x.metadata.iter().cloned().collect(),
+                ))
             })
             .collect::<PlanResult<Vec<_>>>()?;
         let input_types = Self::resolve_expression_types(&args, plan.schema())?;
@@ -432,7 +437,8 @@ impl PlanResolver<'_> {
         });
         let agg_name = agg.name_for_alias()?;
         let agg_alias = state.register_field_name(&agg_name);
-        let agg_col = ident(&agg_name).alias(agg_alias.clone());
+        let agg_metadata = agg.to_field(plan.schema().as_ref())?.1.metadata().clone();
+        let agg_col = alias_preserving_metadata(ident(&agg_name), agg_alias.clone(), agg_metadata);
         let grouping = group_exprs
             .iter()
             .map(|x| Ok(ident(x.name_for_alias()?)))

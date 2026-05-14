@@ -1,12 +1,8 @@
-use std::collections::HashMap;
-
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::utils::{expr_as_column_expr, find_aggregate_exprs};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 use sail_common::spec;
-use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::get_udf_display_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 
@@ -221,21 +217,7 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<WindowRewriter>(plan, projections, state)?;
         let projections = projections
             .into_iter()
-            .map(|x| {
-                let NamedExpr {
-                    name,
-                    expr,
-                    metadata,
-                } = x;
-                let field_id = state.register_field_name(name.one()?);
-                if metadata.is_empty() {
-                    Ok(expr.alias(field_id))
-                } else {
-                    let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
-                    let field_metadata = Some(FieldMetadata::from(metadata_map));
-                    Ok(expr.alias_with_metadata(field_id, field_metadata))
-                }
-            })
+            .map(|x| x.into_registered_alias(state))
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)
             .project(projections)?

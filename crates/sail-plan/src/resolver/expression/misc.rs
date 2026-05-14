@@ -4,7 +4,6 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Column, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
@@ -12,6 +11,7 @@ use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
@@ -42,13 +42,8 @@ impl PlanResolver<'_> {
             if let Some(metadata) = metadata {
                 resolved_metadata.extend(metadata);
             }
-            if !resolved_metadata.is_empty() {
-                let metadata_map: HashMap<String, String> = resolved_metadata.into_iter().collect();
-                let field_metadata = Some(FieldMetadata::from(metadata_map));
-                expr.alias_with_metadata(n, field_metadata)
-            } else {
-                expr.alias(n)
-            }
+            let metadata_map: HashMap<String, String> = resolved_metadata.into_iter().collect();
+            alias_preserving_metadata(expr, n, metadata_map)
         } else {
             expr
         };

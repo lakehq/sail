@@ -7,8 +7,8 @@ use datafusion::functions_aggregate::count::count_udaf;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Dependency, NullEquality, Result,
-    ScalarValue, TableReference,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Dependency, ExprSchema, NullEquality,
+    Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, Case};
 use datafusion_expr::expr_fn::not;
@@ -22,7 +22,7 @@ use datafusion_expr::{
 };
 use educe::Educe;
 use log::trace;
-use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::logical_expr::{alias_preserving_metadata, ExprWithSource};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
@@ -686,7 +686,8 @@ pub fn expand_merge(
         .zip(desired_target_names.iter())
         .map(|(field, desired)| {
             // Use unqualified column to avoid alias-mismatch when upstream qualifiers differ.
-            Expr::Column(Column::from_name(field.name().clone())).alias(desired.clone())
+            let col_expr = Expr::Column(Column::from_name(field.name().clone()));
+            alias_preserving_metadata(col_expr, desired.clone(), field.metadata().clone())
         })
         .collect();
 
@@ -695,19 +696,34 @@ pub fn expand_merge(
         .iter()
         .any(|expr| matches!(expr, Expr::Alias(alias) if alias.name == path_column));
     if !path_already_present {
-        target_proj_exprs.push(
-            Expr::Column(Column::from_name(path_column.to_string())).alias(path_column.to_string()),
-        );
+        let path_metadata = target_plan
+            .schema()
+            .field_from_column(&Column::from_name(path_column.to_string()))
+            .ok()
+            .map(|f| f.metadata().clone())
+            .unwrap_or_default();
+        target_proj_exprs.push(alias_preserving_metadata(
+            Expr::Column(Column::from_name(path_column.to_string())),
+            path_column.to_string(),
+            path_metadata,
+        ));
     }
     if let Some(row_index_column) = row_index_column {
         let row_index_already_present = target_proj_exprs
             .iter()
             .any(|expr| matches!(expr, Expr::Alias(alias) if alias.name == row_index_column));
         if !row_index_already_present {
-            target_proj_exprs.push(
-                Expr::Column(Column::from_name(row_index_column.to_string()))
-                    .alias(row_index_column.to_string()),
-            );
+            let row_index_metadata = target_plan
+                .schema()
+                .field_from_column(&Column::from_name(row_index_column.to_string()))
+                .ok()
+                .map(|f| f.metadata().clone())
+                .unwrap_or_default();
+            target_proj_exprs.push(alias_preserving_metadata(
+                Expr::Column(Column::from_name(row_index_column.to_string())),
+                row_index_column.to_string(),
+                row_index_metadata,
+            ));
         }
     }
 
@@ -786,8 +802,11 @@ pub fn expand_merge(
                         .get(desired)
                         .cloned()
                         .unwrap_or_else(|| desired.clone());
-                    Expr::Column(Column::new(source_relation.clone(), field.name().clone()))
-                        .alias(renamed)
+                    alias_preserving_metadata(
+                        Expr::Column(Column::new(source_relation.clone(), field.name().clone())),
+                        renamed,
+                        field.metadata().clone(),
+                    )
                 })
                 .collect::<Vec<_>>(),
         )?
@@ -1076,19 +1095,43 @@ fn build_default_merge_expansion(
         build_rewrite_predicates(&options, &matched_pred, &not_matched_by_source_pred);
     let rewrite_filter = combine_rewrite_preds(rewrite_matched, rewrite_not_matched_by_source);
 
+    let join_path_metadata = join
+        .schema()
+        .field_from_column(&Column::from_name(path_column.to_string()))
+        .ok()
+        .map(|f| f.metadata().clone())
+        .unwrap_or_default();
     let touched_plan = LogicalPlanBuilder::from(join.as_ref().clone())
         .filter(rewrite_filter.unwrap_or_else(|| lit(false)))?
         .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
-        .project(vec![col(path_column).alias(path_column.to_string())])?
+        .project(vec![alias_preserving_metadata(
+            col(path_column),
+            path_column.to_string(),
+            join_path_metadata.clone(),
+        )])?
         .build()?;
 
     let deletion_vector_plan = if let Some(row_index_column) = row_index_column {
+        let join_row_index_metadata = join
+            .schema()
+            .field_from_column(&Column::from_name(row_index_column.to_string()))
+            .ok()
+            .map(|f| f.metadata().clone())
+            .unwrap_or_default();
         Some(
             LogicalPlanBuilder::from(join.as_ref().clone())
                 .filter(delete_expr)?
                 .project(vec![
-                    col(path_column).alias(path_column.to_string()),
-                    col(row_index_column).alias(row_index_column.to_string()),
+                    alias_preserving_metadata(
+                        col(path_column),
+                        path_column.to_string(),
+                        join_path_metadata,
+                    ),
+                    alias_preserving_metadata(
+                        col(row_index_column),
+                        row_index_column.to_string(),
+                        join_row_index_metadata,
+                    ),
                 ])?
                 .build()?,
         )
@@ -1121,11 +1164,29 @@ fn append_presence_projection(
     if let Some(path_name) = path_column {
         if schema.index_of_column_by_name(None, path_name).is_none() {
             let path_expr = lit(ScalarValue::Utf8(None));
-            exprs.push(path_expr.alias(path_name.to_string()));
+            let path_metadata = schema
+                .field_from_column(&Column::from_name(path_name.to_string()))
+                .ok()
+                .map(|f| f.metadata().clone())
+                .unwrap_or_default();
+            exprs.push(alias_preserving_metadata(
+                path_expr,
+                path_name.to_string(),
+                path_metadata,
+            ));
         }
     }
 
-    exprs.push(lit(true).alias(present_col));
+    let present_metadata = schema
+        .field_from_column(&Column::from_name(present_col.to_string()))
+        .ok()
+        .map(|f| f.metadata().clone())
+        .unwrap_or_default();
+    exprs.push(alias_preserving_metadata(
+        lit(true),
+        present_col,
+        present_metadata,
+    ));
     Ok(exprs)
 }
 
@@ -1240,14 +1301,15 @@ fn apply_generation_projection(
                      user-provided value does not match the generation expression."
                 );
                 let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
+                let field_metadata = f.metadata().clone();
                 let enforced = when(mismatch_check, gen_expr.clone())
                     .otherwise(raise)
-                    .map(|e| e.alias(name.clone()))?;
+                    .map(|e| alias_preserving_metadata(e, name.clone(), field_metadata.clone()))?;
                 if has_op_col {
                     // Only enforce for INSERT operations; UPDATE always recomputes silently.
                     when(col(OPERATION_COLUMN).eq(insert_op_val.clone()), enforced)
                         .otherwise(gen_expr.clone())
-                        .map(|e| e.alias(name.clone()))
+                        .map(|e| alias_preserving_metadata(e, name.clone(), field_metadata.clone()))
                 } else {
                     // Insert-only path (fast-append): always enforce.
                     Ok(enforced)
@@ -1334,10 +1396,23 @@ fn build_insert_only_projection(
             when_then_expr,
             else_expr: Some(Box::new(lit(ScalarValue::Null))),
         });
-        projections.push(expr.alias(name));
+        projections.push(alias_preserving_metadata(
+            expr,
+            name,
+            field.metadata().clone(),
+        ));
     }
 
-    projections.push(operation_expr.alias(OPERATION_COLUMN));
+    let op_metadata = target_schema
+        .field_from_column(&Column::from_name(OPERATION_COLUMN.to_string()))
+        .ok()
+        .map(|f| f.metadata().clone())
+        .unwrap_or_default();
+    projections.push(alias_preserving_metadata(
+        operation_expr,
+        OPERATION_COLUMN,
+        op_metadata,
+    ));
 
     Ok(projections)
 }
@@ -1356,9 +1431,22 @@ fn build_insert_only_noop_projection(
             continue;
         }
         let null_value = ScalarValue::try_new_null(field.data_type())?;
-        projections.push(lit(null_value).alias(field.name().clone()));
+        projections.push(alias_preserving_metadata(
+            lit(null_value),
+            field.name().clone(),
+            field.metadata().clone(),
+        ));
     }
-    projections.push(lit(RowLevelOperationType::Noop.as_i32()).alias(OPERATION_COLUMN));
+    let op_metadata = target_schema
+        .field_from_column(&Column::from_name(OPERATION_COLUMN.to_string()))
+        .ok()
+        .map(|f| f.metadata().clone())
+        .unwrap_or_default();
+    projections.push(alias_preserving_metadata(
+        lit(RowLevelOperationType::Noop.as_i32()),
+        OPERATION_COLUMN,
+        op_metadata,
+    ));
     Ok(projections)
 }
 
@@ -1368,17 +1456,25 @@ fn build_source_metric_plan(
     path_column: &str,
     row_index_column: Option<&str>,
 ) -> Result<LogicalPlan> {
-    let source_count = Expr::AggregateFunction(AggregateFunction {
-        func: count_udaf(),
-        params: AggregateFunctionParams {
-            args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
-            distinct: false,
-            filter: None,
-            order_by: vec![],
-            null_treatment: None,
-        },
-    })
-    .alias(MERGE_SOURCE_METRIC_COLUMN);
+    let source_metric_metadata = target_schema
+        .field_from_column(&Column::from_name(MERGE_SOURCE_METRIC_COLUMN.to_string()))
+        .ok()
+        .map(|f| f.metadata().clone())
+        .unwrap_or_default();
+    let source_count = alias_preserving_metadata(
+        Expr::AggregateFunction(AggregateFunction {
+            func: count_udaf(),
+            params: AggregateFunctionParams {
+                args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
+                distinct: false,
+                filter: None,
+                order_by: vec![],
+                null_treatment: None,
+            },
+        }),
+        MERGE_SOURCE_METRIC_COLUMN,
+        source_metric_metadata.clone(),
+    );
     let count_plan = LogicalPlanBuilder::from(source_plan)
         .aggregate(Vec::<Expr>::new(), vec![source_count])?
         .build()?;
@@ -1389,7 +1485,11 @@ fn build_source_metric_plan(
     for field in target_schema.fields().iter() {
         if field.name() == path_column {
             let null_value = ScalarValue::try_new_null(field.data_type())?;
-            path_expr = Some(lit(null_value).alias(path_column.to_string()));
+            path_expr = Some(alias_preserving_metadata(
+                lit(null_value),
+                path_column.to_string(),
+                field.metadata().clone(),
+            ));
             continue;
         }
         if row_index_column.is_some_and(|c| field.name() == c)
@@ -1398,15 +1498,32 @@ fn build_source_metric_plan(
             continue;
         }
         let null_value = ScalarValue::try_new_null(field.data_type())?;
-        projections.push(lit(null_value).alias(field.name().clone()));
+        projections.push(alias_preserving_metadata(
+            lit(null_value),
+            field.name().clone(),
+            field.metadata().clone(),
+        ));
     }
 
     let Some(path_expr) = path_expr else {
         return plan_err!("MERGE source metric projection is missing required path column");
     };
     projections.push(path_expr);
-    projections.push(lit(RowLevelOperationType::SourceMetric.as_i32()).alias(OPERATION_COLUMN));
-    projections.push(col(MERGE_SOURCE_METRIC_COLUMN).alias(MERGE_SOURCE_METRIC_COLUMN));
+    let op_metadata = target_schema
+        .field_from_column(&Column::from_name(OPERATION_COLUMN.to_string()))
+        .ok()
+        .map(|f| f.metadata().clone())
+        .unwrap_or_default();
+    projections.push(alias_preserving_metadata(
+        lit(RowLevelOperationType::SourceMetric.as_i32()),
+        OPERATION_COLUMN,
+        op_metadata,
+    ));
+    projections.push(alias_preserving_metadata(
+        col(MERGE_SOURCE_METRIC_COLUMN),
+        MERGE_SOURCE_METRIC_COLUMN,
+        source_metric_metadata,
+    ));
 
     LogicalPlanBuilder::from(count_plan)
         .project(projections)?
@@ -1739,12 +1856,25 @@ fn build_merge_projection(
             })
         };
 
-        projections.push(expr.alias(name.clone()));
+        projections.push(alias_preserving_metadata(
+            expr,
+            name.clone(),
+            field.metadata().clone(),
+        ));
     }
 
     // Preserve the file path column so downstream physical planning can implement
     // targeted rewrite (filter writer input to touched files, while keeping inserts).
-    projections.push(col(path_column).alias(path_column.to_string()));
+    let path_metadata = target_schema
+        .field_from_column(&Column::from_name(path_column.to_string()))
+        .ok()
+        .map(|f| f.metadata().clone())
+        .unwrap_or_default();
+    projections.push(alias_preserving_metadata(
+        col(path_column),
+        path_column.to_string(),
+        path_metadata,
+    ));
 
     let mut matched_update_pred: Option<Expr> = None;
     let mut not_matched_by_source_update_pred: Option<Expr> = None;
@@ -1820,8 +1950,26 @@ fn build_merge_projection(
         ],
         else_expr: Some(Box::new(copy_op)),
     });
-    projections.push(op_expr.alias(OPERATION_COLUMN));
-    projections.push(lit(ScalarValue::UInt64(None)).alias(MERGE_SOURCE_METRIC_COLUMN));
+    let op_metadata = target_schema
+        .field_from_column(&Column::from_name(OPERATION_COLUMN.to_string()))
+        .ok()
+        .map(|f| f.metadata().clone())
+        .unwrap_or_default();
+    projections.push(alias_preserving_metadata(
+        op_expr,
+        OPERATION_COLUMN,
+        op_metadata,
+    ));
+    let source_metric_metadata = target_schema
+        .field_from_column(&Column::from_name(MERGE_SOURCE_METRIC_COLUMN.to_string()))
+        .ok()
+        .map(|f| f.metadata().clone())
+        .unwrap_or_default();
+    projections.push(alias_preserving_metadata(
+        lit(ScalarValue::UInt64(None)),
+        MERGE_SOURCE_METRIC_COLUMN,
+        source_metric_metadata,
+    ));
 
     Ok(projections)
 }

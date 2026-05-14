@@ -4,6 +4,7 @@ use async_recursion::async_recursion;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr;
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
@@ -77,6 +78,26 @@ impl NamedExpr {
     pub fn with_metadata(mut self, metadata: Vec<(String, String)>) -> Self {
         self.metadata = metadata;
         self
+    }
+
+    /// Consume `self` into an `Expr::Alias` whose Field carries this
+    /// NamedExpr's metadata. Validates that there is exactly one name,
+    /// registers it with `state` to obtain a unique opaque field ID, and
+    /// attaches the metadata to the alias (so DataFusion's `Alias::to_field`
+    /// surfaces it on the Logical Field). When metadata is empty, this is
+    /// equivalent to `expr.alias(field_id)`.
+    pub fn into_registered_alias(self, state: &mut PlanResolverState) -> PlanResult<expr::Expr> {
+        let NamedExpr {
+            name,
+            expr,
+            metadata,
+        } = self;
+        let field_id = state.register_field_name(name.one()?);
+        Ok(alias_preserving_metadata(
+            expr,
+            field_id,
+            metadata.into_iter().collect(),
+        ))
     }
 }
 

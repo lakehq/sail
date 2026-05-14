@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use datafusion_common::TableReference;
+use datafusion_common::{ExprSchema, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -48,7 +49,15 @@ impl PlanResolver<'_> {
                 .columns()
                 .into_iter()
                 .zip(columns)
-                .map(|(col, name)| Expr::Column(col.clone()).alias(state.register_field_name(name)))
+                .map(|(col, name)| {
+                    let field_id = state.register_field_name(name);
+                    let metadata = schema
+                        .field_from_column(&col)
+                        .ok()
+                        .map(|f| f.metadata().clone())
+                        .unwrap_or_default();
+                    alias_preserving_metadata(Expr::Column(col.clone()), field_id, metadata)
+                })
                 .collect();
             LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?)
         };

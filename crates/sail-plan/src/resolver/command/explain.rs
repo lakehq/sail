@@ -1,7 +1,8 @@
 use async_recursion::async_recursion;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 
 use crate::error::PlanResult;
 use crate::explain::{explain_string_from_logical_plan, ExplainOptions};
@@ -29,10 +30,21 @@ impl PlanResolver<'_> {
         };
         let options = ExplainOptions::from_mode(mode);
         let explain = explain_string_from_logical_plan(self.ctx, plan, fields, options).await?;
-        let plan =
-            LogicalPlanBuilder::values(vec![vec![lit(ScalarValue::Utf8(Some(explain.output)))]])?
-                .project(vec![col("column1").alias("plan")])?
-                .build()?;
+        let values =
+            LogicalPlanBuilder::values(vec![vec![lit(ScalarValue::Utf8(Some(explain.output)))]])?;
+        let metadata = values
+            .schema()
+            .field_from_column(&Column::from_name("column1"))
+            .ok()
+            .map(|f| f.metadata().clone())
+            .unwrap_or_default();
+        let plan = values
+            .project(vec![alias_preserving_metadata(
+                col("column1"),
+                "plan",
+                metadata,
+            )])?
+            .build()?;
         Ok(plan)
     }
 }

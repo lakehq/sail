@@ -1,13 +1,13 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
-use datafusion_expr::expr::{FieldMetadata, ScalarFunction};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{Expr, LogicalPlan, Projection};
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
 
@@ -252,7 +252,6 @@ impl PlanResolver<'_> {
                     expr,
                     metadata,
                 } = e;
-                eprintln!("[DBG rewrite_named_expressions] name={name:?} metadata={metadata:?}");
                 let name = if name.len() == 1 {
                     name.one()?
                 } else {
@@ -271,13 +270,11 @@ impl PlanResolver<'_> {
                 for plan_id in plan_ids {
                     state.register_plan_id_for_field(&field_id, plan_id)?;
                 }
-                if !metadata.is_empty() {
-                    let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
-                    let field_metadata = Some(FieldMetadata::from(metadata_map));
-                    Ok(expr.alias_with_metadata(field_id, field_metadata))
-                } else {
-                    Ok(expr.alias(field_id))
-                }
+                Ok(alias_preserving_metadata(
+                    expr,
+                    field_id,
+                    metadata.into_iter().collect(),
+                ))
             })
             .collect()
     }

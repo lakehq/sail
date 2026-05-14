@@ -4,13 +4,14 @@ use std::sync::Arc;
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result};
+use datafusion_common::{Column, DFSchema, ExprSchema, Result};
 use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
     is_lakehouse_format, MergeCapableSource, MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN,
 };
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 use sail_delta_lake::DeltaTableSource;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::merge::{
@@ -90,13 +91,31 @@ fn expand_merge_node(node: &MergeIntoNode) -> Result<Transformed<LogicalPlan>> {
             .map(|name| Expr::Column(Column::from_name(name.clone())))
             .collect();
         if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN) {
-            exprs.push(Expr::Column(Column::from_name(MERGE_FILE_COLUMN)).alias(MERGE_FILE_COLUMN));
+            let file_metadata = target_plan
+                .schema()
+                .field_from_column(&Column::from_name(MERGE_FILE_COLUMN.to_string()))
+                .ok()
+                .map(|f| f.metadata().clone())
+                .unwrap_or_default();
+            exprs.push(alias_preserving_metadata(
+                Expr::Column(Column::from_name(MERGE_FILE_COLUMN)),
+                MERGE_FILE_COLUMN,
+                file_metadata,
+            ));
         }
         if let Some(row_index_column) = row_index_column {
             if !target_fields.iter().any(|n| n == row_index_column) {
-                exprs.push(
-                    Expr::Column(Column::from_name(row_index_column)).alias(row_index_column),
-                );
+                let row_index_metadata = target_plan
+                    .schema()
+                    .field_from_column(&Column::from_name(row_index_column.to_string()))
+                    .ok()
+                    .map(|f| f.metadata().clone())
+                    .unwrap_or_default();
+                exprs.push(alias_preserving_metadata(
+                    Expr::Column(Column::from_name(row_index_column)),
+                    row_index_column,
+                    row_index_metadata,
+                ));
             }
         }
         target_plan = LogicalPlanBuilder::from(target_plan)
@@ -315,7 +334,16 @@ fn ensure_merge_metadata_columns(
                         _ => false,
                     });
                     if has_in_input && !has_in_projection {
-                        new_exprs.push(Expr::Column(Column::from_name(*col)).alias(*col));
+                        let col_metadata = input_schema
+                            .field_from_column(&Column::from_name(col.to_string()))
+                            .ok()
+                            .map(|f| f.metadata().clone())
+                            .unwrap_or_default();
+                        new_exprs.push(alias_preserving_metadata(
+                            Expr::Column(Column::from_name(*col)),
+                            *col,
+                            col_metadata,
+                        ));
                         changed = true;
                     }
                 }

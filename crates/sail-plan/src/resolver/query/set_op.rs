@@ -4,9 +4,11 @@ use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
-    expr, Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition,
+    expr, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, WindowFrame,
+    WindowFunctionDefinition,
 };
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -55,13 +57,15 @@ impl PlanResolver<'_> {
                                         right.schema().qualified_field(right_idx),
                                     )),
                                 )),
-                                None if allow_missing_columns => Ok((
-                                    Expr::Column(Column::from(
-                                        left.schema().qualified_field(left_idx),
-                                    )),
-                                    Expr::Literal(ScalarValue::Null, None)
-                                        .alias(state.register_field_name(left_name)),
-                                )),
+                                None if allow_missing_columns => {
+                                    let left_qualified = left.schema().qualified_field(left_idx);
+                                    let null_padding = alias_preserving_metadata(
+                                        Expr::Literal(ScalarValue::Null, None),
+                                        state.register_field_name(left_name),
+                                        left_qualified.1.metadata().clone(),
+                                    );
+                                    Ok((Expr::Column(Column::from(left_qualified)), null_padding))
+                                }
                                 None => Err(PlanError::invalid(format!(
                                     "right column not found: {left_name}"
                                 ))),
@@ -81,13 +85,13 @@ impl PlanResolver<'_> {
                                         .any(|left_name| left_name.eq_ignore_ascii_case(right_name))
                                 })
                                 .map(|(right_idx, right_name)| {
-                                    (
-                                        Expr::Literal(ScalarValue::Null, None)
-                                            .alias(state.register_field_name(right_name)),
-                                        Expr::Column(Column::from(
-                                            right.schema().qualified_field(right_idx),
-                                        )),
-                                    )
+                                    let right_qualified = right.schema().qualified_field(right_idx);
+                                    let null_padding = alias_preserving_metadata(
+                                        Expr::Literal(ScalarValue::Null, None),
+                                        state.register_field_name(right_name),
+                                        right_qualified.1.metadata().clone(),
+                                    );
+                                    (null_padding, Expr::Column(Column::from(right_qualified)))
                                 })
                                 .collect::<Vec<(Expr, Expr)>>()
                                 .into_iter()
@@ -138,7 +142,7 @@ impl PlanResolver<'_> {
                 let plan = if is_all {
                     let left_row_number_alias = state.register_field_name("row_num");
                     let right_row_number_alias = state.register_field_name("row_num");
-                    let left_row_number_window =
+                    let left_row_number_expr =
                         Expr::WindowFunction(Box::new(expr::WindowFunction {
                             fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
                             params: WindowFunctionParams {
@@ -155,9 +159,18 @@ impl PlanResolver<'_> {
                                 null_treatment: Some(NullTreatment::RespectNulls),
                                 distinct: false,
                             },
-                        }))
-                        .alias(left_row_number_alias.as_str());
-                    let right_row_number_window =
+                        }));
+                    let left_window_metadata = left_row_number_expr
+                        .to_field(left.schema().as_ref())?
+                        .1
+                        .metadata()
+                        .clone();
+                    let left_row_number_window = alias_preserving_metadata(
+                        left_row_number_expr,
+                        left_row_number_alias.as_str(),
+                        left_window_metadata,
+                    );
+                    let right_row_number_expr =
                         Expr::WindowFunction(Box::new(expr::WindowFunction {
                             fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
                             params: WindowFunctionParams {
@@ -174,8 +187,17 @@ impl PlanResolver<'_> {
                                 null_treatment: Some(NullTreatment::RespectNulls),
                                 distinct: false,
                             },
-                        }))
-                        .alias(right_row_number_alias.as_str());
+                        }));
+                    let right_window_metadata = right_row_number_expr
+                        .to_field(right.schema().as_ref())?
+                        .1
+                        .metadata()
+                        .clone();
+                    let right_row_number_window = alias_preserving_metadata(
+                        right_row_number_expr,
+                        right_row_number_alias.as_str(),
+                        right_window_metadata,
+                    );
                     let left = LogicalPlanBuilder::from(left)
                         .window(vec![left_row_number_window])?
                         .build()?;

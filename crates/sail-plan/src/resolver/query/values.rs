@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::metadata::FieldMetadata;
-use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_common::{DFSchema, DFSchemaRef, ExprSchema};
 use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection};
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -70,13 +71,22 @@ impl PlanResolver<'_> {
             *row = new_row;
         }
         let plan = LogicalPlanBuilder::values(values)?.build()?;
-        let expr = plan
-            .schema()
+        let plan_schema = plan.schema();
+        let expr = plan_schema
             .columns()
             .into_iter()
             .enumerate()
             .map(|(i, col)| {
-                Expr::Column(col).alias(state.register_field_name(format!("col{}", i + 1)))
+                let metadata = plan_schema
+                    .field_from_column(&col)
+                    .ok()
+                    .map(|f| f.metadata().clone())
+                    .unwrap_or_default();
+                alias_preserving_metadata(
+                    Expr::Column(col),
+                    state.register_field_name(format!("col{}", i + 1)),
+                    metadata,
+                )
             })
             .collect::<Vec<_>>();
         Ok(LogicalPlan::Projection(Projection::try_new(

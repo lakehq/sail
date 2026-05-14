@@ -6,8 +6,9 @@ use datafusion::functions_aggregate::count::count_udaf;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::AggregateFunctionParams;
-use datafusion_expr::{expr, lit, Aggregate, Expr, Limit, LogicalPlan};
+use datafusion_expr::{expr, lit, Aggregate, Expr, ExprSchemable, Limit, LogicalPlan};
 use sail_common::spec;
+use sail_common_datafusion::logical_expr::alias_preserving_metadata;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -72,7 +73,7 @@ impl PlanResolver<'_> {
         //    Running tail requires moving data into the application's driver process, and doing so
         //    with a very large `num` can crash the driver process with OutOfMemoryError.
         let count_alias = state.register_field_name("COUNT(*)");
-        let count_expr = Expr::AggregateFunction(expr::AggregateFunction {
+        let count_inner = Expr::AggregateFunction(expr::AggregateFunction {
             func: count_udaf(),
             params: AggregateFunctionParams {
                 args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
@@ -81,8 +82,13 @@ impl PlanResolver<'_> {
                 order_by: vec![],
                 null_treatment: None,
             },
-        })
-        .alias(count_alias);
+        });
+        let count_metadata = count_inner
+            .to_field(input.schema().as_ref())?
+            .1
+            .metadata()
+            .clone();
+        let count_expr = alias_preserving_metadata(count_inner, count_alias, count_metadata);
         let count_plan = LogicalPlan::Aggregate(Aggregate::try_new(
             Arc::new(input.clone()),
             vec![],

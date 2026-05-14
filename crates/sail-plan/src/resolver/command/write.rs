@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion_common::{Column, DFSchema};
+use datafusion_common::{Column, DFSchema, ExprSchema};
 use datafusion_expr::expr::{FieldMetadata, Sort};
 use datafusion_expr::{
     col, lit, when, BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
@@ -23,7 +23,7 @@ use sail_common_datafusion::datasource::{
     find_path_in_options, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::logical_expr::{alias_preserving_metadata, ExprWithSource};
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -624,9 +624,17 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .zip(table_schema.fields().iter())
                     .map(|(column, field)| {
-                        Ok(col(column)
-                            .cast_to(field.data_type(), input.schema())?
-                            .alias(field.name()))
+                        let metadata = input
+                            .schema()
+                            .field_from_column(&column)
+                            .ok()
+                            .map(|f| f.metadata().clone())
+                            .unwrap_or_default();
+                        Ok(alias_preserving_metadata(
+                            col(column).cast_to(field.data_type(), input.schema())?,
+                            field.name(),
+                            metadata,
+                        ))
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
                 Ok(LogicalPlanBuilder::new(input).project(expr)?.build()?)
@@ -670,7 +678,15 @@ impl PlanResolver<'_> {
                     .columns()
                     .into_iter()
                     .zip(columns)
-                    .map(|(column, name)| col(column).alias(name))
+                    .map(|(column, name)| {
+                        let metadata = input
+                            .schema()
+                            .field_from_column(&column)
+                            .ok()
+                            .map(|f| f.metadata().clone())
+                            .unwrap_or_default();
+                        alias_preserving_metadata(col(column), name, metadata)
+                    })
                     .collect::<Vec<_>>();
                 let plan = LogicalPlanBuilder::new(input).project(expr)?.build()?;
                 Self::rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
@@ -750,10 +766,15 @@ impl PlanResolver<'_> {
             if col.generated_always_as.is_some() {
                 if let Some(user_expr) = provided {
                     let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
+                    let target_field = col.field();
                     let cast_expr = user_expr
                         .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
-                    intermediate_aliases.push(cast_expr.alias(check_id.clone()));
+                        .cast_to(target_field.data_type(), input.schema())?;
+                    intermediate_aliases.push(alias_preserving_metadata(
+                        cast_expr,
+                        check_id.clone(),
+                        target_field.metadata().clone(),
+                    ));
                     gen_check_field_ids[idx] = Some(check_id);
                 }
                 continue;
@@ -764,10 +785,15 @@ impl PlanResolver<'_> {
                     col.name
                 )));
             };
+            let target_field = col.field();
             let cast_expr = input_expr
                 .clone()
-                .cast_to(col.field().data_type(), input.schema())?;
-            intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
+                .cast_to(target_field.data_type(), input.schema())?;
+            intermediate_aliases.push(alias_preserving_metadata(
+                cast_expr,
+                field_ids[idx].clone(),
+                target_field.metadata().clone(),
+            ));
         }
         let intermediate = LogicalPlanBuilder::new(input)
             .project(intermediate_aliases)?
@@ -858,7 +884,7 @@ impl PlanResolver<'_> {
             let alias = if let Some(meta) = gen_meta {
                 expr.alias_with_metadata(out_name, Some(meta))
             } else {
-                expr.alias(out_name)
+                alias_preserving_metadata(expr, out_name, field.metadata().clone())
             };
             final_exprs.push(alias);
         }
