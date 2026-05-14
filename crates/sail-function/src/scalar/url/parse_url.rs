@@ -140,12 +140,16 @@ impl ParseUrl {
                     }
                     // Spark preserves the port even if it's the default for the scheme.
                     // Re-parse from the original string to get the explicit port.
-                    if let Some(port_str) = extract_explicit_port(value) {
-                        auth.push(':');
-                        auth.push_str(port_str);
-                    } else if let Some(port) = url.port() {
-                        auth.push(':');
-                        auth.push_str(&port.to_string());
+                    // Only do this when the URL has an authority; otherwise
+                    // extract_explicit_port could find "://" inside an opaque URI's payload.
+                    if url.has_authority() {
+                        if let Some(port_str) = extract_explicit_port(value) {
+                            auth.push(':');
+                            auth.push_str(port_str);
+                        } else if let Some(port) = url.port() {
+                            auth.push(':');
+                            auth.push_str(&port.to_string());
+                        }
                     }
                     // java.net.URI returns null for an empty authority (e.g. "file:///path").
                     if auth.is_empty() {
