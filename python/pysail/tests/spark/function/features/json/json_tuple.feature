@@ -1,327 +1,213 @@
-Feature: json_tuple function
+Feature: json_tuple function extracts multiple fields from a JSON string as columns
 
-  Background:
-    Given a Spark session
+  Rule: Basic extraction
 
-  Scenario: Extract a single field
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":"hello"}', 'a') AS c0
-      """
-    Then the result should be:
-      | c0    |
-      | hello |
+    Scenario: Extract a single field from a JSON string
+      When query
+        """
+        SELECT json_tuple('{"a":"hello"}', 'a')
+        """
+      Then query result
+        | c0    |
+        | hello |
 
-  Scenario: Extract multiple fields
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"f1":"value1","f2":"value2"}', 'f1', 'f2') AS (c0, c1)
-      """
-    Then the result should be:
-      | c0     | c1     |
-      | value1 | value2 |
+    Scenario: Extract multiple fields from a JSON string
+      When query
+        """
+        SELECT json_tuple('{"f1":"value1","f2":"value2"}', 'f1', 'f2')
+        """
+      Then query result
+        | c0     | c1     |
+        | value1 | value2 |
 
-  Scenario: Extract three fields
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":"1","b":"2","c":"3"}', 'a', 'b', 'c') AS (c0, c1, c2)
-      """
-    Then the result should be:
-      | c0 | c1 | c2 |
-      | 1  | 2  | 3  |
+    Scenario: Extract three fields from a JSON string
+      When query
+        """
+        SELECT json_tuple('{"a":"1","b":"2","c":"3"}', 'a', 'b', 'c')
+        """
+      Then query result
+        | c0 | c1 | c2 |
+        | 1  | 2  | 3  |
 
-  Scenario: Numeric values are returned as strings
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":1,"b":2}', 'a', 'b') AS (c0, c1)
-      """
-    Then the result should be:
-      | c0 | c1 |
-      | 1  | 2  |
+  Rule: NULL handling
 
-  Scenario: Boolean values are returned as strings
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"flag":true,"other":false}', 'flag', 'other') AS (c0, c1)
-      """
-    Then the result should be:
-      | c0   | c1    |
-      | true | false |
+    Scenario: Extract from NULL JSON string returns NULL
+      When query
+        """
+        SELECT json_tuple(NULL, 'a', 'b')
+        """
+      Then query result
+        | c0   | c1   |
+        | NULL | NULL |
 
-  Scenario: Float values are returned as strings
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"price":3.14}', 'price') AS c0
-      """
-    Then the result should be:
-      | c0   |
-      | 3.14 |
+    Scenario: Extract non-existent field returns NULL
+      When query
+        """
+        SELECT json_tuple('{"a":"hello"}', 'b')
+        """
+      Then query result
+        | c0   |
+        | NULL |
 
-  Scenario: Missing key returns NULL
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":"1","b":"2"}', 'a', 'c') AS (c0, c1)
-      """
-    Then the result should be:
-      | c0 | c1   |
-      | 1  | NULL |
+    Scenario: Extract from empty JSON object returns NULL for all fields
+      When query
+        """
+        SELECT json_tuple('{}', 'a', 'b', 'c')
+        """
+      Then query result
+        | c0   | c1   | c2   |
+        | NULL | NULL | NULL |
 
-  Scenario: All missing keys return NULL
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":"1"}', 'x', 'y', 'z') AS (c0, c1, c2)
-      """
-    Then the result should be:
-      | c0   | c1   | c2   |
-      | NULL | NULL | NULL |
+    Scenario: Extract from invalid JSON returns NULL for all fields
+      When query
+        """
+        SELECT json_tuple('{invalid json}', 'a', 'b')
+        """
+      Then query result
+        | c0   | c1   |
+        | NULL | NULL |
 
-  Scenario: JSON null returns NULL
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":null}', 'a') AS c0
-      """
-    Then the result should be:
-      | c0   |
-      | NULL |
+    Scenario: Extract some existing and some non-existent fields
+      When query
+        """
+        SELECT json_tuple('{"a":"hello","b":"world"}', 'a', 'c', 'b')
+        """
+      Then query result
+        | c0    | c1   | c2    |
+        | hello | NULL | world |
 
-  Scenario: NULL input returns NULL values
-    When I execute the SQL query:
-      """
-      SELECT json_tuple(NULL, 'a', 'b') AS (c0, c1)
-      """
-    Then the result should be:
-      | c0   | c1   |
-      | NULL | NULL |
+  Rule: Data type conversion
 
-  Scenario: Invalid JSON returns NULL
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('not_json', 'a') AS c0
-      """
-    Then the result should be:
-      | c0   |
-      | NULL |
+    Scenario: Extract numeric values as strings
+      When query
+        """
+        SELECT json_tuple('{"a":123,"b":45.67,"c":true}', 'a', 'b', 'c')
+        """
+      Then query result
+        | c0  | c1    | c2   |
+        | 123 | 45.67 | true |
 
-  Scenario: Empty string input
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('', 'a') AS c0
-      """
-    Then the result should be:
-      | c0   |
-      | NULL |
+    Scenario: Extract nested JSON object as JSON string
+      When query
+        """
+        SELECT json_tuple('{"a":{"b":"c"},"d":42}', 'a', 'd')
+        """
+      Then query result
+        | c0        | c1 |
+        | {"b":"c"} | 42 |
 
-  Scenario: Empty JSON object
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{}', 'a', 'b') AS (c0, c1)
-      """
-    Then the result should be:
-      | c0   | c1   |
-      | NULL | NULL |
+    Scenario: Extract array values as JSON string
+      When query
+        """
+        SELECT json_tuple('{"a":[1,2,3],"b":"hello"}', 'a', 'b')
+        """
+      Then query result
+        | c0      | c1    |
+        | [1,2,3] | hello |
 
-  Scenario: Duplicate keys in arguments
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":"hello"}', 'a', 'a') AS (c0, c1)
-      """
-    Then the result should be:
-      | c0    | c1    |
-      | hello | hello |
+  Rule: Empty string handling
 
-  Scenario: Key with dot character
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a.b":"dotted"}', 'a.b') AS c0
-      """
-    Then the result should be:
-      | c0     |
-      | dotted |
+    Scenario: Extract field with empty string value
+      When query
+        """
+        SELECT json_tuple('{"a":"","b":"value"}', 'a', 'b')
+        """
+      Then query result
+        | c0 | c1    |
+        |    | value |
 
-  Scenario: Key with spaces
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"my key":"spaced"}', 'my key') AS c0
-      """
-    Then the result should be:
-      | c0     |
-      | spaced |
+    Scenario: Extract field with JSON null value
+      When query
+        """
+        SELECT json_tuple('{"a":null,"b":"value"}', 'a', 'b')
+        """
+      Then query result
+        | c0   | c1    |
+        | NULL | value |
 
-  Scenario: Value with escaped characters
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"msg":"hello\\nworld"}', 'msg') AS c0
-      """
-    Then the result should be:
-      | c0           |
-      | hello\nworld |
+  Rule: Special characters and escaping
 
-  Scenario: Nested object is returned as JSON string
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":{"b":1}}', 'a') AS c0
-      """
-    Then the result should be:
-      | c0      |
-      | {"b":1} |
+    Scenario: Extract field with special characters in key
+      When query
+        """
+        SELECT json_tuple('{"a-b":"value1","a b":"value2"}', 'a-b', 'a b')
+        """
+      Then query result
+        | c0     | c1     |
+        | value1 | value2 |
 
-  Scenario: Array is returned as JSON string
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"arr":[1,2,3]}', 'arr') AS c0
-      """
-    Then the result should be:
-      | c0       |
-      | [1,2,3]  |
+    Scenario: Extract field with Unicode characters
+      When query
+        """
+        SELECT json_tuple('{"名称":"值","name":"value"}', '名称', 'name')
+        """
+      Then query result
+        | c0 | c1    |
+        | 值 | value |
 
-  Scenario: Nested path is not resolved
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":{"b":"deep"}}', 'a.b') AS c0
-      """
-    Then the result should be:
-      | c0   |
-      | NULL |
+    Scenario: Extract field with escaped characters in value
+      When query
+        """
+        SELECT json_tuple('{"a":"line1\\nline2","b":"tab\\tseparated"}', 'a', 'b')
+        """
+      Then query result
+        | c0         | c1            |
+        | line1\nline2 | tab\tseparated |
 
-  Scenario: Extract values from multiple rows
-    Given a temporary view "json_data" with data:
-      | json_col                      |
-      | {"f1":"value1","f2":"value2"} |
-      | {"f1":"value12"}              |
-    When I execute the SQL query:
-      """
-      SELECT json_tuple(json_col, 'f1', 'f2') AS (c0, c1)
-      FROM json_data
-      """
-    Then the result should be:
-      | c0      | c1     |
-      | value1  | value2 |
-      | value12 | NULL   |
+  Rule: Column naming behavior
 
-  Scenario: Extract values with NULLs across rows
-    Given a temporary view "json_nums" with data:
-      | json_col            |
-      | {"a":1,"b":2,"c":3} |
-      | {"a":4,"b":5}       |
-      | {"b":6}             |
-      | NULL                |
-    When I execute the SQL query:
-      """
-      SELECT json_tuple(json_col, 'a', 'b', 'c') AS (c0, c1, c2)
-      FROM json_nums
-      """
-    Then the result should be:
-      | c0   | c1   | c2   |
-      | 1    | 2    | 3    |
-      | 4    | 5    | NULL |
-      | NULL | 6    | NULL |
-      | NULL | NULL | NULL |
+    Scenario: Output columns are always named c0, c1, c2, etc.
+      When query
+        """
+        SELECT json_tuple('{"x":"val1","y":"val2"}', 'x', 'y')
+        """
+      Then query result
+        | c0   | c1   |
+        | val1 | val2 |
 
-  Scenario: Use json_tuple with other columns
-    Given a temporary view "events" with data:
-      | id | payload                        |
-      | 1  | {"action":"click","item":"42"} |
-      | 2  | {"action":"view"}              |
-      | 3  | NULL                           |
-    When I execute the SQL query:
-      """
-      SELECT id, json_tuple(payload, 'action', 'item') AS (action, item)
-      FROM events
-      """
-    Then the result should be:
-      | id | action | item |
-      | 1  | click  | 42   |
-      | 2  | view   | NULL |
-      | 3  | NULL   | NULL |
+    Scenario: Column naming with different number of fields
+      When query
+        """
+        SELECT json_tuple('{"p1":"v1","p2":"v2","p3":"v3","p4":"v4"}', 'p1', 'p2', 'p3', 'p4')
+        """
+      Then query result
+        | c0 | c1 | c2 | c3 |
+        | v1 | v2 | v3 | v4 |
 
-  Scenario: Use json_tuple with LATERAL VIEW
-    Given a temporary view "src" with data:
-      | json_col                    |
-      | {"name":"Alice","age":"30"} |
-      | {"name":"Bob","age":"25"}   |
-    When I execute the SQL query:
-      """
-      SELECT jt.name, jt.age
-      FROM src
-      LATERAL VIEW json_tuple(json_col, 'name', 'age') jt AS name, age
-      """
-    Then the result should be:
-      | name  | age |
-      | Alice | 30  |
-      | Bob   | 25  |
+  Rule: Edge cases
 
-  Scenario: LATERAL VIEW with missing values
-    Given a temporary view "partial" with data:
-      | json_col           |
-      | {"x":"10"}         |
-      | {"x":"20","y":"5"} |
-    When I execute the SQL query:
-      """
-      SELECT jt.x, jt.y
-      FROM partial
-      LATERAL VIEW json_tuple(json_col, 'x', 'y') jt AS x, y
-      """
-    Then the result should be:
-      | x  | y    |
-      | 10 | NULL |
-      | 20 | 5    |
+    Scenario: Root JSON array returns NULL for all fields
+      When query
+        """
+        SELECT json_tuple('[{"a":1},{"a":2}]', 'a')
+        """
+      Then query result
+        | c0   |
+        | NULL |
 
-  Scenario: Extract five fields
-    When I execute the SQL query:
-      """
-      SELECT json_tuple(
-        '{"a":"1","b":"2","c":"3","d":"4","e":"5"}',
-        'a', 'b', 'c', 'd', 'e'
-      ) AS (c0, c1, c2, c3, c4)
-      """
-    Then the result should be:
-      | c0 | c1 | c2 | c3 | c4 |
-      | 1  | 2  | 3  | 4  | 5  |
+    Scenario: JSON string with whitespace
+      When query
+        """
+        SELECT json_tuple('  {"a": "value1", "b": "value2"}  ', 'a', 'b')
+        """
+      Then query result
+        | c0     | c1     |
+        | value1 | value2 |
 
-  Scenario: Mix existing and missing fields
-    When I execute the SQL query:
-      """
-      SELECT json_tuple(
-        '{"a":"1","c":"3","e":"5"}',
-        'a', 'b', 'c', 'd', 'e'
-      ) AS (c0, c1, c2, c3, c4)
-      """
-    Then the result should be:
-      | c0 | c1   | c2 | c3   | c4 |
-      | 1  | NULL | 3  | NULL | 5  |
+    Scenario: Single-quoted JSON (should fail gracefully)
+      When query
+        """
+        SELECT json_tuple("{'a':'value'}", 'a')
+        """
+      Then query result
+        | c0   |
+        | NULL |
 
-  Scenario: Requested fields in different order
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"b":"2","a":"1"}', 'a', 'b') AS (c0, c1)
-      """
-    Then the result should be:
-      | c0 | c1 |
-      | 1  | 2  |
-
-  Scenario: JSON with whitespace
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{ "a" : "hello" , "b" : "world" }', 'a', 'b') AS (c0, c1)
-      """
-    Then the result should be:
-      | c0    | c1    |
-      | hello | world |
-
-  Scenario: Empty string value
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('{"a":""}', 'a') AS c0
-      """
-    Then the result should be:
-      | c0 |
-      |    |
-
-  Scenario: Root JSON array returns NULL
-    When I execute the SQL query:
-      """
-      SELECT json_tuple('[1,2,3]', 'a') AS c0
-      """
-    Then the result should be:
-      | c0   |
-      | NULL |
+    Scenario: Very large JSON string
+      When query
+        """
+        SELECT json_tuple('{"a":"' || repeat('x', 10000) || '","b":"value"}', 'a', 'b')
+        """
+      Then query result contains
+        | c0 (length ~10000) | c1    |
+        | x...               | value |

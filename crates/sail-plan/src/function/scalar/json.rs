@@ -2,7 +2,6 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{cast, expr, lit, when, ScalarUDF};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
-use datafusion_spark::expr_fn::json_tuple;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::json::{
     json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf, SparkFromJson,
@@ -82,7 +81,7 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("get_json_object", F::binary(get_json_object)),
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
-        ("json_tuple", F::var_arg(|args| Ok(json_tuple(args)))),
+        //json_tuple is a generator function registered in generator.rs
         ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
         ("to_json", F::var_arg(to_json)),
     ]
