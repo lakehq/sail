@@ -15,6 +15,31 @@ impl CatalogManager {
         provider.create_table(&database, &table, options).await
     }
 
+    /// Performs lightweight catalog checks before a caller initializes
+    /// storage-layer metadata for `CREATE TABLE`.
+    ///
+    /// Returns `false` when `CREATE TABLE IF NOT EXISTS` is already satisfied
+    /// by an existing catalog table, so the storage hook should be skipped.
+    pub async fn should_materialize_create_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        if_not_exists: bool,
+        replace: bool,
+    ) -> CatalogResult<bool> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.get_database(&database).await?;
+        match provider.get_table(&database, &table).await {
+            Ok(_) if if_not_exists => Ok(false),
+            Ok(_) if replace => Ok(true),
+            Ok(_) => Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                table.to_string(),
+            )),
+            Err(CatalogError::NotFound(_, _)) => Ok(true),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Returns `true` when the catalog that owns this table reference is
     /// responsible for initializing physical storage.  Callers should skip
     /// format-specific pre-materialization (e.g. writing the initial Delta
