@@ -1,14 +1,17 @@
 use std::any::Any;
+use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::TimeUnit::Microsecond;
 use datafusion::arrow::datatypes::{
-    DataType, Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
-    IntervalYearMonthType, TimestampMicrosecondType,
+    DataType, Date32Type, DurationMicrosecondType, Field, FieldRef, Int32Type, Int64Type,
+    IntervalMonthDayNanoType, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 use crate::scalar::math::utils::try_op::{
@@ -16,6 +19,7 @@ use crate::scalar::math::utils::try_op::{
     try_binary_op_primitive, try_op_date32_interval_yearmonth, try_op_date32_monthdaynano,
     try_op_interval_yearmonth, try_op_timestamp_duration,
 };
+use crate::scalar::math::utils::widen_interval_qualifier_field_from_args;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryAdd {
@@ -69,6 +73,9 @@ impl ScalarUDFImpl for SparkTryAdd {
             [DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)] => {
                 Ok(DataType::Timestamp(Microsecond, None))
             }
+            [DataType::Duration(Microsecond), DataType::Duration(Microsecond)] => {
+                Ok(DataType::Duration(Microsecond))
+            }
 
             _ => Err(unsupported_data_types_exec_err(
                 "try_add",
@@ -76,6 +83,31 @@ impl ScalarUDFImpl for SparkTryAdd {
                 arg_types,
             )),
         }
+    }
+
+    /// Propagate input nullability and Spark interval qualifier metadata onto
+    /// the output field. The default ScalarUDF return field is `nullable=true`
+    /// with no metadata, which makes interval `+` results render via the
+    /// broadest qualifier formatter (e.g. `INTERVAL '10' DAY` would surface
+    /// as `INTERVAL '10 00:00:00' DAY TO SECOND`). Routing the qualifier
+    /// through this UDF keeps it durable across DataFusion's physical
+    /// planning, which drops `Alias` metadata for non-`Literal` inner exprs.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [left, right] = args.arg_fields else {
+            return Err(invalid_arg_count_exec_err(
+                "try_add",
+                (2, 2),
+                args.arg_fields.len(),
+            ));
+        };
+        let return_type =
+            self.return_type(&[left.data_type().clone(), right.data_type().clone()])?;
+        let nullable = left.is_nullable() || right.is_nullable();
+        let base = Field::new(self.name(), return_type, nullable);
+        Ok(Arc::new(widen_interval_qualifier_field_from_args(
+            base,
+            args.arg_fields,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -162,6 +194,13 @@ impl ScalarUDFImpl for SparkTryAdd {
 
                 binary_op_scalar_or_array(left, right, result)
             }
+            (DataType::Duration(Microsecond), DataType::Duration(Microsecond)) => {
+                let l = left_arr.as_primitive::<DurationMicrosecondType>();
+                let r = right_arr.as_primitive::<DurationMicrosecondType>();
+                let result =
+                    try_binary_op_primitive::<DurationMicrosecondType, _>(l, r, i64::checked_add);
+                binary_op_scalar_or_array(left, right, result)
+            }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "spark_try_add",
                 "Int32 or Int64",
@@ -197,6 +236,10 @@ impl ScalarUDFImpl for SparkTryAdd {
                 | (
                     DataType::Interval(MonthDayNano),
                     DataType::Interval(MonthDayNano)
+                )
+                | (
+                    DataType::Duration(Microsecond),
+                    DataType::Duration(Microsecond)
                 )
         );
         if *left == DataType::Null {

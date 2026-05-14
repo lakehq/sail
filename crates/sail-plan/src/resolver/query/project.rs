@@ -252,6 +252,7 @@ impl PlanResolver<'_> {
                     expr,
                     metadata,
                 } = e;
+                eprintln!("[DBG rewrite_named_expressions] name={name:?} metadata={metadata:?}");
                 let name = if name.len() == 1 {
                     name.one()?
                 } else {

@@ -3,11 +3,12 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    expr, AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    expr, AggregateUDF, Expr, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
@@ -26,6 +27,74 @@ use crate::function::get_built_in_window_function;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+
+/// Format a resolved `Expr` for user-facing display by substituting the
+/// opaque field IDs Sail's resolver uses for column references with the
+/// original names registered in `state`. Verified against PySpark: column
+/// qualifiers are dropped in window column headers (e.g. `ORDER BY t.c`
+/// renders as `ORDER BY c`), so we emit unqualified names.
+fn user_facing_display(expr: &Expr, state: &PlanResolverState) -> String {
+    let rewritten = expr.clone().transform(&mut |e: Expr| match e {
+        Expr::Column(col) => {
+            let user_name = state
+                .get_field_info(&col.name)
+                .ok()
+                .map(|info| info.name().to_string());
+            match user_name {
+                Some(name) => Ok(Transformed::yes(Expr::Column(Column::new_unqualified(
+                    name,
+                )))),
+                None => Ok(Transformed::no(Expr::Column(col))),
+            }
+        }
+        other => Ok(Transformed::no(other)),
+    });
+    match rewritten {
+        Ok(t) => format!("{}", t.data),
+        Err(_) => format!("{expr}"),
+    }
+}
+
+/// Format a single sort entry inside a window `ORDER BY` clause as Spark
+/// shows it (e.g. `c ASC NULLS FIRST`). Direction and null ordering are
+/// always emitted explicitly to match Spark's column header normalization.
+fn format_window_sort(sort: &expr::Sort, state: &PlanResolverState) -> String {
+    let expr = user_facing_display(&sort.expr, state);
+    let dir = if sort.asc { "ASC" } else { "DESC" };
+    let nulls = if sort.nulls_first {
+        "NULLS FIRST"
+    } else {
+        "NULLS LAST"
+    };
+    format!("{expr} {dir} {nulls}")
+}
+
+/// Assemble a Spark-style window column header from an already-formatted
+/// function call (e.g. `min(c)`) and the window spec. The result has the
+/// shape `<func_call> OVER (PARTITION BY ... ORDER BY ... <frame>)`. Each
+/// clause is omitted when empty except the frame, which is always emitted.
+fn format_window_column_header(
+    func_call: &str,
+    partition_by: &[Expr],
+    sorts: &[expr::Sort],
+    window_frame: &WindowFrame,
+    state: &PlanResolverState,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !partition_by.is_empty() {
+        let cols: Vec<String> = partition_by
+            .iter()
+            .map(|e| user_facing_display(e, state))
+            .collect();
+        parts.push(format!("PARTITION BY {}", cols.join(", ")));
+    }
+    if !sorts.is_empty() {
+        let items: Vec<String> = sorts.iter().map(|s| format_window_sort(s, state)).collect();
+        parts.push(format!("ORDER BY {}", items.join(", ")));
+    }
+    parts.push(window_frame.to_string());
+    format!("{func_call} OVER ({})", parts.join(" "))
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_window(
@@ -67,62 +136,195 @@ impl PlanResolver<'_> {
                 Some(false)
             })
         };
-        let (window, function_name, argument_display_names, is_distinct) = match window_function {
-            spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name,
-                arguments,
-                named_arguments,
-                is_user_defined_function: false,
-                is_internal: _,
-                is_distinct,
-                ignore_nulls,
-                filter: None,
-                // TODO: `window` and `window_function` both have an `order_by` field.
-                //  Check: Which one should we use? Are they the same? Is one of them empty?
-                order_by: None,
-            }) => {
-                let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
-                    return Err(PlanError::unsupported("qualified window function name"));
-                };
-                if !named_arguments.is_empty() {
-                    return Err(PlanError::todo("named window function arguments"));
-                }
-                let canonical_function_name = function_name.to_ascii_lowercase();
-                // `is_user_defined_function` is always false on the wire, so a registered
-                // Python UDAF arrives here as `UnresolvedFunction`. Look it up in the
-                // catalog before falling back to the built-in window function registry.
-                let catalog_function = self
-                    .ctx
-                    .extension::<CatalogManager>()?
-                    .get_function(&canonical_function_name)?;
-                let registered_udaf = catalog_function.as_ref().and_then(|udf| {
-                    udf.inner()
-                        .as_any()
-                        .downcast_ref::<PySparkUnresolvedUDF>()
-                        .filter(|f| {
-                            matches!(
-                                f.eval_type(),
-                                spec::PySparkUdfType::GroupedAggPandas
-                                    | spec::PySparkUdfType::GroupedAggPandasIter
-                                    | spec::PySparkUdfType::GroupedAggArrow
-                                    | spec::PySparkUdfType::GroupedAggArrowIter
-                                    | spec::PySparkUdfType::WindowAggPandas
-                                    | spec::PySparkUdfType::WindowAggArrow
+        let partition_by_for_header = partition_by.clone();
+        let sorts_for_header = sorts.clone();
+        let window_frame_for_header = window_frame.clone();
+        // `header_function_name` is what we surface in the Spark-style
+        // column header. For built-in / registered aggregate functions we
+        // use the lowercased canonical name (Spark's normalization), and for
+        // Python-defined window functions we preserve the user's original
+        // case to match Spark's UDF display behavior.
+        let (window, header_function_name, argument_display_names, is_distinct) =
+            match window_function {
+                spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                    function_name,
+                    arguments,
+                    named_arguments,
+                    is_user_defined_function: false,
+                    is_internal: _,
+                    is_distinct,
+                    ignore_nulls,
+                    filter: None,
+                    // TODO: `window` and `window_function` both have an `order_by` field.
+                    //  Check: Which one should we use? Are they the same? Is one of them empty?
+                    order_by: None,
+                }) => {
+                    let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
+                        return Err(PlanError::unsupported("qualified window function name"));
+                    };
+                    if !named_arguments.is_empty() {
+                        return Err(PlanError::todo("named window function arguments"));
+                    }
+                    let canonical_function_name = function_name.to_ascii_lowercase();
+                    // `is_user_defined_function` is always false on the wire, so a registered
+                    // Python UDAF arrives here as `UnresolvedFunction`. Look it up in the
+                    // catalog before falling back to the built-in window function registry.
+                    let catalog_function = self
+                        .ctx
+                        .extension::<CatalogManager>()?
+                        .get_function(&canonical_function_name)?;
+                    let registered_udaf = catalog_function.as_ref().and_then(|udf| {
+                        udf.inner()
+                            .as_any()
+                            .downcast_ref::<PySparkUnresolvedUDF>()
+                            .filter(|f| {
+                                matches!(
+                                    f.eval_type(),
+                                    spec::PySparkUdfType::GroupedAggPandas
+                                        | spec::PySparkUdfType::GroupedAggPandasIter
+                                        | spec::PySparkUdfType::GroupedAggArrow
+                                        | spec::PySparkUdfType::GroupedAggArrowIter
+                                        | spec::PySparkUdfType::WindowAggPandas
+                                        | spec::PySparkUdfType::WindowAggArrow
+                                )
+                            })
+                    });
+                    if let Some(udaf) = registered_udaf {
+                        let (udaf, arguments, argument_display_names) = self
+                            .resolve_registered_pyspark_udaf(
+                                udaf,
+                                &function_name,
+                                arguments,
+                                schema,
+                                state,
                             )
-                        })
-                });
-                if let Some(udaf) = registered_udaf {
-                    let (udaf, arguments, argument_display_names) = self
-                        .resolve_registered_pyspark_udaf(
-                            udaf,
-                            &function_name,
-                            arguments,
-                            schema,
-                            state,
+                            .await?;
+                        let window = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: expr::WindowFunctionDefinition::AggregateUDF(udaf),
+                            params: WindowFunctionParams {
+                                args: arguments,
+                                partition_by,
+                                order_by: sorts,
+                                window_frame,
+                                filter: None,
+                                null_treatment: get_null_treatment(None),
+                                distinct: is_distinct,
+                            },
+                        }));
+                        (
+                            window,
+                            canonical_function_name,
+                            argument_display_names,
+                            is_distinct,
                         )
+                    } else {
+                        let (argument_display_names, arguments) = self
+                            .resolve_expressions_and_names(arguments, schema, state)
+                            .await?;
+                        let function = get_built_in_window_function(&canonical_function_name)?;
+                        let input = WinFunctionInput {
+                            arguments,
+                            partition_by,
+                            order_by: sorts,
+                            window_frame,
+                            ignore_nulls,
+                            distinct: is_distinct,
+                            function_context: FunctionContextInput {
+                                argument_display_names: &argument_display_names,
+                                plan_config: &self.config,
+                                session_context: self.ctx,
+                                schema,
+                            },
+                        };
+                        (
+                            function(input)?,
+                            canonical_function_name,
+                            argument_display_names,
+                            is_distinct,
+                        )
+                    }
+                }
+                spec::Expr::CommonInlineUserDefinedFunction(function) => {
+                    let mut scope = state.enter_config_scope();
+                    let state = scope.state();
+                    state.config_mut().arrow_allow_large_var_types = true;
+                    let spec::CommonInlineUserDefinedFunction {
+                        function_name,
+                        deterministic,
+                        is_distinct,
+                        arguments,
+                        function,
+                    } = function;
+                    let function_name: String = function_name.into();
+                    let (arguments, kwargs) = Self::extract_kwargs(arguments);
+                    let (argument_display_names, arguments) = self
+                        .resolve_expressions_and_names(arguments, schema, state)
                         .await?;
+                    let input_types: Vec<DataType> = arguments
+                        .iter()
+                        .map(|arg| arg.get_type(schema))
+                        .collect::<Result<Vec<DataType>, DataFusionError>>()?;
+                    let function = self.resolve_python_udf(function, state)?;
+                    let payload = PySparkUdfPayload::build(
+                        &function.python_version,
+                        &function.command,
+                        function.eval_type,
+                        &((0..arguments.len()).collect::<Vec<_>>()),
+                        &input_types,
+                        &kwargs,
+                        &self.config.pyspark_udf_config,
+                    )?;
+                    let (function, arguments) = match function.eval_type {
+                        spec::PySparkUdfType::GroupedAggPandas
+                        | spec::PySparkUdfType::GroupedAggPandasIter
+                        | spec::PySparkUdfType::GroupedAggArrow
+                        | spec::PySparkUdfType::GroupedAggArrowIter
+                        | spec::PySparkUdfType::WindowAggPandas
+                        | spec::PySparkUdfType::WindowAggArrow => {
+                            let kind = match function.eval_type {
+                                spec::PySparkUdfType::GroupedAggArrow
+                                | spec::PySparkUdfType::GroupedAggArrowIter
+                                | spec::PySparkUdfType::WindowAggArrow => {
+                                    PySparkGroupAggKind::Arrow
+                                }
+                                _ => PySparkGroupAggKind::Pandas,
+                            };
+                            // DataFusion requires at least one input to an aggregate function.
+                            // For 0-arg UDFs inject a dummy Int64 literal; the accumulator strips it.
+                            let actual_arg_count = arguments.len();
+                            let (arguments, input_types) = if arguments.is_empty() {
+                                (
+                                    vec![datafusion_expr::lit(0i64)],
+                                    vec![arrow::datatypes::DataType::Int64],
+                                )
+                            } else {
+                                (arguments, input_types)
+                            };
+                            let udaf = PySparkGroupAggregateUDF::new(
+                                kind,
+                                get_udf_name(&function_name, &payload),
+                                payload,
+                                deterministic,
+                                argument_display_names.clone(),
+                                input_types,
+                                function.output_type,
+                                self.config.pyspark_udf_config.clone(),
+                                actual_arg_count,
+                            );
+                            let udaf = AggregateUDF::from(udaf);
+                            (
+                                expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf)),
+                                arguments,
+                            )
+                        }
+                        _ => {
+                            return Err(PlanError::invalid(
+                                "invalid user-defined window function type",
+                            ))
+                        }
+                    };
                     let window = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-                        fun: expr::WindowFunctionDefinition::AggregateUDF(udaf),
+                        fun: function,
                         params: WindowFunctionParams {
                             args: arguments,
                             partition_by,
@@ -133,138 +335,32 @@ impl PlanResolver<'_> {
                             distinct: is_distinct,
                         },
                     }));
-                    (window, function_name, argument_display_names, is_distinct)
-                } else {
-                    let (argument_display_names, arguments) = self
-                        .resolve_expressions_and_names(arguments, schema, state)
-                        .await?;
-                    let function = get_built_in_window_function(&canonical_function_name)?;
-                    let input = WinFunctionInput {
-                        arguments,
-                        partition_by,
-                        order_by: sorts,
-                        window_frame,
-                        ignore_nulls,
-                        distinct: is_distinct,
-                        function_context: FunctionContextInput {
-                            argument_display_names: &argument_display_names,
-                            plan_config: &self.config,
-                            session_context: self.ctx,
-                            schema,
-                        },
-                    };
-                    (
-                        function(input)?,
-                        function_name,
-                        argument_display_names,
-                        is_distinct,
-                    )
+                    (window, function_name, argument_display_names, false)
                 }
-            }
-            spec::Expr::CommonInlineUserDefinedFunction(function) => {
-                let mut scope = state.enter_config_scope();
-                let state = scope.state();
-                state.config_mut().arrow_allow_large_var_types = true;
-                let spec::CommonInlineUserDefinedFunction {
-                    function_name,
-                    deterministic,
-                    is_distinct,
-                    arguments,
-                    function,
-                } = function;
-                let function_name: String = function_name.into();
-                let (arguments, kwargs) = Self::extract_kwargs(arguments);
-                let (argument_display_names, arguments) = self
-                    .resolve_expressions_and_names(arguments, schema, state)
-                    .await?;
-                let input_types: Vec<DataType> = arguments
-                    .iter()
-                    .map(|arg| arg.get_type(schema))
-                    .collect::<Result<Vec<DataType>, DataFusionError>>(
-                )?;
-                let function = self.resolve_python_udf(function, state)?;
-                let payload = PySparkUdfPayload::build(
-                    &function.python_version,
-                    &function.command,
-                    function.eval_type,
-                    &((0..arguments.len()).collect::<Vec<_>>()),
-                    &input_types,
-                    &kwargs,
-                    &self.config.pyspark_udf_config,
-                )?;
-                let (function, arguments) = match function.eval_type {
-                    spec::PySparkUdfType::GroupedAggPandas
-                    | spec::PySparkUdfType::GroupedAggPandasIter
-                    | spec::PySparkUdfType::GroupedAggArrow
-                    | spec::PySparkUdfType::GroupedAggArrowIter
-                    | spec::PySparkUdfType::WindowAggPandas
-                    | spec::PySparkUdfType::WindowAggArrow => {
-                        let kind = match function.eval_type {
-                            spec::PySparkUdfType::GroupedAggArrow
-                            | spec::PySparkUdfType::GroupedAggArrowIter
-                            | spec::PySparkUdfType::WindowAggArrow => PySparkGroupAggKind::Arrow,
-                            _ => PySparkGroupAggKind::Pandas,
-                        };
-                        // DataFusion requires at least one input to an aggregate function.
-                        // For 0-arg UDFs inject a dummy Int64 literal; the accumulator strips it.
-                        let actual_arg_count = arguments.len();
-                        let (arguments, input_types) = if arguments.is_empty() {
-                            (
-                                vec![datafusion_expr::lit(0i64)],
-                                vec![arrow::datatypes::DataType::Int64],
-                            )
-                        } else {
-                            (arguments, input_types)
-                        };
-                        let udaf = PySparkGroupAggregateUDF::new(
-                            kind,
-                            get_udf_name(&function_name, &payload),
-                            payload,
-                            deterministic,
-                            argument_display_names.clone(),
-                            input_types,
-                            function.output_type,
-                            self.config.pyspark_udf_config.clone(),
-                            actual_arg_count,
-                        );
-                        let udaf = AggregateUDF::from(udaf);
-                        (
-                            expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf)),
-                            arguments,
-                        )
-                    }
-                    _ => {
-                        return Err(PlanError::invalid(
-                            "invalid user-defined window function type",
-                        ))
-                    }
-                };
-                let window = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-                    fun: function,
-                    params: WindowFunctionParams {
-                        args: arguments,
-                        partition_by,
-                        order_by: sorts,
-                        window_frame,
-                        filter: None,
-                        null_treatment: get_null_treatment(None),
-                        distinct: is_distinct,
-                    },
-                }));
-                (window, function_name, argument_display_names, false)
-            }
-            _ => {
-                return Err(PlanError::invalid(format!(
-                    "invalid window function expression: {window_function:?}"
-                )));
-            }
-        };
+                _ => {
+                    return Err(PlanError::invalid(format!(
+                        "invalid window function expression: {window_function:?}"
+                    )));
+                }
+            };
+        // Build the Spark-style window column header. `header_function_name`
+        // already carries Spark's expected case (lowercase for built-ins,
+        // preserved for UDFs); `function_to_string` handles per-function
+        // formatting (DISTINCT, special cases) so all display rules stay
+        // centralized in the shared formatter.
         let service = self.ctx.extension::<PlanService>()?;
-        let name = service.plan_formatter().function_to_string(
-            function_name.as_str(),
+        let func_call = service.plan_formatter().function_to_string(
+            header_function_name.as_str(),
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
+        let name = format_window_column_header(
+            &func_call,
+            &partition_by_for_header,
+            &sorts_for_header,
+            &window_frame_for_header,
+            state,
+        );
         Ok(NamedExpr::new(vec![name], window))
     }
 

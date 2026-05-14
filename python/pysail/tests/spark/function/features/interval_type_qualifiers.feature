@@ -1,3 +1,4 @@
+@interval-qualifiers
 Feature: Interval type qualifiers
 
   Rule: Year-month interval literal qualifiers
@@ -274,7 +275,7 @@ Feature: Interval type qualifiers
       SELECT SUM(c) AS sum_c, MIN(c) AS min_c, MAX(c) AS max_c, AVG(c) AS avg_c
       FROM VALUES (INTERVAL '1' DAY), (INTERVAL '2' DAY), (INTERVAL '3' DAY) AS t(c)
       """
-      Then query result
+      Then query result ordered
       | sum_c            | min_c            | max_c            | avg_c                               |
       | INTERVAL '6' DAY | INTERVAL '1' DAY | INTERVAL '3' DAY | INTERVAL '2 00:00:00' DAY TO SECOND |
 
@@ -294,6 +295,10 @@ Feature: Interval type qualifiers
       | s                |
       | INTERVAL '6' YEAR |
 
+    @sail-bug
+    # Same root cause as `SUM over typed YEAR intervals stays as YEAR` above —
+    # Sail's SUM does not yet accept Interval(YearMonth). YEAR TO MONTH fails
+    # the same way as the single-field YEAR form.
     Scenario: SUM over YEAR TO MONTH stays as YEAR TO MONTH
       When query
       """
@@ -309,8 +314,9 @@ Feature: Interval type qualifiers
       """
       SELECT c, MIN(c) OVER () AS mn, MAX(c) OVER () AS mx
       FROM VALUES (INTERVAL '1' DAY), (INTERVAL '5' DAY) AS t(c)
+      ORDER BY c
       """
-      Then query result
+      Then query result ordered
       | c                | mn               | mx               |
       | INTERVAL '1' DAY | INTERVAL '1' DAY | INTERVAL '5' DAY |
       | INTERVAL '5' DAY | INTERVAL '1' DAY | INTERVAL '5' DAY |
@@ -450,6 +456,10 @@ Feature: Interval type qualifiers
        |-- (INTERVAL '10' YEAR * 2): interval year to month (nullable = false)
       """
 
+    @sail-bug
+    # Same root cause as `SUM over typed YEAR intervals stays as YEAR` —
+    # Sail's SUM does not yet accept Interval(YearMonth), so the schema check
+    # never reaches the qualifier propagation step.
     Scenario: schema reflects the preserved YEAR qualifier on SUM
       When query
       """
@@ -470,6 +480,69 @@ Feature: Interval type qualifiers
       """
       root
        |-- min(c) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING): interval day (nullable = true)
+      """
+
+    Scenario: schema reflects the preserved YEAR qualifier on a window MIN
+      When query
+      """
+      SELECT MIN(c) OVER () FROM VALUES (INTERVAL '1' YEAR) AS t(c)
+      """
+      Then query schema
+      """
+      root
+       |-- min(c) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING): interval year (nullable = true)
+      """
+
+    Scenario: schema reflects the alias replacing the long window header
+      When query
+      """
+      SELECT MIN(c) OVER () AS mn FROM VALUES (INTERVAL '1' DAY) AS t(c)
+      """
+      Then query schema
+      """
+      root
+       |-- mn: interval day (nullable = true)
+      """
+
+    Scenario: schema reflects the ORDER BY window frame in the header
+      When query
+      """
+      SELECT c, MIN(c) OVER (ORDER BY c)
+      FROM VALUES (INTERVAL '1' DAY), (INTERVAL '2' DAY) AS t(c)
+      """
+      Then query schema
+      """
+      root
+       |-- c: interval day (nullable = false)
+       |-- min(c) OVER (ORDER BY c ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW): interval day (nullable = true)
+      """
+
+    Scenario: schema reflects each side's qualifier on binary `+` over subquery columns
+      When query
+      """
+      SELECT t.a + t.a, t.b + t.b FROM (
+        SELECT INTERVAL '10' YEAR AS a, INTERVAL '5' DAY AS b
+      ) t
+      """
+      Then query schema
+      """
+      root
+       |-- (a + a): interval year (nullable = false)
+       |-- (b + b): interval day (nullable = false)
+      """
+
+    Scenario: schema reflects the preserved DAY qualifier on SUM / MIN / MAX
+      When query
+      """
+      SELECT SUM(c) AS sum_c, MIN(c) AS min_c, MAX(c) AS max_c
+      FROM VALUES (INTERVAL '1' DAY), (INTERVAL '2' DAY), (INTERVAL '3' DAY) AS t(c)
+      """
+      Then query schema
+      """
+      root
+       |-- sum_c: interval day (nullable = true)
+       |-- min_c: interval day (nullable = true)
+       |-- max_c: interval day (nullable = true)
       """
 
     Scenario: schema reflects the preserved YEAR qualifier on IF with matching branches

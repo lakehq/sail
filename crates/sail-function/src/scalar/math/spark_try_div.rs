@@ -1,13 +1,17 @@
 use std::any::Any;
+use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{
-    DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
+    DataType, Field, FieldRef, Int32Type, Int64Type, IntervalMonthDayNanoType,
+    IntervalYearMonthType,
 };
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 use crate::scalar::math::utils::try_op::{
@@ -15,6 +19,7 @@ use crate::scalar::math::utils::try_op::{
     try_div_interval_monthdaynano_i64, try_op_interval_monthdaynano_i32,
     try_op_interval_yearmonth_i32,
 };
+use crate::scalar::math::utils::widen_interval_qualifier_field;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryDiv {
@@ -66,6 +71,28 @@ impl ScalarUDFImpl for SparkTryDiv {
                 arg_types,
             )),
         }
+    }
+
+    /// Propagate input nullability to the output field and attach Spark's
+    /// broadest interval qualifier metadata when the result is an interval
+    /// type. Mirrors `SparkTryMult::return_field_from_args` — see that impl
+    /// for the rationale on overriding the default ScalarUDF return field.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [left, right] = args.arg_fields else {
+            return Err(invalid_arg_count_exec_err(
+                "try_divide",
+                (2, 2),
+                args.arg_fields.len(),
+            ));
+        };
+        let return_type =
+            self.return_type(&[left.data_type().clone(), right.data_type().clone()])?;
+        let nullable = left.is_nullable() || right.is_nullable();
+        Ok(Arc::new(widen_interval_qualifier_field(Field::new(
+            self.name(),
+            return_type,
+            nullable,
+        ))))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

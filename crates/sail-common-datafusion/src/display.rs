@@ -113,6 +113,11 @@ impl<'a> FormatOptions<'a> {
         Self { null, ..self }
     }
 
+    /// The string used to represent a null value.
+    pub const fn null(&self) -> &'a str {
+        self.null
+    }
+
     /// Overrides the format used for [`DataType::Date32`] columns
     pub const fn with_date_format(self, date_format: TimeFormat<'a>) -> Self {
         Self {

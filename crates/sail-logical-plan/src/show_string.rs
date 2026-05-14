@@ -25,12 +25,20 @@ use sail_common_datafusion::utils::items::ItemTaker;
 /// when the field isn't a Spark interval column or the metadata is missing /
 /// invalid — both cases fall back to the default `ArrayFormatter`.
 fn interval_qualifier_kind(field: &Field) -> Option<SparkIntervalKind> {
+    eprintln!(
+        "[DBG interval_qualifier_kind] field.name={} type={:?} ext_name={:?} metadata={:?}",
+        field.name(),
+        field.data_type(),
+        field.extension_type_name(),
+        field.metadata()
+    );
     if field.extension_type_name() != Some(SAIL_INTERVAL_EXTENSION_NAME) {
         return None;
     }
     let meta: IntervalQualifierMetadata =
         serde_json::from_str(field.metadata().get(EXTENSION_TYPE_METADATA_KEY)?).ok()?;
     let (start, end) = (meta.start_field?, meta.end_field?);
+    eprintln!("[DBG interval_qualifier_kind] parsed start={start} end={end}");
     match field.data_type() {
         DataType::Interval(IntervalUnit::YearMonth) => {
             SparkIntervalKind::from_year_month_fields(start, end)
@@ -43,10 +51,14 @@ fn interval_qualifier_kind(field: &Field) -> Option<SparkIntervalKind> {
 }
 
 /// If `field` is a Spark interval column with qualifier metadata, pre-format
-/// every row of `array`. Null cells get `""` to match the default
-/// `FormatOptions` null string. Returns `None` to signal "use the default
-/// ArrayFormatter for this column".
-fn try_format_interval_column(field: &Field, array: &dyn Array) -> Option<Vec<String>> {
+/// every row of `array`. Null cells use `null_repr` so they match the same
+/// representation other columns use via `FormatOptions`. Returns `None` to
+/// signal "use the default `ArrayFormatter` for this column".
+fn try_format_interval_column(
+    field: &Field,
+    array: &dyn Array,
+    null_repr: &str,
+) -> Option<Vec<String>> {
     let kind = interval_qualifier_kind(field)?;
     match field.data_type() {
         DataType::Interval(IntervalUnit::YearMonth) => {
@@ -57,7 +69,7 @@ fn try_format_interval_column(field: &Field, array: &dyn Array) -> Option<Vec<St
                 (0..a.len())
                     .map(|i| {
                         if a.is_null(i) {
-                            String::new()
+                            null_repr.to_string()
                         } else {
                             format_year_month_interval(a.value(i), kind).unwrap_or_default()
                         }
@@ -73,7 +85,7 @@ fn try_format_interval_column(field: &Field, array: &dyn Array) -> Option<Vec<St
                 (0..a.len())
                     .map(|i| {
                         if a.is_null(i) {
-                            String::new()
+                            null_repr.to_string()
                         } else {
                             format_day_time_interval(a.value(i), kind).unwrap_or_default()
                         }
@@ -131,25 +143,32 @@ impl ShowStringFormat {
         }
     }
 
-    fn get_formatters<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<ArrayFormatter<'a>>> {
-        let options = FormatOptions::default();
+    fn get_formatters<'a>(
+        &'a self,
+        batch: &'a RecordBatch,
+        options: &'a FormatOptions<'a>,
+    ) -> Result<Vec<ArrayFormatter<'a>>> {
         Ok(batch
             .columns()
             .iter()
-            .map(|c| ArrayFormatter::try_new(c.as_ref(), &options))
+            .map(|c| ArrayFormatter::try_new(c.as_ref(), options))
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Per-column override strings for Spark interval columns that carry the
     /// qualifier extension metadata. `None` at index i means "use the default
     /// `ArrayFormatter` for column i".
-    fn get_interval_overrides(&self, batch: &RecordBatch) -> Vec<Option<Vec<String>>> {
+    fn get_interval_overrides(
+        &self,
+        batch: &RecordBatch,
+        options: &FormatOptions<'_>,
+    ) -> Vec<Option<Vec<String>>> {
         batch
             .schema()
             .fields()
             .iter()
             .zip(batch.columns().iter())
-            .map(|(f, c)| try_format_interval_column(f, c.as_ref()))
+            .map(|(f, c)| try_format_interval_column(f, c.as_ref(), options.null()))
             .collect()
     }
 
@@ -188,8 +207,9 @@ impl ShowStringFormat {
                 .set_cell_alignment(alignment);
         });
 
-        let formatters = self.get_formatters(batch)?;
-        let interval_overrides = self.get_interval_overrides(batch);
+        let options = FormatOptions::default();
+        let formatters = self.get_formatters(batch, &options)?;
+        let interval_overrides = self.get_interval_overrides(batch, &options);
         for row in 0..batch.num_rows() {
             let row = formatters
                 .iter()
@@ -221,8 +241,9 @@ impl ShowStringFormat {
 
         let mut table = Table::new();
         table.load_preset("        |          ");
-        let formatters = self.get_formatters(batch)?;
-        let interval_overrides = self.get_interval_overrides(batch);
+        let options = FormatOptions::default();
+        let formatters = self.get_formatters(batch, &options)?;
+        let interval_overrides = self.get_interval_overrides(batch, &options);
         for row in 0..batch.num_rows() {
             for (col, (formatter, field)) in formatters
                 .iter()
@@ -281,8 +302,9 @@ impl ShowStringFormat {
     }
 
     fn show_html(&self, batch: &RecordBatch, has_more: bool) -> Result<String> {
-        let formatters = self.get_formatters(batch)?;
-        let interval_overrides = self.get_interval_overrides(batch);
+        let options = FormatOptions::default();
+        let formatters = self.get_formatters(batch, &options)?;
+        let interval_overrides = self.get_interval_overrides(batch, &options);
         let mut table = vec!["<table border='1'>".to_string()];
         let header = batch
             .schema()

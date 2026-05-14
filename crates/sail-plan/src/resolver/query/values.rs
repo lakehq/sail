@@ -56,9 +56,14 @@ impl PlanResolver<'_> {
         let _map_column_indices = Self::resolve_values_map_types(&mut values, &schema)?;
         for (row, meta_row) in values.iter_mut().zip(value_metadata) {
             let mut new_row = Vec::with_capacity(row.len());
-            for (expr, meta) in std::mem::take(row).into_iter().zip(meta_row) {
+            for (i, (expr, meta)) in std::mem::take(row).into_iter().zip(meta_row).enumerate() {
                 new_row.push(match meta {
-                    Some(m) => expr.alias_with_metadata("col", Some(m)),
+                    // Use a per-column alias so we don't introduce duplicate
+                    // field names if a row has multiple metadata-bearing
+                    // exprs. `LogicalPlanBuilder::values` renames positionally
+                    // anyway, but downstream tools (explain, debug output)
+                    // benefit from unique names here.
+                    Some(m) => expr.alias_with_metadata(format!("col{}", i + 1), Some(m)),
                     None => expr,
                 });
             }
