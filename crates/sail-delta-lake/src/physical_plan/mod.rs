@@ -37,6 +37,7 @@ mod metadata_stats_exec;
 mod relaxed_tz_exec;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
+mod write_context;
 mod writer_exec;
 mod writer_options;
 
@@ -46,18 +47,21 @@ pub use action_schema::{
 };
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
-pub use dv_writer_exec::DeletionVectorWriterExec;
+pub use dv_writer_exec::{DeletionVectorRowsWriterExec, DeletionVectorWriterExec};
 pub use expr_adapter::{DeltaCastColumnExpr, DeltaPhysicalExprAdapterFactory};
 pub use log_replay_exec::DeltaLogReplayExec;
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
 pub mod planner;
 pub use planner::{
-    plan_delete, plan_delete_mor, plan_merge, plan_update, DeltaPhysicalPlanner,
+    plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, plan_update, DeltaPhysicalPlanner,
     DeltaPlannerConfig, PlannerContext,
 };
 pub use relaxed_tz_exec::RelaxedTzCastExec;
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
+pub use write_context::{
+    prepare_delta_write_context, DeltaCommitContext, DeltaSnapshotContext, DeltaWriteContext,
+};
 pub(crate) use writer_exec::inject_generation_expressions;
 pub use writer_exec::DeltaWriterExec;
 pub use writer_options::DeltaWriterExecOptions;

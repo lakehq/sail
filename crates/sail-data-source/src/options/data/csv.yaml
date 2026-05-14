@@ -191,7 +191,7 @@
     Ignored if the schema is specified explicitly. If False, the schema must be specified explicitly.
     CSV built-in functions ignore this option.
   default:
-    value: "true"
+    value: "false"
     parser: crate::options::parsers::parse_bool
   supported: true
   rust_type: bool

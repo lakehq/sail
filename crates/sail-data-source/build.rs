@@ -11,5 +11,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     build_data_source_options("Iceberg", "iceberg")?;
     build_data_source_options("Socket", "socket")?;
     build_data_source_options("Rate", "rate")?;
+    build_data_source_options("Console", "console")?;
     Ok(())
 }

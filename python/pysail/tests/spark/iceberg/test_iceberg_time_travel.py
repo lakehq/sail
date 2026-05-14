@@ -1,186 +1,183 @@
-import time
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
-import pytest
 from pandas.testing import assert_frame_equal
-from pyiceberg.schema import Schema
-from pyiceberg.types import LongType, NestedField, StringType
 from pyspark.sql.types import Row
 
-from pysail.tests.spark.iceberg.utils import create_sql_catalog
+
+def _table_path_and_uri(tmp_path: Path, name: str) -> tuple[Path, str]:
+    table_path = tmp_path / name
+    return table_path, table_path.absolute().as_uri()
+
+
+def _latest_metadata_path(table_path: Path) -> Path:
+    metadata_files = sorted((table_path / "metadata").glob("*.metadata.json"))
+    assert metadata_files
+    return metadata_files[-1]
+
+
+def _read_latest_metadata(table_path: Path) -> dict:
+    return json.loads(_latest_metadata_path(table_path).read_text(encoding="utf-8"))
+
+
+def _write_latest_metadata(table_path: Path, metadata: dict) -> None:
+    _latest_metadata_path(table_path).write_text(json.dumps(metadata, separators=(",", ":")), encoding="utf-8")
+
+
+def _ordered_snapshots(metadata: dict) -> list[dict]:
+    snapshots_by_id = {
+        snapshot["snapshot-id"]: snapshot for snapshot in metadata.get("snapshots", []) if "snapshot-id" in snapshot
+    }
+    ordered = []
+    for entry in metadata.get("snapshot-log", []):
+        snapshot = snapshots_by_id.get(entry.get("snapshot-id"))
+        if snapshot is not None:
+            ordered.append(snapshot)
+    return ordered or sorted(snapshots_by_id.values(), key=lambda snapshot: snapshot["timestamp-ms"])
+
+
+def _current_snapshot_id(table_path: Path) -> int:
+    metadata = _read_latest_metadata(table_path)
+    snapshot_id = metadata.get("current-snapshot-id")
+    assert snapshot_id is not None
+    return snapshot_id
+
+
+def _snapshot_ids(table_path: Path) -> list[int]:
+    metadata = _read_latest_metadata(table_path)
+    return [snapshot["snapshot-id"] for snapshot in _ordered_snapshots(metadata)]
+
+
+def _rewrite_snapshot_timestamps(table_path: Path) -> list[str]:
+    metadata = _read_latest_metadata(table_path)
+    ordered = _ordered_snapshots(metadata)
+    assert ordered
+
+    start = datetime.now(timezone.utc) - timedelta(seconds=10)
+    timestamp_by_id = {
+        snapshot["snapshot-id"]: int((start + timedelta(seconds=index)).timestamp() * 1000)
+        for index, snapshot in enumerate(ordered)
+    }
+
+    for snapshot in metadata.get("snapshots", []):
+        snapshot_id = snapshot.get("snapshot-id")
+        if snapshot_id in timestamp_by_id:
+            snapshot["timestamp-ms"] = timestamp_by_id[snapshot_id]
+
+    for entry in metadata.get("snapshot-log", []):
+        snapshot_id = entry.get("snapshot-id")
+        if snapshot_id in timestamp_by_id:
+            entry["timestamp-ms"] = timestamp_by_id[snapshot_id]
+
+    metadata["last-updated-ms"] = max(timestamp_by_id.values())
+    _write_latest_metadata(table_path, metadata)
+
+    return [
+        datetime.fromtimestamp(timestamp_by_id[snapshot["snapshot-id"]] / 1000, timezone.utc).isoformat()
+        for snapshot in ordered
+    ]
 
 
 def test_iceberg_time_travel_by_snapshot_id(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
-    identifier = "default.tt_by_snapshot"
-    table = catalog.create_table(
-        identifier=identifier,
-        schema=Schema(
-            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
-        ),
-    )
-    try:
-        v0 = [Row(id=1, value="v0")]
-        df0 = spark.createDataFrame(v0)
-        df0.write.format("iceberg").mode("overwrite").save(table.location())
-        table.refresh()
-        sid0 = table.current_snapshot().snapshot_id
+    table_path, table_location = _table_path_and_uri(tmp_path, "tt_by_snapshot")
 
-        v1 = [Row(id=2, value="v1")]
-        df1 = spark.createDataFrame(v1)
-        df1.write.format("iceberg").mode("append").save(table.location())
-        table.refresh()
+    spark.createDataFrame([Row(id=1, value="v0")]).write.format("iceberg").mode("overwrite").save(table_location)
+    snapshot_id = _current_snapshot_id(table_path)
 
-        latest = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
-        assert_frame_equal(latest, pd.DataFrame({"id": [1, 2], "value": ["v0", "v1"]}).astype(latest.dtypes))
+    spark.createDataFrame([Row(id=2, value="v1")]).write.format("iceberg").mode("append").save(table_location)
 
-        tt_df = (
-            spark.read.format("iceberg").option("snapshotId", str(sid0)).load(table.location()).sort("id").toPandas()
-        )
-        assert_frame_equal(tt_df, pd.DataFrame({"id": [1], "value": ["v0"]}).astype(tt_df.dtypes))
-    finally:
-        catalog.drop_table(identifier)
+    latest = spark.read.format("iceberg").load(table_location).sort("id").toPandas()
+    assert_frame_equal(latest, pd.DataFrame({"id": [1, 2], "value": ["v0", "v1"]}).astype(latest.dtypes))
+
+    actual = spark.read.format("iceberg").option("snapshotId", str(snapshot_id)).load(table_location).sort("id")
+    actual_pdf = actual.toPandas()
+    assert_frame_equal(actual_pdf, pd.DataFrame({"id": [1], "value": ["v0"]}).astype(actual_pdf.dtypes))
 
 
-@pytest.mark.skip(reason="not working")
 def test_iceberg_time_travel_by_timestamp(spark, tmp_path):
-    table_path = tmp_path / "tt_by_timestamp"
-    table_path.mkdir(parents=True, exist_ok=True)
-    table_location = f"file://{table_path}"
+    table_path, table_location = _table_path_and_uri(tmp_path, "tt_by_timestamp")
 
-    try:
-        # Write snapshot 0: single row
-        v0 = [Row(id=1, value="v0")]
-        spark.createDataFrame(v0).write.format("iceberg").mode("overwrite").save(table_location)
+    spark.createDataFrame([Row(id=1, value="v0")]).write.format("iceberg").mode("overwrite").save(table_location)
+    spark.createDataFrame([Row(id=2, value="v1")]).write.format("iceberg").mode("append").save(table_location)
+    spark.createDataFrame([Row(id=3, value="v2")]).write.format("iceberg").mode("append").save(table_location)
+    snapshot_times = _rewrite_snapshot_timestamps(table_path)
 
-        # Get timestamp after first write
-        ts0 = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
-        time.sleep(0.1)
+    latest = spark.read.format("iceberg").load(table_location).sort("id").collect()
+    assert latest == [Row(id=1, value="v0"), Row(id=2, value="v1"), Row(id=3, value="v2")]
 
-        # Write snapshot 1: append one more row
-        v1 = [Row(id=2, value="v1")]
-        spark.createDataFrame(v1).write.format("iceberg").mode("append").save(table_location)
+    rows = spark.read.format("iceberg").option("timestampAsOf", snapshot_times[0]).load(table_location).collect()
+    assert rows == [Row(id=1, value="v0")]
 
-        # Get timestamp after second write
-        ts1 = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
-        time.sleep(0.1)
+    rows = (
+        spark.read.format("iceberg")
+        .option("timestampAsOf", snapshot_times[1])
+        .load(table_location)
+        .sort("id")
+        .collect()
+    )
+    assert rows == [Row(id=1, value="v0"), Row(id=2, value="v1")]
 
-        # Write snapshot 2: append another row
-        v2 = [Row(id=3, value="v2")]
-        spark.createDataFrame(v2).write.format("iceberg").mode("append").save(table_location)
-
-        # Get timestamp after third write
-        ts2 = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
-
-        # Verify current state (all three rows)
-        latest = spark.read.format("iceberg").load(table_location).sort("id").collect()
-        assert latest == [Row(id=1, value="v0"), Row(id=2, value="v1"), Row(id=3, value="v2")]
-
-        # Test time travel to snapshot 0 (only first row)
-        df0 = spark.read.format("iceberg").option("timestampAsOf", ts0).load(table_location)
-        assert df0.collect() == [Row(id=1, value="v0")]
-
-        # Test time travel to snapshot 1 (first two rows)
-        df1 = spark.read.format("iceberg").option("timestampAsOf", ts1).load(table_location).sort("id").collect()
-        assert df1 == [Row(id=1, value="v0"), Row(id=2, value="v1")]
-
-        # Test time travel to snapshot 2 (all three rows)
-        df2 = spark.read.format("iceberg").option("timestampAsOf", ts2).load(table_location).sort("id").collect()
-        assert df2 == [Row(id=1, value="v0"), Row(id=2, value="v1"), Row(id=3, value="v2")]
-    finally:
-        pass
+    rows = (
+        spark.read.format("iceberg")
+        .option("timestampAsOf", snapshot_times[2])
+        .load(table_location)
+        .sort("id")
+        .collect()
+    )
+    assert rows == [Row(id=1, value="v0"), Row(id=2, value="v1"), Row(id=3, value="v2")]
 
 
 def test_iceberg_time_travel_precedence_snapshot_over_timestamp(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
-    identifier = "default.tt_precedence"
-    table = catalog.create_table(
-        identifier=identifier,
-        schema=Schema(
-            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
-        ),
+    table_path, table_location = _table_path_and_uri(tmp_path, "tt_precedence")
+
+    spark.createDataFrame([Row(id=1, value="old")]).write.format("iceberg").mode("overwrite").save(table_location)
+    old_snapshot_id = _current_snapshot_id(table_path)
+    spark.createDataFrame([Row(id=2, value="new")]).write.format("iceberg").mode("overwrite").save(table_location)
+    snapshot_times = _rewrite_snapshot_timestamps(table_path)
+
+    rows = (
+        spark.read.format("iceberg")
+        .option("snapshotId", str(old_snapshot_id))
+        .option("timestampAsOf", snapshot_times[-1])
+        .load(table_location)
+        .collect()
     )
-    try:
-        spark.createDataFrame([Row(id=1, value="old")]).write.format("iceberg").mode("overwrite").save(table.location())
-        table.refresh()
-        sid_old = table.current_snapshot().snapshot_id
-        time.sleep(0.1)
-
-        spark.createDataFrame([Row(id=2, value="new")]).write.format("iceberg").mode("overwrite").save(table.location())
-        ts_new = datetime.now(timezone.utc).isoformat()
-
-        df_prec = (
-            spark.read.format("iceberg")
-            .option("snapshotId", str(sid_old))
-            .option("timestampAsOf", ts_new)
-            .load(table.location())
-        )
-        assert df_prec.collect() == [Row(id=1, value="old")]
-    finally:
-        catalog.drop_table(identifier)
+    assert rows == [Row(id=1, value="old")]
 
 
-def test_iceberg_time_travel_by_ref_main_if_available(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
-    identifier = "default.tt_ref_main"
-    table = catalog.create_table(
-        identifier=identifier,
-        schema=Schema(
-            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
-        ),
-    )
-    try:
-        spark.createDataFrame([Row(id=1, value="x")]).write.format("iceberg").mode("overwrite").save(table.location())
-        try:
-            df = spark.read.format("iceberg").option("ref", "main").load(table.location())
-            assert df.collect() == [Row(id=1, value="x")]
-        except Exception as e:
-            if "Unknown Iceberg ref" in str(e):
-                pytest.xfail("Iceberg refs (main) not present in table metadata")
-            raise
-    finally:
-        catalog.drop_table(identifier)
+def test_iceberg_time_travel_by_ref_main(spark, tmp_path):
+    _table_path, table_location = _table_path_and_uri(tmp_path, "tt_ref_main")
+
+    spark.createDataFrame([Row(id=1, value="x")]).write.format("iceberg").mode("overwrite").save(table_location)
+
+    rows = spark.read.format("iceberg").option("ref", "main").load(table_location).collect()
+    assert rows == [Row(id=1, value="x")]
 
 
 def test_iceberg_time_travel_across_merge_schema(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
-    identifier = "default.tt_schema_evolution"
-    table = catalog.create_table(
-        identifier=identifier,
-        schema=Schema(
-            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
-        ),
-    )
-    try:
-        base_df = spark.createDataFrame([Row(id=1, value="base")])
-        base_df.write.format("iceberg").mode("overwrite").save(table.location())
-        table.refresh()
-        snapshot_id = table.current_snapshot().snapshot_id
+    table_path, table_location = _table_path_and_uri(tmp_path, "tt_schema_evolution")
 
-        evolved_df = spark.createDataFrame([Row(id=2, value="new", extra=10)])
-        (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
+    spark.createDataFrame([Row(id=1, value="base")]).write.format("iceberg").mode("overwrite").save(table_location)
+    snapshot_id = _snapshot_ids(table_path)[0]
 
-        latest_df = spark.read.format("iceberg").load(table.location()).orderBy("id")
-        assert latest_df.columns == ["id", "value", "extra"]
-        latest_rows = latest_df.collect()
-        assert latest_rows[0].id == 1
-        assert latest_rows[0].extra is None
-        assert latest_rows[1].id == 2  # noqa: PLR2004
-        assert latest_rows[1].extra == 10  # noqa: PLR2004
+    spark.createDataFrame([Row(id=2, value="new", extra=10)]).write.format("iceberg").mode("append").option(
+        "mergeSchema",
+        "true",
+    ).save(table_location)
 
-        tt_df = spark.read.format("iceberg").option("snapshotId", str(snapshot_id)).load(table.location()).orderBy("id")
-        tt_rows = tt_df.collect()
-        assert len(tt_rows) == 1
-        assert tt_rows[0].id == 1
-        assert tt_rows[0].value == "base"
-        if "extra" in tt_df.columns:
-            assert tt_df.select("extra").first().extra is None
-        else:
-            assert "extra" not in tt_df.columns
-    finally:
-        catalog.drop_table(identifier)
+    latest_df = spark.read.format("iceberg").load(table_location).orderBy("id")
+    assert latest_df.columns == ["id", "value", "extra"]
+    latest_rows = latest_df.collect()
+    assert latest_rows[0].id == 1
+    assert latest_rows[0].extra is None
+    assert latest_rows[1].id == 2  # noqa: PLR2004
+    assert latest_rows[1].extra == 10  # noqa: PLR2004
+
+    tt_df = spark.read.format("iceberg").option("snapshotId", str(snapshot_id)).load(table_location).orderBy("id")
+    tt_rows = tt_df.collect()
+    assert len(tt_rows) == 1
+    assert tt_rows[0].id == 1
+    assert tt_rows[0].value == "base"
+    assert "extra" not in tt_df.columns
