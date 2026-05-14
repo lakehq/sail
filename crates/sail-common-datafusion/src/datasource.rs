@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
 use datafusion::physical_expr::{
@@ -305,6 +305,11 @@ pub trait TableFormat: Send + Sync {
         ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
+
+    /// Infers the logical schema for planning without requiring callers to construct a read source.
+    async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
+        Ok(self.create_source(ctx, info).await?.schema())
+    }
 
     /// Creates a `ExecutionPlan` for write.
     async fn create_writer(
