@@ -75,7 +75,11 @@ pub async fn bootstrap_new_table(
         .partition_spec
         .clone()
         .unwrap_or_else(PartitionSpec::unpartitioned_spec);
-    let format_version = format_version_for_schema(&iceberg_schema);
+    let (format_version, table_properties) =
+        crate::properties::metadata_properties_from_table_properties(
+            &commit_info.table_properties,
+        )?;
+    let format_version = format_version.max(format_version_for_schema(&iceberg_schema));
 
     // Create a minimal transaction context (no parent snapshot)
     let empty_snapshot = SnapshotBuilder::new()
@@ -139,7 +143,7 @@ pub async fn bootstrap_new_table(
         partition_specs: vec![partition_spec.clone()],
         default_spec_id: partition_spec.spec_id(),
         last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
-        properties: std::collections::HashMap::new(),
+        properties: table_properties,
         current_snapshot_id: Some(snapshot.snapshot_id()),
         next_row_id: snapshot.added_rows.and_then(|added_rows| {
             row_lineage_start_row_id.map(|start_row_id| start_row_id + added_rows)
