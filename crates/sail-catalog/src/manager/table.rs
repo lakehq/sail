@@ -40,13 +40,15 @@ impl CatalogManager {
         }
     }
 
-    /// Returns `true` when the catalog that owns this table reference is
-    /// responsible for initializing physical storage.  Callers should skip
-    /// format-specific pre-materialization (e.g. writing the initial Delta
-    /// transaction log) when this returns `false`.
-    pub fn table_catalog_manages_storage<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<bool> {
+    /// Returns `true` when the owning catalog supports generic, format-level
+    /// storage materialization for this table and format.
+    pub fn table_supports_generic_create_table_materialization<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        format: &str,
+    ) -> CatalogResult<bool> {
         let (provider, _, _) = self.resolve_object(table)?;
-        Ok(provider.manages_physical_storage())
+        Ok(provider.supports_generic_create_table_materialization(format))
     }
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {

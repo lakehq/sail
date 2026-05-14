@@ -302,8 +302,9 @@ pub struct CreateTableInfo {
     /// Declared table schema. May be empty for external tables that should
     /// inherit their schema from the existing on-disk table.
     pub schema: SchemaRef,
-    /// Partition column names (top-level).
-    pub partition_by: Vec<String>,
+    /// Partition fields (top-level). Formats that only support identity
+    /// partitioning can ignore the transform and use the column names.
+    pub partition_by: Vec<CatalogPartitionField>,
     /// Table properties/configuration (e.g. `delta.*` keys).
     pub properties: HashMap<String, String>,
     /// CREATE TABLE IF NOT EXISTS.

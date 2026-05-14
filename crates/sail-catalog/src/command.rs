@@ -305,17 +305,27 @@ impl CatalogCommand {
                 // roll it back if storage initialization fails; REPLACE materializes
                 // first so a storage failure does not overwrite catalog metadata.
                 //
+                // Known limitation: the REPLACE path is not fully atomic across the
+                // storage and catalog layers. If the catalog update fails AFTER
+                // storage was tombstoned, the previous table contents are gone but
+                // the catalog still references the (now-replaced) location. A full
+                // fix requires two-phase commit on the catalog side; today we accept
+                // this as the symmetric cost of writing a real v0 commit first.
+                //
                 // `defer_materialize=true` means a subsequent writer (CTAS, first
                 // INSERT through the write-to-create path) will atomically create
                 // the physical table in a single commit, so we skip the metadata-
                 // only pre-commit here.
                 //
-                // Catalogs that control storage access or creation (e.g. Unity Catalog)
-                // return `false` so the generic path does not open their table locations
-                // with Sail's ambient object-store credentials.
-                let catalog_manages_storage = manager.table_catalog_manages_storage(&table)?;
-                let materialization = if !options.defer_materialize && catalog_manages_storage {
-                    let format = options.format.trim();
+                // The catalog decides which formats may use generic
+                // materialization. Path-style catalogs can support Delta and
+                // Iceberg here, while provider-side catalogs such as Iceberg
+                // REST/Glue create Iceberg metadata through their own APIs.
+                let format = options.format.trim();
+                let materialization = if !options.defer_materialize
+                    && manager
+                        .table_supports_generic_create_table_materialization(&table, format)?
+                {
                     let should_materialize = if !format.is_empty() && is_lakehouse_format(format) {
                         manager
                             .should_materialize_create_table(
@@ -339,11 +349,7 @@ impl CatalogCommand {
                             ))
                         })?;
                         let schema = create_table_schema_from_columns(&options.columns);
-                        let partition_by = options
-                            .partition_by
-                            .iter()
-                            .map(|p| p.column.clone())
-                            .collect::<Vec<_>>();
+                        let partition_by = options.partition_by.clone();
                         let properties: std::collections::HashMap<String, String> = options
                             .properties
                             .iter()
@@ -376,11 +382,19 @@ impl CatalogCommand {
                 };
                 if let Some((table_format, info)) = materialization {
                     if options.replace {
+                        let physical_location = info.path.clone();
                         table_format
                             .create_table(ctx.runtime_env(), info)
                             .await
                             .map_err(|e| CatalogError::External(e.to_string()))?;
-                        manager.create_table(&table, options).await?;
+                        if let Err(e) = manager.create_table(&table, options).await {
+                            return Err(CatalogError::External(format!(
+                                "failed to register catalog table after materializing storage-backed \
+                                 CREATE OR REPLACE TABLE at {physical_location}; physical table \
+                                 data or metadata may have been created or overwritten, leaving \
+                                 storage and catalog out of sync: {e}"
+                            )));
+                        }
                     } else {
                         manager.create_table(&table, options).await?;
                         if let Err(e) = table_format.create_table(ctx.runtime_env(), info).await {
@@ -897,12 +911,17 @@ mod tests {
         create_table_calls: Arc<AtomicUsize>,
         drop_table_calls: Arc<AtomicUsize>,
         alter_error: Option<String>,
+        supports_materialization: bool,
     }
 
     #[async_trait]
     impl CatalogProvider for TestProvider {
         fn get_name(&self) -> &str {
             "test"
+        }
+
+        fn supports_generic_create_table_materialization(&self, _format: &str) -> bool {
+            self.supports_materialization
         }
 
         async fn create_database(
@@ -1141,12 +1160,13 @@ mod tests {
         alter_error: Option<&str>,
         create_table_calls: Arc<AtomicUsize>,
     ) -> CatalogManager {
-        test_manager_with_drop_calls(
+        test_manager_with_materialization_policy(
             table_exists,
             create_error,
             alter_error,
             create_table_calls,
             Arc::new(AtomicUsize::new(0)),
+            true,
         )
     }
 
@@ -1156,6 +1176,24 @@ mod tests {
         alter_error: Option<&str>,
         create_table_calls: Arc<AtomicUsize>,
         drop_table_calls: Arc<AtomicUsize>,
+    ) -> CatalogManager {
+        test_manager_with_materialization_policy(
+            table_exists,
+            create_error,
+            alter_error,
+            create_table_calls,
+            drop_table_calls,
+            true,
+        )
+    }
+
+    fn test_manager_with_materialization_policy(
+        table_exists: bool,
+        create_error: Option<&str>,
+        alter_error: Option<&str>,
+        create_table_calls: Arc<AtomicUsize>,
+        drop_table_calls: Arc<AtomicUsize>,
+        supports_materialization: bool,
     ) -> CatalogManager {
         let table_status = test_table_status();
         let manager = CatalogManager::try_new(crate::manager::CatalogManagerOptions {
@@ -1168,6 +1206,7 @@ mod tests {
                     create_table_calls,
                     drop_table_calls,
                     alter_error: alter_error.map(ToString::to_string),
+                    supports_materialization,
                 }) as Arc<dyn CatalogProvider>,
             ))
             .collect(),
@@ -1426,6 +1465,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_or_replace_table_reports_catalog_failure_after_materialization() {
+        let (ctx, materialize_calls) = test_session_context_with_registered_format();
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_options(
+            true,
+            Some("catalog replace failed"),
+            None,
+            create_table_calls.clone(),
+        );
+        let mut options = test_create_table_options();
+        options.replace = true;
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options,
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_err(),
+            "expected catalog replace failure: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(matches!(error, CatalogError::External(message)
+                if message.contains("catalog replace failed")
+                    && message.contains("physical table data or metadata may have been created or overwritten")
+                    && message.contains("storage and catalog out of sync")));
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn create_table_requires_registry_for_lakehouse_materialization() {
         let ctx = test_session_context_without_registry();
         let create_table_calls = Arc::new(AtomicUsize::new(0));
@@ -1473,6 +1546,34 @@ mod tests {
             matches!(error, CatalogError::External(message) if message.contains("unknown table format 'delta'"))
         );
         assert_eq!(create_table_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn create_table_skips_materialization_when_catalog_opts_out_for_format() {
+        // A catalog that creates a specific format through its own API (e.g.,
+        // Iceberg REST/Glue) must be able to opt out of generic materialization.
+        let (ctx, materialize_calls) = test_session_context_with_registered_format();
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_materialization_policy(
+            false,
+            None,
+            None,
+            create_table_calls.clone(),
+            Arc::new(AtomicUsize::new(0)),
+            false,
+        );
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options: test_create_table_options(),
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_ok(),
+            "expected catalog opt-out CREATE TABLE to succeed: {result:?}"
+        );
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

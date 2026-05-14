@@ -491,7 +491,7 @@ impl TableFormat for DeltaTableFormat {
             schema_has_generated_columns,
         };
         use crate::spec::{
-            contains_timestampntz_arrow, contains_variant, Action, ColumnMappingMode, StructType,
+            contains_timestampntz_arrow, contains_variant, ColumnMappingMode, StructType,
             TableProperties,
         };
         use crate::table::create_delta_table_with_object_store;
@@ -542,18 +542,30 @@ impl TableFormat for DeltaTableFormat {
         // Fast-path: adopt an existing table when the caller only asked us to
         // ensure it exists (IF NOT EXISTS), or did not declare any schema
         // (external table with no column list). If a schema IS declared,
-        // validate that it matches the on-disk schema.
+        // validate that it matches the on-disk schema and partition layout.
         if let Some(table) = &existing_table {
             if !replace {
                 if !if_not_exists && !schema.fields().is_empty() {
-                    let existing_schema = table
+                    let snapshot = table
                         .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let existing_schema = snapshot
                         .arrow_schema()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     if !delta_schemas_compatible(&existing_schema, &schema) {
                         return plan_err!(
                             "Delta table already exists at {path} with a different schema"
+                        );
+                    }
+                    let declared_partitions = partition_by
+                        .iter()
+                        .map(|field| field.column.clone())
+                        .collect::<Vec<_>>();
+                    let existing_partitions = snapshot.metadata().partition_columns();
+                    if existing_partitions.as_slice() != declared_partitions.as_slice() {
+                        return plan_err!(
+                            "Delta table already exists at {path} with different partition columns: \
+                             existing {existing_partitions:?}, declared {declared_partitions:?}"
                         );
                     }
                 }
@@ -603,7 +615,10 @@ impl TableFormat for DeltaTableFormat {
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let metadata = metadata_for_create_with_struct_type(
             metadata_schema,
-            partition_by.clone(),
+            partition_by
+                .iter()
+                .map(|field| field.column.clone())
+                .collect::<Vec<_>>(),
             Utc::now().timestamp_millis(),
             configuration,
         )
@@ -667,8 +682,6 @@ impl TableFormat for DeltaTableFormat {
             protocol: Box::new(protocol),
             metadata: Box::new(metadata),
         };
-        // Silence unused-import warnings when Action is only referenced transitively.
-        let _ = std::marker::PhantomData::<Action>;
 
         CommitBuilder::default()
             .with_actions(actions)
@@ -776,12 +789,12 @@ impl TableFormat for DeltaTableFormat {
 }
 
 /// Returns true if the declared `new` Arrow schema is compatible with the
-/// `existing` Delta table schema. Two schemas are considered compatible when
-/// they have the same top-level columns with matching names (case-sensitive),
-/// matching data types, and matching Arrow extension type markers. Nullability of
-/// declared fields may be looser than the on-disk fields (Spark allows declaring
-/// a NOT NULL column as nullable and vice versa at `CREATE TABLE` time). Nested
-/// struct fields and partitioning checks are deferred to future iterations.
+/// `existing` Delta table schema. Compatibility means same top-level columns
+/// in the same order, with matching names (case-sensitive), structurally
+/// matching data types (recursing into structs / lists / maps), and matching
+/// Arrow extension type markers at every level. Nullability of declared
+/// fields may differ from the on-disk fields (Spark allows declaring a NOT
+/// NULL column as nullable and vice versa at `CREATE TABLE` time).
 fn delta_schemas_compatible(
     existing: &datafusion::arrow::datatypes::Schema,
     declared: &datafusion::arrow::datatypes::Schema,
@@ -789,18 +802,56 @@ fn delta_schemas_compatible(
     if existing.fields().len() != declared.fields().len() {
         return false;
     }
-    for (a, b) in existing.fields().iter().zip(declared.fields().iter()) {
-        if a.name() != b.name() {
-            return false;
-        }
-        if a.data_type() != b.data_type() {
-            return false;
-        }
-        if !extension_metadata_compatible(a.metadata(), b.metadata()) {
-            return false;
-        }
+    existing
+        .fields()
+        .iter()
+        .zip(declared.fields().iter())
+        .all(|(a, b)| fields_compatible(a, b))
+}
+
+fn fields_compatible(
+    a: &datafusion::arrow::datatypes::Field,
+    b: &datafusion::arrow::datatypes::Field,
+) -> bool {
+    if a.name() != b.name() {
+        return false;
     }
-    true
+    if !extension_metadata_compatible(a.metadata(), b.metadata()) {
+        return false;
+    }
+    data_types_compatible(a.data_type(), b.data_type())
+}
+
+fn data_types_compatible(
+    a: &datafusion::arrow::datatypes::DataType,
+    b: &datafusion::arrow::datatypes::DataType,
+) -> bool {
+    use datafusion::arrow::datatypes::DataType;
+
+    match (a, b) {
+        (DataType::Struct(a_fields), DataType::Struct(b_fields)) => {
+            if a_fields.len() != b_fields.len() {
+                return false;
+            }
+            a_fields
+                .iter()
+                .zip(b_fields.iter())
+                .all(|(x, y)| fields_compatible(x, y))
+        }
+        (DataType::List(a_inner), DataType::List(b_inner))
+        | (DataType::LargeList(a_inner), DataType::LargeList(b_inner))
+        | (DataType::ListView(a_inner), DataType::ListView(b_inner))
+        | (DataType::LargeListView(a_inner), DataType::LargeListView(b_inner)) => {
+            fields_compatible(a_inner, b_inner)
+        }
+        (DataType::FixedSizeList(a_inner, a_size), DataType::FixedSizeList(b_inner, b_size)) => {
+            a_size == b_size && fields_compatible(a_inner, b_inner)
+        }
+        (DataType::Map(a_inner, a_sorted), DataType::Map(b_inner, b_sorted)) => {
+            a_sorted == b_sorted && fields_compatible(a_inner, b_inner)
+        }
+        _ => a == b,
+    }
 }
 
 fn extension_metadata_compatible(
@@ -1328,5 +1379,103 @@ mod tests {
             &schema_with_payload(existing.clone()),
             &schema_with_payload(existing),
         ));
+    }
+
+    #[test]
+    fn delta_schemas_compatible_walks_nested_struct_extension_metadata() {
+        use datafusion::arrow::datatypes::Fields;
+
+        let variant_child = Field::new("inner", variant_physical_shape(), true).with_metadata(
+            std::collections::HashMap::from([(
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                VARIANT_EXTENSION_NAME.to_string(),
+            )]),
+        );
+        let plain_child = Field::new("inner", variant_physical_shape(), true);
+
+        let existing = Field::new(
+            "wrapper",
+            DataType::Struct(Fields::from(vec![variant_child.clone()])),
+            true,
+        );
+        let declared = Field::new(
+            "wrapper",
+            DataType::Struct(Fields::from(vec![plain_child])),
+            true,
+        );
+
+        assert!(!delta_schemas_compatible(
+            &schema_with_payload(existing.clone()),
+            &schema_with_payload(declared),
+        ));
+        let same_declared = Field::new(
+            "wrapper",
+            DataType::Struct(Fields::from(vec![variant_child])),
+            true,
+        );
+        assert!(delta_schemas_compatible(
+            &schema_with_payload(existing),
+            &schema_with_payload(same_declared),
+        ));
+    }
+
+    #[test]
+    fn delta_schemas_compatible_walks_list_and_map_inner_metadata() {
+        let variant_inner = Arc::new(
+            Field::new("item", variant_physical_shape(), true).with_metadata(
+                std::collections::HashMap::from([(
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    VARIANT_EXTENSION_NAME.to_string(),
+                )]),
+            ),
+        );
+        let plain_inner = Arc::new(Field::new("item", variant_physical_shape(), true));
+
+        let existing_list = Field::new("c", DataType::List(variant_inner.clone()), true);
+        let declared_list = Field::new("c", DataType::List(plain_inner.clone()), true);
+        assert!(!delta_schemas_compatible(
+            &schema_with_payload(existing_list.clone()),
+            &schema_with_payload(declared_list),
+        ));
+        assert!(delta_schemas_compatible(
+            &schema_with_payload(existing_list.clone()),
+            &schema_with_payload(existing_list),
+        ));
+
+        let existing_large = Field::new("c", DataType::LargeList(variant_inner.clone()), true);
+        let declared_large = Field::new("c", DataType::LargeList(plain_inner.clone()), true);
+        assert!(!delta_schemas_compatible(
+            &schema_with_payload(existing_large),
+            &schema_with_payload(declared_large),
+        ));
+
+        let existing_fsl = Field::new("c", DataType::FixedSizeList(variant_inner.clone(), 3), true);
+        let mismatched_fsl =
+            Field::new("c", DataType::FixedSizeList(variant_inner.clone(), 4), true);
+        assert!(!delta_schemas_compatible(
+            &schema_with_payload(existing_fsl),
+            &schema_with_payload(mismatched_fsl),
+        ));
+    }
+
+    #[test]
+    fn delta_schemas_compatible_rejects_field_order_mismatch() {
+        let a_first = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let b_first = Schema::new(vec![
+            Field::new("b", DataType::Utf8, true),
+            Field::new("a", DataType::Int32, true),
+        ]);
+        assert!(!delta_schemas_compatible(&a_first, &b_first));
+    }
+
+    #[test]
+    fn delta_schemas_compatible_allows_nullability_difference() {
+        let strict = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let loose = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        assert!(delta_schemas_compatible(&strict, &loose));
+        assert!(delta_schemas_compatible(&loose, &strict));
     }
 }

@@ -328,6 +328,10 @@ impl CatalogProvider for OneLakeCatalogProvider {
         &self.name
     }
 
+    fn supports_generic_create_table_materialization(&self, _format: &str) -> bool {
+        false
+    }
+
     async fn create_database(
         &self,
         _database: &Namespace,

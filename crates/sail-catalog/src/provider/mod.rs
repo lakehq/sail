@@ -22,12 +22,17 @@ pub trait CatalogProvider: Send + Sync {
     /// in different sessions.
     fn get_name(&self) -> &str;
 
-    /// Returns `true` if the generic catalog command may initialize physical
-    /// storage (e.g. a Delta transaction log) before catalog registration.
-    /// Catalogs that control table locations or credentials (e.g. Unity Catalog)
-    /// should return `false` and use provider-specific creation flows instead.
-    fn manages_physical_storage(&self) -> bool {
-        true
+    /// Returns `true` if this catalog supports generic, format-level table
+    /// materialization for the requested format.
+    ///
+    /// The default supports path-style Delta and Iceberg materialization. Catalogs
+    /// with provider-side creation flows (for example, Iceberg REST or Glue
+    /// Iceberg) should override this with an explicit positive allow-list.
+    fn supports_generic_create_table_materialization(&self, format: &str) -> bool {
+        matches!(
+            format.trim().to_ascii_lowercase().as_str(),
+            "delta" | "iceberg"
+        )
     }
 
     /// Creates a new database in the catalog.

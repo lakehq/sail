@@ -510,6 +510,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self.name
     }
 
+    fn supports_generic_create_table_materialization(&self, _format: &str) -> bool {
+        // Iceberg REST CREATE TABLE is a catalog-side operation: the REST
+        // service creates table metadata and returns the resulting metadata
+        // location/config. The generic path must not pre-write metadata files.
+        false
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

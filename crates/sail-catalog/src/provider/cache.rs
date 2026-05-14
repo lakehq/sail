@@ -200,8 +200,9 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.get_name()
     }
 
-    fn manages_physical_storage(&self) -> bool {
-        self.inner.manages_physical_storage()
+    fn supports_generic_create_table_materialization(&self, format: &str) -> bool {
+        self.inner
+            .supports_generic_create_table_materialization(format)
     }
 
     async fn create_database(

@@ -329,7 +329,7 @@ impl CatalogProvider for UnityCatalogProvider {
         &self.name
     }
 
-    fn manages_physical_storage(&self) -> bool {
+    fn supports_generic_create_table_materialization(&self, _format: &str) -> bool {
         // Unity Catalog controls storage locations and credentials. The generic
         // create-table path must not pre-initialize Delta logs with Sail's
         // ambient object-store credentials.

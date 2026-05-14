@@ -20,9 +20,8 @@ use crate::schema::{
     schema_contains_type_widening_metadata, schema_has_generated_columns,
 };
 use crate::spec::{
-    contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
-    ColumnMetadataKey, DomainMetadata, Metadata, MetadataValue, Protocol, StructField, StructType,
-    TableProperties, Transaction,
+    contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode, DomainMetadata,
+    Metadata, Protocol, StructType, TableProperties, Transaction,
 };
 use crate::storage::LogStore;
 use crate::table::DeltaSnapshot;
@@ -183,8 +182,10 @@ pub fn prepare_delta_write_context(
         let mut kernel_schema = StructType::try_from(final_schema.as_ref())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if !options.generation_expressions.is_empty() {
-            kernel_schema =
-                inject_generation_expressions(kernel_schema, &options.generation_expressions);
+            kernel_schema = super::inject_generation_expressions(
+                kernel_schema,
+                &options.generation_expressions,
+            );
         }
 
         let mut configuration = metadata_configuration.clone();
@@ -529,44 +530,4 @@ fn validate_schema_compatibility(table_schema: &Schema, input_schema: &Schema) -
         }
     }
     Ok(())
-}
-
-fn inject_generation_expressions(
-    schema: StructType,
-    generation_expressions: &HashMap<String, String>,
-) -> StructType {
-    let fields = schema.into_fields().map(|field| {
-        if let Some(expr) = generation_expressions.get(&field.name) {
-            let existing_expr = field
-                .metadata
-                .get(ColumnMetadataKey::GenerationExpression.as_ref())
-                .and_then(|v| match v {
-                    MetadataValue::String(s) => Some(s.clone()),
-                    _ => None,
-                });
-            if existing_expr.as_deref() == Some(expr.as_str()) {
-                field
-            } else {
-                let StructField {
-                    name,
-                    data_type,
-                    nullable,
-                    mut metadata,
-                } = field;
-                metadata.insert(
-                    ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
-                    MetadataValue::String(expr.clone()),
-                );
-                StructField {
-                    name,
-                    data_type,
-                    nullable,
-                    metadata,
-                }
-            }
-        } else {
-            field
-        }
-    });
-    StructType::new_unchecked(fields)
 }
