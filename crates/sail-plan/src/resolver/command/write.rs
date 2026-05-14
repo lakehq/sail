@@ -388,13 +388,22 @@ impl PlanResolver<'_> {
                         .inner()
                         .fields()
                         .iter()
-                        .map(|f| CreateTableColumnOptions {
-                            name: f.name().clone(),
-                            data_type: f.data_type().clone(),
-                            nullable: f.is_nullable(),
-                            comment: None,
-                            default: None,
-                            generated_always_as: None,
+                        .map(|f| {
+                            let mut metadata = f
+                                .metadata()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect::<Vec<_>>();
+                            metadata.sort_by(|(a, _), (b, _)| a.cmp(b));
+                            CreateTableColumnOptions {
+                                name: f.name().clone(),
+                                data_type: f.data_type().clone(),
+                                nullable: f.is_nullable(),
+                                comment: None,
+                                default: None,
+                                metadata,
+                                generated_always_as: None,
+                            }
                         })
                         .collect();
                     // TODO: Revisit passing write options as table properties.

@@ -1246,6 +1246,7 @@ mod tests {
                         nullable: false,
                         comment: None,
                         default: None,
+                        metadata: vec![],
                         generated_always_as: None,
                     }],
                     comment: None,

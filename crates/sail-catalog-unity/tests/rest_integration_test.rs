@@ -607,6 +607,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -622,6 +623,7 @@ async fn test_create_table() {
             nullable: false,
             comment: Some("meow".to_string()),
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -640,6 +642,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -651,6 +654,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
     ];
@@ -839,6 +843,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -847,6 +852,7 @@ async fn test_create_table() {
             nullable: false,
             comment: Some("meow".to_string()),
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -855,6 +861,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
     ];
@@ -1005,6 +1012,7 @@ async fn test_get_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -1013,6 +1021,7 @@ async fn test_get_table() {
             nullable: false,
             comment: Some("meow".to_string()),
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -1021,6 +1030,7 @@ async fn test_get_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
     ];
@@ -1177,6 +1187,7 @@ async fn test_list_tables() {
         nullable: false,
         comment: None,
         default: None,
+        metadata: vec![],
         generated_always_as: None,
     }];
 
@@ -1273,6 +1284,7 @@ async fn test_drop_table() {
         nullable: false,
         comment: None,
         default: None,
+        metadata: vec![],
         generated_always_as: None,
     }];
 

@@ -784,43 +784,17 @@ struct ShowTableExtendedRow {
 fn create_table_schema_from_columns(
     columns: &[crate::provider::CreateTableColumnOptions],
 ) -> SchemaRef {
-    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-    use sail_common::spec::{EXTENSION_TYPE_NAME_KEY, VARIANT_EXTENSION_NAME};
-
-    fn is_variant_struct(dt: &ArrowDataType) -> bool {
-        // TODO: consider storing field-level metadata in `CreateTableColumnOptions`
-        //   so that extension types (e.g. Variant) do not need to be re-detected here.
-        // Variant columns are resolved to Struct(metadata: Binary NOT NULL,
-        // value: Binary NOT NULL) by the plan resolver.  The field-level
-        // extension metadata that marks the field as a variant type is stored
-        // on the ArrowField, not on the ArrowDataType, so it is lost when only
-        // the data type is stored in CreateTableColumnOptions.  Detect the
-        // canonical variant struct shape here and restore the metadata.
-        if let ArrowDataType::Struct(fields) = dt {
-            fields.len() == 2
-                && fields[0].name() == "metadata"
-                && *fields[0].data_type() == ArrowDataType::Binary
-                && !fields[0].is_nullable()
-                && fields[1].name() == "value"
-                && *fields[1].data_type() == ArrowDataType::Binary
-                && !fields[1].is_nullable()
-        } else {
-            false
-        }
-    }
+    use datafusion::arrow::datatypes::{Field, Schema};
 
     let fields: Vec<Field> = columns
         .iter()
         .map(|c| {
-            let field = Field::new(&c.name, c.data_type.clone(), c.nullable);
-            if is_variant_struct(&c.data_type) {
-                field.with_metadata(std::collections::HashMap::from([(
-                    EXTENSION_TYPE_NAME_KEY.to_string(),
-                    VARIANT_EXTENSION_NAME.to_string(),
-                )]))
-            } else {
-                field
-            }
+            Field::new(&c.name, c.data_type.clone(), c.nullable).with_metadata(
+                c.metadata
+                    .iter()
+                    .cloned()
+                    .collect::<std::collections::HashMap<_, _>>(),
+            )
         })
         .collect();
     std::sync::Arc::new(Schema::new(fields))
@@ -1254,6 +1228,7 @@ mod tests {
                 nullable: false,
                 comment: None,
                 default: None,
+                metadata: vec![],
                 generated_always_as: None,
             }],
             comment: None,
@@ -1268,6 +1243,57 @@ mod tests {
             properties: vec![],
             defer_materialize: false,
         }
+    }
+
+    fn variant_physical_shape() -> datafusion::arrow::datatypes::DataType {
+        use datafusion::arrow::datatypes::{DataType, Field, Fields};
+
+        DataType::Struct(Fields::from(vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, false),
+        ]))
+    }
+
+    #[test]
+    fn create_table_schema_uses_explicit_field_metadata_for_variant() {
+        let schema =
+            create_table_schema_from_columns(&[crate::provider::CreateTableColumnOptions {
+                name: "payload".to_string(),
+                data_type: variant_physical_shape(),
+                nullable: true,
+                comment: None,
+                default: None,
+                metadata: vec![],
+                generated_always_as: None,
+            }]);
+        assert!(
+            !schema
+                .field(0)
+                .metadata()
+                .contains_key(sail_common::spec::EXTENSION_TYPE_NAME_KEY),
+            "plain structs with the same physical shape as Variant must not be marked as Variant"
+        );
+
+        let schema =
+            create_table_schema_from_columns(&[crate::provider::CreateTableColumnOptions {
+                name: "payload".to_string(),
+                data_type: variant_physical_shape(),
+                nullable: true,
+                comment: None,
+                default: None,
+                metadata: vec![(
+                    sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                    sail_common::spec::VARIANT_EXTENSION_NAME.to_string(),
+                )],
+                generated_always_as: None,
+            }]);
+        assert_eq!(
+            schema
+                .field(0)
+                .metadata()
+                .get(sail_common::spec::EXTENSION_TYPE_NAME_KEY),
+            Some(&sail_common::spec::VARIANT_EXTENSION_NAME.to_string())
+        );
     }
 
     #[tokio::test]

@@ -592,7 +592,7 @@ impl TableFormat for DeltaTableFormat {
             kernel_schema
         };
 
-        let protocol = protocol_for_create(
+        let desired_protocol = protocol_for_create(
             !matches!(effective_mode, ColumnMappingMode::None),
             has_timestamp_ntz,
             TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
@@ -609,25 +609,32 @@ impl TableFormat for DeltaTableFormat {
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let mut actions: Vec<CommitAction> = vec![
-            CommitAction::Protocol(protocol.clone()),
-            CommitAction::Metadata(metadata.clone()),
-        ];
-
         // REPLACE: tombstone all existing active files before writing the new metadata.
-        let (save_mode, reference, log_store) = match existing_table {
+        let mut actions: Vec<CommitAction> = Vec::new();
+        let (save_mode, reference, log_store, protocol) = match existing_table {
             Some(table) if replace => {
                 let snapshot = table
                     .snapshot()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .clone();
+                let (protocol, protocol_upgraded) =
+                    merge_protocol_for_upgrade(snapshot.protocol(), &desired_protocol);
+                if protocol_upgraded {
+                    actions.push(CommitAction::Protocol(protocol.clone()));
+                }
+                actions.push(CommitAction::Metadata(metadata.clone()));
                 let deletion_timestamp = Utc::now().timestamp_millis();
                 for add in snapshot.adds() {
                     actions.push(CommitAction::Remove(
                         add.clone().into_remove(deletion_timestamp),
                     ));
                 }
-                (SaveMode::Overwrite, Some(snapshot), table.log_store())
+                (
+                    SaveMode::Overwrite,
+                    Some(snapshot),
+                    table.log_store(),
+                    protocol,
+                )
             }
             Some(_) => {
                 // This path should not be reachable given the earlier fast-path,
@@ -635,6 +642,9 @@ impl TableFormat for DeltaTableFormat {
                 return Ok(());
             }
             None => {
+                let protocol = desired_protocol;
+                actions.push(CommitAction::Protocol(protocol.clone()));
+                actions.push(CommitAction::Metadata(metadata.clone()));
                 let fresh = create_delta_table_with_object_store(
                     url.clone(),
                     object_store,
@@ -642,7 +652,12 @@ impl TableFormat for DeltaTableFormat {
                 )
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                (SaveMode::ErrorIfExists, None, fresh.log_store())
+                let save_mode = if replace {
+                    SaveMode::Overwrite
+                } else {
+                    SaveMode::ErrorIfExists
+                };
+                (save_mode, None, fresh.log_store(), protocol)
             }
         };
 

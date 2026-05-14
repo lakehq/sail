@@ -29,6 +29,7 @@ pub fn col(name: &str, data_type: DataType) -> CreateTableColumnOptions {
         nullable: true,
         comment: None,
         default: None,
+        metadata: vec![],
         generated_always_as: None,
     }
 }

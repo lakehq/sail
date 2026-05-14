@@ -1213,6 +1213,7 @@ fn columns_to_nested_fields(
             nullable,
             comment,
             default: _,
+            metadata: _,
             generated_always_as: _,
         } = col;
         let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {

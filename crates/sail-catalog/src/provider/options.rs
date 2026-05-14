@@ -52,6 +52,10 @@ pub struct CreateTableColumnOptions {
     pub nullable: bool,
     pub comment: Option<String>,
     pub default: Option<String>,
+    /// Arrow field metadata to preserve extension type markers (e.g. Variant)
+    /// when materializing storage-level table metadata.
+    #[serde(default)]
+    pub metadata: Vec<(String, String)>,
     pub generated_always_as: Option<String>,
 }
 

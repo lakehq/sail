@@ -200,6 +200,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     nullable,
                     comment,
                     default,
+                    metadata: _,
                     generated_always_as,
                 } = x;
                 let is_partition = partition_by
