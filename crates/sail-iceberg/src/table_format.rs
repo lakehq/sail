@@ -130,7 +130,10 @@ impl TableFormat for IcebergTableFormat {
         }
         let partition_spec = partition_spec_builder.build();
 
-        let mut table_properties = properties.drain().collect::<Vec<_>>();
+        let mut table_properties = properties
+            .drain()
+            .filter(|(key, _)| !is_catalog_encoded_option(key))
+            .collect::<Vec<_>>();
         table_properties.sort_by(|(a, _), (b, _)| a.cmp(b));
         let (requested_format_version, metadata_properties) =
             crate::properties::metadata_properties_from_table_properties(&table_properties)?;
@@ -593,13 +596,17 @@ fn split_iceberg_write_options_and_table_properties(
                 table_properties.extend(
                     items
                         .iter()
-                        .filter(|(key, _)| !key.starts_with("option."))
+                        .filter(|(key, _)| !is_catalog_encoded_option(key))
                         .cloned(),
                 );
             }
         })
         .collect();
     (clean_options, table_properties)
+}
+
+fn is_catalog_encoded_option(key: &str) -> bool {
+    key.starts_with("option.")
 }
 
 fn alter_table_properties_conflict_error() -> DataFusionError {
@@ -699,10 +706,11 @@ mod tests {
                                 sail_common_datafusion::catalog::PartitionTransform::Bucket(8),
                             ),
                         }],
-                        properties: std::collections::HashMap::from([(
-                            "format-version".to_string(),
-                            "2".to_string(),
-                        )]),
+                        properties: std::collections::HashMap::from([
+                            ("format-version".to_string(), "2".to_string()),
+                            ("option.metadataAsDataRead".to_string(), "true".to_string()),
+                            ("custom.key".to_string(), "custom-value".to_string()),
+                        ]),
                         if_not_exists: false,
                         replace: false,
                         generated_columns: std::collections::HashMap::new(),
@@ -727,6 +735,13 @@ mod tests {
             })?;
             assert_eq!(spec.fields().len(), 1);
             assert_eq!(spec.fields()[0].name, "id_bucket");
+            assert!(!metadata
+                .properties
+                .contains_key("option.metadataAsDataRead"));
+            assert_eq!(
+                metadata.properties.get("custom.key").map(String::as_str),
+                Some("custom-value")
+            );
 
             std::fs::remove_dir_all(&dir).map_err(|e| DataFusionError::External(Box::new(e)))?;
             Ok(())

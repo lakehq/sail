@@ -350,11 +350,7 @@ impl CatalogCommand {
                         })?;
                         let schema = create_table_schema_from_columns(&options.columns);
                         let partition_by = options.partition_by.clone();
-                        let properties: std::collections::HashMap<String, String> = options
-                            .properties
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
+                        let properties = create_table_physical_properties(&options.properties);
                         let generated_columns: std::collections::HashMap<String, String> = options
                             .columns
                             .iter()
@@ -812,6 +808,20 @@ fn create_table_schema_from_columns(
         })
         .collect();
     std::sync::Arc::new(Schema::new(fields))
+}
+
+fn create_table_physical_properties(
+    properties: &[(String, String)],
+) -> std::collections::HashMap<String, String> {
+    properties
+        .iter()
+        .filter(|(key, _)| !is_catalog_encoded_option_property(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn is_catalog_encoded_option_property(key: &str) -> bool {
+    key.starts_with("option.")
 }
 
 #[cfg(test)]
@@ -1332,6 +1342,25 @@ mod tests {
                 .metadata()
                 .get(sail_common::spec::EXTENSION_TYPE_NAME_KEY),
             Some(&sail_common::spec::VARIANT_EXTENSION_NAME.to_string())
+        );
+    }
+
+    #[test]
+    fn create_table_physical_properties_exclude_catalog_encoded_options() {
+        let properties = create_table_physical_properties(&[
+            ("option.metadataAsDataRead".to_string(), "true".to_string()),
+            ("custom.key".to_string(), "custom-value".to_string()),
+            ("delta.appendOnly".to_string(), "true".to_string()),
+        ]);
+
+        assert!(!properties.contains_key("option.metadataAsDataRead"));
+        assert_eq!(
+            properties.get("custom.key").map(String::as_str),
+            Some("custom-value")
+        );
+        assert_eq!(
+            properties.get("delta.appendOnly").map(String::as_str),
+            Some("true")
         );
     }
 
