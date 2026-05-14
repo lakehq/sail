@@ -448,8 +448,10 @@ impl ScalarUDFImpl for SparkAbs {
         // Idempotence: abs(abs(x)) = abs(x).
         if args.len() == 1 {
             if let Expr::ScalarFunction(inner) = &args[0] {
-                if inner.func.name() == self.name() {
-                    return Ok(ExprSimplifyResult::Simplified(args[0].clone()));
+                if let Some(inner_abs) = inner.func.inner().as_any().downcast_ref::<Self>() {
+                    if inner_abs.ansi_mode == self.ansi_mode {
+                        return Ok(ExprSimplifyResult::Simplified(args[0].clone()));
+                    }
                 }
             }
         }
