@@ -25,20 +25,12 @@ use sail_common_datafusion::utils::items::ItemTaker;
 /// when the field isn't a Spark interval column or the metadata is missing /
 /// invalid — both cases fall back to the default `ArrayFormatter`.
 fn interval_qualifier_kind(field: &Field) -> Option<SparkIntervalKind> {
-    eprintln!(
-        "[DBG interval_qualifier_kind] field.name={} type={:?} ext_name={:?} metadata={:?}",
-        field.name(),
-        field.data_type(),
-        field.extension_type_name(),
-        field.metadata()
-    );
     if field.extension_type_name() != Some(SAIL_INTERVAL_EXTENSION_NAME) {
         return None;
     }
     let meta: IntervalQualifierMetadata =
         serde_json::from_str(field.metadata().get(EXTENSION_TYPE_METADATA_KEY)?).ok()?;
     let (start, end) = (meta.start_field?, meta.end_field?);
-    eprintln!("[DBG interval_qualifier_kind] parsed start={start} end={end}");
     match field.data_type() {
         DataType::Interval(IntervalUnit::YearMonth) => {
             SparkIntervalKind::from_year_month_fields(start, end)

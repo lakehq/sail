@@ -83,6 +83,7 @@ pub mod mode;
 pub mod percentile;
 pub mod percentile_disc;
 pub mod percentile_disc_groups;
+pub mod preserve_input_metadata;
 pub mod product;
 pub mod schema_of_variant_agg;
 pub mod skewness;

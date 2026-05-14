@@ -300,12 +300,6 @@ impl PlanResolver<'_> {
         // back to the default formatter; not incorrect, just lossy.
         if metadata.is_empty() {
             use datafusion_expr::ExprSchemable;
-            eprintln!(
-                "[DBG fn={canonical_function_name}] arg_types={:?} arg_metas={:?} func_type={:?}",
-                argument_types,
-                argument_metadatas,
-                func.get_type(schema)
-            );
             if let (Some(metas), Ok(output_type)) = (&argument_metadatas, func.get_type(schema)) {
                 let matching: Vec<&Vec<(String, String)>> = argument_types
                     .iter()
@@ -318,10 +312,6 @@ impl PlanResolver<'_> {
                         }
                     })
                     .collect();
-                eprintln!(
-                    "[DBG fn={canonical_function_name}] matching.len={}",
-                    matching.len()
-                );
                 match matching.as_slice() {
                     [single] => {
                         // `Interval × Numeric` / `Interval / Numeric` widens the
@@ -344,9 +334,6 @@ impl PlanResolver<'_> {
                     }
                     multi if multi.len() > 1 => {
                         let widened_result = widen_interval_qualifier_metadata(multi, &output_type);
-                        eprintln!(
-                            "[DBG fn={canonical_function_name}] widen returned: {widened_result:?}"
-                        );
                         if let Some(widened) = widened_result {
                             metadata = widened;
                         }
@@ -356,9 +343,6 @@ impl PlanResolver<'_> {
             }
         }
 
-        eprintln!(
-            "[DBG fn={canonical_function_name}] final metadata before NamedExpr: {metadata:?}"
-        );
         if !metadata.is_empty() {
             Ok(NamedExpr::new(vec![name], func).with_metadata(metadata))
         } else {

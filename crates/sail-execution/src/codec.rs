@@ -106,6 +106,7 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
+use sail_function::aggregate::preserve_input_metadata::PreserveInputMetadataAggregate;
 use sail_function::aggregate::product::ProductFunction;
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
@@ -2693,6 +2694,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ModeFunction>()
             || node.inner().as_any().is::<PercentileFunction>()
             || node.inner().as_any().is::<PercentileDisc>()
+            || node.inner().as_any().is::<PreserveInputMetadataAggregate>()
             || node.inner().as_any().is::<ProductFunction>()
             || node.inner().as_any().is::<SchemaOfVariantAggFunction>()
             || node.inner().as_any().is::<SkewnessFunc>()

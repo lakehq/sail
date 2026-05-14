@@ -24,6 +24,7 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
+use sail_function::aggregate::preserve_input_metadata::PreserveInputMetadataAggregate;
 use sail_function::aggregate::product::ProductFunction;
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
@@ -592,11 +593,25 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),
         ("listagg", F::custom(listagg)),
-        ("max", F::default(min_max::max_udaf)),
+        (
+            "max",
+            F::default(|| {
+                Arc::new(AggregateUDF::from(PreserveInputMetadataAggregate::new(
+                    min_max::max_udaf(),
+                )))
+            }),
+        ),
         ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),
         ("median", F::custom(median)),
-        ("min", F::default(min_max::min_udaf)),
+        (
+            "min",
+            F::default(|| {
+                Arc::new(AggregateUDF::from(PreserveInputMetadataAggregate::new(
+                    min_max::min_udaf(),
+                )))
+            }),
+        ),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
         ("percentile", F::custom(percentile_exact)),
@@ -624,7 +639,14 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("stddev_pop", F::default(stddev::stddev_pop_udaf)),
         ("stddev_samp", F::default(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
-        ("sum", F::default(sum::sum_udaf)),
+        (
+            "sum",
+            F::default(|| {
+                Arc::new(AggregateUDF::from(PreserveInputMetadataAggregate::new(
+                    sum::sum_udaf(),
+                )))
+            }),
+        ),
         ("try_avg", F::custom(try_avg)),
         ("try_sum", F::custom(try_sum)),
         ("var_pop", F::default(variance::var_pop_udaf)),
