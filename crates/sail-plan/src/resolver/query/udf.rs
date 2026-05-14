@@ -414,14 +414,7 @@ impl PlanResolver<'_> {
         let args = args.into_iter().map(|x| x.expr).collect::<Vec<_>>();
         let group_exprs = grouping
             .into_iter()
-            .map(|x| {
-                let name = x.name.clone().one()?;
-                Ok(alias_preserving_metadata(
-                    x.expr.clone(),
-                    state.register_field_name(name),
-                    x.metadata.iter().cloned().collect(),
-                ))
-            })
+            .map(|x| x.into_registered_alias(state))
             .collect::<PlanResult<Vec<_>>>()?;
         let input_types = Self::resolve_expression_types(&args, plan.schema())?;
         let udaf = PySparkBatchCollectorUDF::new(input_types.clone(), input_names.clone());
