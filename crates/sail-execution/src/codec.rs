@@ -2891,7 +2891,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_delta_snapshot_context(
         &self,
-        context: gen::DeltaSnapshotContextNode,
+        context: gen::DeltaSnapshotContext,
     ) -> Result<DeltaSnapshotContext> {
         Ok(DeltaSnapshotContext {
             version: context.version,
@@ -2908,8 +2908,8 @@ impl RemoteExecutionCodec {
     fn try_encode_delta_snapshot_context(
         &self,
         context: &DeltaSnapshotContext,
-    ) -> Result<gen::DeltaSnapshotContextNode> {
-        Ok(gen::DeltaSnapshotContextNode {
+    ) -> Result<gen::DeltaSnapshotContext> {
+        Ok(gen::DeltaSnapshotContext {
             version: context.version,
             protocol_json: self.try_encode_json(&context.protocol, "Delta protocol")?,
             metadata_json: self.try_encode_json(&context.metadata, "Delta metadata")?,
@@ -2923,7 +2923,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_delta_commit_context(
         &self,
-        context: gen::DeltaCommitContextNode,
+        context: gen::DeltaCommitContext,
     ) -> Result<DeltaCommitContext> {
         let base_snapshot = context
             .base_snapshot
@@ -2935,18 +2935,18 @@ impl RemoteExecutionCodec {
     fn try_encode_delta_commit_context(
         &self,
         context: &DeltaCommitContext,
-    ) -> Result<gen::DeltaCommitContextNode> {
+    ) -> Result<gen::DeltaCommitContext> {
         let base_snapshot = context
             .base_snapshot
             .as_ref()
             .map(|context| self.try_encode_delta_snapshot_context(context))
             .transpose()?;
-        Ok(gen::DeltaCommitContextNode { base_snapshot })
+        Ok(gen::DeltaCommitContext { base_snapshot })
     }
 
     fn try_decode_delta_write_context(
         &self,
-        context: gen::DeltaWriteContextNode,
+        context: gen::DeltaWriteContext,
     ) -> Result<DeltaWriteContext> {
         let commit_context = match context.commit_context {
             Some(context) => self.try_decode_delta_commit_context(context)?,
@@ -2989,7 +2989,7 @@ impl RemoteExecutionCodec {
     fn try_encode_delta_write_context(
         &self,
         context: &DeltaWriteContext,
-    ) -> Result<gen::DeltaWriteContextNode> {
+    ) -> Result<gen::DeltaWriteContext> {
         let initial_actions_json = context
             .initial_actions
             .iter()
@@ -3011,7 +3011,7 @@ impl RemoteExecutionCodec {
             .map(|schema| self.try_encode_json(schema, "Delta logical schema"))
             .transpose()?;
 
-        Ok(gen::DeltaWriteContextNode {
+        Ok(gen::DeltaWriteContext {
             commit_context: Some(self.try_encode_delta_commit_context(&context.commit_context)?),
             final_schema_json: self.try_encode_json(&context.final_schema, "Delta final schema")?,
             effective_column_mapping_mode: Self::try_encode_delta_column_mapping_mode(
