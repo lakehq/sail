@@ -1660,7 +1660,7 @@
                         "nonTerminal": "IdentList"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Keyword(Sorted), Keyword(By), SortColumnList))"
+                        "nonTerminal": "Option(SortColumnClause)"
                       },
                       {
                         "nonTerminal": "Keyword(Into)"
@@ -7382,6 +7382,14 @@
               }
             },
             {
+              "name": "Option(SortColumnClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "SortColumnClause"
+                }
+              }
+            },
+            {
               "name": "Option(StringLiteral)",
               "node": {
                 "optional": {
@@ -7522,14 +7530,6 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Keyword(Or), Keyword(Replace))"
-                }
-              }
-            },
-            {
-              "name": "Option(Tuple(Keyword(Sorted), Keyword(By), SortColumnList))",
-              "node": {
-                "optional": {
-                  "nonTerminal": "Tuple(Keyword(Sorted), Keyword(By), SortColumnList)"
                 }
               }
             },
@@ -9024,10 +9024,26 @@
               "node": {
                 "sequence": [
                   {
-                    "nonTerminal": "Identifier"
+                    "nonTerminal": "Expression"
                   },
                   {
                     "nonTerminal": "Option(OrderDirection)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SortColumnClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Sorted)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(By)"
+                  },
+                  {
+                    "nonTerminal": "SortColumnList"
                   }
                 ]
               }
@@ -10937,22 +10953,6 @@
                   },
                   {
                     "nonTerminal": "Keyword(By)"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Tuple(Keyword(Sorted), Keyword(By), SortColumnList)",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Keyword(Sorted)"
-                  },
-                  {
-                    "nonTerminal": "Keyword(By)"
-                  },
-                  {
-                    "nonTerminal": "SortColumnList"
                   }
                 ]
               }

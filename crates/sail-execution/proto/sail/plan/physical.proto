@@ -204,6 +204,14 @@ message SparkFromJsonUdf {
 
 message StandardUdaf {}
 
+message ExtendedWindowUdf {
+  oneof UdwfKind {
+    StandardUdwf standard = 1;
+  }
+}
+
+message StandardUdwf {}
+
 // Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
 enum PySparkGroupAggKind {
   PY_SPARK_GROUP_AGG_KIND_PANDAS = 0;

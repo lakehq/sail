@@ -526,6 +526,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 properties,
+                is_external: _,
             } => {
                 // When a table is created without column definitions
                 // (e.g. `CREATE TABLE t USING fmt`), the catalog stores an empty column list.
