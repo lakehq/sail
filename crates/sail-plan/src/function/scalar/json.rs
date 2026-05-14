@@ -80,27 +80,31 @@ fn from_json(
 
 fn json_tuple_impl(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
-    
+
     // Split into (json_expr, field_name_exprs)
-    let (json_expr, field_names) = arguments
-        .split_first()
-        .ok_or_else(|| PlanError::invalid("json_tuple requires at least 2 arguments (json string and at least one field name)"))?;
-    
+    let (json_expr, field_names) = arguments.split_first().ok_or_else(|| {
+        PlanError::invalid(
+            "json_tuple requires at least 2 arguments (json string and at least one field name)",
+        )
+    })?;
+
     // Validate field names are string literals
     for expr in field_names {
         match expr {
             Expr::Literal(ScalarValue::Utf8(Some(_)), _) => (),
-            _ => return Err(PlanError::invalid(
-                "json_tuple field names must be string literals"
-            )),
+            _ => {
+                return Err(PlanError::invalid(
+                    "json_tuple field names must be string literals",
+                ))
+            }
         }
     }
-    
+
     // Build the json_tuple call with all field names
     let mut all_args = vec![json_expr.clone()];
     all_args.extend(field_names.iter().cloned());
     let json_tuple_expr = df_json_tuple(all_args);
-    
+
     // Wrap in array and explode with Inline
     let array_expr = ScalarUDF::from(SparkArray::new()).call(vec![json_tuple_expr]);
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![array_expr]))
