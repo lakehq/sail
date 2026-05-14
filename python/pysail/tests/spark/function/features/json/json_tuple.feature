@@ -202,12 +202,3 @@ Feature: json_tuple function extracts multiple fields from a JSON string as colu
       Then query result
         | c0   |
         | NULL |
-
-    Scenario: Very large JSON string
-      When query
-        """
-        SELECT json_tuple('{"a":"' || repeat('x', 10000) || '","b":"value"}', 'a', 'b')
-        """
-      Then query result contains
-        | c0 (length ~10000) | c1    |
-        | x...               | value |

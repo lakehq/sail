@@ -7,7 +7,6 @@ pub mod explode;
 pub mod geo;
 pub mod hash;
 pub mod json;
-pub mod json_to_struct;
 pub mod map;
 pub mod math;
 pub mod misc;
