@@ -54,10 +54,7 @@ def dataframe_partition_count(name, expected, dataframes):
 def dataframe_distinct_partition_ids(name, expected_ids, dataframes):
     actual = {
         row["pid"]
-        for row in _get_dataframe(dataframes, name)
-        .selectExpr("spark_partition_id() AS pid")
-        .distinct()
-        .collect()
+        for row in _get_dataframe(dataframes, name).selectExpr("spark_partition_id() AS pid").distinct().collect()
     }
     expected = {int(part.strip()) for part in expected_ids.split(",") if part.strip()}
     assert actual == expected
