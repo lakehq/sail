@@ -15,6 +15,15 @@ impl CatalogManager {
         provider.create_table(&database, &table, options).await
     }
 
+    /// Returns `true` when the catalog that owns this table reference is
+    /// responsible for initializing physical storage.  Callers should skip
+    /// format-specific pre-materialization (e.g. writing the initial Delta
+    /// transaction log) when this returns `false`.
+    pub fn table_catalog_manages_storage<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<bool> {
+        let (provider, _, _) = self.resolve_object(table)?;
+        Ok(provider.manages_physical_storage())
+    }
+
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.get_table(&database, &table).await

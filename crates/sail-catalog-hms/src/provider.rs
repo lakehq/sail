@@ -924,6 +924,8 @@ impl CatalogProvider for HmsCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
+        // TODO: Keep hive_metastore crate up to date; HMS may create warehouse
+        // directories, but Delta log initialization remains table-format-side.
         let format = options.format.trim().to_lowercase();
 
         if options.replace {
@@ -1256,6 +1258,7 @@ mod tests {
                     if_not_exists: false,
                     replace: false,
                     properties: vec![],
+                    defer_materialize: false,
                 },
             )
             .await

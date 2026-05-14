@@ -22,6 +22,14 @@ pub trait CatalogProvider: Send + Sync {
     /// in different sessions.
     fn get_name(&self) -> &str;
 
+    /// Returns `true` if the generic catalog command may initialize physical
+    /// storage (e.g. a Delta transaction log) before catalog registration.
+    /// Catalogs that control table locations or credentials (e.g. Unity Catalog)
+    /// should return `false` and use provider-specific creation flows instead.
+    fn manages_physical_storage(&self) -> bool {
+        true
+    }
+
     /// Creates a new database in the catalog.
     async fn create_database(
         &self,

@@ -502,6 +502,8 @@ impl CatalogProvider for GlueCatalogProvider {
         let client = self.get_client().await?;
         let format_lower = options.format.to_lowercase();
 
+        // TODO: Keep aws-sdk-glue up to date; Iceberg creation is handled by
+        // Glue OpenTableFormatInput, while other formats only register metadata.
         if format_lower == "iceberg" {
             iceberg::create_iceberg_table(self, client, database, table, options).await
         } else {

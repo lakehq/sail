@@ -308,7 +308,14 @@ impl CatalogCommand {
                 // INSERT through the write-to-create path) will atomically create
                 // the physical table in a single commit, so we skip the metadata-
                 // only pre-commit here.
-                if !options.defer_materialize {
+                //
+                // Catalogs that control storage access or creation (e.g. Unity Catalog)
+                // return `false` so the generic path does not open their table locations
+                // with Sail's ambient object-store credentials.
+                let catalog_manages_storage = manager
+                    .table_catalog_manages_storage(&table)
+                    .unwrap_or(true);
+                if !options.defer_materialize && catalog_manages_storage {
                     if let (Some(location), format) =
                         (options.location.clone(), options.format.clone())
                     {

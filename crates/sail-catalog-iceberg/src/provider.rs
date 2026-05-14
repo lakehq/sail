@@ -812,6 +812,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             props.insert(k, v);
         }
 
+        // TODO: Regenerate client from the latest Iceberg REST OpenAPI spec;
+        // plain CREATE is catalog-side metadata initialization (`stage-create` stays unset here).
         let request = crate::models::CreateTableRequest {
             name: table.to_string(),
             location,
