@@ -136,6 +136,7 @@ impl ScalarUDFImpl for SparkConcat {
                 | DataType::Utf8View
                 | DataType::Binary
                 | DataType::LargeBinary
+                | DataType::BinaryView
                 | DataType::List(_)
         ) {
             Ok(ExprSimplifyResult::Simplified(arg))
