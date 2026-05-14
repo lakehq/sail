@@ -234,6 +234,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                 sort_by,
                 bucket_by,
                 properties,
+                is_external: true,
             },
         };
         db.tables.insert(table.to_string(), status.clone());
