@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, StringArray, StructArray};
 use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 /// A scalar UDF that takes a JSON string column and a fixed list of field names
@@ -78,12 +78,26 @@ impl ScalarUDFImpl for JsonToStruct {
             args, number_rows, ..
         } = args;
 
-        // Materialise the JSON column into a StringArray.
-        let json_array: ArrayRef = match &args[0] {
+        // Handle NULL case - if the input is NULL, return struct with all NULLs
+        let json_array = match &args[0] {
+            ColumnarValue::Scalar(ScalarValue::Null) => {
+                // Return struct with all NULLs
+                let fields: Vec<(Arc<Field>, ArrayRef)> = (0..self.field_names.len())
+                    .map(|i| {
+                        // Fix: Explicitly type the None values
+                        let field = Arc::new(Field::new(format!("c{i}"), DataType::Utf8, true));
+                        let array = Arc::new(StringArray::new_null(number_rows)) as ArrayRef;
+                        (field, array)
+                    })
+                    .collect();
+                let struct_array = StructArray::from(fields);
+                return Ok(ColumnarValue::Array(Arc::new(struct_array)));
+            }
             ColumnarValue::Array(arr) => Arc::clone(arr),
             ColumnarValue::Scalar(sv) => sv.to_array_of_size(number_rows)?,
         };
 
+        // Materialise the JSON column into a StringArray
         let json_strings = json_array
             .as_any()
             .downcast_ref::<StringArray>()
@@ -116,13 +130,18 @@ impl ScalarUDFImpl for JsonToStruct {
                         let extracted = map.get(key.as_str()).and_then(|v| match v {
                             serde_json::Value::Null => None,
                             serde_json::Value::String(s) => Some(s.clone()),
-                            other => Some(other.to_string()),
+                            other => {
+                                // Convert to string without extra escaping
+                                let s = serde_json::to_string(other).unwrap_or_else(|_| other.to_string());
+                                // Remove surrounding quotes if present
+                                Some(s.trim_matches('"').to_string())
+                            }
                         });
                         builders[j].push(extracted);
                     }
                 }
                 _ => {
-                    // Non-object JSON (array, scalar) or parse failure all NULL
+                    // Non-object JSON (array, scalar) or parse failure → all NULL
                     for col in &mut builders {
                         col.push(None);
                     }
