@@ -17,6 +17,8 @@ from pyiceberg.manifest import MANIFEST_LIST_FILE_SCHEMAS, ManifestContent, Part
 from pyspark.sql import Row
 from pytest_bdd import given, parsers, then
 
+from pysail.testing.spark.steps.delta_log import _get_by_path, _parse_expected_value
+
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
@@ -603,6 +605,26 @@ def check_iceberg_metadata_matches_snapshot(variables, snapshot: SnapshotAsserti
     sanitized = _sanitize_iceberg_metadata(metadata)
 
     assert snapshot == sanitized
+
+
+@then("iceberg metadata contains")
+def check_iceberg_metadata_contains(variables, datatable):
+    """Assert that specific fields in the latest Iceberg table metadata match expected values."""
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg metadata inspection"
+
+    metadata = _find_latest_metadata(Path(location.path))
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert header[:2] == ["path", "value"], "expected datatable header: path | value"
+    for row in rows:
+        if not row or not row[0].strip():
+            continue
+        path, raw = row[0], row[1] if len(row) > 1 else ""
+        expected = _parse_expected_value(raw)
+        actual = _get_by_path(metadata, path)
+        assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
 
 
 @then("iceberg current manifest list matches snapshot")

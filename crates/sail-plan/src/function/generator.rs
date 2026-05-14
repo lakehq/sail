@@ -8,6 +8,7 @@ use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::json_to_struct::JsonToStruct;
+use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 
 use crate::error::PlanError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -86,6 +87,7 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![cast(zipped, res_type)]))
 }
+
 fn json_tuple(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
 
@@ -119,6 +121,13 @@ fn json_tuple(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![array_expr]))
 }
 
+fn variant_explode(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let arg = arguments.one()?;
+    let explode_arr = ScalarUDF::from(SparkVariantExplodeUdf::new()).call(vec![arg]);
+    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![explode_arr]))
+}
+
 pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -140,6 +149,8 @@ pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFu
         ),
         ("stack", F::custom(stack)),
         ("json_tuple", F::custom(json_tuple)),
+        ("variant_explode", F::custom(variant_explode)),
+        ("variant_explode_outer", F::custom(variant_explode)),
     ]
 }
 
@@ -148,6 +159,7 @@ pub fn get_outer_built_in_generator_functions(name: &str) -> &str {
         "explode" => "explode_outer",
         "inline" => "inline_outer",
         "posexplode" => "posexplode_outer",
+        "variant_explode" => "variant_explode_outer",
         _ => name,
     }
 }
