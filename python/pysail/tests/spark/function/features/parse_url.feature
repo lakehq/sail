@@ -863,6 +863,51 @@ Feature: parse_url() extracts URL component
         | result |
         | NULL   |
 
+    Scenario: parse_url opaque mailto FILE returns NULL
+      When query
+        """
+        SELECT parse_url('mailto:user@example.com', 'FILE') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url opaque tel FILE returns NULL
+      When query
+        """
+        SELECT parse_url('tel:+1-816-555-1212', 'FILE') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url opaque mailto QUERY returns NULL
+      When query
+        """
+        SELECT parse_url('mailto:user@example.com?subject=hello', 'QUERY') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url opaque mailto QUERY with key returns NULL
+      When query
+        """
+        SELECT parse_url('mailto:user@example.com?subject=hello', 'QUERY', 'subject') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url opaque urn REF returns fragment
+      When query
+        """
+        SELECT parse_url('urn:isbn:0451450523#section', 'REF') AS result
+        """
+      Then query result
+        | result  |
+        | section |
+
   Rule: Percent-encoded host
 
     Scenario: parse_url percent-encoded host returns NULL

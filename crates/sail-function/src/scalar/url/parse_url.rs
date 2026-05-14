@@ -77,10 +77,8 @@ impl ParseUrl {
                 }
                 "PATH" => {
                     let path = url.path();
-                    // Opaque URIs (e.g. "mailto:user@example.com", "tel:+1-816-555-1212")
-                    // have no authority and a path that doesn't start with '/'.
                     // java.net.URI returns null for PATH on opaque URIs; we match that.
-                    if !url.has_authority() && !path.starts_with('/') {
+                    if is_opaque_uri(&url) {
                         return Ok(None);
                     }
                     let path = path.to_string();
@@ -94,23 +92,34 @@ impl ParseUrl {
                     };
                     Some(path)
                 }
-                "QUERY" => match key {
-                    None => url.query().map(String::from),
-                    Some(key) => {
-                        // Spark doesn't decode percent-encoding in query values.
-                        // Use raw query string parsing instead of url.query_pairs()
-                        // which auto-decodes.
-                        url.query().and_then(|q| {
-                            q.split('&')
-                                .filter_map(|pair| pair.split_once('='))
-                                .find(|(k, _)| *k == key)
-                                .map(|(_, v)| v.to_string())
-                        })
+                "QUERY" => {
+                    // Opaque URIs (e.g. "mailto:user@example.com?subject=x") have no
+                    // QUERY component in java.net.URI — return NULL to match Spark.
+                    if is_opaque_uri(&url) {
+                        return Ok(None);
                     }
-                },
+                    match key {
+                        None => url.query().map(String::from),
+                        Some(key) => {
+                            // Spark doesn't decode percent-encoding in query values.
+                            // Use raw query string parsing instead of url.query_pairs()
+                            // which auto-decodes.
+                            url.query().and_then(|q| {
+                                q.split('&')
+                                    .filter_map(|pair| pair.split_once('='))
+                                    .find(|(k, _)| *k == key)
+                                    .map(|(_, v)| v.to_string())
+                            })
+                        }
+                    }
+                }
                 "REF" => url.fragment().map(String::from),
                 "PROTOCOL" => Some(url.scheme().to_string()),
                 "FILE" => {
+                    // Opaque URIs have no FILE component in java.net.URI — return NULL.
+                    if is_opaque_uri(&url) {
+                        return Ok(None);
+                    }
                     let path = url.path();
                     let path = if path == "/" && !has_explicit_path(value) {
                         ""
@@ -288,6 +297,13 @@ impl ScalarUDFImpl for ParseUrl {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(move |a| spark_parse_url_impl(a, safe, &name), vec![])(&args)
     }
+}
+
+/// Returns true if the URL is an opaque URI — scheme-specific part without a hierarchical path.
+/// Examples: `mailto:user@example.com`, `tel:+1-816-555-1212`, `urn:isbn:...`
+/// java.net.URI returns null for PATH, QUERY, FILE, AUTHORITY on opaque URIs.
+fn is_opaque_uri(url: &url::Url) -> bool {
+    !url.has_authority() && !url.path().starts_with('/')
 }
 
 /// Returns true if the host portion of the URL contains a percent-encoded character.
