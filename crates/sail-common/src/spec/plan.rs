@@ -886,6 +886,7 @@ pub struct TableDefinition {
     pub replace: bool,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+    pub is_external: bool,
 }
 
 /// A column reference or typed column definition used in a `PARTITIONED BY` clause.

@@ -1449,6 +1449,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         replace: false,
                         options: options.into_iter().collect(),
                         properties: vec![],
+                        is_external: true,
                     },
                 })
             }
@@ -1461,6 +1462,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     schema,
                     options,
                 } = x;
+                let is_external = path.is_some();
                 let schema = schema.required("create external table schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
@@ -1486,6 +1488,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         replace: false,
                         options: options.into_iter().collect(),
                         properties: vec![],
+                        is_external,
                     },
                 })
             }
