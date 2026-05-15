@@ -7,8 +7,8 @@ use datafusion::arrow::array::{
     PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
 };
 use datafusion::arrow::datatypes::{
-    Date32Type, Float64Type, Int32Type, Int64Type, IntervalMonthDayNano, IntervalMonthDayNanoType,
-    IntervalYearMonthType,
+    Date32Type, DurationMicrosecondType, Float64Type, Int32Type, Int64Type, IntervalMonthDayNano,
+    IntervalMonthDayNanoType, IntervalYearMonthType,
 };
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -457,6 +457,78 @@ pub fn try_div_interval_monthdaynano_i64(
         }
     }
     Ok(b.finish())
+}
+
+pub fn try_op_interval_yearmonth_i64<F>(
+    intervals: &PrimitiveArray<IntervalYearMonthType>,
+    scalars: &PrimitiveArray<Int64Type>,
+    op: F,
+) -> PrimitiveArray<IntervalYearMonthType>
+where
+    F: Fn(i64, i64) -> Option<i64>,
+{
+    let mut builder = PrimitiveBuilder::<IntervalYearMonthType>::with_capacity(intervals.len());
+    for i in 0..intervals.len() {
+        if intervals.is_null(i) || scalars.is_null(i) {
+            builder.append_null();
+        } else {
+            let a = intervals.value(i) as i64;
+            let b = scalars.value(i);
+            match op(a, b).and_then(|v| i32::try_from(v).ok()) {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(),
+            }
+        }
+    }
+    builder.finish()
+}
+
+pub fn try_op_duration_microsecond_i32<F>(
+    durations: &DurationMicrosecondArray,
+    scalars: &PrimitiveArray<Int32Type>,
+    op: F,
+) -> DurationMicrosecondArray
+where
+    F: Fn(i64, i64) -> Option<i64>,
+{
+    let mut builder = PrimitiveBuilder::<DurationMicrosecondType>::with_capacity(durations.len());
+    for i in 0..durations.len() {
+        if durations.is_null(i) || scalars.is_null(i) {
+            builder.append_null();
+        } else {
+            let a = durations.value(i);
+            let b = scalars.value(i) as i64;
+            match op(a, b) {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(),
+            }
+        }
+    }
+    builder.finish()
+}
+
+pub fn try_op_duration_microsecond_i64<F>(
+    durations: &DurationMicrosecondArray,
+    scalars: &PrimitiveArray<Int64Type>,
+    op: F,
+) -> DurationMicrosecondArray
+where
+    F: Fn(i64, i64) -> Option<i64>,
+{
+    let mut builder = PrimitiveBuilder::<DurationMicrosecondType>::with_capacity(durations.len());
+    for i in 0..durations.len() {
+        if durations.is_null(i) || scalars.is_null(i) {
+            builder.append_null();
+        } else {
+            let a = durations.value(i);
+            let b = scalars.value(i);
+            match op(a, b) {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(),
+            }
+        }
+    }
+    builder.finish()
 }
 
 #[cfg(test)]

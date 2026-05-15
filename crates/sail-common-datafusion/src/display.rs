@@ -101,6 +101,38 @@ impl<'a> FormatOptions<'a> {
         }
     }
 
+    pub const fn safe(&self) -> bool {
+        self.safe
+    }
+
+    pub const fn null(&self) -> &'a str {
+        self.null
+    }
+
+    pub const fn date_format(&self) -> TimeFormat<'a> {
+        self.date_format
+    }
+
+    pub const fn datetime_format(&self) -> TimeFormat<'a> {
+        self.datetime_format
+    }
+
+    pub const fn timestamp_format(&self) -> TimeFormat<'a> {
+        self.timestamp_format
+    }
+
+    pub const fn timestamp_tz_format(&self) -> TimeFormat<'a> {
+        self.timestamp_tz_format
+    }
+
+    pub const fn time_format(&self) -> TimeFormat<'a> {
+        self.time_format
+    }
+
+    pub const fn duration_format(&self) -> DurationFormat {
+        self.duration_format
+    }
+
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
     pub const fn with_display_error(mut self, safe: bool) -> Self {

@@ -69,6 +69,9 @@ impl ScalarUDFImpl for SparkTryAdd {
             [DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)] => {
                 Ok(DataType::Timestamp(Microsecond, None))
             }
+            [DataType::Duration(Microsecond), DataType::Duration(Microsecond)] => {
+                Ok(DataType::Duration(Microsecond))
+            }
 
             _ => Err(unsupported_data_types_exec_err(
                 "try_add",
@@ -162,6 +165,13 @@ impl ScalarUDFImpl for SparkTryAdd {
 
                 binary_op_scalar_or_array(left, right, result)
             }
+            (DataType::Duration(Microsecond), DataType::Duration(Microsecond)) => {
+                let l = left_arr.as_primitive::<DurationMicrosecondType>();
+                let r = right_arr.as_primitive::<DurationMicrosecondType>();
+                let result =
+                    try_binary_op_primitive::<DurationMicrosecondType, _>(l, r, i64::checked_add);
+                binary_op_scalar_or_array(left, right, result)
+            }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "spark_try_add",
                 "Int32 or Int64",
@@ -197,6 +207,10 @@ impl ScalarUDFImpl for SparkTryAdd {
                 | (
                     DataType::Interval(MonthDayNano),
                     DataType::Interval(MonthDayNano)
+                )
+                | (
+                    DataType::Duration(Microsecond),
+                    DataType::Duration(Microsecond)
                 )
         );
         if *left == DataType::Null {
