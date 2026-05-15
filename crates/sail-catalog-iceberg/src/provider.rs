@@ -1036,13 +1036,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
-        // TODO: Is this correct?
         let view_version = crate::models::ViewVersion {
             version_id: 1,
             timestamp_ms,
-            schema_id: schema
-                .schema_id
-                .ok_or_else(|| CatalogError::External("Schema ID is missing".to_string()))?,
+            // Use "last added schema"; the REST catalog will assign a schema-id to the provided
+            // schema and replace this value with the assigned id.
+            schema_id: -1,
             summary: HashMap::new(),
             representations: vec![sql_representation],
             default_catalog: None,
@@ -1059,7 +1058,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let request = crate::models::CreateViewRequest {
             name: view.to_string(),
-            location: None, // TODO: Is this correct?
+            // Omit to allow the REST catalog to choose a default location (e.g. from its warehouse
+            // configuration).
+            location: None,
             schema: Box::new(schema),
             view_version: Box::new(view_version),
             properties: props,
