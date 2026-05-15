@@ -124,6 +124,8 @@ def configure_spark_session(session):
     # in some local time zones. This would result in `pytz.exceptions.NonExistentTimeError`
     # when converting such timestamps from the local time zone to UTC.
     session.conf.set("spark.sql.session.timeZone", "UTC")
+    # Pin ANSI mode so plan snapshots are stable across PySpark 3.x and 4.x test environments.
+    session.conf.set("spark.sql.ansi.enabled", "true")
     # Enable Arrow to avoid data type errors when creating Spark DataFrame from Pandas.
     session.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
 
