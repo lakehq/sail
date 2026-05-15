@@ -3,6 +3,7 @@ Feature: coalesce returns the first non-null argument
   Rule: Spark-compatible coercion for mixed string and temporal arguments
 
     Scenario: Coalesce null string column falls back to date column as string
+      Given config spark.sql.ansi.enabled = false
       When query
       """
       WITH t(string_col, date_col) AS (
@@ -18,6 +19,7 @@ Feature: coalesce returns the first non-null argument
       | 2024-01-15 | string      |
 
     Scenario: Coalesce null string column falls back to timestamp column as string
+      Given config spark.sql.ansi.enabled = false
       When query
       """
       WITH t(string_col, timestamp_col) AS (
@@ -33,6 +35,7 @@ Feature: coalesce returns the first non-null argument
       | 2024-01-15 10:30:00 | string      |
 
     Scenario: Coalesce string literal before a date column wins without temporal casting
+      Given config spark.sql.ansi.enabled = false
       When query
       """
       WITH t(date_col) AS (
@@ -48,6 +51,7 @@ Feature: coalesce returns the first non-null argument
       | default | string      |
 
     Scenario: Coalesce non-null string column before a date column wins without temporal casting
+      Given config spark.sql.ansi.enabled = false
       When query
       """
       WITH t(string_col, date_col) AS (
@@ -63,6 +67,7 @@ Feature: coalesce returns the first non-null argument
       | hello  | string      |
 
     Scenario: Coalesce date column before a string column returns a string value
+      Given config spark.sql.ansi.enabled = false
       When query
       """
       WITH t(date_col, string_col) AS (
@@ -78,6 +83,7 @@ Feature: coalesce returns the first non-null argument
       | 2024-01-15 | string      |
 
     Scenario: Coalesce multiple mixed temporal arguments still coerces to string
+      Given config spark.sql.ansi.enabled = false
       When query
       """
       SELECT
@@ -97,6 +103,7 @@ Feature: coalesce returns the first non-null argument
       | 2024-01-15 10:30:00 | string      |
 
     Scenario: Coalesce all-null mixed string and date arguments returns null with string type
+      Given config spark.sql.ansi.enabled = false
       When query
       """
       SELECT
