@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from jinja2 import Template
+from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then, when
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal, parse_show_string
@@ -126,6 +127,55 @@ def query(template, docstring, variables):
 def query_schema(docstring, query, spark):
     """Analyze the SQL query and compare schema with expected schema tree string."""
     df = spark.sql(query)
+    assert_schema_tree(df, docstring)
+
+
+@when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
+def dataframe_for(case, spark):
+    """Builds a DataFrame for a named BDD case."""
+    cases = {
+        "null literal": lambda: spark.range(1).select(F.lit(None).alias("result")),
+        "null literal alias projection": lambda: (
+            spark.range(1).select(F.lit(None).alias("value")).select(F.col("value").alias("result"))
+        ),
+        "null literal with column": lambda: spark.range(1).withColumn("result", F.lit(None)).select("result"),
+        "to_timestamp null literal": lambda: spark.range(1).select(F.to_timestamp(F.lit(None)).alias("result")),
+        "to_timestamp null literal with format": lambda: spark.range(1).select(
+            F.to_timestamp(F.lit(None), "yyyy-MM-dd").alias("result")
+        ),
+        "try_to_timestamp null literal with format": lambda: spark.range(1).select(
+            F.try_to_timestamp(F.lit(None), F.lit("yyyy-MM-dd")).alias("result")
+        ),
+        "try_to_timestamp value with null format": lambda: spark.range(1).select(
+            F.try_to_timestamp(F.lit("2024-01-02"), F.lit(None)).alias("result")
+        ),
+        "to_timestamp_ltz null literal with format": lambda: spark.range(1).select(
+            F.to_timestamp_ltz(F.lit(None), F.lit("yyyy-MM-dd")).alias("result")
+        ),
+        "to_timestamp_ltz value with null format": lambda: spark.range(1).select(
+            F.to_timestamp_ltz(F.lit("2024-01-02"), F.lit(None)).alias("result")
+        ),
+        "to_timestamp_ntz null literal with format": lambda: spark.range(1).select(
+            F.to_timestamp_ntz(F.lit(None), F.lit("yyyy-MM-dd")).alias("result")
+        ),
+        "to_timestamp_ntz value with null format": lambda: spark.range(1).select(
+            F.to_timestamp_ntz(F.lit("2024-01-02"), F.lit(None)).alias("result")
+        ),
+    }
+    try:
+        return cases[case]()
+    except KeyError:
+        pytest.fail(f"Unknown DataFrame case: {case}")
+
+
+@then("dataframe schema")
+def dataframe_schema(docstring, dataframe):
+    """Compare a DataFrame schema with expected schema tree string."""
+    assert_schema_tree(dataframe, docstring)
+
+
+def assert_schema_tree(df, docstring):
+    """Compare a DataFrame schema with expected schema tree string."""
     if hasattr(df.schema, "treeString"):
         actual = df.schema.treeString()
     else:

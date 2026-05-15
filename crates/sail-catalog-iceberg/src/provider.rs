@@ -21,8 +21,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
-    CatalogTableConstraint, CatalogTableSort, DatabaseStatus, TableColumnStatus, TableKind,
-    TableStatus,
+    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
+    TableColumnStatus, TableKind, TableStatus,
 };
 use sail_iceberg::utils::partition_transform::catalog_partition_field_from_iceberg;
 use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField, StructType};
@@ -406,6 +406,7 @@ impl IcebergRestCatalogProvider {
                 sort_by,
                 bucket_by: None,
                 properties,
+                is_external: true,
             },
         })
     }
@@ -771,12 +772,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             ));
         }
 
-        if bucket_by.is_some() {
-            return Err(CatalogError::NotSupported(
-                "Bucketed table is not supported yet".to_string(),
-            ));
-        }
-
         let fields = columns_to_nested_fields(&columns)?;
 
         let struct_type = StructType::new(fields.clone());
@@ -810,7 +805,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             identifier_field_ids: Some(schema.identifier_field_ids().collect()),
         };
 
-        let partition_spec = build_partition_spec(&partition_by, &name_to_id);
+        let partition_spec = build_partition_spec(&partition_by, bucket_by.as_ref(), &name_to_id)?;
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
         let mut props = HashMap::new();
@@ -921,6 +916,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     sort_by: Vec::new(),
                     bucket_by: None,
                     properties: Vec::new(),
+                    is_external: true,
                 },
             })
             .collect())
@@ -999,20 +995,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let mut fields = Vec::new();
-        for (idx, col) in columns.iter().enumerate() {
+        for col in columns.iter() {
             let CreateViewColumnOptions {
                 name,
                 data_type,
                 nullable,
                 comment,
             } = col;
-            let field_id = idx as i32 + 1; // FIXME: Is this wrong?
             let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
                 CatalogError::External(format!(
                     "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
                 ))
             })?;
-            let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+            // Use a placeholder field id of 0; after all fields are collected,
+            // `SchemaEvolver::assign_schema_field_ids` assigns unique IDs
+            // including for nested struct/list/map children.
+            let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
             if let Some(comment) = comment {
                 field = field.with_doc(comment);
             }
@@ -1023,6 +1021,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .with_fields(fields)
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
+        let schema = sail_iceberg::SchemaEvolver::assign_schema_field_ids(&schema)
+            .map_err(|e| CatalogError::External(format!("Failed to assign field ids: {e}")))?;
         let schema = crate::models::Schema {
             r#type: crate::models::schema::Type::Struct,
             fields: schema.fields().to_vec(),
@@ -1197,11 +1197,18 @@ where
 }
 
 /// Converts table column options to Iceberg nested fields.
+///
+/// Ensures all fields (top-level and nested) receive sequential, unique field
+/// IDs starting at 1 via `SchemaEvolver::assign_schema_field_ids`. This is
+/// required because Iceberg uses field IDs for schema indexing and column
+/// identity, and nested children produced by `arrow_type_to_iceberg` would
+/// otherwise default to id 0 since the source `CreateTableColumnOptions` carry
+/// no Iceberg field-id metadata.
 fn columns_to_nested_fields(
     columns: &[CreateTableColumnOptions],
 ) -> CatalogResult<Vec<Arc<NestedField>>> {
     let mut fields = Vec::new();
-    for (idx, col) in columns.iter().enumerate() {
+    for col in columns.iter() {
         let CreateTableColumnOptions {
             name,
             data_type,
@@ -1210,29 +1217,38 @@ fn columns_to_nested_fields(
             default: _,
             generated_always_as: _,
         } = col;
-        let field_id = idx as i32 + 1; // FIXME: Is this wrong?
         let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
             CatalogError::External(format!(
                 "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
             ))
         })?;
         // TODO: `default` is not supported until Iceberg V3
-        let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+        // Use a placeholder field id of 0; after all fields are collected,
+        // `SchemaEvolver::assign_schema_field_ids` assigns unique IDs including
+        // for nested struct/list/map children.
+        let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
         if let Some(comment) = comment {
             field = field.with_doc(comment);
         }
         fields.push(Arc::new(field));
     }
-    Ok(fields)
+    let temp_schema = sail_iceberg::spec::Schema::builder()
+        .with_fields(fields)
+        .build()
+        .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
+    let assigned = sail_iceberg::SchemaEvolver::assign_schema_field_ids(&temp_schema)
+        .map_err(|e| CatalogError::External(format!("Failed to assign field ids: {e}")))?;
+    Ok(assigned.fields().to_vec())
 }
 
 /// Builds an Iceberg partition spec from partition fields and their field ID mappings.
 fn build_partition_spec(
     partition_by: &[CatalogPartitionField],
+    bucket_by: Option<&CatalogTableBucketBy>,
     name_to_id: &HashMap<String, i32>,
-) -> Option<Box<crate::models::PartitionSpec>> {
-    if partition_by.is_empty() {
-        return None;
+) -> CatalogResult<Option<Box<crate::models::PartitionSpec>>> {
+    if partition_by.is_empty() && bucket_by.is_none() {
+        return Ok(None);
     }
     let mut partition_spec_builder = sail_iceberg::PartitionSpec::builder();
     for field in partition_by {
@@ -1269,8 +1285,27 @@ fn build_partition_spec(
             partition_spec_builder = partition_spec_builder.add_field(source_id, &name, transform);
         }
     }
+    if let Some(bucket_by) = bucket_by {
+        let num_buckets = u32::try_from(bucket_by.num_buckets).map_err(|e| {
+            CatalogError::InvalidArgument(format!("Invalid number of buckets: {e}"))
+        })?;
+        if num_buckets == 0 {
+            return Err(CatalogError::InvalidArgument(
+                "number of buckets must be a positive integer".to_string(),
+            ));
+        }
+        for column in &bucket_by.columns {
+            if let Some(&source_id) = name_to_id.get(column) {
+                partition_spec_builder = partition_spec_builder.add_field(
+                    source_id,
+                    &format!("{column}_bucket"),
+                    sail_iceberg::Transform::Bucket(num_buckets),
+                );
+            }
+        }
+    }
     let spec = partition_spec_builder.build();
-    Some(Box::new(crate::models::PartitionSpec {
+    Ok(Some(Box::new(crate::models::PartitionSpec {
         spec_id: Some(spec.spec_id()),
         fields: spec
             .fields()
@@ -1282,7 +1317,7 @@ fn build_partition_spec(
                 transform: f.transform.to_string(),
             })
             .collect(),
-    }))
+    })))
 }
 
 fn build_sort_order(
@@ -1295,10 +1330,12 @@ fn build_sort_order(
 
     let mut sort_fields = Vec::new();
     for sort in sort_by {
-        if let Some(&source_id) = name_to_id.get(&sort.column) {
+        let (column, transform) = parse_sort_column(&sort.column)?;
+        if let Some(&source_id) = name_to_id.get(&column) {
             sort_fields.push(sail_iceberg::spec::sort::SortField {
                 source_id,
-                transform: sail_iceberg::Transform::Identity, // FIXME: This is wrong, col needs to be parsed.
+                source_ids: vec![],
+                transform,
                 direction: if sort.ascending {
                     sail_iceberg::spec::sort::SortDirection::Ascending
                 } else {
@@ -1345,6 +1382,95 @@ fn build_sort_order(
             })
             .collect(),
     })))
+}
+
+/// Parses a catalog sort column into the Iceberg source column and transform.
+///
+/// The input is either a plain column name or a transform expression such as
+/// `years(ts)`, `bucket(16, id)`, or `truncate(4, category)`.
+fn parse_sort_column(column: &str) -> CatalogResult<(String, sail_iceberg::Transform)> {
+    let column = column.trim();
+    let Some((function, arguments)) = parse_transform_function(column) else {
+        return Ok((column.to_string(), sail_iceberg::Transform::Identity));
+    };
+
+    let arguments = arguments.split(',').map(str::trim).collect::<Vec<_>>();
+
+    match function.to_ascii_lowercase().as_str() {
+        "year" | "years" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Year)
+        }
+        "month" | "months" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Month)
+        }
+        "day" | "days" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Day)
+        }
+        "hour" | "hours" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Hour)
+        }
+        "bucket" => {
+            let [num_buckets_str, column] = arguments.as_slice() else {
+                return Err(CatalogError::InvalidArgument(
+                    "bucket sort transform expects bucket count and column".to_string(),
+                ));
+            };
+            let num_buckets = num_buckets_str.parse::<u32>().map_err(|_| {
+                CatalogError::InvalidArgument(format!(
+                    "bucket count for sort transform must be a valid unsigned integer: {num_buckets_str}"
+                ))
+            })?;
+            if num_buckets == 0 {
+                return Err(CatalogError::InvalidArgument(
+                    "bucket count for sort transform must be a positive integer".to_string(),
+                ));
+            }
+            Ok((
+                column.to_string(),
+                sail_iceberg::Transform::Bucket(num_buckets),
+            ))
+        }
+        "truncate" => {
+            let [first, second] = arguments.as_slice() else {
+                return Err(CatalogError::InvalidArgument(
+                    "truncate sort transform expects width and column".to_string(),
+                ));
+            };
+            let parse_positive_u32 =
+                |s: &str| -> Option<u32> { s.parse::<u32>().ok().filter(|&w| w > 0) };
+            if let Some(width) = parse_positive_u32(first) {
+                Ok((second.to_string(), sail_iceberg::Transform::Truncate(width)))
+            } else if let Some(width) = parse_positive_u32(second) {
+                Ok((first.to_string(), sail_iceberg::Transform::Truncate(width)))
+            } else {
+                Err(CatalogError::InvalidArgument(format!(
+                    "truncate sort transform requires one argument to be a positive integer width, got: {first}, {second}"
+                )))
+            }
+        }
+        _ => Err(CatalogError::InvalidArgument(format!(
+            "Unsupported sort transform function: {function}"
+        ))),
+    }
+}
+
+fn parse_transform_function(column: &str) -> Option<(&str, &str)> {
+    let column = column.strip_suffix(')')?;
+    let (function, arguments) = column.split_once('(')?;
+    Some((function.trim(), arguments))
+}
+
+fn parse_unary_sort_transform(
+    function: &str,
+    arguments: Vec<&str>,
+    transform: sail_iceberg::Transform,
+) -> CatalogResult<(String, sail_iceberg::Transform)> {
+    let [column] = arguments.as_slice() else {
+        return Err(CatalogError::InvalidArgument(format!(
+            "{function} sort transform expects a single column"
+        )));
+    };
+    Ok((column.to_string(), transform))
 }
 
 #[expect(clippy::unwrap_used, clippy::panic)]

@@ -16,6 +16,7 @@ pub mod logical;
 pub mod operations;
 pub mod physical;
 pub mod physical_plan;
+pub(crate) mod properties;
 pub mod schema_evolution;
 pub mod spec;
 pub mod table;

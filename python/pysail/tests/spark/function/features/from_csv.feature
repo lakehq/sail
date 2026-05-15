@@ -25,6 +25,49 @@ Feature: from_csv column display name matches Spark
       | from_csv(value) |
       | {1, 2, 3}       |
 
+  Scenario: from_csv with schema_of_csv as the schema argument
+    When query
+      """
+      SELECT from_csv(value, schema_of_csv('1,abc')) AS result
+      FROM VALUES ('42,hello') AS t(value)
+      """
+    Then query result
+      | result       |
+      | {42, hello}  |
+
+  Scenario: from_csv with schema_of_csv handles multiple rows
+    When query
+      """
+      SELECT from_csv(value, schema_of_csv('0,x')) AS result
+      FROM VALUES ('1,a'), ('2,b'), ('3,c') AS t(value)
+      ORDER BY result._c0
+      """
+    Then query result ordered
+      | result  |
+      | {1, a}  |
+      | {2, b}  |
+      | {3, c}  |
+
+  Scenario: from_csv with schema_of_csv options as the schema argument
+    When query
+      """
+      SELECT from_csv(value, schema_of_csv('1|abc', map('sep', '|')), map('sep', '|')) AS result
+      FROM VALUES ('42|hello') AS t(value)
+      """
+    Then query result
+      | result       |
+      | {42, hello}  |
+
+  Scenario: from_csv with schema_of_csv delimiter option as the schema argument
+    When query
+      """
+      SELECT from_csv(value, schema_of_csv('1|abc', map('delimiter', '|')), map('delimiter', '|')) AS result
+      FROM VALUES ('42|hello') AS t(value)
+      """
+    Then query result
+      | result       |
+      | {42, hello}  |
+
   Scenario: any_value drops the ignoreNulls argument from its display name
     When query
       """
