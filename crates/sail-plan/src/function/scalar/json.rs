@@ -78,11 +78,11 @@ fn from_json(
     Ok(udf.call(arguments))
 }
 
-fn json_tuple_impl(input: ScalarFunctionInput) -> PlanResult<Expr> {
+fn json_tuple(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
 
     // Split into (json_expr, field_name_exprs)
-    let (json_expr, field_names) = arguments.split_first().ok_or_else(|| {
+    let (_json_expr, field_names) = arguments.split_first().ok_or_else(|| {
         PlanError::invalid(
             "json_tuple requires at least 2 arguments (json string and at least one field name)",
         )
@@ -101,9 +101,7 @@ fn json_tuple_impl(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
 
     // Build the json_tuple call with all field names
-    let mut all_args = vec![json_expr.clone()];
-    all_args.extend(field_names.iter().cloned());
-    let json_tuple_expr = df_json_tuple(all_args);
+    let json_tuple_expr = df_json_tuple(arguments);
 
     // Wrap in array and explode with Inline
     let array_expr = ScalarUDF::from(SparkArray::new()).call(vec![json_tuple_expr]);
@@ -116,7 +114,7 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("get_json_object", F::binary(get_json_object)),
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
-        ("json_tuple", F::custom(json_tuple_impl)),
+        ("json_tuple", F::custom(json_tuple)),
         ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
         ("to_json", F::var_arg(to_json)),
     ]

@@ -5,7 +5,7 @@ Feature: json_tuple function extracts multiple fields from a JSON string as colu
     Scenario: Extract a single field from a JSON string
       When query
         """
-        SELECT json_tuple('{"a":"hello"}', 'a')
+        SELECT json_tuple('{"a":"hello"}', 'a') AS c0
         """
       Then query result
         | c0    |
@@ -43,7 +43,7 @@ Feature: json_tuple function extracts multiple fields from a JSON string as colu
     Scenario: Extract non-existent field returns NULL
       When query
         """
-        SELECT json_tuple('{"a":"hello"}', 'b')
+        SELECT json_tuple('{"a":"hello"}', 'b') AS c0
         """
       Then query result
         | c0   |
@@ -148,11 +148,11 @@ Feature: json_tuple function extracts multiple fields from a JSON string as colu
     Scenario: Extract field with escaped characters in value
       When query
         """
-        SELECT json_tuple('{"a":"line1\\nline2","b":"tab\\tseparated"}', 'a', 'b')
+        SELECT encode(c0, 'utf-8') AS v0, encode(c1, 'utf-8') AS v1 FROM (SELECT json_tuple('{"a":"x\\ny","b":"m\\tn"}', 'a', 'b'))
         """
       Then query result
-        | c0         | c1            |
-        | line1\nline2 | tab\tseparated |
+        |         v0 |         v1 |
+        | [78 0A 79] | [6D 09 6E] |
 
   Rule: Column naming behavior
 
@@ -179,7 +179,7 @@ Feature: json_tuple function extracts multiple fields from a JSON string as colu
     Scenario: Root JSON array returns NULL for all fields
       When query
         """
-        SELECT json_tuple('[{"a":1},{"a":2}]', 'a')
+        SELECT json_tuple('[{"a":1},{"a":2}]', 'a') AS c0
         """
       Then query result
         | c0   |
@@ -197,7 +197,7 @@ Feature: json_tuple function extracts multiple fields from a JSON string as colu
     Scenario: Single-quoted JSON (should fail gracefully)
       When query
         """
-        SELECT json_tuple("{'a':'value'}", 'a')
+        SELECT json_tuple("{'a':'value'}", 'a') AS c0
         """
       Then query result
         | c0   |
