@@ -39,7 +39,7 @@ pub enum Statement {
     },
     UseDatabase {
         r#use: Use,
-        database: DatabaseNamespace,
+        database: DatabaseKeyword,
         name: ObjectName,
     },
     UseCatalog {
@@ -49,27 +49,27 @@ pub enum Statement {
     },
     CreateDatabase {
         create: Create,
-        database: DatabaseNamespace,
+        database: DatabaseKeyword,
         if_not_exists: Option<(If, Not, Exists)>,
         name: ObjectName,
         clauses: Vec<CreateDatabaseClause>,
     },
     AlterDatabase {
         alter: Alter,
-        database: DatabaseNamespace,
+        database: DatabaseKeyword,
         name: ObjectName,
         operation: AlterDatabaseOperation,
     },
     DropDatabase {
         drop: Drop,
-        database: DatabaseNamespace,
+        database: DatabaseKeyword,
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
         specifier: Option<Either<Restrict, Cascade>>,
     },
     ShowDatabases {
         show: Show,
-        databases: DatabasesNamespaces,
+        databases: DatabasesKeyword,
         from: Option<(Either<From, In>, ObjectName)>,
         like: Option<(Option<Like>, StringLiteral)>,
     },
@@ -335,7 +335,7 @@ pub enum Statement {
         value: CommentValue,
     },
     CommentOnDatabase {
-        comment: (Comment, On, DatabaseNamespace),
+        comment: (Comment, On, DatabaseKeyword),
         name: ObjectName,
         is: Is,
         value: CommentValue,
@@ -508,14 +508,14 @@ pub enum CreateDatabaseClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
-pub enum DatabaseNamespace {
+pub enum DatabaseKeyword {
     Database(Database),
     Schema(Schema),
     Namespace(Namespace),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
-pub enum DatabasesNamespaces {
+pub enum DatabasesKeyword {
     Databases(Databases),
     Schemas(Schemas),
     Namespaces(Namespaces),
@@ -983,7 +983,7 @@ pub enum DescribeItem {
         item: ObjectName,
     },
     Database {
-        database: DatabaseNamespace,
+        database: DatabaseKeyword,
         extended: Option<Extended>,
         item: ObjectName,
     },

@@ -2233,7 +2233,7 @@
               }
             },
             {
-              "name": "DatabaseNamespace",
+              "name": "DatabaseKeyword",
               "node": {
                 "choice": [
                   {
@@ -2261,7 +2261,7 @@
               }
             },
             {
-              "name": "DatabasesNamespaces",
+              "name": "DatabasesKeyword",
               "node": {
                 "choice": [
                   {
@@ -2365,7 +2365,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "DatabaseNamespace"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "Option(Keyword(Extended))"
@@ -9140,7 +9140,7 @@
                         "nonTerminal": "Keyword(Use)"
                       },
                       {
-                        "nonTerminal": "DatabaseNamespace"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -9166,7 +9166,7 @@
                         "nonTerminal": "Keyword(Create)"
                       },
                       {
-                        "nonTerminal": "DatabaseNamespace"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
@@ -9185,7 +9185,7 @@
                         "nonTerminal": "Keyword(Alter)"
                       },
                       {
-                        "nonTerminal": "DatabaseNamespace"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -9201,7 +9201,7 @@
                         "nonTerminal": "Keyword(Drop)"
                       },
                       {
-                        "nonTerminal": "DatabaseNamespace"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Exists)))"
@@ -9220,7 +9220,7 @@
                         "nonTerminal": "Keyword(Show)"
                       },
                       {
-                        "nonTerminal": "DatabasesNamespaces"
+                        "nonTerminal": "DatabasesKeyword"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Either(Keyword(From), Keyword(In)), ObjectName))"
@@ -9861,7 +9861,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Tuple(Keyword(Comment), Keyword(On), DatabaseNamespace)"
+                        "nonTerminal": "Tuple(Keyword(Comment), Keyword(On), DatabaseKeyword)"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -10590,7 +10590,7 @@
               }
             },
             {
-              "name": "Tuple(Keyword(Comment), Keyword(On), DatabaseNamespace)",
+              "name": "Tuple(Keyword(Comment), Keyword(On), DatabaseKeyword)",
               "node": {
                 "sequence": [
                   {
@@ -10600,7 +10600,7 @@
                     "nonTerminal": "Keyword(On)"
                   },
                   {
-                    "nonTerminal": "DatabaseNamespace"
+                    "nonTerminal": "DatabaseKeyword"
                   }
                 ]
               }
