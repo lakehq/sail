@@ -97,6 +97,8 @@ message ExtendedScalarUdf {
     SparkFromJsonUdf spark_from_json = 17;
     ArraysZipUdf arrays_zip = 18;
     SparkToNumberUdf spark_to_number = 19;
+    SparkCeilUdf spark_ceil = 20;
+    SparkFloorUdf spark_floor = 21;
   }
 }
 
@@ -185,6 +187,14 @@ message SparkDateUdf {
 
 message SparkVariantGetUdf {
   bool safe = 1;
+}
+
+message SparkCeilUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkFloorUdf {
+  bool ansi_mode = 1;
 }
 
 message SparkNextDayUdf {

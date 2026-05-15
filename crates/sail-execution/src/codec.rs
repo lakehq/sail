@@ -2154,6 +2154,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkTime(gen::SparkTimeUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkTime::new(is_try))));
             }
+            UdfKind::SparkCeil(gen::SparkCeilUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkCeil::new(ansi_mode))));
+            }
+            UdfKind::SparkFloor(gen::SparkFloorUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkFloor::new(ansi_mode))));
+            }
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone }) => {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2314,8 +2320,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
-            "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
-            "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
+            "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new(false)))),
+            "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new(false)))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
@@ -2389,7 +2395,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
             || node_inner.is::<SparkCalendarInterval>()
-            || node_inner.is::<SparkCeil>()
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
@@ -2398,7 +2403,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkElt>()
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
-            || node_inner.is::<SparkFloor>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
@@ -2563,6 +2567,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkToNumber>() {
             let safe = func.safe();
             UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkCeil>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkCeil(gen::SparkCeilUdf { ansi_mode })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFloor>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkFloor(gen::SparkFloorUdf { ansi_mode })
         } else {
             return Ok(());
         };
