@@ -308,6 +308,10 @@ SKIPPED_SPARK_TESTS = [
         reason="Segmentation fault",
     ),
     TestMarker(
+        keywords=["test_recursion_handling_for_plan_logging"],
+        reason="Stack overflow due to large query plan",
+    ),
+    TestMarker(
         keywords=["test_reattach.py"],
         reason="Slow test not working yet",
     ),
