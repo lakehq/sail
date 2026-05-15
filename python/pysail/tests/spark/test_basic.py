@@ -428,7 +428,7 @@ def _assert_coalesce_string_date_ansi_error(df):
 
 
 def test_coalesce_string_literal_and_date_default_ansi_enabled(spark):
-    # This configuration is enabled by test fixture. 
+    # This configuration is enabled by test fixture.
     assert spark.conf.get("spark.sql.ansi.enabled") == "true"
     df = _date_df(spark)
     _assert_coalesce_string_date_ansi_error(df)
