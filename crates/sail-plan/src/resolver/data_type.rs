@@ -409,7 +409,10 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<adt::Schema> {
         let fields = self.resolve_fields(&schema.fields, state)?;
-        Ok(adt::Schema::new(fields))
+        Ok(adt::Schema::new_with_metadata(
+            fields,
+            schema.metadata.into_iter().collect(),
+        ))
     }
 
     pub fn resolve_time_unit(time_unit: &spec::TimeUnit) -> PlanResult<adt::TimeUnit> {

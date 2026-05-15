@@ -74,7 +74,7 @@ impl EdgeInterpolationAlgorithm {
     }
 }
 
-impl std::fmt::Display for EdgeInterpolationAlgorithm {
+impl Display for EdgeInterpolationAlgorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EdgeInterpolationAlgorithm::Spherical => write!(f, "Spherical"),
@@ -319,8 +319,17 @@ impl DataType {
                 metadata: vec![],
             }]),
         };
-        Schema { fields }
+        Schema {
+            fields,
+            metadata: vec![], // CHECK HERE: COME BACK TO THIS
+        }
     }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Schema {
+    pub fields: Fields,
+    pub metadata: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -620,11 +629,6 @@ impl TryFrom<YearMonthIntervalField> for IntervalFieldType {
             YearMonthIntervalField::Month => Ok(IntervalFieldType::Month),
         }
     }
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Schema {
-    pub fields: Fields,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
