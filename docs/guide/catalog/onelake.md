@@ -14,6 +14,8 @@ OneLake catalog can be configured using the following options:
 - `url` (required): The OneLake item location.
 - `bearer_token` (optional): The bearer token for authentication.
 
+See [Common Options](./index.md#common-options) for caching configuration.
+
 The `url` should be in the format <code><SyntaxText raw="<workspace>'/'<item-name>'.'<item-type>" /></code>.
 
 If `bearer_token` is not provided, Sail will attempt to find credentials from the following sources in order:

@@ -38,13 +38,15 @@ use super::context::PlannerContext;
 use super::utils::LogReplayOptions;
 use crate::datasource::PATH_COLUMN;
 use crate::kernel::{DeltaOperation, MergePredicate};
-use crate::physical_plan::{DeltaCommitExec, DeltaWriterExec};
+use crate::physical_plan::{prepare_delta_write_context, DeltaCommitExec, DeltaWriterExec};
 
 /// Internal metadata columns stripped before passing rows to DeltaWriterExec.
-const INTERNAL_MERGE_COLUMNS: &[&str] = &[
-    PATH_COLUMN,
-    sail_common_datafusion::datasource::OPERATION_COLUMN,
-];
+///
+/// Operation/metric columns are intentionally preserved for DeltaWriterExec so it
+/// can populate MERGE operationMetrics before dropping them from Parquet output.
+/// TODO: Share this internal-column boundary with future row-level writers so
+/// each sink can consume row intent before stripping Sail metadata.
+const INTERNAL_MERGE_COLUMNS: &[&str] = &[PATH_COLUMN];
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
 /// expanded (handled by ExpandRowLevelOp) and passed down as pre-expanded plans.
@@ -87,9 +89,8 @@ pub async fn build_merge_plan(
         Arc::clone(&expanded)
     };
 
-    // DeltaWriterExec expects rows to match the target table schema. Drop the internal
-    // merge metadata columns (file path, operation type) after using them for targeted
-    // rewrite filtering.
+    // DeltaWriterExec consumes operation/metric columns for MERGE metrics. Drop only
+    // metadata already used for targeted rewrite before handing rows to the writer.
     let writer_input: Arc<dyn ExecutionPlan> = strip_internal_columns(writer_input)?;
 
     // Build the remove source from the touched files, if any.
@@ -110,17 +111,30 @@ pub async fn build_merge_plan(
         None
     };
 
+    let write_context = prepare_delta_write_context(
+        ctx.table_url(),
+        Some(snapshot_state.as_ref()),
+        &options,
+        ctx.metadata_configuration(),
+        &partition_columns,
+        &PhysicalSinkMode::Append,
+        true,
+        &writer_input.schema(),
+        merge_operation.clone(),
+    )?;
+
     assemble_commit_plan(
         writer_input,
         remove_source,
+        Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
         options,
         ctx.metadata_configuration().clone(),
         partition_columns,
         true, // table exists
         table_schema,
-        merge_operation,
         ctx.options().user_metadata.clone(),
+        write_context,
     )
 }
 
@@ -178,6 +192,18 @@ pub async fn build_merge_plan_mor(
         Arc::clone(&expanded)
     };
     let writer_input = strip_internal_columns(writer_input)?;
+    let writer_schema = writer_input.schema();
+    let write_context = prepare_delta_write_context(
+        ctx.table_url(),
+        Some(snapshot_state.as_ref()),
+        &options,
+        ctx.metadata_configuration(),
+        &partition_columns,
+        &PhysicalSinkMode::Append,
+        true,
+        &writer_schema,
+        merge_operation.clone(),
+    )?;
 
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -188,7 +214,7 @@ pub async fn build_merge_plan_mor(
         PhysicalSinkMode::Append,
         true,
         table_schema.clone(),
-        merge_operation.clone(),
+        write_context.clone(),
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> =
@@ -227,6 +253,7 @@ pub async fn build_merge_plan_mor(
                     PATH_COLUMN,
                     sail_common_datafusion::datasource::MERGE_ROW_INDEX_COLUMN,
                     version,
+                    Some(snapshot_state.physical_partition_columns()),
                     merge_operation,
                 )?);
             UnionExec::try_new(vec![writer, dv_writer])?
@@ -242,6 +269,7 @@ pub async fn build_merge_plan_mor(
         table_schema,
         PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 
@@ -383,7 +411,7 @@ fn build_insert_rows_input(expanded: &Arc<dyn ExecutionPlan>) -> Result<Arc<dyn 
     )?))
 }
 
-/// Strip internal merge metadata columns (file path, operation type) from the writer input.
+/// Strip internal merge metadata columns already consumed by the physical planner.
 fn strip_internal_columns(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let schema = input.schema();
     let has_internal = INTERNAL_MERGE_COLUMNS

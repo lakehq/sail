@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use sail_plan::config::{DefaultTimestampType, PlanConfig};
 use sail_python_udf::config::PySparkUdfConfig;
@@ -87,6 +87,9 @@ impl SparkRuntimeConfig {
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get(fallback);
         }
+        if let Some(value) = versioned_default_value(key) {
+            return Ok(Some(value));
+        }
         if let Some(entry) = entry {
             return Ok(entry.default_value);
         }
@@ -103,6 +106,9 @@ impl SparkRuntimeConfig {
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get_option(fallback);
         }
+        if let Some(value) = versioned_default_value(key) {
+            return Some(value);
+        }
         entry.and_then(|x| x.default_value)
     }
 
@@ -117,6 +123,9 @@ impl SparkRuntimeConfig {
         let entry = SPARK_CONFIG.get(key);
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get_with_default(fallback, default);
+        }
+        if let Some(value) = versioned_default_value(key) {
+            return Some(value);
         }
         default
     }
@@ -176,6 +185,38 @@ impl SparkRuntimeConfig {
             .map(|x| x.to_string())
             .collect()
     }
+}
+
+fn versioned_default_value(key: &str) -> Option<&'static str> {
+    match key {
+        SPARK_SQL_ANSI_ENABLED if get_pyspark_major_version().is_some_and(|x| x < 4) => {
+            Some("false")
+        }
+        _ => None,
+    }
+}
+
+fn get_pyspark_major_version() -> Option<u64> {
+    static PYSPARK_MAJOR_VERSION: OnceLock<Option<u64>> = OnceLock::new();
+
+    *PYSPARK_MAJOR_VERSION.get_or_init(|| {
+        get_pyspark_version()
+            .ok()
+            .and_then(|version| version.split('.').next()?.parse().ok())
+    })
+}
+
+pub(crate) fn get_pyspark_version() -> SparkResult<String> {
+    use pyo3::prelude::PyAnyMethods;
+    use pyo3::types::PyModule;
+    use pyo3::Python;
+
+    Python::attach(|py| {
+        let module = PyModule::import(py, "pyspark")?;
+        let version: String = module.getattr("__version__")?.extract()?;
+        Ok(version)
+    })
+    .map_err(|e: pyo3::PyErr| SparkError::invalid(format!("failed to get PySpark version: {e}")))
 }
 
 impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
