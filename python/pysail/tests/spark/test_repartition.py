@@ -4,6 +4,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 def partition_count(df):
@@ -48,6 +49,32 @@ def test_explicit_repartition_spreads_identical_rows(spark):
     }
 
     assert partition_ids == set(range(4))
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
+def test_repartition_assigns_rows_round_robin(spark):
+    df = spark.sql("SELECT id FROM range(0, 6, 1, 1)")
+    repartitioned = df.repartition(2)
+    repartitioned.createOrReplaceTempView("repartitioned_rows")
+
+    result = spark.sql("""
+        WITH repartitioned AS (
+          SELECT id, spark_partition_id() AS pid
+          FROM repartitioned_rows
+        )
+        SELECT id, DENSE_RANK() OVER (ORDER BY pid) - 1 AS pid
+        FROM repartitioned
+        ORDER BY id
+    """).collect()
+
+    assert [(row["id"], row["pid"]) for row in result] == [
+        (0, 0),
+        (1, 1),
+        (2, 0),
+        (3, 1),
+        (4, 0),
+        (5, 1),
+    ]
 
 
 def test_explicit_repartition_plan_shape_matches_pyspark(spark):

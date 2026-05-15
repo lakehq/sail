@@ -34,7 +34,6 @@ def pytest_configure(config):
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")
-    config.pluginmanager.import_plugin("pysail.testing.spark.steps.dataframe")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.delta_log")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.iceberg_metadata")
 
