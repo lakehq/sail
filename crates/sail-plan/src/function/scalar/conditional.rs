@@ -1,8 +1,9 @@
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ExprSchemable};
+use datafusion_expr::{expr, lit, ExprSchemable, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -36,11 +37,54 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let data_types = arguments
+        .iter()
+        .map(|arg| arg.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    let has_string = data_types.iter().any(is_string_type);
+    let has_temporal = data_types.iter().any(is_temporal_type);
+    let arguments = if has_string && has_temporal {
+        arguments
+            .into_iter()
+            .zip(data_types)
+            .map(|(arg, data_type)| {
+                if is_temporal_type(&data_type) {
+                    ScalarUDF::from(SparkToUtf8::new()).call(vec![arg])
+                } else {
+                    arg
+                }
+            })
+            .collect()
+    } else {
+        arguments
+    };
+    Ok(expr_fn::coalesce(arguments))
+}
+
+fn is_string_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
+fn is_temporal_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+    )
+}
+
 pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("coalesce", F::var_arg(expr_fn::coalesce)),
+        ("coalesce", F::custom(coalesce)),
         ("if", F::custom(if_expr)),
         ("ifnull", F::binary(expr_fn::nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
