@@ -124,7 +124,7 @@ impl ExecutionPlan for RandExec {
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
         // Match Spark: seed + partitionIndex
-        let rng = SparkXorShiftRandom::new(self.seed + partition as i64);
+        let rng = SparkXorShiftRandom::new(self.seed.wrapping_add(partition as i64));
         Ok(Box::pin(RandStream::new(
             input,
             self.schema.clone(),

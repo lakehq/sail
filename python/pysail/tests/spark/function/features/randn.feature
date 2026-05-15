@@ -158,6 +158,20 @@ Feature: randn function (Gaussian/normal distribution)
         | has_value |
         | true      |
 
+  Rule: Seed near Long.MAX_VALUE wraps correctly
+
+    # seed + partitionIndex must use wrapping (Java long) arithmetic.
+    # Without wrapping_add, debug builds panic on overflow when partitionIndex > 0.
+
+    Scenario: randn with Long.MAX_VALUE seed matches Spark
+      When query
+        """
+        SELECT randn(9223372036854775807) AS r
+        """
+      Then query result
+        | r                        |
+        | -0.023841785718521923    |
+
   Rule: Empty batch
 
     Scenario: randn on empty batch returns empty result

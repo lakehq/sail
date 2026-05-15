@@ -158,6 +158,33 @@ Feature: rand function (uniform [0, 1) distribution)
         | in_range |
         | true     |
 
+  Rule: Seed near Long.MAX_VALUE wraps correctly
+
+    # seed + partitionIndex must use wrapping (Java long) arithmetic.
+    # Without wrapping_add, debug builds panic on overflow when partitionIndex > 0.
+
+    Scenario: rand with Long.MAX_VALUE seed matches Spark
+      When query
+        """
+        SELECT rand(9223372036854775807) AS r
+        """
+      Then query result
+        | r                      |
+        | 0.17715881442674208    |
+
+    Scenario: rand with Long.MAX_VALUE seed multi-row matches Spark
+      When query
+        """
+        SELECT rand(9223372036854775807) AS r FROM range(5)
+        """
+      Then query result
+        | r                      |
+        | 0.17715881442674208    |
+        | 0.9077141821545979     |
+        | 0.08354279996053304    |
+        | 0.12007064558690794    |
+        | 0.4640324942790296     |
+
   Rule: Empty batch
 
     Scenario: rand on empty batch returns empty result

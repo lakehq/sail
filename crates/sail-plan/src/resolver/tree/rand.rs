@@ -47,15 +47,29 @@ impl TreeNodeRewriter for RandRewriter<'_> {
         };
 
         // Extract the seed from args. Only rewrite seeded calls.
-        // The seed may arrive as any integer type (e.g. Int32 from PySpark proto)
-        // before type coercion runs, so accept all integer scalar types.
+        // Spark treats a literal NULL seed as seed=0, and the seed may arrive as
+        // any integer type (e.g. Int32 from PySpark proto) before type coercion
+        // runs, so accept all integer scalar types including None variants.
         let seed: i64 = match args.as_slice() {
             [] => return Ok(Transformed::no(func.call(args))),
             [Expr::Literal(scalar, _)] => match scalar {
+                ScalarValue::Null => 0,
                 ScalarValue::Int8(Some(v)) => *v as i64,
+                ScalarValue::Int8(None) => 0,
                 ScalarValue::Int16(Some(v)) => *v as i64,
+                ScalarValue::Int16(None) => 0,
                 ScalarValue::Int32(Some(v)) => *v as i64,
+                ScalarValue::Int32(None) => 0,
                 ScalarValue::Int64(Some(v)) => *v,
+                ScalarValue::Int64(None) => 0,
+                ScalarValue::UInt8(Some(v)) => *v as i64,
+                ScalarValue::UInt8(None) => 0,
+                ScalarValue::UInt16(Some(v)) => *v as i64,
+                ScalarValue::UInt16(None) => 0,
+                ScalarValue::UInt32(Some(v)) => *v as i64,
+                ScalarValue::UInt32(None) => 0,
+                ScalarValue::UInt64(Some(v)) => *v as i64,
+                ScalarValue::UInt64(None) => 0,
                 _ => return Ok(Transformed::no(func.call(args))),
             },
             _ => return Ok(Transformed::no(func.call(args))),
