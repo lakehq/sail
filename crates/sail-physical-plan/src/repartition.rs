@@ -5,6 +5,7 @@ use datafusion::arrow::array::PrimitiveArray;
 use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::UInt32Type;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::execution_plan::{
@@ -85,6 +86,7 @@ impl RowRoundRobinPartitioner {
 #[derive(Debug, Default)]
 struct ExplicitRepartitionState {
     receivers: Option<Vec<Option<Receiver<Result<RecordBatch>>>>>,
+    tasks: Vec<SpawnedTask<()>>,
 }
 
 /// A physical plan node for explicit repartitioning in the query.
@@ -151,7 +153,7 @@ impl ExplicitRepartitionExec {
         for input_partition in 0..input_partition_count {
             let input = self.input.execute(input_partition, context.clone())?;
             let output_senders = senders.clone();
-            tokio::spawn(async move {
+            state.tasks.push(SpawnedTask::spawn(async move {
                 execute_round_robin_input_partition(
                     input,
                     output_senders,
@@ -160,7 +162,7 @@ impl ExplicitRepartitionExec {
                     output_partitions,
                 )
                 .await;
-            });
+            }));
         }
 
         state.receivers = Some(receivers);

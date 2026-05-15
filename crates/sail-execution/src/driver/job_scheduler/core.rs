@@ -643,6 +643,27 @@ impl JobScheduler {
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 vec![keys]
             }
+            InputMode::Rescale => {
+                let consumer_stage = &job.graph.stages()[key.stage];
+                let output_partitions = consumer_stage.plan.output_partitioning().partition_count();
+                (0..output_partitions)
+                    .map(|output_partition| {
+                        let start = output_partition * partitions / output_partitions;
+                        let end = (output_partition + 1) * partitions / output_partitions;
+                        (start..end)
+                            .flat_map(|partition| {
+                                (0..channels).map(move |channel| {
+                                    Ok(TaskInputKey {
+                                        partition,
+                                        attempt: latest_attempt(input.stage, partition)?,
+                                        channel,
+                                    })
+                                })
+                            })
+                            .collect::<ExecutionResult<Vec<_>>>()
+                    })
+                    .collect::<ExecutionResult<Vec<Vec<_>>>>()?
+            }
         };
         let locator = match producer.mode {
             OutputMode::Pipelined => match producer.placement {
