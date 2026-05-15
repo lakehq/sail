@@ -427,14 +427,11 @@ def _assert_coalesce_string_date_ansi_error(df):
         actual.collect()
 
 
-def test_coalesce_string_literal_and_date_default(spark):
+def test_coalesce_string_literal_and_date_default_ansi_enabled(spark):
+    # This configuration is enabled by test fixture. 
+    assert spark.conf.get("spark.sql.ansi.enabled") == "true"
     df = _date_df(spark)
-    if pyspark_version() < (4,):
-        actual = df.select(F.coalesce(F.lit("default"), F.col("date_col")).alias("c"))
-        assert actual.schema.simpleString() == "struct<c:string>"
-        assert actual.collect() == [Row(c="default")]
-    else:
-        _assert_coalesce_string_date_ansi_error(df)
+    _assert_coalesce_string_date_ansi_error(df)
 
 
 def test_coalesce_string_literal_and_date_ansi_disabled(spark):
