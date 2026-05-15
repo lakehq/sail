@@ -1,5 +1,6 @@
 import itertools
 import re
+import unicodedata
 from decimal import Decimal
 from typing import Any
 
@@ -94,6 +95,32 @@ def escape_sql_string_literal(s: str) -> str:
     )
 
 
+def _display_width(c):
+    """The approximate display width of a character.
+    Note that this does not take into account hidden control characters,
+    zero-width combining characters, etc.
+    But the simple logic is enough for common testing use cases,
+    without depending on third-party libraries that can precisely determine
+    the display width of strings.
+    """
+    return 2 if unicodedata.east_asian_width(c) in "FW" else 1
+
+
+def _display_slice(text, start, end):
+    """Returns the substring, where the `start` (inclusive) and `end` (exclusive) positions
+    take into account the display width."""
+    pos, s, e = 0, None, None
+    for i, c in enumerate(text):
+        if s is None and pos >= start:
+            s = i
+        if pos >= end:
+            e = i
+            break
+        pos += _display_width(c)
+    # `e` can still be `None` here but the slice syntax works correctly.
+    return text[s:e] if s is not None else ""
+
+
 def parse_show_string(text) -> list[list[str]]:
     """
     Parses `DataFrame.show()` text into a list of rows including the header row.
@@ -106,12 +133,12 @@ def parse_show_string(text) -> list[list[str]]:
     positions = [i for i, c in enumerate(border) if c == "+"]
     columns = []
     for start, end in itertools.pairwise(positions):
-        columns.append(header[start + 1 : end].strip())
+        columns.append(_display_slice(header, start + 1, end).strip())
     result = [columns]
     for line in data:
         row = []
         for start, end in itertools.pairwise(positions):
-            row.append(line[start + 1 : end].strip())
+            row.append(_display_slice(line, start + 1, end).strip())
         result.append(row)
     return result
 
