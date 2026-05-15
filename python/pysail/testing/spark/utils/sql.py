@@ -121,11 +121,21 @@ def _display_slice(text, start, end):
     return text[s:e] if s is not None else ""
 
 
+def _ascii_slice(text, start, end):
+    return text[start:end]
+
+
+_ASCII_PRINTABLE_STRING = re.compile(r"^[\x20-\x7E]*$")
+
+
 def parse_show_string(text) -> list[list[str]]:
     """
     Parses `DataFrame.show()` text into a list of rows including the header row.
     The leading and trailing whitespace for each cell is stripped.
     """
+
+    # define the slicing function with a fast path for ASCII strings for better performance
+    _slice = _ascii_slice if _ASCII_PRINTABLE_STRING.match(text) else _display_slice
 
     lines = [line for line in text.splitlines() if line.strip()]
     border, header, _, *data, _ = lines
@@ -133,12 +143,12 @@ def parse_show_string(text) -> list[list[str]]:
     positions = [i for i, c in enumerate(border) if c == "+"]
     columns = []
     for start, end in itertools.pairwise(positions):
-        columns.append(_display_slice(header, start + 1, end).strip())
+        columns.append(_slice(header, start + 1, end).strip())
     result = [columns]
     for line in data:
         row = []
         for start, end in itertools.pairwise(positions):
-            row.append(_display_slice(line, start + 1, end).strip())
+            row.append(_slice(line, start + 1, end).strip())
         result.append(row)
     return result
 

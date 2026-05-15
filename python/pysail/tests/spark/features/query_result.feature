@@ -28,7 +28,7 @@ Feature: Query result display
 
     When query
         """
-        SELECT encode(v, "utf-8") AS x FROM VALUES ('hi\nhello') AS t(v)
+        SELECT encode(v, 'utf-8') AS x FROM VALUES ('hi\nhello') AS t(v)
         """
     Then query result
       | x                         |
