@@ -1,5 +1,7 @@
 """Test partition column mismatch validation for Delta Lake tables"""
 
+import json
+
 import pytest
 from pyspark.sql.types import Row
 from pyspark.sql.utils import AnalysisException
@@ -179,11 +181,83 @@ class TestDeltaPartitionMismatch:
         result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
         result_count = result_df.count()
         assert result_count == 2, f"Expected 2 rows after overwrite, got {result_count}"  # noqa: PLR2004
+        assert [row.asDict() for row in result_df.collect()] == [
+            {"id": 3, "category": "C", "value": 300, "region": "East"},
+            {"id": 4, "category": "D", "value": 400, "region": "West"},
+        ]
 
         # Verify schema contains new partition column
         columns = result_df.columns
         assert "region" in columns, "New partition column 'region' should exist"
         assert "category" in columns, "Column 'category' should still exist in data"
+
+        latest_log = sorted((delta_path / "_delta_log").glob("*.json"))[-1]
+        metadata = None
+        for line in latest_log.read_text(encoding="utf-8").splitlines():
+            action = json.loads(line)
+            if "metaData" in action:
+                metadata = action["metaData"]
+        assert metadata is not None, f"Expected metadata action in {latest_log}"
+        assert metadata["partitionColumns"] == ["region"]
+
+    def test_overwrite_with_schema_overwrite_can_remove_partitioning(self, spark, tmp_path):
+        """Full overwrite with overwriteSchema=true can replace a partitioned table with an unpartitioned one"""
+        delta_path = tmp_path / "schema_overwrite_unpartitioned_table"
+
+        initial_data = [
+            Row(id=1, category="A", value=100),
+            Row(id=2, category="B", value=200),
+        ]
+        df_initial = spark.createDataFrame(initial_data)
+        df_initial.write.format("delta").mode("overwrite").partitionBy("category").save(str(delta_path))
+
+        overwrite_data = [
+            Row(id=3, category="C", value=300),
+            Row(id=4, category="D", value=400),
+        ]
+        df_overwrite = spark.createDataFrame(overwrite_data)
+        df_overwrite.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
+        assert [row.asDict() for row in result_df.collect()] == [
+            {"id": 3, "category": "C", "value": 300},
+            {"id": 4, "category": "D", "value": 400},
+        ]
+
+        latest_log = sorted((delta_path / "_delta_log").glob("*.json"))[-1]
+        metadata = None
+        add_paths = []
+        for line in latest_log.read_text(encoding="utf-8").splitlines():
+            action = json.loads(line)
+            if "metaData" in action:
+                metadata = action["metaData"]
+            if "add" in action:
+                add_paths.append(action["add"]["path"])
+        assert metadata is not None, f"Expected metadata action in {latest_log}"
+        assert metadata["partitionColumns"] == []
+        assert add_paths
+        assert all("/" not in path for path in add_paths)
+
+    def test_replace_where_cannot_change_partition_columns(self, spark, tmp_path):
+        """Conditional overwrite must not change global Delta partition metadata"""
+        delta_path = tmp_path / "replace_where_partition_change_table"
+
+        initial_data = [
+            Row(id=1, category="A", value=100),
+            Row(id=2, category="B", value=200),
+        ]
+        df_initial = spark.createDataFrame(initial_data)
+        df_initial.write.format("delta").mode("overwrite").partitionBy("category").save(str(delta_path))
+
+        overwrite_data = [
+            Row(id=3, category="A", value=300, region="East"),
+        ]
+        df_overwrite = spark.createDataFrame(overwrite_data)
+
+        with pytest.raises(AnalysisException, match=r"replaceWhere|conditional overwrite"):
+            df_overwrite.write.format("delta").mode("overwrite").option("overwriteSchema", "true").option(
+                "replaceWhere", "category = 'A'"
+            ).partitionBy("region").save(str(delta_path))
 
     def test_append_to_unpartitioned_table_with_partitioning_raises_error(self, spark, tmp_path):
         """Test that appending with partitioning to an unpartitioned table raises error"""

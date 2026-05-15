@@ -20,6 +20,7 @@ futures = { workspace = true }
 hive_metastore = { workspace = true }
 libloading = { workspace = true }
 pilota = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 volo = { workspace = true }
 volo-thrift = { workspace = true }

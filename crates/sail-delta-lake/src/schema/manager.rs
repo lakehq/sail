@@ -179,6 +179,19 @@ pub fn protocol_for_create(
         }
     }
 
+    // `delta.enableTypeWidening = "true"` enables the stable TypeWidening feature unless
+    // the table explicitly uses the preview feature.
+    if TableProperties::from(configuration.iter()).enable_type_widening() {
+        let preview_enabled = reader_features.contains(&TableFeature::TypeWideningPreview)
+            || writer_features.contains(&TableFeature::TypeWideningPreview);
+        if !preview_enabled && !reader_features.contains(&TableFeature::TypeWidening) {
+            reader_features.push(TableFeature::TypeWidening);
+        }
+        if !preview_enabled && !writer_features.contains(&TableFeature::TypeWidening) {
+            writer_features.push(TableFeature::TypeWidening);
+        }
+    }
+
     // `delta.checkpointPolicy = "v2"` implicitly activates V2Checkpoint
     if configuration
         .get("delta.checkpointPolicy")
