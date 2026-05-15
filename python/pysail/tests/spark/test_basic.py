@@ -472,3 +472,14 @@ def test_select_expression(df):
 @pytest.mark.skip(reason="not implemented")
 def test_stream(spark):
     spark.readStream.format("rate").load().writeStream.format("console").start()
+
+
+def test_large_plan_no_proto_recursion_limit(spark):
+    # Build a large plan and make sure the protocol buffers message can be handled correctly
+    # without hitting the default recursion limit (100) of the prost library.
+    # Note that this test requires a large stack size beyond the default,
+    # so the test setup contains configuration to accommodate this.
+    df = spark.range(0, 10)
+    for i in range(50):
+        df = df.withColumn(f"c{i}", F.lit("v"))
+    assert df.count() == 10  # noqa: PLR2004
