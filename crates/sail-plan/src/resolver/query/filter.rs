@@ -5,6 +5,7 @@ use sail_common::spec;
 
 use crate::error::PlanResult;
 use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::rand::RandRewriter;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
@@ -19,6 +20,7 @@ impl PlanResolver<'_> {
             .await?;
         let schema = input.schema();
         let predicate = self.resolve_expression(condition, schema, state).await?;
+        let (input, predicate) = self.rewrite_expr::<RandRewriter>(input, predicate, state)?;
         let filter = Filter::try_new(predicate, Arc::new(input))?;
         Ok(LogicalPlan::Filter(filter))
     }

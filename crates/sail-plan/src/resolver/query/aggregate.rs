@@ -205,6 +205,7 @@ impl PlanResolver<'_> {
             Some(having) => {
                 let having =
                     Self::rebase_expression(having.clone(), &aggregate_or_grouping_exprs, &plan)?;
+                let (plan, having) = self.rewrite_expr::<RandRewriter>(plan, having, state)?;
                 LogicalPlanBuilder::from(plan).having(having)?.build()?
             }
             None => plan,

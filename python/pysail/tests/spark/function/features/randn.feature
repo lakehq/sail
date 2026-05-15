@@ -172,6 +172,21 @@ Feature: randn function (Gaussian/normal distribution)
         | r                        |
         | -0.023841785718521923    |
 
+  Rule: Seeded randn is supported in WHERE clause
+
+    Scenario: randn with seed filters rows deterministically in WHERE
+      When query
+        """
+        SELECT id FROM range(10) WHERE randn(0) > 0
+        """
+      Then query result
+        | id |
+        | 0  |
+        | 1  |
+        | 4  |
+        | 7  |
+        | 9  |
+
   Rule: Empty batch
 
     Scenario: randn on empty batch returns empty result

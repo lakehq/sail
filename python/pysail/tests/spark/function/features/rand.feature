@@ -185,6 +185,37 @@ Feature: rand function (uniform [0, 1) distribution)
         | 0.12007064558690794    |
         | 0.4640324942790296     |
 
+  Rule: Seeded rand is supported in WHERE clause
+
+    Scenario: rand with seed filters rows deterministically in WHERE
+      When query
+        """
+        SELECT id FROM range(10) WHERE rand(42) > 0.5
+        """
+      Then query result
+        | id |
+        | 0  |
+        | 1  |
+        | 2  |
+        | 4  |
+        | 5  |
+        | 6  |
+        | 8  |
+        | 9  |
+
+  Rule: Seeded rand is supported in HAVING clause
+
+    Scenario: rand with seed filters groups deterministically in HAVING
+      When query
+        """
+        SELECT id % 3 AS grp, count(*) AS cnt FROM range(10) GROUP BY id % 3 HAVING rand(42) > 0.5
+        """
+      Then query result
+        | grp | cnt |
+        | 0   | 4   |
+        | 1   | 3   |
+        | 2   | 3   |
+
   Rule: Empty batch
 
     Scenario: rand on empty batch returns empty result

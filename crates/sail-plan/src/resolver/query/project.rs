@@ -197,6 +197,20 @@ impl PlanResolver<'_> {
         Ok((rewriter.into_plan(), expr))
     }
 
+    pub(super) fn rewrite_expr<'s, T>(
+        &self,
+        input: LogicalPlan,
+        expr: Expr,
+        state: &'s mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Expr)>
+    where
+        T: PlanRewriter<'s> + TreeNodeRewriter<Node = Expr>,
+    {
+        let mut rewriter = T::new_from_plan(input, state);
+        let expr = expr.rewrite(&mut rewriter)?.data;
+        Ok((rewriter.into_plan(), expr))
+    }
+
     pub(super) fn rewrite_multi_expr(&self, expr: Vec<NamedExpr>) -> PlanResult<Vec<NamedExpr>> {
         let mut out = vec![];
         for e in expr {

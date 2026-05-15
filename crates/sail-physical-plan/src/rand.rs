@@ -224,3 +224,21 @@ impl Stream for RandStream {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use sail_function::scalar::math::xorshift::SparkXorShiftRandom;
+
+    #[test]
+    fn test_partition_seed_wraps_at_i64_max() {
+        // seed=i64::MAX, partition=1 → effective seed wraps to i64::MIN.
+        // Without wrapping_add this overflows and panics in debug builds.
+        let seed = i64::MAX;
+        let partition: usize = 1;
+        let effective_seed = seed.wrapping_add(partition as i64);
+        assert_eq!(effective_seed, i64::MIN);
+        let mut rng = SparkXorShiftRandom::new(effective_seed);
+        let v = rng.next_double();
+        assert!((0.0..1.0).contains(&v));
+    }
+}
