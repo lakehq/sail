@@ -27,7 +27,7 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         cast_to_type: spec::DataType,
-        _rename: bool,
+        rename: bool,
         is_try: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
@@ -35,9 +35,12 @@ impl PlanResolver<'_> {
         // CAST(expr AS VARIANT) → rewrite to SparkCastToVariant UDF
         // Must intercept before resolve_data_type converts Variant to Struct.
         if matches!(cast_to_type, spec::DataType::Variant) {
-            let NamedExpr { expr, name, .. } =
-                self.resolve_named_expression(expr, schema, state).await?;
-            let name = if need_rename_cast(&expr) {
+            let NamedExpr {
+                expr,
+                name,
+                metadata: _, // CHECK HERE
+            } = self.resolve_named_expression(expr, schema, state).await?;
+            let name = if rename || need_rename_cast(&expr) {
                 let prefix = if is_try { "TRY_" } else { "" };
                 vec![format!("{}CAST({} AS VARIANT)", prefix, name.one()?)]
             } else {
@@ -60,11 +63,24 @@ impl PlanResolver<'_> {
             } => end_field.or(*start_field),
             _ => None,
         };
+
+        let interval_metadata = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            } => self.resolve_interval_qualifier_metadata(interval_unit, start_field, end_field)?,
+            _ => vec![],
+        };
+
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
-        let NamedExpr { expr, name, .. } =
-            self.resolve_named_expression(expr, schema, state).await?;
+        let NamedExpr {
+            expr,
+            name,
+            metadata: _, // CHECK HERE
+        } = self.resolve_named_expression(expr, schema, state).await?;
         let expr_type = expr.get_type(schema)?;
-        let name = if need_rename_cast(&expr) {
+        let name = if rename || need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
             let data_type_string = service
                 .plan_formatter()
@@ -163,7 +179,11 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(NamedExpr::new(name, expr))
+        if interval_metadata.is_empty() {
+            Ok(NamedExpr::new(name, expr))
+        } else {
+            Ok(NamedExpr::new(name, expr).with_metadata(interval_metadata))
+        }
     }
 }
 

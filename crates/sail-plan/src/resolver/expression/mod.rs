@@ -37,10 +37,25 @@ pub(super) struct NamedExpr {
 }
 
 impl NamedExpr {
-    pub fn new(name: Vec<String>, expr: expr::Expr) -> Self {
-        let metadata = match &expr {
+    pub fn new(
+        name: Vec<String>,
+        expr: expr::Expr,
+        // schema: &DFSchemaRef,
+        // metadata: Vec<(String, String)>,
+    ) -> Self {
+        // let schema_metadata = expr.metadata(schema);
+        let expr_metadata = match &expr {
             expr::Expr::Alias(alias) => alias
                 .metadata
+                .as_ref()
+                .map(|x| {
+                    x.inner()
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect()
+                })
+                .unwrap_or(vec![]),
+            expr::Expr::Literal(_literal, field_metadata) => field_metadata
                 .as_ref()
                 .map(|x| {
                     x.inner()
@@ -54,7 +69,7 @@ impl NamedExpr {
         Self {
             name,
             expr,
-            metadata,
+            metadata: expr_metadata,
         }
     }
 
@@ -81,6 +96,50 @@ impl NamedExpr {
 }
 
 impl PlanResolver<'_> {
+    // CHECK HERE: remove
+    pub(super) async fn resolve_expression(
+        &self,
+        expressions: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<expr::Expr> {
+        let NamedExpr { expr, .. } = self
+            .resolve_named_expression(expressions, schema, state)
+            .await?;
+        Ok(expr)
+    }
+
+    // CHECK HERE: remove
+    pub(super) async fn resolve_expressions(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<expr::Expr>> {
+        let mut results: Vec<expr::Expr> = Vec::with_capacity(expressions.len());
+        for expression in expressions {
+            let expr = self.resolve_expression(expression, schema, state).await?;
+            results.push(expr);
+        }
+        Ok(results)
+    }
+
+    pub(super) async fn resolve_named_expressions(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<NamedExpr>> {
+        let mut results: Vec<NamedExpr> = Vec::with_capacity(expressions.len());
+        for expression in expressions {
+            let named_expr = self
+                .resolve_named_expression(expression, schema, state)
+                .await?;
+            results.push(named_expr);
+        }
+        Ok(results)
+    }
+
     #[async_recursion]
     /// Resolves a Sail spec expression into a named expression.
     ///
@@ -329,48 +388,6 @@ impl PlanResolver<'_> {
                 "named argument expression can only be used in UDF arguments",
             )),
         }
-    }
-
-    pub(super) async fn resolve_named_expressions(
-        &self,
-        expressions: Vec<spec::Expr>,
-        schema: &DFSchemaRef,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<Vec<NamedExpr>> {
-        let mut results: Vec<NamedExpr> = Vec::with_capacity(expressions.len());
-        for expression in expressions {
-            let named_expr = self
-                .resolve_named_expression(expression, schema, state)
-                .await?;
-            results.push(named_expr);
-        }
-        Ok(results)
-    }
-
-    pub(super) async fn resolve_expression(
-        &self,
-        expressions: spec::Expr,
-        schema: &DFSchemaRef,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<expr::Expr> {
-        let NamedExpr { expr, .. } = self
-            .resolve_named_expression(expressions, schema, state)
-            .await?;
-        Ok(expr)
-    }
-
-    pub(super) async fn resolve_expressions(
-        &self,
-        expressions: Vec<spec::Expr>,
-        schema: &DFSchemaRef,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<Vec<expr::Expr>> {
-        let mut results: Vec<expr::Expr> = Vec::with_capacity(expressions.len());
-        for expression in expressions {
-            let expr = self.resolve_expression(expression, schema, state).await?;
-            results.push(expr);
-        }
-        Ok(results)
     }
 
     pub(super) async fn resolve_expressions_and_names(

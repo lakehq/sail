@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use datafusion::arrow::datatypes as adt;
+use sail_common::spec::{EXTENSION_TYPE_METADATA_KEY, SAIL_INTERVAL_EXTENSION_NAME};
 use serde::Deserialize;
 
 use crate::error::{SparkError, SparkResult};
@@ -186,7 +187,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
                 .metadata()
                 .get(EXTENSION_TYPE_METADATA_KEY)
                 .map(String::as_str)
-                .unwrap_or("{}");
+                .unwrap_or_default();
             match (
                 serde_json::from_str::<IntervalQualifierMetadata>(qualifier_json),
                 field.data_type(),

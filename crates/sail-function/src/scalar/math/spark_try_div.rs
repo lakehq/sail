@@ -54,7 +54,7 @@ impl ScalarUDFImpl for SparkTryDiv {
             [DataType::Interval(unit), rhs]
                 if matches!(unit, YearMonth | MonthDayNano) && rhs.is_integer() =>
             {
-                Ok(DataType::Interval(unit.clone()))
+                Ok(DataType::Interval(*unit))
             }
             [DataType::Duration(TimeUnit::Microsecond), rhs] if rhs.is_integer() => {
                 Ok(DataType::Duration(TimeUnit::Microsecond))
@@ -184,12 +184,12 @@ impl ScalarUDFImpl for SparkTryDiv {
             (DataType::Interval(unit), rhs)
                 if matches!(unit, YearMonth | MonthDayNano) && rhs.is_integer() =>
             {
-                Ok(vec![DataType::Interval(unit.clone()), widen(rhs, rhs)])
+                Ok(vec![DataType::Interval(*unit), widen(rhs, rhs)])
             }
             (lhs, DataType::Interval(unit))
                 if matches!(unit, YearMonth | MonthDayNano) && lhs.is_integer() =>
             {
-                Ok(vec![DataType::Interval(unit.clone()), widen(lhs, lhs)])
+                Ok(vec![DataType::Interval(*unit), widen(lhs, lhs)])
             }
             (DataType::Duration(TimeUnit::Microsecond), rhs) if rhs.is_integer() => Ok(vec![
                 DataType::Duration(TimeUnit::Microsecond),
