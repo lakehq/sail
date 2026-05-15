@@ -1,8 +1,10 @@
+from datetime import date
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
+from pyspark.sql.types import DateType, IntegerType, Row, StringType, StructField, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
@@ -411,6 +413,58 @@ def test_sql_dataframe_argument(spark):
     ).toPandas()
     expected = pd.DataFrame({"id": [8]}, dtype="int64")
     assert_frame_equal(actual, expected)
+
+
+def _date_df(spark):
+    schema = StructType([StructField("date_col", DateType(), True)])
+    return spark.createDataFrame([(date(2024, 1, 15),)], schema)
+
+
+def _assert_coalesce_string_date_ansi_error(df):
+    actual = df.select(F.coalesce(F.lit("default"), F.col("date_col")).alias("c"))
+    assert actual.schema.simpleString() == "struct<c:date>"
+    with pytest.raises(Exception, match=r"."):
+        actual.collect()
+
+
+def test_coalesce_string_literal_and_date_default(spark):
+    df = _date_df(spark)
+    if pyspark_version() < (4,):
+        actual = df.select(F.coalesce(F.lit("default"), F.col("date_col")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:string>"
+        assert actual.collect() == [Row(c="default")]
+    else:
+        _assert_coalesce_string_date_ansi_error(df)
+
+
+def test_coalesce_string_literal_and_date_ansi_disabled(spark):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    try:
+        df = _date_df(spark)
+        actual = df.select(F.coalesce(F.lit("default"), F.col("date_col")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:string>"
+        assert actual.collect() == [Row(c="default")]
+
+        actual = df.select(F.coalesce(F.col("date_col"), F.lit("default")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:string>"
+        assert actual.collect() == [Row(c="2024-01-15")]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
+def test_coalesce_string_literal_and_date_ansi_enabled(spark):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        df = _date_df(spark)
+        _assert_coalesce_string_date_ansi_error(df)
+
+        actual = df.select(F.coalesce(F.col("date_col"), F.lit("default")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:date>"
+        assert actual.collect() == [Row(c=date(2024, 1, 15))]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
 
 
 def test_select_expression(df):

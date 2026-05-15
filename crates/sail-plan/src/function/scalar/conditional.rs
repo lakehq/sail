@@ -1,8 +1,10 @@
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ExprSchemable, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, ExprSchemable, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::PlanResult;
@@ -47,23 +49,77 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .map(|arg| arg.get_type(function_context.schema))
         .collect::<Result<Vec<_>, _>>()?;
     let has_string = data_types.iter().any(is_string_type);
-    let has_temporal = data_types.iter().any(is_temporal_type);
-    let arguments = if has_string && has_temporal {
-        arguments
-            .into_iter()
-            .zip(data_types)
-            .map(|(arg, data_type)| {
-                if is_temporal_type(&data_type) {
-                    ScalarUDF::from(SparkToUtf8::new()).call(vec![arg])
-                } else {
-                    arg
-                }
-            })
-            .collect()
+    let temporal_type = common_temporal_type(&data_types);
+    let arguments = if has_string {
+        if let Some(temporal_type) = temporal_type {
+            if function_context.plan_config.ansi_mode {
+                arguments
+                    .into_iter()
+                    .zip(data_types.iter())
+                    .map(|(arg, data_type)| coerce_to_temporal(arg, data_type, &temporal_type))
+                    .collect::<PlanResult<Vec<_>>>()?
+            } else {
+                arguments
+                    .into_iter()
+                    .zip(data_types)
+                    .map(|(arg, data_type)| {
+                        if is_temporal_type(&data_type) {
+                            ScalarUDF::from(SparkToUtf8::new()).call(vec![arg])
+                        } else {
+                            arg
+                        }
+                    })
+                    .collect()
+            }
+        } else {
+            arguments
+        }
     } else {
         arguments
     };
     Ok(expr_fn::coalesce(arguments))
+}
+
+fn coerce_to_temporal(
+    arg: expr::Expr,
+    data_type: &DataType,
+    target_type: &DataType,
+) -> PlanResult<expr::Expr> {
+    if data_type == target_type {
+        return Ok(arg);
+    }
+    if is_string_type(data_type) {
+        match target_type {
+            DataType::Date32 => Ok(ScalarUDF::from(SparkDate::new(false)).call(vec![arg])),
+            DataType::Timestamp(_, timezone) => Ok(ScalarUDF::from(SparkTimestamp::try_new(
+                timezone.clone(),
+                false,
+            )?)
+            .call(vec![arg])),
+            _ => Ok(cast(arg, target_type.clone())),
+        }
+    } else if is_temporal_type(data_type) {
+        Ok(cast(arg, target_type.clone()))
+    } else {
+        Ok(arg)
+    }
+}
+
+fn common_temporal_type(data_types: &[DataType]) -> Option<DataType> {
+    data_types
+        .iter()
+        .find_map(|data_type| match data_type {
+            DataType::Timestamp(_, timezone) => {
+                Some(DataType::Timestamp(TimeUnit::Microsecond, timezone.clone()))
+            }
+            _ => None,
+        })
+        .or_else(|| {
+            data_types
+                .iter()
+                .any(is_date_type)
+                .then_some(DataType::Date32)
+        })
 }
 
 fn is_string_type(data_type: &DataType) -> bool {
@@ -74,10 +130,11 @@ fn is_string_type(data_type: &DataType) -> bool {
 }
 
 fn is_temporal_type(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
-    )
+    is_date_type(data_type) || matches!(data_type, DataType::Timestamp(_, _))
+}
+
+fn is_date_type(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Date32 | DataType::Date64)
 }
 
 pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, ScalarFunction)> {
