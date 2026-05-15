@@ -1046,5 +1046,3 @@ Feature: ceil() and floor() round numbers toward +/- infinity
         """
       Then query result
         | v |
-
-
