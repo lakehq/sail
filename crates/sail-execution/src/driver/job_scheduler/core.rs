@@ -801,7 +801,6 @@ fn build_task_input_keys(
     }
 }
 
-
 #[derive(PartialEq, Eq, Hash)]
 struct StageGroupKey {
     placement: TaskPlacement,
