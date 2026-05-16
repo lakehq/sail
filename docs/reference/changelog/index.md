@@ -5,6 +5,29 @@ next: false
 
 # Changelog
 
+## 0.6.2
+
+_May 5, 2026_
+
+- Improved handling for `OPTIONS` and `TBLPROPERTIES` clauses in SQL statements ([#1795](https://github.com/lakehq/sail/pull/1795)).
+- Added support for deletion vectors in merge operations for Delta Lake ([#1809](https://github.com/lakehq/sail/pull/1809)).
+- Improved partition pruning for Iceberg ([#1794](https://github.com/lakehq/sail/pull/1794)).
+- Improved checkpointing for Delta Lake ([#1796](https://github.com/lakehq/sail/pull/1796)).
+- Improved operation metrics reporting for Delta Lake ([#1761](https://github.com/lakehq/sail/pull/1761)).
+- Added support for non-standard file extensions when reading files ([#1786](https://github.com/lakehq/sail/pull/1786) and [#1825](https://github.com/lakehq/sail/pull/1825)).
+- Added support for registering Python UDAFs as window functions ([#1832](https://github.com/lakehq/sail/pull/1832)).
+- Added support for the following SQL functions ([#1818](https://github.com/lakehq/sail/pull/1818), [#1804](https://github.com/lakehq/sail/pull/1804), and [#1074](https://github.com/lakehq/sail/pull/1074)):
+  - `from_json`
+  - `bitmap_and_agg`
+  - `uniform`
+- Improved the following SQL functions ([#1797](https://github.com/lakehq/sail/pull/1797) and [#1821](https://github.com/lakehq/sail/pull/1821)):
+  - `last_day`
+  - `from_csv`
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@Shaked98](https://github.com/Shaked98) (_first-time contributor_), and [@twsl](https://github.com/twsl) (_first-time contributor_) for your contributions!
+
 ## 0.6.1
 
 _April 28, 2026_

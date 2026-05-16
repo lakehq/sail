@@ -7,7 +7,7 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, internal_err, plan_err, ScalarValue};
+use datafusion_common::{exec_err, plan_err, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -124,13 +124,18 @@ impl ScalarUDFImpl for SparkFromJson {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let schema: &String = if let Some(schema) = scalar_arguments.get(1) {
+        let schema_str = if let Some(schema) = scalar_arguments.get(1) {
             match schema {
-                Some(ScalarValue::Utf8(Some(schema)))
-                | Some(ScalarValue::LargeUtf8(Some(schema)))
-                | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
-                _ => internal_err!("Expected UTF-8 schema string"),
-            }?
+                Some(ScalarValue::Utf8(Some(s)))
+                | Some(ScalarValue::LargeUtf8(Some(s)))
+                | Some(ScalarValue::Utf8View(Some(s))) => s.as_str(),
+                None | Some(_) => {
+                    return plan_err!(
+                        "`{}` function requires the schema argument to be a string literal",
+                        Self::FROM_JSON_NAME
+                    );
+                }
+            }
         } else {
             return plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
@@ -139,7 +144,7 @@ impl ScalarUDFImpl for SparkFromJson {
             );
         };
 
-        let dt = parse_schema_to_data_type(schema, &self.session_timezone)?;
+        let dt = parse_schema_to_data_type(schema_str, &self.session_timezone)?;
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
@@ -948,6 +953,14 @@ fn parse_timestamp(
 fn parse_schema_to_data_type(schema: &str, session_timezone: &str) -> Result<DataType> {
     let schema = schema.trim();
 
+    // Try parsing as Spark JSON schema format (e.g., {"type":"struct","fields":[...]}).
+    // PySpark serializes DataType objects to JSON format via schema.json().
+    // For inputs that clearly look like JSON, return the JSON parsing result directly
+    // so callers see the real error instead of a later DDL parsing failure.
+    if schema.starts_with('{') || schema.starts_with('"') {
+        return parse_spark_json_schema(schema, session_timezone);
+    }
+
     // Try parsing as a full type first (STRUCT<...>, ARRAY<...>, MAP<...>).
     let ast = sail_parser::parse_data_type(schema).or_else(|_| {
         // If that fails, treat as a bare field list and wrap in STRUCT<...>.
@@ -959,6 +972,202 @@ fn parse_schema_to_data_type(schema: &str, session_timezone: &str) -> Result<Dat
     let spec_dt = from_ast_data_type(ast)
         .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
     spec_to_arrow_data_type(&spec_dt, session_timezone)
+}
+
+/// Parses a Spark JSON schema string into an Arrow DataType.
+/// Spark serializes DataType objects to JSON format like:
+/// - Simple types: `"integer"`, `"string"`, `"boolean"`
+/// - Struct: `{"type":"struct","fields":[{"name":"a","type":"integer","nullable":true,"metadata":{}}]}`
+/// - Array: `{"type":"array","elementType":"integer","containsNull":true}`
+/// - Map: `{"type":"map","keyType":"string","valueType":"integer","valueContainsNull":true}`
+fn parse_spark_json_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
+    let json: Value = serde_json::from_str(schema)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to parse JSON schema: {e}")))?;
+    json_value_to_data_type(&json, session_timezone)
+}
+
+fn json_value_to_data_type(value: &Value, session_timezone: &str) -> Result<DataType> {
+    match value {
+        Value::String(s) => json_type_name_to_data_type(s, session_timezone),
+        Value::Object(map) => {
+            let type_str = map.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
+                DataFusionError::Plan("JSON schema object missing 'type' field".to_string())
+            })?;
+            match type_str {
+                "struct" => {
+                    let fields = map
+                        .get("fields")
+                        .and_then(|v| v.as_array())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan("Struct type missing 'fields' array".to_string())
+                        })?;
+                    let mut arrow_fields = Vec::with_capacity(fields.len());
+                    for field in fields {
+                        let name = field.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                            DataFusionError::Plan("Struct field missing 'name'".to_string())
+                        })?;
+                        let nullable = field
+                            .get("nullable")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
+                        let field_type = field.get("type").ok_or_else(|| {
+                            DataFusionError::Plan("Struct field missing 'type'".to_string())
+                        })?;
+                        let dt = json_value_to_data_type(field_type, session_timezone)?;
+                        arrow_fields.push(Arc::new(Field::new(name, dt, nullable)));
+                    }
+                    Ok(DataType::Struct(Fields::from(arrow_fields)))
+                }
+                "array" => {
+                    let element_type = map.get("elementType").ok_or_else(|| {
+                        DataFusionError::Plan("Array type missing 'elementType'".to_string())
+                    })?;
+                    let contains_null = map
+                        .get("containsNull")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let dt = json_value_to_data_type(element_type, session_timezone)?;
+                    Ok(DataType::List(Arc::new(Field::new(
+                        SAIL_LIST_FIELD_NAME,
+                        dt,
+                        contains_null,
+                    ))))
+                }
+                "map" => {
+                    let key_type = map.get("keyType").ok_or_else(|| {
+                        DataFusionError::Plan("Map type missing 'keyType'".to_string())
+                    })?;
+                    let value_type = map.get("valueType").ok_or_else(|| {
+                        DataFusionError::Plan("Map type missing 'valueType'".to_string())
+                    })?;
+                    let value_contains_null = map
+                        .get("valueContainsNull")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let key_dt = json_value_to_data_type(key_type, session_timezone)?;
+                    let value_dt = json_value_to_data_type(value_type, session_timezone)?;
+                    let fields = Fields::from(vec![
+                        Arc::new(Field::new(SAIL_MAP_KEY_FIELD_NAME, key_dt, false)),
+                        Arc::new(Field::new(
+                            SAIL_MAP_VALUE_FIELD_NAME,
+                            value_dt,
+                            value_contains_null,
+                        )),
+                    ]);
+                    Ok(DataType::Map(
+                        Arc::new(Field::new(
+                            SAIL_MAP_FIELD_NAME,
+                            DataType::Struct(fields),
+                            false,
+                        )),
+                        false,
+                    ))
+                }
+                "udt" => {
+                    let sql_type = map
+                        .get("sqlType")
+                        .or_else(|| map.get("sql_type"))
+                        .ok_or_else(|| {
+                            DataFusionError::Plan("UDT type missing 'sqlType' field".to_string())
+                        })?;
+                    json_value_to_data_type(sql_type, session_timezone)
+                }
+                other => {
+                    // Some types might be expressed as {"type": "simple_name"}
+                    json_type_name_to_data_type(other, session_timezone)
+                }
+            }
+        }
+        _ => Err(DataFusionError::Plan(format!(
+            "Unexpected JSON schema value: {value}"
+        ))),
+    }
+}
+
+fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Result<DataType> {
+    match type_name {
+        "null" | "void" => Ok(DataType::Null),
+        "boolean" => Ok(DataType::Boolean),
+        "byte" | "tinyint" => Ok(DataType::Int8),
+        "short" | "smallint" => Ok(DataType::Int16),
+        "integer" | "int" => Ok(DataType::Int32),
+        "long" | "bigint" => Ok(DataType::Int64),
+        "float" => Ok(DataType::Float32),
+        "double" => Ok(DataType::Float64),
+        "decimal" => Ok(DataType::Decimal128(10, 0)),
+        "string" => Ok(DataType::Utf8),
+        "binary" => Ok(DataType::Binary),
+        "date" => Ok(DataType::Date32),
+        "timestamp" | "timestamp_ltz" => Ok(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(Arc::from(session_timezone)),
+        )),
+        "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+        "interval" => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+        other => {
+            if let Some(args) = other
+                .strip_prefix("decimal(")
+                .and_then(|x| x.strip_suffix(')'))
+            {
+                let mut parts = args.split(',').map(str::trim);
+                if let (Some(precision), Some(scale), None) =
+                    (parts.next(), parts.next(), parts.next())
+                {
+                    if let (Ok(precision), Ok(scale)) =
+                        (precision.parse::<u8>(), scale.parse::<i8>())
+                    {
+                        datafusion::arrow::datatypes::validate_decimal_precision_and_scale::<
+                            Decimal128Type,
+                        >(precision, scale)
+                        .map_err(|e| {
+                            DataFusionError::Plan(format!(
+                                "Invalid decimal precision/scale in '{other}': {e}"
+                            ))
+                        })?;
+                        return Ok(DataType::Decimal128(precision, scale));
+                    }
+                }
+            }
+            if let Some(args) = other
+                .strip_prefix("geometry(")
+                .and_then(|x| x.strip_suffix(')'))
+            {
+                let srid = args.trim();
+                if srid == "ANY" || srid.parse::<i32>().is_ok() {
+                    return Ok(DataType::Binary);
+                }
+                return Err(DataFusionError::Plan(format!(
+                    "Unsupported JSON schema type: '{other}'"
+                )));
+            }
+            if let Some(args) = other
+                .strip_prefix("geography(")
+                .and_then(|x| x.strip_suffix(')'))
+            {
+                let mut parts = args.split(',').map(str::trim);
+                if let (Some(srid), algorithm, None) = (parts.next(), parts.next(), parts.next()) {
+                    let valid_srid = srid == "ANY" || srid.parse::<i32>().is_ok();
+                    let valid_algorithm = algorithm.is_none_or(|x| x == "spherical");
+                    if valid_srid && valid_algorithm {
+                        return Ok(DataType::Binary);
+                    }
+                }
+                return Err(DataFusionError::Plan(format!(
+                    "Unsupported JSON schema type: '{other}'"
+                )));
+            }
+            // Parameterized Spark JSON type strings such as "decimal(10,2)",
+            // "time(0)", "char(10)", and "varchar(20)" use the same syntax
+            // as Spark DDL type strings, so reuse the existing DDL analyzer.
+            let ast = sail_parser::parse_data_type(other).map_err(|_| {
+                DataFusionError::Plan(format!("Unsupported JSON schema type: '{other}'"))
+            })?;
+            let spec_dt = from_ast_data_type(ast).map_err(|e| {
+                DataFusionError::Plan(format!("Failed to analyze JSON schema type '{other}': {e}"))
+            })?;
+            spec_to_arrow_data_type(&spec_dt, session_timezone)
+        }
+    }
 }
 
 fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
@@ -1011,11 +1220,11 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
         SDT::Time32 { time_unit: u } => Ok(DataType::Time32(to_time_unit(u))),
         SDT::Time64 { time_unit: u } => Ok(DataType::Time64(to_time_unit(u))),
         SDT::Duration { time_unit: u } => Ok(DataType::Duration(to_time_unit(u))),
-        SDT::Interval { interval_unit, .. } => Ok(DataType::Interval(match interval_unit {
-            spec::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
-            spec::IntervalUnit::DayTime => IntervalUnit::DayTime,
-            spec::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
-        })),
+        SDT::Interval { interval_unit, .. } => match interval_unit {
+            spec::IntervalUnit::YearMonth => Ok(DataType::Interval(IntervalUnit::YearMonth)),
+            spec::IntervalUnit::DayTime => Ok(DataType::Duration(TimeUnit::Microsecond)),
+            spec::IntervalUnit::MonthDayNano => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+        },
         SDT::Decimal128 { precision, scale } => Ok(DataType::Decimal128(*precision, *scale)),
         SDT::Decimal256 { precision, scale } => Ok(DataType::Decimal256(*precision, *scale)),
         SDT::List {
@@ -1084,6 +1293,14 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
                 *keys_sorted,
             ))
         }
+        SDT::Geometry { .. } | SDT::Geography { .. } => Ok(DataType::Binary),
+        SDT::Variant => Ok(DataType::Struct(Fields::from(vec![
+            Arc::new(Field::new("metadata", DataType::Binary, false)),
+            Arc::new(Field::new("value", DataType::Binary, false)),
+        ]))),
+        SDT::UserDefined { sql_type, .. } => {
+            spec_to_arrow_data_type(sql_type.as_ref(), session_timezone)
+        }
         other => Err(DataFusionError::Plan(format!(
             "Unsupported data type in from_json schema: {other:?}"
         ))),
@@ -1120,5 +1337,390 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
             })
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_simple_spark_json_schema_string() -> Result<()> {
+        let data_type = parse_schema_to_data_type(r#""integer""#, "UTC")?;
+        assert_eq!(data_type, DataType::Int32);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_struct_spark_json_schema_string() -> Result<()> {
+        let schema = r#"{
+            "type":"struct",
+            "fields":[
+                {"name":"a","type":"integer","nullable":true,"metadata":{}},
+                {"name":"b","type":"string","nullable":false,"metadata":{}}
+            ]
+        }"#;
+
+        let data_type = parse_schema_to_data_type(schema, "UTC")?;
+        assert_eq!(
+            data_type,
+            DataType::Struct(Fields::from(vec![
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Field::new("b", DataType::Utf8, false)),
+            ]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_array_spark_json_schema_string() -> Result<()> {
+        let schema = r#"{"type":"array","elementType":"integer","containsNull":true}"#;
+
+        let data_type = parse_schema_to_data_type(schema, "UTC")?;
+        assert_eq!(
+            data_type,
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_map_spark_json_schema_string() -> Result<()> {
+        let schema = r#"{
+            "type":"map",
+            "keyType":"string",
+            "valueType":"integer",
+            "valueContainsNull":true
+        }"#;
+
+        let data_type = parse_schema_to_data_type(schema, "UTC")?;
+        assert_eq!(
+            data_type,
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Arc::new(Field::new("key", DataType::Utf8, false)),
+                        Arc::new(Field::new("value", DataType::Int32, true)),
+                    ])),
+                    false,
+                )),
+                false,
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_decimal_spark_json_schema_string() -> Result<()> {
+        let simple_decimal = parse_schema_to_data_type(r#""decimal(10,2)""#, "UTC")?;
+        assert_eq!(simple_decimal, DataType::Decimal128(10, 2));
+
+        let struct_schema = r#"{
+            "type":"struct",
+            "fields":[
+                {"name":"amount","type":"decimal(12,4)","nullable":false,"metadata":{}}
+            ]
+        }"#;
+        let struct_decimal = parse_schema_to_data_type(struct_schema, "UTC")?;
+        assert_eq!(
+            struct_decimal,
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "amount",
+                DataType::Decimal128(12, 4),
+                false,
+            ))]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_bare_decimal_json_schema_string() -> Result<()> {
+        let dt = parse_schema_to_data_type(r#""decimal""#, "UTC")?;
+        assert_eq!(dt, DataType::Decimal128(10, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_invalid_decimal_precision_json_schema() {
+        // precision > 38 should fail validation
+        let result = parse_schema_to_data_type(r#""decimal(50,2)""#, "UTC");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_parameterized_spark_json_type_strings() -> Result<()> {
+        assert_eq!(
+            parse_schema_to_data_type(r#""decimal(10, 2)""#, "UTC")?,
+            DataType::Decimal128(10, 2)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""time""#, "UTC")?,
+            DataType::Time64(TimeUnit::Microsecond)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""time(0)""#, "UTC")?,
+            DataType::Time32(TimeUnit::Second)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""time(3)""#, "UTC")?,
+            DataType::Time32(TimeUnit::Millisecond)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""time(6)""#, "UTC")?,
+            DataType::Time64(TimeUnit::Microsecond)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""time(9)""#, "UTC")?,
+            DataType::Time64(TimeUnit::Nanosecond)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""char(10)""#, "UTC")?,
+            DataType::Utf8
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""varchar(20)""#, "UTC")?,
+            DataType::Utf8
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_interval_spark_json_type_strings() -> Result<()> {
+        assert_eq!(
+            parse_schema_to_data_type(r#""interval""#, "UTC")?,
+            DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""interval year""#, "UTC")?,
+            DataType::Interval(IntervalUnit::YearMonth)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""interval year to month""#, "UTC")?,
+            DataType::Interval(IntervalUnit::YearMonth)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""interval day""#, "UTC")?,
+            DataType::Duration(TimeUnit::Microsecond)
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""interval day to second""#, "UTC")?,
+            DataType::Duration(TimeUnit::Microsecond)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_variant_and_geospatial_spark_json_type_strings() -> Result<()> {
+        assert_eq!(
+            parse_schema_to_data_type(r#""variant""#, "UTC")?,
+            DataType::Struct(Fields::from(vec![
+                Arc::new(Field::new("metadata", DataType::Binary, false)),
+                Arc::new(Field::new("value", DataType::Binary, false)),
+            ]))
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""geometry(4326)""#, "UTC")?,
+            DataType::Binary
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""geometry(ANY)""#, "UTC")?,
+            DataType::Binary
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""geography(4326, spherical)""#, "UTC")?,
+            DataType::Binary
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""geography(ANY, spherical)""#, "UTC")?,
+            DataType::Binary
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_udt_spark_json_schema_uses_sql_type() -> Result<()> {
+        let schema = r#"{
+            "type":"udt",
+            "pyClass":"example.PointUDT",
+            "serializedClass":"abc",
+            "sqlType":{
+                "type":"struct",
+                "fields":[
+                    {"name":"x","type":"double","nullable":false,"metadata":{}},
+                    {"name":"y","type":"double","nullable":false,"metadata":{}}
+                ]
+            }
+        }"#;
+        assert_eq!(
+            parse_schema_to_data_type(schema, "UTC")?,
+            DataType::Struct(Fields::from(vec![
+                Arc::new(Field::new("x", DataType::Float64, false)),
+                Arc::new(Field::new("y", DataType::Float64, false)),
+            ]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_all_simple_json_types() -> Result<()> {
+        assert_eq!(
+            parse_schema_to_data_type(r#""null""#, "UTC")?,
+            DataType::Null
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""boolean""#, "UTC")?,
+            DataType::Boolean
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""byte""#, "UTC")?,
+            DataType::Int8
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""tinyint""#, "UTC")?,
+            DataType::Int8
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""short""#, "UTC")?,
+            DataType::Int16
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""smallint""#, "UTC")?,
+            DataType::Int16
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""int""#, "UTC")?,
+            DataType::Int32
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""long""#, "UTC")?,
+            DataType::Int64
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""bigint""#, "UTC")?,
+            DataType::Int64
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""float""#, "UTC")?,
+            DataType::Float32
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""double""#, "UTC")?,
+            DataType::Float64
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""string""#, "UTC")?,
+            DataType::Utf8
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""binary""#, "UTC")?,
+            DataType::Binary
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""date""#, "UTC")?,
+            DataType::Date32
+        );
+        assert_eq!(
+            parse_schema_to_data_type(r#""timestamp_ntz""#, "UTC")?,
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_timestamp_json_respects_timezone() -> Result<()> {
+        let dt = parse_schema_to_data_type(r#""timestamp""#, "America/New_York")?;
+        assert_eq!(
+            dt,
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("America/New_York")))
+        );
+
+        let dt2 = parse_schema_to_data_type(r#""timestamp_ltz""#, "Europe/London")?;
+        assert_eq!(
+            dt2,
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("Europe/London")))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_unsupported_json_type_errors() {
+        let result = parse_schema_to_data_type(r#""unsupported_type""#, "UTC");
+        assert!(result.is_err());
+        let err_msg = result
+            .as_ref()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            err_msg.contains("Unsupported JSON schema type"),
+            "unexpected error message: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_json_schema_errors() {
+        let result = parse_schema_to_data_type(r#"{"type":"struct""#, "UTC");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_nested_struct_json_schema() -> Result<()> {
+        let schema = r#"{
+            "type":"struct",
+            "fields":[{
+                "name":"outer",
+                "type":{
+                    "type":"struct",
+                    "fields":[
+                        {"name":"inner","type":"integer","nullable":true,"metadata":{}}
+                    ]
+                },
+                "nullable":true,
+                "metadata":{}
+            }]
+        }"#;
+        let dt = parse_schema_to_data_type(schema, "UTC")?;
+        assert_eq!(
+            dt,
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "outer",
+                DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                    "inner",
+                    DataType::Int32,
+                    true,
+                ))])),
+                true,
+            ))]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ddl_schema_fallback() -> Result<()> {
+        // DDL-style schemas should still work
+        let dt = parse_schema_to_data_type("a INT, b DOUBLE", "UTC")?;
+        assert_eq!(
+            dt,
+            DataType::Struct(Fields::from(vec![
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Field::new("b", DataType::Float64, true)),
+            ]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ddl_array_schema() -> Result<()> {
+        let dt = parse_schema_to_data_type("ARRAY<INT>", "UTC")?;
+        assert!(matches!(dt, DataType::List(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ddl_map_schema() -> Result<()> {
+        let dt = parse_schema_to_data_type("MAP<STRING, INT>", "UTC")?;
+        assert!(matches!(dt, DataType::Map(_, _)));
+        Ok(())
     }
 }
