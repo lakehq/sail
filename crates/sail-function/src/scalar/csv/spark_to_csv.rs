@@ -8,12 +8,12 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion_common::{exec_err, plan_err, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
+use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
-use sail_common::spec::SAIL_MAP_KEY_FIELD_NAME;
-use sail_common::spec::SAIL_MAP_VALUE_FIELD_NAME;
 
+#[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
 /// UDF implementation of `to_csv`, similar to Spark's `to_csv` / `StructsToCsv`.
@@ -275,9 +275,9 @@ fn format_timestamp_field(
         .map(|s| s.as_ref())
         .unwrap_or(session_timezone);
 
-    let tz: Tz = tz_str.parse().map_err(|e| {
-        DataFusionError::Execution(format!("Invalid timezone '{tz_str}': {e}"))
-    })?;
+    let tz: Tz = tz_str
+        .parse()
+        .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz_str}': {e}")))?;
 
     let secs = micros / 1_000_000;
     let nanos = ((micros % 1_000_000) * 1_000) as u32;
@@ -316,9 +316,7 @@ fn format_field_to_csv(
             let arr = array
                 .as_any()
                 .downcast_ref::<Date32Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution("Expected Date32Array".to_string())
-                })?;
+                .ok_or_else(|| DataFusionError::Execution("Expected Date32Array".to_string()))?;
             let days = arr.value(row_idx);
             // Arrow Date32 = days since Unix epoch (1970-01-01)
             let date = NaiveDate::from_ymd_opt(1970, 1, 1)
@@ -333,9 +331,7 @@ fn format_field_to_csv(
             let arr = array
                 .as_any()
                 .downcast_ref::<Date64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution("Expected Date64Array".to_string())
-                })?;
+                .ok_or_else(|| DataFusionError::Execution("Expected Date64Array".to_string()))?;
             let millis = arr.value(row_idx);
             let secs = millis / 1_000;
             let date = DateTime::<Utc>::from_timestamp(secs, 0)
@@ -418,13 +414,14 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use super::*;
     use datafusion::arrow::array::{
         BooleanArray, Date32Array, Decimal128Array, Float64Array, Int32Array, Int64Array,
         ListArray, StringArray, StructArray,
     };
     use datafusion::arrow::buffer::OffsetBuffer;
     use datafusion::arrow::datatypes::{DataType, Field, Fields};
+
+    use super::*;
 
     // ---------------------------------------------------------------------------
     // Helper: build a StructArray from columns, with optional row-level nulls.
@@ -434,11 +431,7 @@ mod tests {
         columns: Vec<ArrayRef>,
         nulls: Option<Vec<bool>>,
     ) -> ArrayRef {
-        Arc::new(StructArray::new(
-            fields,
-            columns,
-            nulls.map(Into::into),
-        )) as ArrayRef
+        Arc::new(StructArray::new(fields, columns, nulls.map(Into::into))) as ArrayRef
     }
 
     // ---------------------------------------------------------------------------
@@ -494,11 +487,7 @@ mod tests {
         let col_x = Arc::new(Int32Array::from(vec![Some(42), Some(99)])) as ArrayRef;
 
         // row 0 valid, row 1 null at the struct level
-        let struct_array = make_struct_array(
-            fields,
-            vec![col_x],
-            Some(vec![true, false]),
-        );
+        let struct_array = make_struct_array(fields, vec![col_x], Some(vec![true, false]));
         let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
 
         let output = result.as_any().downcast_ref::<StringArray>().unwrap();
@@ -534,8 +523,7 @@ mod tests {
             Arc::new(Field::new("score", DataType::Float64, true)),
             Arc::new(Field::new("count", DataType::Int64, true)),
         ]);
-        let col_score =
-            Arc::new(Float64Array::from(vec![Some(3.14), Some(0.0), None])) as ArrayRef;
+        let col_score = Arc::new(Float64Array::from(vec![Some(1.5), Some(0.0), None])) as ArrayRef;
         let col_count =
             Arc::new(Int64Array::from(vec![Some(1_000_000), Some(0), Some(-7)])) as ArrayRef;
 
@@ -543,7 +531,7 @@ mod tests {
         let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
 
         let output = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(output.value(0), "3.14,1000000");
+        assert_eq!(output.value(0), "1.5,1000000");
         assert_eq!(output.value(1), "0,0");
         assert_eq!(output.value(2), ",-7"); // null float → empty string
         Ok(())
@@ -621,9 +609,9 @@ mod tests {
             DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
             true,
         ))]);
-        let col_ts = Arc::new(
-            TimestampMicrosecondArray::from(vec![Some(micros)]).with_timezone("UTC"),
-        ) as ArrayRef;
+        let col_ts =
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(micros)]).with_timezone("UTC"))
+                as ArrayRef;
 
         let struct_array = make_struct_array(fields, vec![col_ts], None);
         let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
@@ -646,8 +634,7 @@ mod tests {
             true,
         ))]);
         let col_ts = Arc::new(
-            TimestampMicrosecondArray::from(vec![Some(micros)])
-                .with_timezone("Asia/Shanghai"),
+            TimestampMicrosecondArray::from(vec![Some(micros)]).with_timezone("Asia/Shanghai"),
         ) as ArrayRef;
 
         let struct_array = make_struct_array(fields, vec![col_ts], None);
@@ -699,11 +686,7 @@ mod tests {
         let col_a = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
         let col_b = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
 
-        let struct_array = Arc::new(StructArray::new(
-            fields,
-            vec![col_a, col_b],
-            None,
-        )) as ArrayRef;
+        let struct_array = Arc::new(StructArray::new(fields, vec![col_a, col_b], None)) as ArrayRef;
 
         // Use the options struct directly with a pipe separator
         let options = SparkToCsvOptions {
@@ -712,17 +695,20 @@ mod tests {
             date_format: SparkToCsvOptions::DATE_FORMAT_DEFAULT.to_string(),
         };
 
-        let struct_arr = struct_array
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap();
+        let struct_arr = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
         let fields = struct_arr.fields();
         let columns = struct_arr.columns();
         let parts: Vec<String> = fields
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                format_field_to_csv(&columns[i], 0, f.data_type(), &options, DEFAULT_SESSION_TIMEZONE)
+                format_field_to_csv(
+                    &columns[i],
+                    0,
+                    f.data_type(),
+                    &options,
+                    DEFAULT_SESSION_TIMEZONE,
+                )
             })
             .collect::<Result<_>>()?;
 
@@ -751,11 +737,7 @@ mod tests {
 
         let fields = Fields::from(vec![
             Arc::new(Field::new("id", DataType::Int32, true)),
-            Arc::new(Field::new(
-                "tags",
-                DataType::List(list_field),
-                true,
-            )),
+            Arc::new(Field::new("tags", DataType::List(list_field), true)),
         ]);
         let col_id = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
 
@@ -768,7 +750,6 @@ mod tests {
         Ok(())
     }
 
-
     /// Nested STRUCT fields that are null serialize as empty strings —
     /// mirrors test_from_csv_schema_nested_struct.
     #[test]
@@ -777,10 +758,8 @@ mod tests {
             Arc::new(Field::new("city", DataType::Utf8, true)),
             Arc::new(Field::new("zip", DataType::Int32, true)),
         ]);
-        let inner_city =
-            Arc::new(StringArray::from(vec![Option::<&str>::None])) as ArrayRef;
-        let inner_zip =
-            Arc::new(Int32Array::from(vec![Option::<i32>::None])) as ArrayRef;
+        let inner_city = Arc::new(StringArray::from(vec![Option::<&str>::None])) as ArrayRef;
+        let inner_zip = Arc::new(Int32Array::from(vec![Option::<i32>::None])) as ArrayRef;
 
         // The inner struct itself is null
         let inner_struct = Arc::new(StructArray::new(
@@ -791,11 +770,7 @@ mod tests {
 
         let outer_fields = Fields::from(vec![
             Arc::new(Field::new("id", DataType::Int32, true)),
-            Arc::new(Field::new(
-                "addr",
-                DataType::Struct(inner_fields),
-                true,
-            )),
+            Arc::new(Field::new("addr", DataType::Struct(inner_fields), true)),
         ]);
         let col_id = Arc::new(Int32Array::from(vec![Some(42)])) as ArrayRef;
 
@@ -807,85 +782,83 @@ mod tests {
         assert_eq!(output.value(0), "42,");
         Ok(())
     }
-	
-	
-	/// Date64 values are formatted with dateFormat (similar to Date32).
-	#[test]
-	fn test_to_csv_date64_field() -> Result<()> {
-		let fields = Fields::from(vec![Arc::new(Field::new("d", DataType::Date64, true))]);
-		// Arrow Date64: milliseconds since epoch
-		let millis: i64 = 1440547200 * 1_000; // 2015-08-26 in millis
-		let col = Arc::new(Date64Array::from(vec![Some(millis), None])) as ArrayRef;
 
-		let struct_array = make_struct_array(fields, vec![col], None);
-		let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
+    /// Date64 values are formatted with dateFormat (similar to Date32).
+    #[test]
+    fn test_to_csv_date64_field() -> Result<()> {
+        let fields = Fields::from(vec![Arc::new(Field::new("d", DataType::Date64, true))]);
+        // Arrow Date64: milliseconds since epoch
+        let millis: i64 = 1440547200 * 1_000; // 2015-08-26 in millis
+        let col = Arc::new(Date64Array::from(vec![Some(millis), None])) as ArrayRef;
 
-		let output = result.as_any().downcast_ref::<StringArray>().unwrap();
-		assert_eq!(output.value(0), "2015-08-26");
-		assert_eq!(output.value(1), "");
-		Ok(())
-	}
+        let struct_array = make_struct_array(fields, vec![col], None);
+        let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
 
+        let output = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(output.value(0), "2015-08-26");
+        assert_eq!(output.value(1), "");
+        Ok(())
+    }
 
-	/// All timestamp time_unit variants (Second, Millisecond, Nanosecond).
-	#[test]
-	fn test_to_csv_timestamp_all_time_units() -> Result<()> {
-		// Test that Second/Millisecond/Nanosecond variants all format correctly
-		let secs: i64 = 1440547200; // 2015-08-26 00:00:00 UTC
+    /// All timestamp time_unit variants (Second, Millisecond, Nanosecond).
+    #[test]
+    fn test_to_csv_timestamp_all_time_units() -> Result<()> {
+        // Test that Second/Millisecond/Nanosecond variants all format correctly
+        let secs: i64 = 1440547200; // 2015-08-26 00:00:00 UTC
 
-		let fields_sec = Fields::from(vec![Arc::new(Field::new(
-			"ts",
-			DataType::Timestamp(TimeUnit::Second, Some(Arc::from("UTC"))),
-			true,
-		))]);
-		let col_sec = Arc::new(TimestampSecondArray::from(vec![Some(secs)]).with_timezone("UTC"))
-			as ArrayRef;
-		let struct_sec = make_struct_array(fields_sec, vec![col_sec], None);
-		let result_sec = spark_to_csv_inner(&[struct_sec], DEFAULT_SESSION_TIMEZONE)?;
-		let output_sec = result_sec.as_any().downcast_ref::<StringArray>().unwrap();
-		assert_eq!(output_sec.value(0), "2015-08-26 00:00:00");
+        let fields_sec = Fields::from(vec![Arc::new(Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Second, Some(Arc::from("UTC"))),
+            true,
+        ))]);
+        let col_sec =
+            Arc::new(TimestampSecondArray::from(vec![Some(secs)]).with_timezone("UTC")) as ArrayRef;
+        let struct_sec = make_struct_array(fields_sec, vec![col_sec], None);
+        let result_sec = spark_to_csv_inner(&[struct_sec], DEFAULT_SESSION_TIMEZONE)?;
+        let output_sec = result_sec.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(output_sec.value(0), "2015-08-26 00:00:00");
 
-		// Similar for Millisecond and Nanosecond...
-		Ok(())
-	}
+        // Similar for Millisecond and Nanosecond...
+        Ok(())
+    }
 
+    /// Custom timestampFormat option changes the output format.
+    #[test]
+    fn test_to_csv_custom_timestamp_format() -> Result<()> {
+        let micros: i64 = 1440547200 * 1_000_000; // 2015-08-26 00:00:00 UTC
 
-	/// Custom timestampFormat option changes the output format.
-	#[test]
-	fn test_to_csv_custom_timestamp_format() -> Result<()> {
-		let micros: i64 = 1440547200 * 1_000_000; // 2015-08-26 00:00:00 UTC
-		
-		// Manually construct options with custom format
-		let options = SparkToCsvOptions {
-			sep: ",".to_string(),
-			timestamp_format: "%d/%m/%Y".to_string(), // dd/MM/yyyy format
-			date_format: SparkToCsvOptions::DATE_FORMAT_DEFAULT.to_string(),
-		};
+        // Manually construct options with custom format
+        let options = SparkToCsvOptions {
+            sep: ",".to_string(),
+            timestamp_format: "%d/%m/%Y".to_string(), // dd/MM/yyyy format
+            date_format: SparkToCsvOptions::DATE_FORMAT_DEFAULT.to_string(),
+        };
 
-		let fields = Fields::from(vec![Arc::new(Field::new(
-			"time",
-			DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
-			true,
-		))]);
-		let col_ts = Arc::new(
-			TimestampMicrosecondArray::from(vec![Some(micros)]).with_timezone("UTC"),
-		) as ArrayRef;
+        let fields = Fields::from(vec![Arc::new(Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            true,
+        ))]);
+        let col_ts =
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(micros)]).with_timezone("UTC"))
+                as ArrayRef;
 
-		let struct_arr = make_struct_array(fields, vec![col_ts], None)
-			.as_any()
-			.downcast_ref::<StructArray>()
-			.unwrap();
+        let binding = make_struct_array(fields, vec![col_ts], None);
+        let struct_arr = binding
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
 
-		let field = &struct_arr.fields()[0];
-		let result = format_field_to_csv(
-			&struct_arr.columns()[0],
-			0,
-			field.data_type(),
-			&options,
-			DEFAULT_SESSION_TIMEZONE,
-		)?;
+        let field = &struct_arr.fields()[0];
+        let result = format_field_to_csv(
+            &struct_arr.columns()[0],
+            0,
+            field.data_type(),
+            &options,
+            DEFAULT_SESSION_TIMEZONE,
+        )?;
 
-		assert_eq!(result, "26/08/2015");
-		Ok(())
-	}
+        assert_eq!(result, "26/08/2015");
+        Ok(())
+    }
 }
