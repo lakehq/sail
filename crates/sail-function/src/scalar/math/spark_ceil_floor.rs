@@ -10,6 +10,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     expr, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -208,6 +209,45 @@ fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
     Ok(ExprSimplifyResult::Original(vec![arg]))
 }
 
+fn scalar_to_i64_ceil(v: &ScalarValue) -> Option<i64> {
+    match v {
+        ScalarValue::Float64(Some(f)) if f.is_finite() => Some(f.ceil() as i64),
+        ScalarValue::Float32(Some(f)) if f.is_finite() => Some(f.ceil() as i64),
+        ScalarValue::Int8(Some(n)) => Some(*n as i64),
+        ScalarValue::Int16(Some(n)) => Some(*n as i64),
+        ScalarValue::Int32(Some(n)) => Some(*n as i64),
+        ScalarValue::Int64(Some(n)) => Some(*n),
+        _ => None,
+    }
+}
+
+fn scalar_to_i64_floor(v: &ScalarValue) -> Option<i64> {
+    match v {
+        ScalarValue::Float64(Some(f)) if f.is_finite() => Some(f.floor() as i64),
+        ScalarValue::Float32(Some(f)) if f.is_finite() => Some(f.floor() as i64),
+        ScalarValue::Int8(Some(n)) => Some(*n as i64),
+        ScalarValue::Int16(Some(n)) => Some(*n as i64),
+        ScalarValue::Int32(Some(n)) => Some(*n as i64),
+        ScalarValue::Int64(Some(n)) => Some(*n),
+        _ => None,
+    }
+}
+
+fn i64_to_input_scalar(n: i64, dtype: &DataType) -> Option<ScalarValue> {
+    match dtype {
+        DataType::Float64 => Some(ScalarValue::Float64(Some(n as f64))),
+        DataType::Float32 => {
+            let f = n as f32;
+            (f as i64 == n).then_some(ScalarValue::Float32(Some(f)))
+        }
+        DataType::Int8 => i8::try_from(n).ok().map(|v| ScalarValue::Int8(Some(v))),
+        DataType::Int16 => i16::try_from(n).ok().map(|v| ScalarValue::Int16(Some(v))),
+        DataType::Int32 => i32::try_from(n).ok().map(|v| ScalarValue::Int32(Some(v))),
+        DataType::Int64 => Some(ScalarValue::Int64(Some(n))),
+        _ => None,
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
@@ -278,6 +318,61 @@ impl ScalarUDFImpl for SparkCeil {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         ceil_floor_coerce_types("ceil", arg_types)
+    }
+
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        let [arg] = input else {
+            return Ok(SortProperties::Unordered);
+        };
+        // monotonically non-decreasing: ceil(x) <= ceil(y) when x <= y
+        Ok(arg.sort_properties)
+    }
+
+    fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        let [input] = inputs else {
+            return Interval::make_unbounded(&DataType::Int64);
+        };
+        match (
+            scalar_to_i64_ceil(input.lower()),
+            scalar_to_i64_ceil(input.upper()),
+        ) {
+            (Some(lo), Some(hi)) => Interval::try_new(
+                ScalarValue::Int64(Some(lo)),
+                ScalarValue::Int64(Some(hi)),
+            )
+            .or_else(|_| Interval::make_unbounded(&DataType::Int64)),
+            _ => Interval::make_unbounded(&DataType::Int64),
+        }
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        let [input_interval] = inputs else {
+            return Ok(Some(vec![]));
+        };
+        let input_type = input_interval.data_type();
+        // ceil(x) ∈ [N, M] → x ∈ (N-1, M] — use [N-1, M] (conservative closed)
+        let lo = if let ScalarValue::Int64(Some(n)) = interval.lower() {
+            n.checked_sub(1)
+                .and_then(|n1| i64_to_input_scalar(n1, &input_type))
+        } else {
+            None
+        };
+        let hi = if let ScalarValue::Int64(Some(n)) = interval.upper() {
+            i64_to_input_scalar(*n, &input_type)
+        } else {
+            None
+        };
+        match (lo, hi) {
+            (Some(lo), Some(hi)) => {
+                let constraint = Interval::try_new(lo, hi)?;
+                Ok(input_interval.intersect(constraint)?.map(|r| vec![r]))
+            }
+            _ => Ok(Some(vec![])),
+        }
     }
 }
 
@@ -360,6 +455,60 @@ impl ScalarUDFImpl for SparkFloor {
         info: &SimplifyContext,
     ) -> Result<PreimageResult> {
         preimage_floor(args, lit_expr, info)
+    }
+
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        let [arg] = input else {
+            return Ok(SortProperties::Unordered);
+        };
+        // monotonically non-decreasing: floor(x) <= floor(y) when x <= y
+        Ok(arg.sort_properties)
+    }
+
+    fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        let [input] = inputs else {
+            return Interval::make_unbounded(&DataType::Int64);
+        };
+        match (
+            scalar_to_i64_floor(input.lower()),
+            scalar_to_i64_floor(input.upper()),
+        ) {
+            (Some(lo), Some(hi)) => Interval::try_new(
+                ScalarValue::Int64(Some(lo)),
+                ScalarValue::Int64(Some(hi)),
+            )
+            .or_else(|_| Interval::make_unbounded(&DataType::Int64)),
+            _ => Interval::make_unbounded(&DataType::Int64),
+        }
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        inputs: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        let [input_interval] = inputs else {
+            return Ok(Some(vec![]));
+        };
+        let input_type = input_interval.data_type();
+        // floor(x) ∈ [N, M] → x ∈ [N, M+1) — use [N, M+1] (conservative closed)
+        let lo = if let ScalarValue::Int64(Some(n)) = interval.lower() {
+            i64_to_input_scalar(*n, &input_type)
+        } else {
+            None
+        };
+        let hi = if let ScalarValue::Int64(Some(n)) = interval.upper() {
+            i64::checked_add(*n, 1).and_then(|n1| i64_to_input_scalar(n1, &input_type))
+        } else {
+            None
+        };
+        match (lo, hi) {
+            (Some(lo), Some(hi)) => {
+                let constraint = Interval::try_new(lo, hi)?;
+                Ok(input_interval.intersect(constraint)?.map(|r| vec![r]))
+            }
+            _ => Ok(Some(vec![])),
+        }
     }
 }
 
