@@ -37,6 +37,7 @@
                   "v2"
                 ]
               ],
+              "isExternal": true,
               "query": {
                 "project": {
                   "input": {
@@ -114,6 +115,7 @@
                   "v2"
                 ]
               ],
+              "isExternal": true,
               "query": {
                 "project": {
                   "input": {
@@ -402,7 +404,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -448,7 +451,8 @@
                   "true"
                 ]
               ],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -487,7 +491,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -530,7 +535,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -584,7 +590,8 @@
               "ifNotExists": true,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -658,7 +665,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -742,7 +750,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -799,7 +808,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -861,7 +871,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -927,7 +938,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -994,7 +1006,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1050,7 +1063,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1116,7 +1130,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1182,7 +1197,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1247,7 +1263,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1313,7 +1330,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1365,7 +1383,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1428,7 +1447,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1510,7 +1530,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1608,7 +1629,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1672,7 +1694,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1732,7 +1755,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1782,7 +1806,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1836,7 +1861,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1901,7 +1927,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -1972,7 +1999,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -2040,7 +2068,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -2102,7 +2131,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -2156,7 +2186,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -2296,7 +2327,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -2360,7 +2392,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -2433,7 +2466,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -2487,7 +2521,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": false
             },
             "planId": null
           }
@@ -2541,7 +2576,8 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": []
+              "properties": [],
+              "isExternal": true
             },
             "planId": null
           }
@@ -2600,7 +2636,8 @@
                   "test",
                   "test"
                 ]
-              ]
+              ],
+              "isExternal": false
             },
             "planId": null
           }

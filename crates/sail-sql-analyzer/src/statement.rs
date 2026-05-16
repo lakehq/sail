@@ -1254,7 +1254,11 @@ fn from_ast_table_definition(
     let properties = properties.map(from_ast_property_list).transpose()?;
     let columns = from_ast_table_columns(columns)?;
     let location = location.map(from_ast_string).transpose()?;
-    let is_external = external || location.is_some();
+    let has_path_in_options = options
+        .iter()
+        .flatten()
+        .any(|(k, _)| k.eq_ignore_ascii_case("path") || k.eq_ignore_ascii_case("location"));
+    let is_external = external || location.is_some() || has_path_in_options;
     let definition = spec::TableDefinition {
         columns,
         comment: comment.map(from_ast_string).transpose()?,

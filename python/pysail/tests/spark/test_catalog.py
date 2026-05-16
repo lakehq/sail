@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
@@ -79,7 +78,6 @@ class TestListTables:
         assert metadata_marker.data_type == ""
 
     @pytest.mark.catalog_integration
-    @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific regression coverage")
     def test_persistent_table_defaults_to_managed(self, spark):
         """Persistent tables without an explicit location are managed."""
         table_name = "test_external_default"
