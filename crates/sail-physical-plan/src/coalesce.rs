@@ -194,103 +194,30 @@ impl Stream for CoalesceStream {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use std::any::Any;
     use std::sync::Arc;
 
     use datafusion::arrow::array::Int32Array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion::arrow::record_batch::RecordBatch;
-    use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-    use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
-    use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-    use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-    use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-    use datafusion_common::{internal_datafusion_err, Result, Statistics};
-    use futures::{stream, StreamExt};
+    use datafusion::catalog::MemTable;
+    use datafusion::datasource::TableProvider;
+    use datafusion::execution::TaskContext;
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::Result;
+    use futures::StreamExt;
 
     use super::{coalesced_input_range, CoalesceExec};
 
-    #[derive(Debug)]
-    struct TestExec {
-        schema: SchemaRef,
-        partitions: Vec<Vec<RecordBatch>>,
-        properties: Arc<PlanProperties>,
-    }
-
-    impl TestExec {
-        fn new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Self {
-            let properties = Arc::new(PlanProperties::new(
-                EquivalenceProperties::new(schema.clone()),
-                Partitioning::UnknownPartitioning(partitions.len()),
-                EmissionType::Final,
-                Boundedness::Bounded,
-            ));
-            Self {
-                schema,
-                partitions,
-                properties,
-            }
-        }
-    }
-
-    impl DisplayAs for TestExec {
-        fn fmt_as(
-            &self,
-            _t: datafusion::physical_plan::DisplayFormatType,
-            f: &mut std::fmt::Formatter,
-        ) -> std::fmt::Result {
-            write!(f, "TestExec")
-        }
-    }
-
-    impl ExecutionPlan for TestExec {
-        fn name(&self) -> &str {
-            "TestExec"
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn properties(&self) -> &Arc<PlanProperties> {
-            &self.properties
-        }
-
-        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-            vec![]
-        }
-
-        fn with_new_children(
-            self: Arc<Self>,
-            children: Vec<Arc<dyn ExecutionPlan>>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            if !children.is_empty() {
-                return Err(internal_datafusion_err!(
-                    "TestExec does not accept children"
-                ));
-            }
-            Ok(self)
-        }
-
-        fn execute(
-            &self,
-            partition: usize,
-            _context: Arc<TaskContext>,
-        ) -> Result<SendableRecordBatchStream> {
-            let Some(batches) = self.partitions.get(partition) else {
-                return Err(internal_datafusion_err!(
-                    "TestExec partition {partition} out of range"
-                ));
-            };
-            let schema = Arc::clone(&self.schema);
-            let stream = stream::iter(batches.clone().into_iter().map(Ok));
-            Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
-        }
-
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-            let _ = partition;
-            Ok(Statistics::new_unknown(self.schema.as_ref()))
-        }
+    fn test_plan(partitions: Vec<Vec<RecordBatch>>) -> Arc<dyn ExecutionPlan> {
+        let schema = if let Some(batch) = partitions.iter().flatten().next() {
+            batch.schema()
+        } else {
+            test_schema()
+        };
+        let table = MemTable::try_new(schema, partitions).unwrap();
+        let ctx = SessionContext::new();
+        futures::executor::block_on(table.scan(&ctx.state(), None, &[], None)).unwrap()
     }
 
     fn test_schema() -> SchemaRef {
@@ -340,15 +267,12 @@ mod tests {
 
     #[test]
     fn test_coalesce_exec_merges_even_partition_groups() -> Result<()> {
-        let input = Arc::new(TestExec::new(
-            test_schema(),
-            vec![
-                vec![test_batch(&[0, 1])],
-                vec![test_batch(&[2])],
-                vec![test_batch(&[3, 4])],
-                vec![test_batch(&[5])],
-            ],
-        ));
+        let input = test_plan(vec![
+            vec![test_batch(&[0, 1])],
+            vec![test_batch(&[2])],
+            vec![test_batch(&[3, 4])],
+            vec![test_batch(&[5])],
+        ]);
         let exec = CoalesceExec::new(input, 2);
 
         assert_eq!(collect_values(&exec, 0)?, vec![0, 1, 2]);
@@ -359,16 +283,13 @@ mod tests {
 
     #[test]
     fn test_coalesce_exec_merges_uneven_partition_groups() -> Result<()> {
-        let input = Arc::new(TestExec::new(
-            test_schema(),
-            vec![
-                vec![test_batch(&[0])],
-                vec![test_batch(&[1])],
-                vec![test_batch(&[2])],
-                vec![test_batch(&[3])],
-                vec![test_batch(&[4])],
-            ],
-        ));
+        let input = test_plan(vec![
+            vec![test_batch(&[0])],
+            vec![test_batch(&[1])],
+            vec![test_batch(&[2])],
+            vec![test_batch(&[3])],
+            vec![test_batch(&[4])],
+        ]);
         let exec = CoalesceExec::new(input, 3);
 
         assert_eq!(collect_values(&exec, 0)?, vec![0]);
@@ -380,10 +301,7 @@ mod tests {
 
     #[test]
     fn test_coalesce_exec_rejects_out_of_range_partition() {
-        let input = Arc::new(TestExec::new(
-            test_schema(),
-            vec![vec![test_batch(&[0])], vec![test_batch(&[1])]],
-        ));
+        let input = test_plan(vec![vec![test_batch(&[0])], vec![test_batch(&[1])]]);
         let exec = CoalesceExec::new(input, 2);
 
         assert!(matches!(
@@ -394,10 +312,7 @@ mod tests {
 
     #[test]
     fn test_coalesce_exec_rejects_partition_increase() {
-        let input = Arc::new(TestExec::new(
-            test_schema(),
-            vec![vec![test_batch(&[0])], vec![test_batch(&[1])]],
-        ));
+        let input = test_plan(vec![vec![test_batch(&[0])], vec![test_batch(&[1])]]);
         let exec = CoalesceExec::new(input, 3);
 
         assert!(matches!(

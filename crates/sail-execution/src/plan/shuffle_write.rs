@@ -23,7 +23,7 @@ use crate::plan::ListListDisplay;
 use crate::stream::writer::{TaskStreamSinkState, TaskStreamWriter, TaskWriteLocation};
 
 enum ShufflePartitioner {
-    Hash(BatchPartitioner),
+    Batch(BatchPartitioner),
     RoundRobin(RowRoundRobinPartitioner),
 }
 
@@ -33,7 +33,7 @@ impl ShufflePartitioner {
         F: FnMut(usize, RecordBatch) -> Result<()>,
     {
         match self {
-            Self::Hash(partitioner) => partitioner.partition(batch, f),
+            Self::Batch(partitioner) => partitioner.partition(batch, f),
             Self::RoundRobin(partitioner) => partitioner.partition(batch, f),
         }
     }
@@ -163,8 +163,9 @@ impl ExecutionPlan for ShuffleWriteExec {
             .properties()
             .output_partitioning()
             .partition_count();
+        // TODO: Support metrics in batch partitioner
         let partitioner = match &self.shuffle_partitioning {
-            Partitioning::Hash(_, _) => ShufflePartitioner::Hash(BatchPartitioner::try_new(
+            Partitioning::Hash(_, _) => ShufflePartitioner::Batch(BatchPartitioner::try_new(
                 self.shuffle_partitioning.clone(),
                 Default::default(),
                 partition,
