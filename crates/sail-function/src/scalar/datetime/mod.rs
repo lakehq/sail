@@ -16,5 +16,6 @@ pub mod spark_to_chrono_fmt;
 pub mod spark_try_make_timestamp_ntz;
 pub mod spark_try_to_timestamp;
 pub mod spark_unix_timestamp;
+pub mod spark_year;
 pub mod timestamp_now;
 pub(crate) mod utils;
