@@ -149,11 +149,8 @@ impl FileFormat for NoopFileFormat {
         input: Arc<dyn ExecutionPlan>,
         _state: &dyn Session,
         _conf: FileSinkConfig,
-        order_requirements: Option<LexRequirement>,
+        _order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if order_requirements.is_some() {
-            return not_impl_err!("sorting for noop file format");
-        }
         Ok(Arc::new(NoopSinkExec::new(input)))
     }
 

@@ -8,7 +8,7 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{plan_err, Result};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 #[derive(Debug)]
 pub struct NoopSinkExec {
@@ -73,15 +73,17 @@ impl ExecutionPlan for NoopSinkExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.input.execute(partition, context)?;
+
         let output = futures::stream::once(async move {
-            stream
-                .for_each(|batch| async move {
-                    let _ = batch;
-                })
-                .await;
-            futures::stream::empty()
+            futures::pin_mut!(stream);
+
+            while let Some(batch) = stream.next().await {
+                batch?;
+            }
+
+            Ok::<_, datafusion_common::DataFusionError>(futures::stream::empty())
         })
-        .flatten();
+        .try_flatten();
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
