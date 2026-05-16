@@ -336,11 +336,10 @@ impl ScalarUDFImpl for SparkCeil {
             scalar_to_i64_ceil(input.lower()),
             scalar_to_i64_ceil(input.upper()),
         ) {
-            (Some(lo), Some(hi)) => Interval::try_new(
-                ScalarValue::Int64(Some(lo)),
-                ScalarValue::Int64(Some(hi)),
-            )
-            .or_else(|_| Interval::make_unbounded(&DataType::Int64)),
+            (Some(lo), Some(hi)) => {
+                Interval::try_new(ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi)))
+                    .or_else(|_| Interval::make_unbounded(&DataType::Int64))
+            }
             _ => Interval::make_unbounded(&DataType::Int64),
         }
     }
@@ -473,11 +472,10 @@ impl ScalarUDFImpl for SparkFloor {
             scalar_to_i64_floor(input.lower()),
             scalar_to_i64_floor(input.upper()),
         ) {
-            (Some(lo), Some(hi)) => Interval::try_new(
-                ScalarValue::Int64(Some(lo)),
-                ScalarValue::Int64(Some(hi)),
-            )
-            .or_else(|_| Interval::make_unbounded(&DataType::Int64)),
+            (Some(lo), Some(hi)) => {
+                Interval::try_new(ScalarValue::Int64(Some(lo)), ScalarValue::Int64(Some(hi)))
+                    .or_else(|_| Interval::make_unbounded(&DataType::Int64))
+            }
             _ => Interval::make_unbounded(&DataType::Int64),
         }
     }
