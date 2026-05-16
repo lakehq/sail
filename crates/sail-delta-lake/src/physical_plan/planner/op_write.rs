@@ -85,16 +85,19 @@ async fn build_full_overwrite_plan(
     let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
 
     let writer_schema = plan.schema();
+    let write_context =
+        ctx.prepare_write_context(&writer_schema, &PhysicalSinkMode::Overwrite, None)?;
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
-        DeltaWriterExecOptions::from(ctx.options().clone()),
+        DeltaWriterExecOptions::from(ctx.options().clone())
+            .with_generation_expressions(ctx.generation_expressions().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::Overwrite,
         ctx.table_exists(),
         writer_schema,
-        None,
+        write_context.clone(),
     )?);
 
     // For existing tables, build a remove plan from the active file set and union it with the
@@ -122,7 +125,10 @@ async fn build_full_overwrite_plan(
             partition_columns,
             true, // partition_scan
         )?);
-        let remove_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::new(all_adds)?);
+        let remove_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::try_new(
+            all_adds,
+            Some(snapshot_state.physical_partition_columns()),
+        )?);
 
         UnionExec::try_new(vec![writer, remove_plan])?
     } else {
@@ -136,6 +142,8 @@ async fn build_full_overwrite_plan(
         ctx.table_exists(),
         input_schema,
         PhysicalSinkMode::Overwrite,
+        ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 
@@ -195,10 +203,26 @@ async fn build_overwrite_if_plan(
         },
         predicate: predicate_source.clone(),
     });
+    let writer_options = DeltaWriterExecOptions::from(ctx.options().clone())
+        .with_generation_expressions(ctx.generation_expressions().clone());
+    let write_context = crate::physical_plan::prepare_delta_write_context(
+        ctx.table_url(),
+        Some(snapshot_state.as_ref()),
+        &writer_options,
+        ctx.metadata_configuration(),
+        ctx.partition_columns(),
+        &PhysicalSinkMode::OverwriteIf {
+            condition: None,
+            source: predicate_source.clone(),
+        },
+        ctx.table_exists(),
+        &union_plan.schema(),
+        operation_override,
+    )?;
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&union_plan),
         ctx.table_url().clone(),
-        DeltaWriterExecOptions::from(ctx.options().clone()),
+        writer_options,
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::OverwriteIf {
@@ -207,12 +231,14 @@ async fn build_overwrite_if_plan(
         },
         ctx.table_exists(),
         union_plan.schema(),
-        operation_override,
+        write_context.clone(),
     )?);
 
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
     let log_replay_options = LogReplayOptions {
-        include_stats_json: !partition_only,
+        // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
+        // for partition-only overwrites where data-skipping itself does not need stats_json.
+        include_stats_json: true,
         ..Default::default()
     };
     let meta_scan: Arc<dyn ExecutionPlan> =
@@ -233,7 +259,10 @@ async fn build_overwrite_if_plan(
         partition_columns.clone(),
         partition_only,
     )?);
-    let remove_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan)?);
+    let remove_plan = Arc::new(DeltaRemoveActionsExec::try_new(
+        find_files_plan,
+        Some(snapshot_state.physical_partition_columns()),
+    )?);
 
     let union_actions = UnionExec::try_new(vec![writer, remove_plan])?;
 
@@ -247,6 +276,8 @@ async fn build_overwrite_if_plan(
             condition: None,
             source: predicate_source,
         },
+        ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 

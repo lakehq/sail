@@ -1953,7 +1953,7 @@
                   "nullable": false,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": "a + 1"
                 }
               ],
               "comment": null,
