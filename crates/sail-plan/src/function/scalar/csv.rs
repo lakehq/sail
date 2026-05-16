@@ -1,6 +1,7 @@
 use datafusion_expr::{expr, Expr, ScalarUDF};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
+use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 
 use crate::error::PlanResult;
@@ -30,6 +31,6 @@ pub(super) fn list_built_in_csv_functions() -> Vec<(&'static str, ScalarFunction
     vec![
         ("from_csv", F::custom(from_csv)),
         ("schema_of_csv", F::udf(SparkSchemaOfCsv::new())),
-        ("to_csv", F::unknown("to_csv")),
+        ("to_csv", F::udf(SparkToCsv::new())),
     ]
 }
