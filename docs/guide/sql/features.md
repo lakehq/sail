@@ -86,7 +86,7 @@ But some extensions support these statements for lakehouse tables (e.g., Delta L
 | `ANALYZE TABLE`         | :construction:               |
 | `CREATE DATABASE`       | :white_check_mark:           |
 | `CREATE FUNCTION`       | :construction:               |
-| `CREATE TABLE`          | :white_check_mark: (partial) |
+| `CREATE TABLE`          | :white_check_mark:           |
 | `CREATE TEMPORARY VIEW` | :white_check_mark:           |
 | `CREATE VIEW`           | :construction:               |
 | `DESCRIBE DATABASE`     | :construction:               |
