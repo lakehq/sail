@@ -235,16 +235,33 @@ fn parse_rows(
             append_to_builder(&mut builder, &Value::Null, options)?;
         } else {
             let json_str = rows.value(i);
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
-                append_to_builder(&mut builder, &value, options)?;
-            } else {
-                // on invalid json handle PERMISSIVE mode
-                // note other modes aren't handled yet
-                append_permissive_parse_error(&mut builder, options)?;
+            match serde_json::from_str::<serde_json::Value>(json_str) {
+                Ok(value) if top_level_matches(&builder, &value) => {
+                    append_to_builder(&mut builder, &value, options)?;
+                }
+                // PERMISSIVE mode (only mode supported today):
+                // - parsed JSON shape doesn't match top-level builder shape
+                //   (e.g. struct schema with non-object JSON), OR
+                // - JSON failed to parse entirely.
+                // Struct → validity=true with null children.
+                // List/Map → validity=false.
+                _ => append_permissive_parse_error(&mut builder, options)?,
             }
         }
     }
     finish_builder(builder)
+}
+
+/// Returns true when the parsed JSON value matches the shape of the top-level
+/// builder. The top-level kind guard in `from_json_inner` restricts builder kind
+/// to Struct / List / Map, so other variants don't appear here.
+fn top_level_matches(builder: &FieldBuilder, value: &Value) -> bool {
+    matches!(
+        (builder, value),
+        (FieldBuilder::Struct { .. }, Value::Object(_))
+            | (FieldBuilder::List { .. }, Value::Array(_))
+            | (FieldBuilder::Map { .. }, Value::Object(_))
+    )
 }
 
 #[derive(Debug)]
@@ -271,8 +288,9 @@ enum FieldBuilder {
     LargeString(LargeStringBuilder),
     Map {
         field: Arc<Field>,
+        keys: Box<FieldBuilder>,
+        values: Box<FieldBuilder>,
         offsets: Vec<i32>,
-        struct_builder: Box<FieldBuilder>,
         nulls: Vec<bool>,
         ordered: bool,
     },
@@ -282,7 +300,6 @@ enum FieldBuilder {
         nested_builders: Vec<FieldBuilder>,
         nulls: Vec<bool>,
     },
-    // TODO: claude is there a better pattern to reduce writing `tz` 4 times?
     TimestampMicrosecond {
         builder: TimestampMicrosecondBuilder,
         tz: Arc<str>,
@@ -350,13 +367,26 @@ fn create_builder(
             LargeStringBuilder::with_capacity(capacity, capacity * 16),
         )),
         DataType::Map(field, ordered) => {
-            let struct_builder = create_builder(field.data_type(), capacity, session_timezone)?;
+            let (keys_field, values_field) = match field.data_type() {
+                DataType::Struct(fields) => {
+                    Ok((fields[0].clone(), fields[1].clone()))
+                },
+                other => exec_err!(
+                    "Unreachable: `{}` function handled map field that should be a struct but is {:#?}",
+                    SparkFromJson::FROM_JSON_NAME,
+                    other
+                )
+            }?;
+            let keys_builder = create_builder(keys_field.data_type(), capacity, session_timezone)?;
+            let values_builder =
+                create_builder(values_field.data_type(), capacity, session_timezone)?;
             let mut offsets = Vec::with_capacity(capacity);
             offsets.push(0);
             Ok(FieldBuilder::Map {
                 field: field.clone(),
+                keys: Box::new(keys_builder),
+                values: Box::new(values_builder),
                 offsets,
-                struct_builder: Box::new(struct_builder),
                 nulls: Vec::with_capacity(capacity),
                 ordered: *ordered,
             })
@@ -413,158 +443,141 @@ fn append_to_builder(
     value: &Value,
     options: &SparkFromJsonOptions,
 ) -> Result<()> {
-    // null value
-    if let Value::Null = value {
-        match builder {
-            FieldBuilder::Boolean(b) => b.append_null(),
-            FieldBuilder::Decimal128 { builder, .. } => builder.append_null(),
-            FieldBuilder::Date32(b) => b.append_null(),
-            FieldBuilder::Float32(b) => b.append_null(),
-            FieldBuilder::Float64(b) => b.append_null(),
-            FieldBuilder::LargeString(b) => b.append_null(),
-            FieldBuilder::List { nulls, offsets, .. } => {
-                nulls.push(false);
-                let curr = offsets.last().copied().unwrap_or(0);
-                offsets.push(curr);
+    match builder {
+        FieldBuilder::Boolean(b) => match value {
+            Value::Bool(bool) => b.append_value(*bool),
+            _ => b.append_null(),
+        },
+        FieldBuilder::Date32(b) => match value {
+            Value::String(string) => {
+                let date32 = parse_date32(string, options)?;
+                b.append_value(date32);
             }
-            FieldBuilder::Int8(b) => b.append_null(),
-            FieldBuilder::Int16(b) => b.append_null(),
-            FieldBuilder::Int32(b) => b.append_null(),
-            FieldBuilder::Int64(b) => b.append_null(),
-            FieldBuilder::Map { nulls, offsets, .. } => {
-                nulls.push(false);
-                let curr = offsets.last().copied().unwrap_or(0);
-                offsets.push(curr);
-            }
-            FieldBuilder::String(b) => b.append_null(),
-            FieldBuilder::Struct {
-                nested_builders,
-                nulls,
-                ..
-            } => {
-                nulls.push(false);
-                for nested_builder in nested_builders.iter_mut() {
-                    append_to_builder(nested_builder, value, options)?;
+            _ => b.append_null(),
+        },
+        FieldBuilder::Decimal128 {
+            builder,
+            precision,
+            scale,
+        } => {
+            match value {
+                Value::Number(n) => {
+                    let decimal128 = parse_decimal_to_i128(&n.to_string(), *precision, *scale)?;
+                    builder.append_value(decimal128);
                 }
-            }
-            FieldBuilder::TimestampMicrosecond { builder, .. } => builder.append_null(),
-            FieldBuilder::TimestampMillisecond { builder, .. } => builder.append_null(),
-            FieldBuilder::TimestampNanosecond { builder, .. } => builder.append_null(),
-            FieldBuilder::TimestampSecond { builder, .. } => builder.append_null(),
-            FieldBuilder::Unsupported { count, .. } => *count += 1,
+                Value::String(s) => {
+                    let decimal128 = parse_decimal_to_i128(s, *precision, *scale)?;
+                    builder.append_value(decimal128);
+                }
+                _ => builder.append_null(),
+            };
         }
-    // not null value
-    } else {
-        match builder {
-            FieldBuilder::Boolean(b) => match value {
-                Value::Bool(bool) => b.append_value(*bool),
-                _ => b.append_null(),
-            },
-            FieldBuilder::Date32(b) => match value {
-                Value::String(string) => {
-                    let date32 = parse_date32(string, options)?;
-                    b.append_value(date32);
+        FieldBuilder::Float32(b) => match value {
+            Value::Number(num) => {
+                if let Some(f) = num.as_f64() {
+                    b.append_value(f as f32);
+                } else {
+                    b.append_null();
                 }
-                _ => b.append_null(),
-            },
-            FieldBuilder::Decimal128 {
-                builder,
-                precision,
-                scale,
-            } => {
-                match value {
-                    Value::Number(n) => {
-                        let decimal128 = parse_decimal_to_i128(&n.to_string(), *precision, *scale)?;
-                        builder.append_value(decimal128);
-                    }
-                    Value::String(s) => {
-                        let decimal128 = parse_decimal_to_i128(s, *precision, *scale)?;
-                        builder.append_value(decimal128);
-                    }
-                    _ => builder.append_null(),
-                };
             }
-            FieldBuilder::Float32(b) => match value {
-                Value::Number(num) => {
-                    if let Some(f) = num.as_f64() {
-                        b.append_value(f as f32);
-                    } else {
-                        b.append_null();
-                    }
+            _ => b.append_null(),
+        },
+        FieldBuilder::Float64(b) => match value {
+            Value::Number(num) => {
+                if let Some(f) = num.as_f64() {
+                    b.append_value(f);
+                } else {
+                    b.append_null();
                 }
-                _ => b.append_null(),
-            },
-            FieldBuilder::Float64(b) => match value {
-                Value::Number(num) => {
-                    if let Some(f) = num.as_f64() {
-                        b.append_value(f);
-                    } else {
-                        b.append_null();
-                    }
+            }
+            _ => b.append_null(),
+        },
+        FieldBuilder::Int8(b) => match value {
+            Value::Number(num) => {
+                if let Some(n) = num.as_i64() {
+                    b.append_value(n as i8);
+                } else {
+                    b.append_null();
                 }
-                _ => b.append_null(),
-            },
-            FieldBuilder::Int8(b) => match value {
-                Value::Number(num) => {
-                    if let Some(n) = num.as_i64() {
-                        b.append_value(n as i8);
-                    } else {
-                        b.append_null();
-                    }
+            }
+            _ => b.append_null(),
+        },
+        FieldBuilder::Int16(b) => match value {
+            Value::Number(num) => {
+                if let Some(n) = num.as_i64() {
+                    b.append_value(n as i16);
+                } else {
+                    b.append_null();
                 }
-                _ => b.append_null(),
-            },
-            FieldBuilder::Int16(b) => match value {
-                Value::Number(num) => {
-                    if let Some(n) = num.as_i64() {
-                        b.append_value(n as i16);
-                    } else {
-                        b.append_null();
-                    }
+            }
+            _ => b.append_null(),
+        },
+        FieldBuilder::Int32(b) => match value {
+            Value::Number(num) => {
+                if let Some(n) = num.as_i64() {
+                    b.append_value(n as i32);
+                } else {
+                    b.append_null();
                 }
-                _ => b.append_null(),
-            },
-            FieldBuilder::Int32(b) => match value {
-                Value::Number(num) => {
-                    if let Some(n) = num.as_i64() {
-                        b.append_value(n as i32);
-                    } else {
-                        b.append_null();
-                    }
+            }
+            _ => b.append_null(),
+        },
+        FieldBuilder::Int64(b) => match value {
+            Value::Number(num) => {
+                if let Some(n) = num.as_i64() {
+                    b.append_value(n);
+                } else {
+                    b.append_null();
                 }
-                _ => b.append_null(),
-            },
-            FieldBuilder::Int64(b) => match value {
-                Value::Number(num) => {
-                    if let Some(n) = num.as_i64() {
-                        b.append_value(n);
-                    } else {
-                        b.append_null();
-                    }
+            }
+            _ => b.append_null(),
+        },
+        // TODO: 1) verify string size 2) other Values can be converted to strings
+        FieldBuilder::LargeString(b) => match value {
+            Value::String(string) => b.append_value(string),
+            Value::Number(num) => b.append_value(num.to_string()),
+            Value::Bool(bool) => b.append_value(bool.to_string()),
+            Value::Object(_) => b.append_value(value.to_string()),
+            Value::Array(_) => b.append_value(value.to_string()),
+            _ => b.append_null(),
+        },
+        FieldBuilder::List {
+            offsets,
+            values,
+            nulls,
+            ..
+        } => match value {
+            Value::Array(arr) => {
+                nulls.push(true);
+                for val in arr.iter() {
+                    append_to_builder(values, val, options)?;
                 }
-                _ => b.append_null(),
-            },
-            // TODO: 1) verify string size 2) other Values can be converted to strings
-            FieldBuilder::LargeString(b) => match value {
-                Value::String(string) => b.append_value(string),
-                Value::Number(num) => b.append_value(num.to_string()),
-                Value::Bool(bool) => b.append_value(bool.to_string()),
-                Value::Object(_) => b.append_value(value.to_string()),
-                Value::Array(_) => b.append_value(value.to_string()),
-                _ => b.append_null(),
-            },
-            FieldBuilder::List {
-                offsets,
-                values,
-                nulls,
-                ..
-            } => match value {
-                Value::Array(arr) => {
+                let curr_len = offsets.last().copied().unwrap_or(0) + arr.len() as i32;
+                offsets.push(curr_len);
+            }
+            _ => {
+                nulls.push(false);
+                let curr = offsets.last().copied().unwrap_or(0);
+                offsets.push(curr);
+            }
+        },
+        FieldBuilder::Map {
+            keys,
+            values,
+            nulls,
+            offsets,
+            ..
+        } => {
+            match value {
+                Value::Object(obj) => {
+                    // just push to struct builder
                     nulls.push(true);
-                    for val in arr.iter() {
-                        append_to_builder(values, val, options)?;
+                    for (k, v) in obj.iter() {
+                        // map each pair to "key" and "value" - default field names
+                        append_to_builder(keys, &Value::String(k.clone()), options)?;
+                        append_to_builder(values, v, options)?;
                     }
-                    let curr_len = offsets.last().copied().unwrap_or(0) + arr.len() as i32;
+                    let curr_len = offsets.last().copied().unwrap_or(0) + obj.len() as i32;
                     offsets.push(curr_len);
                 }
                 _ => {
@@ -572,125 +585,94 @@ fn append_to_builder(
                     let curr = offsets.last().copied().unwrap_or(0);
                     offsets.push(curr);
                 }
-            },
-            FieldBuilder::Map {
-                struct_builder,
-                nulls,
-                offsets,
-                ..
-            } => {
-                match value {
-                    Value::Object(obj) => {
-                        // just push to struct builder
-                        nulls.push(true);
-                        for (k, v) in obj.iter() {
-                            // map each pair to "key" and "value" - default field names
-                            let entry = serde_json::json!({
-                            "key": k,
-                            "value": v
-                            });
-                            append_to_builder(struct_builder, &entry, options)?;
-                        }
-                        let curr_len = offsets.last().copied().unwrap_or(0) + obj.len() as i32;
-                        offsets.push(curr_len);
+            }
+        }
+        FieldBuilder::String(b) => match value {
+            Value::String(string) => b.append_value(string),
+            Value::Number(num) => b.append_value(num.to_string()),
+            Value::Bool(bool) => b.append_value(bool.to_string()),
+            Value::Object(_) => b.append_value(value.to_string()),
+            Value::Array(_) => b.append_value(value.to_string()),
+            _ => b.append_null(),
+        },
+        FieldBuilder::Struct {
+            fields,
+            nested_builders,
+            nulls,
+        } => {
+            match value {
+                Value::Object(obj) => {
+                    nulls.push(true);
+                    for (field, nested_builder) in fields.iter().zip(nested_builders.iter_mut()) {
+                        // if key not found return null
+                        let val = if let Some(v) = obj.get(field.name()) {
+                            v
+                        } else {
+                            &Value::Null
+                        };
+                        append_to_builder(nested_builder, val, options)?;
                     }
-                    _ => {
-                        nulls.push(false);
-                        let curr = offsets.last().copied().unwrap_or(0);
-                        offsets.push(curr);
+                }
+                _ => {
+                    nulls.push(false);
+                    for nested_builder in nested_builders.iter_mut() {
+                        append_to_builder(nested_builder, &Value::Null, options)?;
                     }
                 }
             }
-            FieldBuilder::String(b) => match value {
-                Value::String(string) => b.append_value(string),
-                Value::Number(num) => b.append_value(num.to_string()),
-                Value::Bool(bool) => b.append_value(bool.to_string()),
-                Value::Object(_) => b.append_value(value.to_string()),
-                Value::Array(_) => b.append_value(value.to_string()),
-                _ => b.append_null(),
-            },
-            FieldBuilder::Struct {
-                fields,
-                nested_builders,
-                nulls,
-            } => {
-                match value {
-                    Value::Object(obj) => {
-                        nulls.push(true);
-                        for (field, nested_builder) in fields.iter().zip(nested_builders.iter_mut())
-                        {
-                            // if key not found return null
-                            let val = if let Some(v) = obj.get(field.name()) {
-                                v
-                            } else {
-                                &Value::Null
-                            };
-                            append_to_builder(nested_builder, val, options)?;
-                        }
-                    }
-                    _ => {
-                        nulls.push(false);
-                        for nested_builder in nested_builders.iter_mut() {
-                            append_to_builder(nested_builder, &Value::Null, options)?;
-                        }
-                    }
+        }
+        FieldBuilder::TimestampMicrosecond { builder, tz } => match value {
+            Value::String(string) => {
+                let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                if let Some(timestamp_microseconds) =
+                    TimestampMicrosecondType::from_datetime(naive_datetime)
+                {
+                    builder.append_value(timestamp_microseconds);
+                } else {
+                    builder.append_null();
                 }
             }
-            FieldBuilder::TimestampMicrosecond { builder, tz } => match value {
-                Value::String(string) => {
-                    let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
-                    if let Some(timestamp_microseconds) =
-                        TimestampMicrosecondType::from_datetime(naive_datetime)
-                    {
-                        builder.append_value(timestamp_microseconds);
-                    } else {
-                        builder.append_null();
-                    }
+            _ => builder.append_null(),
+        },
+        FieldBuilder::TimestampMillisecond { builder, tz } => match value {
+            Value::String(string) => {
+                let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                if let Some(timestamp_milliseconds) =
+                    TimestampMillisecondType::from_datetime(naive_datetime)
+                {
+                    builder.append_value(timestamp_milliseconds);
+                } else {
+                    builder.append_null();
                 }
-                _ => builder.append_null(),
-            },
-            FieldBuilder::TimestampMillisecond { builder, tz } => match value {
-                Value::String(string) => {
-                    let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
-                    if let Some(timestamp_milliseconds) =
-                        TimestampMillisecondType::from_datetime(naive_datetime)
-                    {
-                        builder.append_value(timestamp_milliseconds);
-                    } else {
-                        builder.append_null();
-                    }
+            }
+            _ => builder.append_null(),
+        },
+        FieldBuilder::TimestampNanosecond { builder, tz } => match value {
+            Value::String(string) => {
+                let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                if let Some(timestamp_nanoseconds) =
+                    TimestampNanosecondType::from_datetime(naive_datetime)
+                {
+                    builder.append_value(timestamp_nanoseconds);
+                } else {
+                    builder.append_null();
                 }
-                _ => builder.append_null(),
-            },
-            FieldBuilder::TimestampNanosecond { builder, tz } => match value {
-                Value::String(string) => {
-                    let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
-                    if let Some(timestamp_nanoseconds) =
-                        TimestampNanosecondType::from_datetime(naive_datetime)
-                    {
-                        builder.append_value(timestamp_nanoseconds);
-                    } else {
-                        builder.append_null();
-                    }
+            }
+            _ => builder.append_null(),
+        },
+        FieldBuilder::TimestampSecond { builder, tz } => match value {
+            Value::String(string) => {
+                let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                if let Some(timestamp_second) = TimestampSecondType::from_datetime(naive_datetime) {
+                    builder.append_value(timestamp_second);
+                } else {
+                    builder.append_null();
                 }
-                _ => builder.append_null(),
-            },
-            FieldBuilder::TimestampSecond { builder, tz } => match value {
-                Value::String(string) => {
-                    let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
-                    if let Some(timestamp_second) =
-                        TimestampSecondType::from_datetime(naive_datetime)
-                    {
-                        builder.append_value(timestamp_second);
-                    } else {
-                        builder.append_null();
-                    }
-                }
-                _ => builder.append_null(),
-            },
-            FieldBuilder::Unsupported { count, .. } => *count += 1,
-        };
-    }
+            }
+            _ => builder.append_null(),
+        },
+        FieldBuilder::Unsupported { count, .. } => *count += 1,
+    };
     Ok(())
 }
 
@@ -757,18 +739,28 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
         }
         FieldBuilder::Map {
             field,
+            keys,
+            values,
             offsets,
-            struct_builder,
             nulls,
             ordered,
         } => {
-            let deref_struct_builder = *struct_builder;
-            let array_ref = finish_builder(deref_struct_builder)?;
-            let struct_array = downcast_array::<StructArray>(&*array_ref);
+            let finished_keys = finish_builder(*keys)?;
+            let finished_values = finish_builder(*values)?;
+            let fields = match field.data_type() {
+                DataType::Struct(fields) => Ok(fields),
+                other => exec_err!(
+                    "Unreachable: `{}` function handled map field that should be a struct but is {:#?}",
+                    SparkFromJson::FROM_JSON_NAME,
+                    other
+                )
+            }?;
+            let struct_array =
+                StructArray::new(fields.clone(), vec![finished_keys, finished_values], None);
             Ok(Arc::new(MapArray::new(
                 field,
                 OffsetBuffer::new(ScalarBuffer::from(offsets)),
-                struct_array.clone(),
+                struct_array,
                 Some(NullBuffer::from(nulls)),
                 ordered,
             )))
