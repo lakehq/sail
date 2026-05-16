@@ -37,6 +37,12 @@ pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 pub const REST_CATALOG_PROP_PREFIX: &str = "prefix";
 
+/// Iceberg REST catalog configuration property for the namespace separator.
+///
+/// The REST API default is the ASCII Unit Separator (`0x1F`), but the server may
+/// be configured to use a different separator and return it in `/v1/config`.
+pub const REST_CATALOG_PROP_NAMESPACE_SEPARATOR: &str = "rest.namespace.separator";
+
 // TODO: Further properties and configurations may be needed from:
 //  - https://iceberg.apache.org/docs/nightly/configuration/#catalog-properties
 //  - https://iceberg.apache.org/docs/nightly/spark-configuration/
@@ -151,15 +157,90 @@ impl IcebergRestCatalogProvider {
     }
 
     /// Converts a `Namespace` into a string representation for the REST API URL.
-    /// The Iceberg REST API separates namespace components with `\x1F`.
-    fn namespace_string(database: &Namespace) -> String {
-        // TODO: The separator is actually configurable and we should support it as an option.
+    ///
+    /// The Iceberg REST API default separates namespace components with the ASCII
+    /// Unit Separator (`0x1F`), but this may be configurable by the server.
+    fn namespace_string(database: &Namespace, separator: char) -> String {
         let mut result = database.head.to_string();
         for s in &database.tail {
-            result.push('\x1F');
+            result.push(separator);
             result.push_str(s.as_ref());
         }
         result
+    }
+
+    fn namespace_separator(catalog_config: &RestCatalogConfig) -> CatalogResult<char> {
+        const DEFAULT_SEPARATOR: char = '\x1F';
+
+        let Some(raw) = catalog_config
+            .props
+            .get(REST_CATALOG_PROP_NAMESPACE_SEPARATOR)
+            .map(|s| s.as_str())
+        else {
+            return Ok(DEFAULT_SEPARATOR);
+        };
+
+        Self::decode_namespace_separator(raw).map_err(|e| {
+            CatalogError::InvalidArgument(format!(
+                "invalid value for Iceberg REST catalog property `{REST_CATALOG_PROP_NAMESPACE_SEPARATOR}`: {e}"
+            ))
+        })
+    }
+
+    fn decode_namespace_separator(raw: &str) -> CatalogResult<char> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(CatalogError::InvalidArgument(
+                "separator must be a single character".to_string(),
+            ));
+        }
+
+        // Accept common escape notations (useful for configuration formats that
+        // cannot easily represent control characters).
+        if let Some(hex) = raw.strip_prefix("\\x").or_else(|| raw.strip_prefix("0x")) {
+            if hex.len() != 2 {
+                return Err(CatalogError::InvalidArgument(
+                    "hex separator must be exactly 2 digits (e.g. \"\\\\x1F\" or \"0x1F\")"
+                        .to_string(),
+                ));
+            }
+            let byte = u8::from_str_radix(hex, 16)
+                .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+            return Ok(char::from(byte));
+        }
+
+        if let Some(hex) = raw.strip_prefix("\\u{").and_then(|s| s.strip_suffix('}')) {
+            let code = u32::from_str_radix(hex, 16)
+                .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+            return char::from_u32(code).ok_or_else(|| {
+                CatalogError::InvalidArgument(format!("invalid unicode codepoint: {raw}"))
+            });
+        }
+
+        if let Some(hex) = raw.strip_prefix("\\u") {
+            if hex.len() != 4 {
+                return Err(CatalogError::InvalidArgument(
+                    "unicode separator must be exactly 4 hex digits (e.g. \"\\\\u001F\")"
+                        .to_string(),
+                ));
+            }
+            let code = u32::from_str_radix(hex, 16)
+                .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+            return char::from_u32(code).ok_or_else(|| {
+                CatalogError::InvalidArgument(format!("invalid unicode codepoint: {raw}"))
+            });
+        }
+
+        let mut chars = raw.chars();
+        let first = chars.next().ok_or_else(|| {
+            CatalogError::InvalidArgument("separator must not be empty".to_string())
+        })?;
+        if chars.next().is_some() {
+            return Err(CatalogError::InvalidArgument(
+                "separator must be a single character".to_string(),
+            ));
+        }
+        Ok(first)
     }
 
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
@@ -582,7 +663,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
-        let namespace = Self::namespace_string(database);
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
 
         let result = client
             .catalog_api_api()
@@ -638,7 +720,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
-        let parent = prefix.map(|namespace| Self::namespace_string(namespace));
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let parent = prefix.map(|namespace| Self::namespace_string(namespace, namespace_separator));
 
         let result = client
             .catalog_api_api()
@@ -674,6 +757,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
 
         let DropDatabaseOptions { if_exists, cascade } = options;
 
@@ -683,28 +768,27 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 .props
                 .get(REST_CATALOG_PROP_PREFIX)
                 .map(|s| s.as_str());
-            let ns_string = Self::namespace_string(database);
             let tables_result = client
                 .catalog_api_api()
-                .list_tables(&ns_string, None, None, prefix)
+                .list_tables(&namespace, None, None, prefix)
                 .await;
             if let Ok(tables) = tables_result {
                 for identifier in tables.identifiers.unwrap_or_default() {
                     let _ = client
                         .catalog_api_api()
-                        .drop_table(&ns_string, &identifier.name, Some(true), prefix)
+                        .drop_table(&namespace, &identifier.name, Some(true), prefix)
                         .await;
                 }
             }
             let views_result = client
                 .catalog_api_api()
-                .list_views(&ns_string, None, None, prefix)
+                .list_views(&namespace, None, None, prefix)
                 .await;
             if let Ok(views) = views_result {
                 for identifier in views.identifiers.unwrap_or_default() {
                     let _ = client
                         .catalog_api_api()
-                        .drop_view(&ns_string, &identifier.name, prefix)
+                        .drop_view(&namespace, &identifier.name, prefix)
                         .await;
                 }
             }
@@ -713,7 +797,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         match client
             .catalog_api_api()
             .drop_namespace(
-                &Self::namespace_string(database),
+                &namespace,
                 catalog_config
                     .props
                     .get(REST_CATALOG_PROP_PREFIX)
@@ -740,6 +824,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
 
         let CreateTableOptions {
             columns,
@@ -824,7 +910,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .create_table(
-                &Self::namespace_string(database),
+                &namespace,
                 request,
                 None,
                 catalog_config
@@ -840,10 +926,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
         let result = client
             .catalog_api_api()
             .load_table(
-                &Self::namespace_string(database),
+                &namespace,
                 table,
                 None,
                 None,
@@ -878,11 +966,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
 
         let result = client
             .catalog_api_api()
             .list_tables(
-                &Self::namespace_string(database),
+                &namespace,
                 None,
                 None,
                 catalog_config
@@ -924,11 +1014,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropTableOptions,
     ) -> CatalogResult<()> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
         let DropTableOptions { if_exists, purge } = options;
         match client
             .catalog_api_api()
             .drop_table(
-                &Self::namespace_string(database),
+                &namespace,
                 table,
                 Some(purge),
                 catalog_config
@@ -966,6 +1058,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
 
         let CreateViewOptions {
             columns,
@@ -1068,7 +1162,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .create_view(
-                &Self::namespace_string(database),
+                &namespace,
                 request,
                 catalog_config
                     .props
@@ -1083,10 +1177,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
         let result = client
             .catalog_api_api()
             .load_view(
-                &Self::namespace_string(database),
+                &namespace,
                 view,
                 catalog_config
                     .props
@@ -1106,11 +1202,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
 
         let result = client
             .catalog_api_api()
             .list_views(
-                &Self::namespace_string(database),
+                &namespace,
                 None,
                 None,
                 catalog_config
@@ -1146,11 +1244,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropViewOptions,
     ) -> CatalogResult<()> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let namespace_separator = Self::namespace_separator(catalog_config)?;
+        let namespace = Self::namespace_string(database, namespace_separator);
         let DropViewOptions { if_exists } = options;
         match client
             .catalog_api_api()
             .drop_view(
-                &Self::namespace_string(database),
+                &namespace,
                 view,
                 catalog_config
                     .props
