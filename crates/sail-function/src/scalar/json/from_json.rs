@@ -241,8 +241,12 @@ fn parse_rows(
         } else {
             let json_str = rows.value(i);
             match serde_json::from_str::<serde_json::Value>(json_str) {
-                Ok(value) if top_level_matches(&builder, &value) => {
+                Ok(value) if is_top_level_match(&builder, &value) => {
                     append_to_builder(&mut builder, &value, options)?;
+                }
+                Ok(value) if is_arr_and_obj_match(&builder, &value) => {
+                    let arr_wrapped_struct = Value::Array(vec![value]);
+                    append_to_builder(&mut builder, &arr_wrapped_struct, options)?;
                 }
                 // PERMISSIVE mode (only mode supported today):
                 // - parsed JSON shape doesn't match top-level builder shape
@@ -260,12 +264,22 @@ fn parse_rows(
 /// Returns true when the parsed JSON value matches the shape of the top-level
 /// builder. The top-level kind guard in `from_json_inner` restricts builder kind
 /// to Struct / List / Map, so other variants don't appear here.
-fn top_level_matches(builder: &FieldBuilder, value: &Value) -> bool {
+fn is_top_level_match(builder: &FieldBuilder, value: &Value) -> bool {
     matches!(
         (builder, value),
         (FieldBuilder::Struct { .. }, Value::Object(_))
             | (FieldBuilder::List { .. }, Value::Array(_))
             | (FieldBuilder::Map { .. }, Value::Object(_))
+    )
+}
+
+/// Returns true when parsed JSON is an Object and the builder is a List.
+/// In this case the object should be wrapped in a list. e.g.
+/// {"a": 1} -> [{"a": 1}]
+fn is_arr_and_obj_match(builder: &FieldBuilder, value: &Value) -> bool {
+    matches!(
+        (builder, value),
+        (FieldBuilder::List { .. }, Value::Object(_))
     )
 }
 

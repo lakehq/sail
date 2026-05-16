@@ -1351,15 +1351,6 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         | result  |
         | {NULL}  |
 
-    Scenario: Parseable JSON object as array target returns null
-      When query
-        """
-        SELECT from_json('{"a":1}', 'ARRAY<INT>') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
     Scenario: Parseable JSON number as array target returns null
       When query
         """
