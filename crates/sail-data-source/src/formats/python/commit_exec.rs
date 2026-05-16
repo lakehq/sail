@@ -20,7 +20,22 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use futures::StreamExt;
 
 use super::executor::{InProcessExecutor, PythonExecutor};
-use super::write_exec::{COL_COMMIT_MESSAGE, COL_ERROR, COL_PARTITION_ID};
+use super::write_exec::{
+    PythonDataSourceWriteExec, COL_COMMIT_MESSAGE, COL_ERROR, COL_PARTITION_ID,
+};
+
+/// Walk the plan tree to find the output partition count of `PythonDataSourceWriteExec`.
+fn find_write_exec_partition_count(plan: &dyn ExecutionPlan) -> Option<usize> {
+    if plan.as_any().is::<PythonDataSourceWriteExec>() {
+        return Some(plan.properties().partitioning.partition_count());
+    }
+    for child in plan.children() {
+        if let Some(count) = find_write_exec_partition_count(child.as_ref()) {
+            return Some(count);
+        }
+    }
+    None
+}
 
 /// Execution plan for commit/abort in Python datasource write flow.
 #[derive(Debug)]
@@ -115,10 +130,13 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
         if children.len() != 1 {
             return internal_err!("PythonDataSourceWriteCommitExec should have exactly one child");
         }
+        let child = children[0].clone();
+        let expected_partitions =
+            find_write_exec_partition_count(child.as_ref()).unwrap_or(self.expected_partitions);
         Ok(Arc::new(Self::new(
-            children[0].clone(),
+            child,
             self.pickled_writer.clone(),
-            self.expected_partitions,
+            expected_partitions,
         )))
     }
 
