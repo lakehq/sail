@@ -223,7 +223,7 @@ def iceberg_spark_client_config_separator(
 ) -> Generator[SparkSession, None, None]:
     catalog_config = (
         f'[{{name="sail", type="iceberg-rest", uri="{iceberg_rest_proxy_endpoint_passthrough}", '
-        f'"rest.namespace.separator"="{_CLIENT_SEPARATOR}"}}]'
+        f'namespace_separator="{_CLIENT_SEPARATOR}"}}]'
     )
     server, remote, saved_env = start_sail_server(catalog_list=catalog_config)
     spark = create_spark_session(remote, "iceberg_rest_namespace_separator_client_config")
@@ -249,26 +249,26 @@ def test_namespace_separator_allows_multi_part_namespaces(
     spark: SparkSession = request.getfixturevalue(spark_fixture)
 
     base = f"iceberg_ns_sep_{threading.get_ident()}"
-    mid = "mid"
-    leaf1 = "leaf1"
-    leaf2 = "leaf2"
+    ns = f"{base}.mid"
+    table = "t1"
+    view = "v1"
 
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {base}")
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {base}.{mid}")
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {base}.{mid}.{leaf1}")
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {base}.{mid}.{leaf2}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {ns}")
 
-    # Exercise a GET /namespaces/{namespace} call where {namespace} is multipart.
-    spark.sql(f"DESCRIBE DATABASE {base}.{mid}").collect()
+    # Exercise namespace-in-path operations for multipart namespaces.
+    spark.sql(f"DESCRIBE DATABASE {ns}").collect()
 
-    # Exercise GET /namespaces?parent=... where parent is multipart.
-    rows = spark.sql(f"SHOW DATABASES LIKE '{base}.{mid}.%'").collect()
-    names = {row.name for row in rows}
-    assert f"{base}.{mid}.{leaf1}" in names
-    assert f"{base}.{mid}.{leaf2}" in names
+    # Exercise table/view operations that use the namespace string in the REST URL.
+    spark.sql(f"DROP TABLE IF EXISTS {ns}.{table}")
+    spark.sql(f"DROP VIEW IF EXISTS {ns}.{view}")
+    spark.sql(f"CREATE TABLE {ns}.{table} (id INT) USING iceberg")
+    spark.sql(f"CREATE VIEW {ns}.{view} AS SELECT 1 AS id")
+
+    rows = spark.sql(f"SHOW TABLES IN {ns}").collect()
+    names = {row.tableName for row in rows}
+    assert table in names
 
     # Exercise CASCADE path where list_tables/list_views/drop_namespace all need the separator.
-    spark.sql(f"DROP DATABASE IF EXISTS {base}.{mid}.{leaf1} CASCADE")
-    spark.sql(f"DROP DATABASE IF EXISTS {base}.{mid}.{leaf2} CASCADE")
-    spark.sql(f"DROP DATABASE IF EXISTS {base}.{mid} CASCADE")
+    spark.sql(f"DROP DATABASE IF EXISTS {ns} CASCADE")
     spark.sql(f"DROP DATABASE IF EXISTS {base} CASCADE")

@@ -519,6 +519,12 @@ pub enum CatalogType {
         warehouse: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         prefix: Option<String>,
+        /// Namespace separator used to encode multipart namespaces in the Iceberg REST API.
+        ///
+        /// If unset, Sail uses the separator provided by the server in `/v1/config`,
+        /// falling back to the Iceberg default (Unit Separator, `0x1F`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        namespace_separator: Option<String>,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"

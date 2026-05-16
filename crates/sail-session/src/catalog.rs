@@ -47,6 +47,7 @@ pub fn create_catalog_manager(
                     uri,
                     warehouse,
                     prefix,
+                    namespace_separator,
                     oauth_access_token,
                     bearer_access_token,
                     cache,
@@ -69,6 +70,12 @@ pub fn create_catalog_manager(
                         properties.insert(
                             "bearer-access-token".to_string(), // Iceberg uses kebab-case
                             bearer_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
+                        );
+                    }
+                    if let Some(namespace_separator) = namespace_separator {
+                        properties.insert(
+                            sail_catalog_iceberg::REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
+                            namespace_separator.to_string(),
                         );
                     }
 
