@@ -106,7 +106,7 @@ def test_rest_create_view_location_is_honored(
 
     namespace = _quote(NAMESPACE)
     url = f"{iceberg_rest_endpoint}/v1/namespaces/{namespace}/views"
-    request = urllib.request.Request(
+    request = urllib.request.Request(  # noqa: S310
         url,
         data=json.dumps(request_body).encode("utf-8"),
         headers={"Content-Type": "application/json"},
@@ -120,4 +120,3 @@ def test_rest_create_view_location_is_honored(
 
     loaded = _load_view_metadata(iceberg_rest_endpoint, explicit_view)
     assert loaded["location"] == explicit_location
-
