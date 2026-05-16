@@ -211,7 +211,9 @@ fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
 
 fn f64_ceil_to_i64(f: f64) -> Option<i64> {
     let c = f.ceil();
-    if c >= i64::MIN as f64 && c <= i64::MAX as f64 {
+    // i64::MAX (2^63-1) rounds up to 2^63 in f64, so use strict < to avoid
+    // saturating cast for c == 2^63. i64::MIN (-2^63) is exact, so >= is fine.
+    if c >= i64::MIN as f64 && c < (i64::MAX as f64) {
         Some(c as i64)
     } else {
         None
@@ -224,7 +226,7 @@ fn f32_ceil_to_i64(f: f32) -> Option<i64> {
 
 fn f64_floor_to_i64(f: f64) -> Option<i64> {
     let fl = f.floor();
-    if fl >= i64::MIN as f64 && fl <= i64::MAX as f64 {
+    if fl >= i64::MIN as f64 && fl < (i64::MAX as f64) {
         Some(fl as i64)
     } else {
         None
@@ -266,6 +268,24 @@ fn extract_tight_scale(interval: &Interval) -> Option<i32> {
     }
 }
 
+/// Compute the Decimal128 output type for the 2-arg form, mirroring the
+/// `ceil_floor_return_type_from_args` logic so `evaluate_bounds` always
+/// returns an interval whose type matches the function's declared return type.
+fn decimal128_2arg_output_type(input_type: &DataType, target_scale: i32) -> DataType {
+    let (in_p, in_s): (i32, i32) = match input_type {
+        DataType::Decimal128(p, s) => (*p as i32, *s as i32),
+        DataType::Float32 => (14, 7),
+        DataType::Float64 => (30, 15),
+        DataType::Int8 => (3, 0),
+        DataType::Int16 => (5, 0),
+        DataType::Int32 => (10, 0),
+        DataType::Int64 => (20, 0),
+        _ => (DECIMAL128_MAX_PRECISION as i32, 0),
+    };
+    let (out_p, out_s) = round_decimal_base(in_p, in_s, target_scale, true);
+    DataType::Decimal128(out_p, out_s)
+}
+
 fn decimal128_evaluate_bounds(
     name: &str,
     value_interval: &Interval,
@@ -274,7 +294,15 @@ fn decimal128_evaluate_bounds(
     let input_type = value_interval.data_type();
     let (in_p, in_s) = match input_type {
         DataType::Decimal128(p, s) => (p, s),
-        _ => return Interval::make_unbounded(&ceil_floor_output_type(&input_type)),
+        // Non-Decimal128 value (Float/Int): execution casts to Decimal128 first,
+        // so we can't compute tight bounds here. Return unbounded with the correct
+        // Decimal128 output type (matches ceil_floor_return_type_from_args).
+        _ => {
+            return Interval::make_unbounded(&decimal128_2arg_output_type(
+                &input_type,
+                target_scale,
+            ));
+        }
     };
     let (out_p, out_s) = round_decimal_base(in_p as i32, in_s as i32, target_scale, true);
     let out_type = DataType::Decimal128(out_p, out_s);
@@ -424,7 +452,12 @@ impl ScalarUDFImpl for SparkCeil {
                 if let Some(target_scale) = extract_tight_scale(scale_interval) {
                     decimal128_evaluate_bounds("ceil", value_interval, target_scale)
                 } else {
-                    Interval::make_unbounded(&ceil_floor_output_type(&value_interval.data_type()))
+                    // Non-tight scale: can't narrow. 2-arg always returns Decimal128;
+                    // use target_scale=0 as a conservative type approximation.
+                    Interval::make_unbounded(&decimal128_2arg_output_type(
+                        &value_interval.data_type(),
+                        0,
+                    ))
                 }
             }
             _ => Interval::make_unbounded(&DataType::Int64),
@@ -571,7 +604,12 @@ impl ScalarUDFImpl for SparkFloor {
                 if let Some(target_scale) = extract_tight_scale(scale_interval) {
                     decimal128_evaluate_bounds("floor", value_interval, target_scale)
                 } else {
-                    Interval::make_unbounded(&ceil_floor_output_type(&value_interval.data_type()))
+                    // Non-tight scale: can't narrow. 2-arg always returns Decimal128;
+                    // use target_scale=0 as a conservative type approximation.
+                    Interval::make_unbounded(&decimal128_2arg_output_type(
+                        &value_interval.data_type(),
+                        0,
+                    ))
                 }
             }
             _ => Interval::make_unbounded(&DataType::Int64),
@@ -1291,6 +1329,17 @@ mod tests {
     }
 
     #[test]
+    fn test_ceil_evaluate_bounds_float64_with_scale_returns_unbounded_decimal() -> Result<()> {
+        // Float64 input with 2-arg form: can't compute tight bounds (no Decimal128 interval),
+        // but must return Decimal128 type (not Int64) to match the function's declared return type.
+        let input = interval_f64(1.23, 4.56)?;
+        let scale = Interval::try_new(ScalarValue::Int32(Some(2)), ScalarValue::Int32(Some(2)))?;
+        let result = SparkCeil::new().evaluate_bounds(&[&input, &scale])?;
+        assert!(matches!(result.data_type(), DataType::Decimal128(_, _)));
+        Ok(())
+    }
+
+    #[test]
     fn test_ceil_evaluate_bounds_2arg_non_tight_scale_falls_back() -> Result<()> {
         // Non-tight scale interval (lower != upper) → unbounded Decimal128
         let input = Interval::try_new(
@@ -1311,6 +1360,22 @@ mod tests {
         assert_eq!(result.data_type(), DataType::Int64);
         assert_eq!(result.lower(), &ScalarValue::Int64(None));
         assert_eq!(result.upper(), &ScalarValue::Int64(None));
+        Ok(())
+    }
+
+    #[test]
+    fn test_ceil_evaluate_bounds_f64_near_i64_max() -> Result<()> {
+        // i64::MAX = 2^63-1 is not exactly representable in f64; it rounds up to 2^63.
+        // The largest f64 < 2^63 is 9223372036854774784 = i64::MAX - 1023.
+        // ceil of that value must NOT saturate to i64::MAX — it should return that value itself.
+        let largest_f64_below_i64_max = 9_223_372_036_854_774_784.0_f64;
+        assert!(largest_f64_below_i64_max < i64::MAX as f64);
+        let result = f64_ceil_to_i64(largest_f64_below_i64_max);
+        assert_eq!(result, Some(9_223_372_036_854_774_784_i64));
+
+        // Exactly 2^63 (i64::MAX as f64 rounds up to this) → must return None, not saturate
+        let two63 = i64::MAX as f64; // == 2^63
+        assert_eq!(f64_ceil_to_i64(two63), None);
         Ok(())
     }
 
