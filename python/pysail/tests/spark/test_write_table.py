@@ -140,7 +140,7 @@ def test_save_as_table(spark, tmp_path):
 
 @pytest.mark.catalog_integration
 def test_save_as_table_without_path_surfaces_managed(spark):
-    table_name = "t_external_default"
+    table_name = "t_managed_default"
     df = spark.createDataFrame([(1, "Alice")], schema="id LONG, name STRING")
     try:
         df.write.saveAsTable(table_name)
