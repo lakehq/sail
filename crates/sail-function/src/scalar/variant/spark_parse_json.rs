@@ -135,11 +135,13 @@ fn try_parse_json_lenient(json_str: &str) -> Option<serde_json::Value> {
 
 /// Try to append a JSON string to the builder leniently. Returns true if successful.
 fn try_append_json(builder: &mut VariantArrayBuilder, json_str: &str) -> bool {
+    // Fast path: strict JSON parses cleanly in one pass.
+    if builder.append_json(json_str).is_ok() {
+        return true;
+    }
+    // Slow path: lenient parse for inputs with trailing content or other quirks.
     match try_parse_json_lenient(json_str) {
-        Some(value) => {
-            let json_str = value.to_string();
-            builder.append_json(json_str.as_str()).is_ok()
-        }
+        Some(value) => builder.append_json(value.to_string().as_str()).is_ok(),
         None => false,
     }
 }
