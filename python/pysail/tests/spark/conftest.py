@@ -31,6 +31,7 @@ def pytest_configure(config):
         "(deselected by default; pass -m catalog_integration to run)",
     )
     # Load all pytest-bdd step modules.
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.coalesce")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")

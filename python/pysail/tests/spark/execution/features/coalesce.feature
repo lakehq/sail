@@ -1,6 +1,43 @@
 Feature: Coalesce in distributed query execution
 
-  Rule: Coalesce reduces partitions without shuffle
+  Rule: Coalesce gets a dedicated stage and reduces partitions without shuffle
+
+    Scenario: Coalesce reduction produces CoalesceExec in the physical plan
+      Given a range DataFrame with 12 rows and 4 partitions
+      When the DataFrame is coalesced to 2 partitions
+      Then the physical plan contains "CoalesceExec"
+
+    Scenario: Coalesce does not increase partition count beyond input
+      Given a range DataFrame with 48 rows and 4 partitions
+      When the DataFrame is coalesced to 6 partitions
+      Then the partition count is 4
+
+    Scenario: Coalesce reduces partitions to target
+      Given a range DataFrame with 48 rows and 4 partitions
+      When the DataFrame is coalesced to 2 partitions
+      Then the partition count is 2
+
+    Scenario: Coalesce to one partition
+      Given a range DataFrame with 10 rows and 2 partitions
+      When the DataFrame is coalesced to 1 partitions
+      Then the partition count is 1
+
+    Scenario: COALESCE hint reduces partitions
+      Given a range DataFrame with 48 rows and 4 partitions
+      When the COALESCE hint is applied with 2 partitions
+      Then the partition count is 2
+
+    Scenario: COALESCE hint does not increase partition count beyond input
+      Given a range DataFrame with 48 rows and 4 partitions
+      When the COALESCE hint is applied with 6 partitions
+      Then the partition count is 4
+
+    Scenario: COALESCE hint rejects zero partitions
+      Given a range DataFrame with 10 rows and 2 partitions
+      When the COALESCE hint is applied with 0 partitions
+      Then the operation fails with "COALESCE hint requires at least one partition"
+
+  Rule: Coalesce preserves data
 
     Scenario: Coalesce preserves all rows when reducing partitions
       When query
