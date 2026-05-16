@@ -621,6 +621,7 @@ pub enum FileFormat {
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum CreateViewClause {
     Comment(Comment, StringLiteral),
+    Location(Location, StringLiteral),
     Properties(Tblproperties, PropertyList),
 }
 

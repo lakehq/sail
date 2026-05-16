@@ -41,6 +41,7 @@ fn simple_view_options(
     CreateViewOptions {
         columns,
         definition: definition.to_string(),
+        location: None,
         if_not_exists: false,
         replace: false,
         comment: None,
@@ -76,6 +77,7 @@ async fn test_create_view() {
             CreateViewOptions {
                 columns,
                 definition: "SELECT id, name, price FROM products".to_string(),
+                location: None,
                 if_not_exists: false,
                 replace: false,
                 comment: Some("View of products".to_string()),
@@ -127,6 +129,7 @@ async fn test_create_view() {
             CreateViewOptions {
                 columns: vec![view_col("different", DataType::Int32)],
                 definition: "SELECT 2".to_string(),
+                location: None,
                 if_not_exists: true,
                 replace: false,
                 comment: Some("Different comment".to_string()),
@@ -181,6 +184,7 @@ async fn test_get_view() {
             CreateViewOptions {
                 columns,
                 definition: "SELECT id, value FROM source_table".to_string(),
+                location: None,
                 if_not_exists: false,
                 replace: false,
                 comment: Some("Test view description".to_string()),

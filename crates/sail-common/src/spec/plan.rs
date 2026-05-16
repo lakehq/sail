@@ -937,6 +937,7 @@ pub struct ViewDefinition {
     pub if_not_exists: bool,
     pub replace: bool,
     pub comment: Option<String>,
+    pub location: Option<String>,
     pub properties: Vec<(String, String)>,
 }
 

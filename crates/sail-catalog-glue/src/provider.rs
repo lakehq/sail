@@ -651,6 +651,7 @@ impl CatalogProvider for GlueCatalogProvider {
         let CreateViewOptions {
             columns,
             definition,
+            location: _location,
             if_not_exists,
             replace,
             comment,

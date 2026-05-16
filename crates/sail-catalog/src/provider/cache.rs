@@ -652,6 +652,7 @@ mod tests {
         let view_options = CreateViewOptions {
             columns: vec![],
             definition: "SELECT 1".to_string(),
+            location: None,
             if_not_exists: false,
             replace: false,
             comment: None,

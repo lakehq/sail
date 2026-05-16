@@ -1778,6 +1778,16 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Location)"
+                      },
+                      {
+                        "nonTerminal": "StringLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Tblproperties)"
                       },
                       {

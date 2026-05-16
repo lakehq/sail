@@ -970,6 +970,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let CreateViewOptions {
             columns,
             definition,
+            location,
             if_not_exists,
             replace,
             comment,
@@ -1058,9 +1059,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let request = crate::models::CreateViewRequest {
             name: view.to_string(),
-            // Omit to allow the REST catalog to choose a default location (e.g. from its warehouse
-            // configuration).
-            location: None,
+            // Omit to allow the REST catalog to choose a default location (e.g. from its
+            // warehouse configuration). When provided, the REST catalog must honor it.
+            location,
             schema: Box::new(schema),
             view_version: Box::new(view_version),
             properties: props,

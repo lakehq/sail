@@ -58,6 +58,7 @@ pub struct DropTableOptions {
 pub struct CreateViewOptions {
     pub columns: Vec<CreateViewColumnOptions>,
     pub definition: String,
+    pub location: Option<String>,
     pub if_not_exists: bool,
     pub replace: bool,
     pub comment: Option<String>,

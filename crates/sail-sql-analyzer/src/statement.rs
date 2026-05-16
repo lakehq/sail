@@ -340,9 +340,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let name = from_ast_object_name(name)?;
             let CreateViewClauses {
                 comment,
+                location,
                 properties,
             } = clauses.try_into()?;
             let comment = comment.map(from_ast_string).transpose()?;
+            let location = location.map(from_ast_string).transpose()?;
             let properties = properties
                 .map(from_ast_property_list)
                 .transpose()?
@@ -395,6 +397,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         if_not_exists: if_not_exists.is_some(),
                         replace: or_replace.is_some(),
                         comment,
+                        location,
                         properties,
                     },
                 },
@@ -1633,6 +1636,7 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
 #[derive(Default)]
 struct CreateViewClauses {
     comment: Option<StringLiteral>,
+    location: Option<StringLiteral>,
     properties: Option<PropertyList>,
 }
 
@@ -1646,6 +1650,11 @@ impl TryFrom<Vec<CreateViewClause>> for CreateViewClauses {
                 CreateViewClause::Comment(_, x) => {
                     if output.comment.replace(x).is_some() {
                         return Err(SqlError::invalid("duplicate COMMENT clause"));
+                    }
+                }
+                CreateViewClause::Location(_, x) => {
+                    if output.location.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate LOCATION clause"));
                     }
                 }
                 CreateViewClause::Properties(_, properties) => {

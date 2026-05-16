@@ -31,6 +31,7 @@ impl PlanResolver<'_> {
             if_not_exists,
             replace,
             comment,
+            location,
             properties,
         } = definition;
         // Resolve the query plan to register fields in state and extract column types.
@@ -76,6 +77,7 @@ impl PlanResolver<'_> {
                 definition,
                 columns,
                 comment,
+                location,
                 if_not_exists,
                 replace,
                 properties,

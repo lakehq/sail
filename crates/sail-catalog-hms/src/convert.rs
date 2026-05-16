@@ -309,6 +309,7 @@ pub(crate) fn build_view(
     let CreateViewOptions {
         columns,
         definition,
+        location: _location,
         if_not_exists: _,
         replace: _,
         comment,
@@ -1755,6 +1756,7 @@ mod tests {
                     comment: None,
                 }],
                 definition: "select 1 as id".to_string(),
+                location: None,
                 if_not_exists: false,
                 replace: false,
                 comment: None,
