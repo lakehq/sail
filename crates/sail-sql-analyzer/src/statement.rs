@@ -164,13 +164,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 or_replace: or_replace.is_some(),
                 if_not_exists: if_not_exists.is_some(),
                 using: using.map(|(_, x)| x),
-                external: external.is_some(),
                 columns,
                 clauses: clauses.try_into()?,
                 query: r#as,
             };
             let table = from_ast_object_name(name)?;
-            let (definition, query) = from_ast_table_definition(definition)?;
+            let (definition, query) = from_ast_table_definition(definition, external.is_some())?;
             let node = if let Some(query) = query {
                 spec::CommandNode::CreateTableAsSelect {
                     table,
@@ -184,6 +183,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         }
         Statement::ReplaceTable {
             replace: _,
+            external,
             table: _,
             name,
             columns,
@@ -195,13 +195,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 or_replace: true,
                 if_not_exists: false,
                 using: using.map(|(_, x)| x),
-                external: false,
                 columns,
                 clauses: clauses.try_into()?,
                 query: r#as,
             };
             let table = from_ast_object_name(name)?;
-            let (definition, query) = from_ast_table_definition(definition)?;
+            let (definition, query) = from_ast_table_definition(definition, external.is_some())?;
             let node = if let Some(query) = query {
                 spec::CommandNode::CreateTableAsSelect {
                     table,
@@ -1149,7 +1148,6 @@ struct TableDefinition {
     or_replace: bool,
     if_not_exists: bool,
     using: Option<Ident>,
-    external: bool,
     columns: Option<ColumnDefinitionList>,
     clauses: CreateTableClauses,
     query: Option<AsQueryClause>,
@@ -1157,12 +1155,12 @@ struct TableDefinition {
 
 fn from_ast_table_definition(
     definition: TableDefinition,
+    explicit_external: bool,
 ) -> SqlResult<(spec::TableDefinition, Option<Box<QueryPlan>>)> {
     let TableDefinition {
         or_replace,
         if_not_exists,
         using,
-        external,
         columns,
         clauses:
             CreateTableClauses {
@@ -1254,11 +1252,9 @@ fn from_ast_table_definition(
     let properties = properties.map(from_ast_property_list).transpose()?;
     let columns = from_ast_table_columns(columns)?;
     let location = location.map(from_ast_string).transpose()?;
-    let has_path_in_options = options
-        .iter()
-        .flatten()
-        .any(|(k, _)| k.eq_ignore_ascii_case("path") || k.eq_ignore_ascii_case("location"));
-    let is_external = external || location.is_some() || has_path_in_options;
+    let options: Vec<(String, String)> = options.into_iter().flatten().collect();
+    let is_external =
+        explicit_external || spec::has_path_or_location(location.as_deref(), &options);
     let definition = spec::TableDefinition {
         columns,
         comment: comment.map(from_ast_string).transpose()?,
@@ -1272,7 +1268,7 @@ fn from_ast_table_definition(
         cluster_by,
         if_not_exists,
         replace: or_replace,
-        options: options.into_iter().flatten().collect(),
+        options,
         properties: properties.into_iter().flatten().collect(),
         is_external,
     };

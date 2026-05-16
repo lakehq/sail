@@ -1462,7 +1462,8 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     schema,
                     options,
                 } = x;
-                let is_external = path.is_some();
+                let options: Vec<(String, String)> = options.into_iter().collect();
+                let is_external = spec::has_path_or_location(path.as_deref(), &options);
                 let schema = schema.required("create external table schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
@@ -1486,7 +1487,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         cluster_by: vec![],
                         if_not_exists: false,
                         replace: false,
-                        options: options.into_iter().collect(),
+                        options,
                         properties: vec![],
                         is_external,
                     },
