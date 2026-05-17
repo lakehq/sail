@@ -153,9 +153,3 @@ def iceberg_spark(iceberg_rest_endpoint: str) -> Generator[SparkSession, None, N
     with contextlib.suppress(Exception):
         spark.stop()
     stop_sail_server(server, saved_env)
-
-
-@pytest.fixture(scope="module")
-def spark(iceberg_spark: SparkSession) -> SparkSession:
-    """Alias for iceberg_spark, used by BDD step definitions."""
-    return iceberg_spark

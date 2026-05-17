@@ -200,6 +200,7 @@ impl GlueCatalogProvider {
                 sort_by: vec![],
                 bucket_by: None,
                 properties,
+                is_external: true,
             },
         })
     }
