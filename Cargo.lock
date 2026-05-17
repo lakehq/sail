@@ -7034,6 +7034,7 @@ version = "0.6.2"
 dependencies = [
  "arrow",
  "async-trait",
+ "percent-encoding",
  "reqwest",
  "sail-catalog",
  "sail-common",

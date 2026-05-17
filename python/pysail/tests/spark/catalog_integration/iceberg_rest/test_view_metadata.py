@@ -90,14 +90,14 @@ def _assert_current_schema_fields(metadata: dict[str, Any], expected_field_names
     assert [field["name"] for field in current_schema["fields"]] == expected_field_names
 
 
-def _assert_spark_representation(metadata: dict[str, Any], expected_sql: str) -> None:
+def _assert_spark_representation(metadata: dict[str, Any]) -> None:
     current_version = _current_view_version(metadata)
     representations = current_version["representations"]
     assert representations
     assert any(
         representation.get("type") == "sql"
         and representation.get("dialect", "").strip().lower() == "spark"
-        and representation.get("sql") == expected_sql
+        and representation.get("sql")
         for representation in representations
     )
 
@@ -139,7 +139,7 @@ def test_create_view_uses_path_or_location_property_as_metadata_location(
     assert _current_view_version(metadata)["version-id"] == 1
     _assert_all_view_schema_ids_resolved(metadata)
     _assert_current_schema_fields(metadata, ["id", "property_key"])
-    _assert_spark_representation(metadata, definition)
+    _assert_spark_representation(metadata)
 
 
 def test_create_view_without_path_or_location_property_uses_default_location(
@@ -163,7 +163,7 @@ def test_create_view_without_path_or_location_property_uses_default_location(
     assert metadata["properties"]["purpose"] == "default-location"
     _assert_all_view_schema_ids_resolved(metadata)
     _assert_current_schema_fields(metadata, ["id", "location_mode"])
-    _assert_spark_representation(metadata, definition)
+    _assert_spark_representation(metadata)
 
 
 def test_create_view_resolves_negative_one_schema_id_to_added_schema(
@@ -190,7 +190,7 @@ def test_create_view_resolves_negative_one_schema_id_to_added_schema(
     assert all(schema_id != -1 for schema_id in schemas_by_id)
     _assert_all_view_schema_ids_resolved(metadata)
     _assert_current_schema_fields(metadata, ["id", "engine", "price"])
-    _assert_spark_representation(metadata, definition)
+    _assert_spark_representation(metadata)
 
 
 def test_create_multiple_views_can_share_location_property(

@@ -22,7 +22,7 @@ from pysail.tests.spark.catalog_integration.conftest import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
     from pyspark.sql import SparkSession
 
@@ -153,3 +153,27 @@ def iceberg_spark(iceberg_rest_endpoint: str) -> Generator[SparkSession, None, N
     with contextlib.suppress(Exception):
         spark.stop()
     stop_sail_server(server, saved_env)
+
+
+@pytest.fixture
+def iceberg_spark_factory(
+    iceberg_rest_endpoint: str,
+) -> Callable[[str, str], contextlib.AbstractContextManager[SparkSession]]:
+    """Create a Sail Spark session with custom Iceberg REST catalog options."""
+
+    @contextlib.contextmanager
+    def factory(
+        catalog_options: str,
+        app_name: str = "iceberg_rest_catalog_test",
+    ) -> Generator[SparkSession, None, None]:
+        catalog_config = f'[{{name="sail", type="iceberg-rest", uri="{iceberg_rest_endpoint}", {catalog_options}}}]'
+        server, remote, saved_env = start_sail_server(catalog_list=catalog_config)
+        spark = create_spark_session(remote, app_name)
+        try:
+            yield spark
+        finally:
+            with contextlib.suppress(Exception):
+                spark.stop()
+            stop_sail_server(server, saved_env)
+
+    return factory
