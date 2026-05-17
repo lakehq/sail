@@ -6,6 +6,7 @@ pub mod csv;
 pub mod delta;
 pub mod iceberg;
 pub mod json;
+pub mod noop;
 pub mod parquet;
 pub mod python;
 pub mod rate;

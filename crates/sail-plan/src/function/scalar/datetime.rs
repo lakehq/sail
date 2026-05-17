@@ -351,7 +351,12 @@ fn is_null_literal(expr: &Expr) -> bool {
 fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
     let data_type = timestamp_data_type(&input, timestamp_ntz);
     if input.arguments.len() == 1 {
-        Ok(cast(input.arguments.one()?, data_type))
+        let expr = input.arguments.one()?;
+        let expr = match expr.get_type(input.function_context.schema)? {
+            DataType::Timestamp(_, Some(_)) => expr_fn::to_local_time(vec![expr]),
+            _ => expr,
+        };
+        Ok(cast(expr, data_type))
     } else if input.arguments.len() == 2 {
         let null = timestamp_null(&input, timestamp_ntz);
         let (expr, format) = input.arguments.two()?;
@@ -371,7 +376,12 @@ fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<E
 fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
     let data_type = timestamp_data_type(&input, timestamp_ntz);
     if input.arguments.len() == 1 {
-        Ok(try_cast(input.arguments.one()?, data_type))
+        let expr = input.arguments.one()?;
+        let expr = match expr.get_type(input.function_context.schema)? {
+            DataType::Timestamp(_, Some(_)) => expr_fn::to_local_time(vec![expr]),
+            _ => expr,
+        };
+        Ok(try_cast(expr, data_type))
     } else if input.arguments.len() == 2 {
         let null = timestamp_null(&input, timestamp_ntz);
         let (expr, format) = input.arguments.two()?;

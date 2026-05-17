@@ -96,7 +96,9 @@ message ExtendedScalarUdf {
     SparkTimeUdf spark_time = 16;
     SparkFromJsonUdf spark_from_json = 17;
     ArraysZipUdf arrays_zip = 18;
-    ParseUrlUdf parse_url = 19;
+    SparkToNumberUdf spark_to_number = 19;
+    SparkAbsUdf spark_abs = 20;
+    ParseUrlUdf parse_url = 21;
   }
 }
 
@@ -191,6 +193,10 @@ message SparkNextDayUdf {
   bool ansi_mode = 1;
 }
 
+message SparkAbsUdf {
+  bool ansi_mode = 1;
+}
+
 message SparkFromCsvUdf {
   string session_timezone = 1;
 }
@@ -205,6 +211,10 @@ message SparkTimeUdf {
 
 message SparkFromJsonUdf {
   string session_timezone = 1;
+}
+
+message SparkToNumberUdf {
+  bool safe = 1;
 }
 
 message StandardUdaf {}

@@ -191,7 +191,6 @@ use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
-use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
 use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
@@ -2168,6 +2167,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
             }
+            UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkToNumber::new(safe))));
+            }
+            UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
+            }
             UdfKind::ParseUrl(gen::ParseUrlUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(ParseUrl::new(safe))));
             }
@@ -2213,10 +2218,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
-            "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
-            "spark_try_to_number" | "try_to_number" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
-            }
             "spark_split" | "split" => Ok(Arc::new(ScalarUDF::from(SparkSplit::new()))),
             "regexp_extract_all" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtractAll::new()))),
             "sentences" => Ok(Arc::new(ScalarUDF::from(SparkSentences::new()))),
@@ -2261,7 +2262,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_to_binary" | "try_to_binary" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
             }
-            "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
             "spark_bit_count" | "bit_count" => Ok(Arc::new(ScalarUDF::from(SparkBitCount::new()))),
             "spark_bit_get" | "bit_get" | "getbit" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
@@ -2377,7 +2377,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
             || node_inner.is::<RewriteLikePatternFunc>()
-            || node_inner.is::<SparkAbs>()
             || node_inner.is::<SparkAESDecrypt>()
             || node_inner.is::<SparkAESEncrypt>()
             || node_inner.is::<SparkArray>()
@@ -2434,7 +2433,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkToBinary>()
             || node_inner.is::<SparkToChronoFmt>()
             || node_inner.is::<SparkToLargeUtf8>()
-            || node_inner.is::<SparkToNumber>()
             || node_inner.is::<SparkToUtf8>()
             || node_inner.is::<SparkToUtf8View>()
             || node_inner.is::<SparkTryAdd>()
@@ -2445,7 +2443,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryMult>()
             || node_inner.is::<SparkTrySubtract>()
             || node_inner.is::<SparkTryToBinary>()
-            || node_inner.is::<SparkTryToNumber>()
             || node_inner.is::<SparkTryToTimestamp>()
             || node_inner.is::<SparkUnbase64>()
             || node_inner.is::<SparkUniform>()
@@ -2560,6 +2557,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkNextDay>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkToNumber>() {
+            let safe = func.safe();
+            UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkAbs>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<ParseUrl>() {
             let safe = func.safe();
             UdfKind::ParseUrl(gen::ParseUrlUdf { safe })
