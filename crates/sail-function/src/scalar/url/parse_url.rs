@@ -35,60 +35,35 @@ impl ParseUrl {
     pub fn safe(&self) -> bool {
         self.safe
     }
-    /// Parses a URL and extracts the specified component.
-    ///
-    /// This function takes a URL string and extracts different parts of it based on the
-    /// `part` parameter. For query parameters, an optional `key` can be specified to
-    /// extract a specific query parameter value.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - The URL string to parse
-    /// * `part` - The component of the URL to extract. Valid values are:
-    ///   - `"HOST"` - The hostname (e.g., "example.com")
-    ///   - `"PATH"` - The path portion (e.g., "/path/to/resource")
-    ///   - `"QUERY"` - The query string or a specific query parameter
-    ///   - `"REF"` - The fragment/anchor (the part after #)
-    ///   - `"PROTOCOL"` - The URL scheme (e.g., "https", "http")
-    ///   - `"FILE"` - The path with query string (e.g., "/path?query=value")
-    ///   - `"AUTHORITY"` - The authority component (host:port)
-    ///   - `"USERINFO"` - The user information (username:password)
-    /// * `key` - Optional parameter used only with `"QUERY"`. When provided, extracts
-    ///   the value of the specific query parameter with this key name.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Some(String))` - The extracted URL component as a string
-    /// * `Ok(None)` - If the requested component doesn't exist or is empty
-    /// * `Err(DataFusionError)` - If the URL is malformed and cannot be parsed
-    ///
+
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
         match Url::parse(value) {
             Ok(url) => Ok(match part {
                 "HOST" => {
-                    // java.net.URI returns null for percent-encoded hostnames (e.g.
-                    // "http://ex%61mple.com"). The WHATWG url crate decodes them, so
-                    // we reject any host containing a raw '%' in the original string.
-                    if host_is_percent_encoded(value) {
+                    // java.net.URI returns null for percent-encoded or non-ASCII (IDN)
+                    // hostnames. The WHATWG url crate decodes %-sequences and converts
+                    // IDN to Punycode, so we check the raw string instead.
+                    if host_is_percent_encoded(value) || host_has_non_ascii(value) {
                         None
                     } else {
                         url.host_str().map(String::from)
                     }
                 }
                 "PATH" => {
-                    let path = url.path();
                     // java.net.URI returns null for PATH on opaque URIs; we match that.
                     if is_opaque_uri(&url) {
                         return Ok(None);
                     }
-                    let path = path.to_string();
+                    // Extract from the raw string: the url crate percent-encodes non-ASCII
+                    // characters in the path, but java.net.URI preserves them verbatim.
+                    let path = extract_raw_path_from(value);
                     // Spark: "https://example.com" → empty PATH, "https://example.com/" → "/"
                     // The url crate always returns "/" when there is no path, so we use
                     // has_explicit_path to distinguish "http://ex.com" from "http://ex.com/".
                     let path = if path == "/" && !has_explicit_path(value) {
                         "".to_string()
                     } else {
-                        path
+                        path.to_string()
                     };
                     Some(path)
                 }
@@ -98,84 +73,51 @@ impl ParseUrl {
                     if is_opaque_uri(&url) {
                         return Ok(None);
                     }
+                    // Extract from raw string to preserve non-ASCII and avoid auto-decoding.
+                    let raw_query = extract_raw_query_from(value);
                     match key {
-                        None => url.query().map(String::from),
-                        Some(key) => {
-                            // Spark doesn't decode percent-encoding in query values.
-                            // Use raw query string parsing instead of url.query_pairs()
-                            // which auto-decodes.
-                            url.query().and_then(|q| {
-                                q.split('&')
-                                    .filter_map(|pair| pair.split_once('='))
-                                    .find(|(k, _)| *k == key)
-                                    .map(|(_, v)| v.to_string())
-                            })
-                        }
+                        None => raw_query.map(String::from),
+                        Some(key) => raw_query.and_then(|q| {
+                            q.split('&')
+                                .filter_map(|pair| pair.split_once('='))
+                                .find(|(k, _)| *k == key)
+                                .map(|(_, v)| v.to_string())
+                        }),
                     }
                 }
-                "REF" => url.fragment().map(String::from),
+                // Extract fragment from raw string; url crate percent-encodes non-ASCII.
+                "REF" => extract_raw_fragment_from(value).map(String::from),
                 "PROTOCOL" => Some(url.scheme().to_string()),
                 "FILE" => {
                     // Opaque URIs have no FILE component in java.net.URI — return NULL.
                     if is_opaque_uri(&url) {
                         return Ok(None);
                     }
-                    let path = url.path();
+                    let path = extract_raw_path_from(value);
                     let path = if path == "/" && !has_explicit_path(value) {
                         ""
                     } else {
                         path
                     };
-                    match url.query() {
+                    match extract_raw_query_from(value) {
                         Some(query) => Some(format!("{path}?{query}")),
                         None => Some(path.to_string()),
                     }
                 }
                 "AUTHORITY" => {
-                    // Build authority manually to preserve explicit port
-                    // (url crate strips default ports like 443 for https)
-                    let mut auth = String::new();
-                    let username = url.username();
-                    if !username.is_empty() {
-                        auth.push_str(username);
-                        if let Some(password) = url.password() {
-                            auth.push(':');
-                            auth.push_str(password);
-                        }
-                        auth.push('@');
-                    }
-                    if let Some(host) = url.host_str() {
-                        auth.push_str(host);
-                    }
-                    // Spark preserves the port even if it's the default for the scheme.
-                    // Re-parse from the original string to get the explicit port.
-                    // Only do this when the URL has an authority; otherwise
-                    // extract_explicit_port could find "://" inside an opaque URI's payload.
-                    if url.has_authority() {
-                        if let Some(port_str) = extract_explicit_port(value) {
-                            auth.push(':');
-                            auth.push_str(port_str);
-                        } else if let Some(port) = url.port() {
-                            auth.push(':');
-                            auth.push_str(&port.to_string());
-                        }
-                    }
-                    // java.net.URI returns null for an empty authority (e.g. "file:///path").
-                    if auth.is_empty() {
-                        None
-                    } else {
-                        Some(auth)
-                    }
+                    // Extract directly from the raw string: avoids Punycode conversion for
+                    // IDN hosts and percent-encoding of non-ASCII userinfo. The raw authority
+                    // naturally includes any explicitly-specified port (even default ports),
+                    // which matches java.net.URI semantics.
+                    extract_raw_authority_from(value)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
                 }
                 "USERINFO" => {
-                    let username = url.username();
-                    if username.is_empty() {
-                        return Ok(None);
-                    }
-                    match url.password() {
-                        Some(password) => Some(format!("{username}:{password}")),
-                        None => Some(username.to_string()),
-                    }
+                    // Extract from raw string to preserve non-ASCII characters.
+                    extract_raw_userinfo_from(value)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
                 }
                 _ => None,
             }),
@@ -306,24 +248,109 @@ fn is_opaque_uri(url: &url::Url) -> bool {
     !url.has_authority() && !url.path().starts_with('/')
 }
 
-/// Returns true if the host portion of the URL contains a percent-encoded character.
-/// java.net.URI returns null for `getHost()` when the host is percent-encoded
-/// (e.g. "http://ex%61mple.com"), while the WHATWG url crate decodes it.
-fn host_is_percent_encoded(url: &str) -> bool {
-    let after_scheme = match url.find("://") {
-        Some(i) => i + 3,
-        None => return false,
-    };
-    // Skip userinfo
+/// Returns the byte range of the host portion within a URL string.
+/// Accounts for optional userinfo (before `@`) and stops at `/`, `?`, `#`, or `:` (port).
+/// For IPv6 addresses (`[::1]`), the closing `]` is the host end so `:` inside brackets
+/// is skipped — making this safe to use for percent-encoding and ASCII checks.
+fn raw_host_range(url: &str) -> Option<(usize, usize)> {
+    let after_scheme = url.find("://").map(|i| i + 3)?;
     let host_start = url[after_scheme..]
         .find('@')
         .map(|i| after_scheme + i + 1)
         .unwrap_or(after_scheme);
-    let host_end = url[host_start..]
-        .find(['/', '?', '#', ':'])
-        .map(|i| host_start + i)
-        .unwrap_or(url.len());
-    url[host_start..host_end].contains('%')
+    let host_end = if url[host_start..].starts_with('[') {
+        // IPv6 literal: scan to the closing ']'
+        url[host_start..]
+            .find(']')
+            .map(|i| host_start + i + 1)
+            .unwrap_or(url.len())
+    } else {
+        url[host_start..]
+            .find(['/', '?', '#', ':'])
+            .map(|i| host_start + i)
+            .unwrap_or(url.len())
+    };
+    Some((host_start, host_end))
+}
+
+/// Returns true if the host portion of the URL contains a percent-encoded character.
+/// java.net.URI returns null for `getHost()` when the host is percent-encoded
+/// (e.g. "http://ex%61mple.com"), while the WHATWG url crate decodes it.
+fn host_is_percent_encoded(url: &str) -> bool {
+    raw_host_range(url)
+        .map(|(s, e)| url[s..e].contains('%'))
+        .unwrap_or(false)
+}
+
+/// Returns true if the host portion of the URL contains non-ASCII characters (IDN hostname).
+/// java.net.URI returns null for `getHost()` on non-ASCII (non-Punycode) hostnames.
+fn host_has_non_ascii(url: &str) -> bool {
+    raw_host_range(url)
+        .map(|(s, e)| !url[s..e].is_ascii())
+        .unwrap_or(false)
+}
+
+/// Extracts the raw (un-encoded) path from a hierarchical URL string.
+/// Returns an empty slice when there is no path segment.
+fn extract_raw_path_from(url_str: &str) -> &str {
+    let path_start = if let Some(i) = url_str.find("://") {
+        // URL with authority (scheme://host/path): path starts after authority.
+        let after_scheme = i + 3;
+        url_str[after_scheme..]
+            .find(['/', '?', '#'])
+            .map(|j| after_scheme + j)
+            .unwrap_or(url_str.len())
+    } else if let Some(i) = url_str.find(':') {
+        // Authority-less URL (scheme:/path or scheme:opaque): path starts after ':'.
+        // Opaque URIs are guarded by is_opaque_uri() before this helper is called.
+        i + 1
+    } else {
+        return "";
+    };
+    let path_end = url_str[path_start..]
+        .find(['?', '#'])
+        .map(|i| path_start + i)
+        .unwrap_or(url_str.len());
+    &url_str[path_start..path_end]
+}
+
+/// Extracts the raw query string (the part after `?` and before `#`) from a URL string.
+/// Returns `None` when no `?` is present before any `#`.
+fn extract_raw_query_from(url_str: &str) -> Option<&str> {
+    let frag_start = url_str.find('#').unwrap_or(url_str.len());
+    let q_pos = url_str[..frag_start].find('?')?;
+    Some(&url_str[q_pos + 1..frag_start])
+}
+
+/// Extracts the raw fragment (the part after `#`) from a URL string.
+fn extract_raw_fragment_from(url_str: &str) -> Option<&str> {
+    url_str.find('#').map(|i| &url_str[i + 1..])
+}
+
+/// Extracts the raw authority (everything between `://` and the first `/`, `?`, or `#`).
+fn extract_raw_authority_from(url_str: &str) -> Option<&str> {
+    let after_scheme = url_str.find("://").map(|i| i + 3)?;
+    let auth_end = url_str[after_scheme..]
+        .find(['/', '?', '#'])
+        .map(|i| after_scheme + i)
+        .unwrap_or(url_str.len());
+    let auth = &url_str[after_scheme..auth_end];
+    if auth.is_empty() {
+        None
+    } else {
+        Some(auth)
+    }
+}
+
+/// Extracts the raw userinfo (everything before the last `@` in the authority).
+fn extract_raw_userinfo_from(url_str: &str) -> Option<&str> {
+    let after_scheme = url_str.find("://").map(|i| i + 3)?;
+    let auth_end = url_str[after_scheme..]
+        .find(['/', '?', '#'])
+        .map(|i| after_scheme + i)
+        .unwrap_or(url_str.len());
+    let authority = &url_str[after_scheme..auth_end];
+    authority.rfind('@').map(|i| &authority[..i])
 }
 
 /// Returns true if the URL has an explicit path segment (a `/` immediately after the authority).
@@ -342,30 +369,6 @@ fn has_explicit_path(url: &str) -> bool {
         }
         // No authority section — the path after the colon is always explicit.
         None => true,
-    }
-}
-
-/// Extract the explicit port string from a raw URL, even if it's a default port.
-/// Returns None if no port is specified in the URL string.
-fn extract_explicit_port(url: &str) -> Option<&str> {
-    // Find authority section: after "://" and before first "/" or "?" or "#" or end
-    let after_scheme = url.find("://").map(|i| i + 3)?;
-    let authority_end = url[after_scheme..]
-        .find(['/', '?', '#'])
-        .map(|i| after_scheme + i)
-        .unwrap_or(url.len());
-    let authority = &url[after_scheme..authority_end];
-    // Strip userinfo if present
-    let host_port = match authority.rfind('@') {
-        Some(i) => &authority[i + 1..],
-        None => authority,
-    };
-    // Find last colon that's part of port (not IPv6)
-    if host_port.starts_with('[') {
-        // IPv6: [::1]:port
-        host_port.rfind("]:").map(|i| &host_port[i + 2..])
-    } else {
-        host_port.rfind(':').map(|i| &host_port[i + 1..])
     }
 }
 

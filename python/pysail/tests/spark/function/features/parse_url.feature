@@ -938,3 +938,161 @@ Feature: parse_url() extracts URL component
       Then query result
         | result       |
         | [::1]:8080   |
+
+  Rule: Non-ASCII characters
+
+    Scenario: parse_url PATH preserves non-ASCII unicode characters
+      When query
+        """
+        SELECT parse_url('http://example.com/über/path', 'PATH') AS result
+        """
+      Then query result
+        | result      |
+        | /über/path  |
+
+    Scenario: parse_url PATH preserves non-ASCII accented characters
+      When query
+        """
+        SELECT parse_url('http://example.com/café', 'PATH') AS result
+        """
+      Then query result
+        | result  |
+        | /café   |
+
+    Scenario: parse_url PATH preserves non-ASCII CJK characters
+      When query
+        """
+        SELECT parse_url('http://example.com/中文/path', 'PATH') AS result
+        """
+      Then query result
+        | result     |
+        | /中文/path  |
+
+    Scenario: parse_url PATH preserves mix of non-ASCII and percent-encoded
+      When query
+        """
+        SELECT parse_url('http://example.com/über%20path', 'PATH') AS result
+        """
+      Then query result
+        | result         |
+        | /über%20path   |
+
+    Scenario: parse_url PATH preserves percent-encoded bytes without decoding
+      When query
+        """
+        SELECT parse_url('http://example.com/%C3%BCber/path', 'PATH') AS result
+        """
+      Then query result
+        | result            |
+        | /%C3%BCber/path   |
+
+    Scenario: parse_url HOST returns NULL for non-ASCII internationalized domain
+      When query
+        """
+        SELECT parse_url('http://münchen.de/path', 'HOST') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url AUTHORITY returns non-ASCII internationalized domain as-is
+      When query
+        """
+        SELECT parse_url('http://münchen.de/path', 'AUTHORITY') AS result
+        """
+      Then query result
+        | result     |
+        | münchen.de |
+
+    Scenario: parse_url non-ASCII host PATH and other parts still extractable
+      When query
+        """
+        SELECT parse_url('http://münchen.de/path', 'PROTOCOL') AS r1,
+               parse_url('http://münchen.de/path', 'PATH') AS r2,
+               parse_url('http://münchen.de/path?q=1', 'QUERY') AS r3,
+               parse_url('http://münchen.de/path', 'HOST') AS r4
+        """
+      Then query result
+        | r1   | r2    | r3  | r4   |
+        | http | /path | q=1 | NULL |
+
+    Scenario: parse_url HOST returns NULL for Japanese internationalized domain
+      When query
+        """
+        SELECT parse_url('http://例え.jp/path', 'HOST') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: parse_url AUTHORITY returns Japanese IDN as-is
+      When query
+        """
+        SELECT parse_url('http://例え.jp/path', 'AUTHORITY') AS result
+        """
+      Then query result
+        | result  |
+        | 例え.jp  |
+
+    Scenario: parse_url QUERY preserves non-ASCII value
+      When query
+        """
+        SELECT parse_url('http://example.com/path?q=über', 'QUERY') AS result
+        """
+      Then query result
+        | result  |
+        | q=über  |
+
+    Scenario: parse_url QUERY key lookup returns non-ASCII value
+      When query
+        """
+        SELECT parse_url('http://example.com/path?q=über', 'QUERY', 'q') AS result
+        """
+      Then query result
+        | result |
+        | über   |
+
+    Scenario: parse_url QUERY key lookup returns CJK value
+      When query
+        """
+        SELECT parse_url('http://example.com/path?q=中文', 'QUERY', 'q') AS result
+        """
+      Then query result
+        | result |
+        | 中文   |
+
+    Scenario: parse_url QUERY key lookup with non-ASCII key
+      When query
+        """
+        SELECT parse_url('http://example.com/?über=value', 'QUERY', 'über') AS result
+        """
+      Then query result
+        | result |
+        | value  |
+
+    Scenario: parse_url REF preserves non-ASCII fragment
+      When query
+        """
+        SELECT parse_url('http://example.com/path#über', 'REF') AS result
+        """
+      Then query result
+        | result |
+        | über   |
+
+    Scenario: parse_url USERINFO preserves non-ASCII username
+      When query
+        """
+        SELECT parse_url('http://über:pass@example.com/', 'USERINFO') AS result
+        """
+      Then query result
+        | result     |
+        | über:pass  |
+
+    Scenario: parse_url AUTHORITY includes non-ASCII userinfo
+      When query
+        """
+        SELECT parse_url('http://über:pass@example.com/', 'AUTHORITY') AS result
+        """
+      Then query result
+        | result                  |
+        | über:pass@example.com   |
