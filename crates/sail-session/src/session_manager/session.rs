@@ -12,6 +12,7 @@ use sail_common_datafusion::session::job::JobService;
 use sail_common_datafusion::system::observable::{JobRunnerObserver, StateObservable};
 use tokio::sync::oneshot;
 
+use crate::error::SessionResult;
 use crate::session_manager::event::SessionHistory;
 
 pub struct ServerSession {
@@ -63,9 +64,15 @@ impl ServerSession {
 }
 
 pub enum ServerSessionState {
-    Running { context: SessionContext },
-    Deleting,
-    Deleted { history: Arc<SessionHistory> },
+    Running {
+        context: SessionContext,
+    },
+    Deleting {
+        waiters: Vec<oneshot::Sender<SessionResult<()>>>,
+    },
+    Deleted {
+        history: Arc<SessionHistory>,
+    },
     Failed,
 }
 
@@ -73,7 +80,7 @@ impl ServerSessionState {
     pub fn status(&self) -> &'static str {
         match self {
             ServerSessionState::Running { .. } => "RUNNING",
-            ServerSessionState::Deleting => "DELETING",
+            ServerSessionState::Deleting { .. } => "DELETING",
             ServerSessionState::Deleted { .. } => "DELETED",
             ServerSessionState::Failed => "FAILED",
         }

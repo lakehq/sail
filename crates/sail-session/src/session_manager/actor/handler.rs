@@ -1,3 +1,4 @@
+use std::mem;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -96,9 +97,16 @@ impl SessionManagerActor {
                 if let Ok(tracker) = context.extension::<ActivityTracker>() {
                     if tracker.active_at().is_ok_and(|x| x <= instant) {
                         info!("removing idle session {session_id}");
-                        Self::delete_session(ctx, session_id, context);
-                        session.deleted_at = Some(Utc::now());
-                        session.state = ServerSessionState::Deleting;
+                        match Self::delete_session(ctx, session_id.clone(), context) {
+                            Ok(()) => {
+                                session.deleted_at = Some(Utc::now());
+                                session.state = ServerSessionState::Deleting { waiters: vec![] };
+                            }
+                            Err(error) => {
+                                warn!("failed to remove idle session {session_id}: {error}");
+                                session.state = ServerSessionState::Failed;
+                            }
+                        }
                     }
                 }
             }
@@ -113,24 +121,39 @@ impl SessionManagerActor {
         result: oneshot::Sender<SessionResult<()>>,
     ) -> ActorAction {
         let session = self.sessions.get_mut(&session_id);
-        let output = if let Some(session) = session {
-            if let ServerSessionState::Running { context } = &mut session.state {
-                info!("removing session {session_id}");
-                Self::delete_session(ctx, session_id, context);
-                session.deleted_at = Some(Utc::now());
-                session.state = ServerSessionState::Deleting;
-                Ok(())
-            } else {
-                Err(SessionError::invalid(format!(
-                    "session {session_id} is not running"
-                )))
+        match session {
+            Some(session) => match &mut session.state {
+                ServerSessionState::Running { context } => {
+                    info!("removing session {session_id}");
+                    match Self::delete_session(ctx, session_id.clone(), context) {
+                        Ok(()) => {
+                            session.deleted_at = Some(Utc::now());
+                            session.state = ServerSessionState::Deleting {
+                                waiters: vec![result],
+                            };
+                        }
+                        Err(error) => {
+                            session.state = ServerSessionState::Failed;
+                            let _ = result.send(Err(error));
+                        }
+                    }
+                }
+                ServerSessionState::Deleting { waiters } => {
+                    waiters.push(result);
+                }
+                ServerSessionState::Deleted { .. } => {
+                    let _ = result.send(Ok(()));
+                }
+                ServerSessionState::Failed => {
+                    let _ = result.send(Err(SessionError::internal(format!(
+                        "failed to delete session: {session_id}"
+                    ))));
+                }
+            },
+            None => {
+                let _ = result.send(Ok(()));
             }
-        } else {
-            Err(SessionError::invalid(format!(
-                "session not found: {session_id}"
-            )))
-        };
-        let _ = result.send(output);
+        }
         ActorAction::Continue
     }
 
@@ -144,12 +167,20 @@ impl SessionManagerActor {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
-        if matches!(session.state, ServerSessionState::Deleting) {
-            session.state = ServerSessionState::Deleted {
-                history: Arc::new(history),
-            };
-        } else {
-            warn!("session is not being deleted: {session_id}");
+        let state = mem::replace(&mut session.state, ServerSessionState::Failed);
+        match state {
+            ServerSessionState::Deleting { waiters } => {
+                session.state = ServerSessionState::Deleted {
+                    history: Arc::new(history),
+                };
+                for waiter in waiters {
+                    let _ = waiter.send(Ok(()));
+                }
+            }
+            state => {
+                warn!("session is not being deleted: {session_id}");
+                session.state = state;
+            }
         }
         ActorAction::Continue
     }
@@ -163,6 +194,15 @@ impl SessionManagerActor {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
+        if let ServerSessionState::Deleting { waiters } =
+            mem::replace(&mut session.state, ServerSessionState::Failed)
+        {
+            for waiter in waiters {
+                let _ = waiter.send(Err(SessionError::internal(format!(
+                    "failed to delete session: {session_id}"
+                ))));
+            }
+        }
         session.state = ServerSessionState::Failed;
         ActorAction::Continue
     }
@@ -321,10 +361,16 @@ impl SessionManagerActor {
         ActorAction::Continue
     }
 
-    fn delete_session(ctx: &mut ActorContext<Self>, session_id: String, context: &SessionContext) {
+    fn delete_session(
+        ctx: &mut ActorContext<Self>,
+        session_id: String,
+        context: &SessionContext,
+    ) -> SessionResult<()> {
         let Ok(service) = context.extension::<JobService>() else {
             warn!("job service not found for session {session_id}");
-            return;
+            return Err(SessionError::internal(format!(
+                "job service not found for session {session_id}"
+            )));
         };
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
@@ -339,5 +385,6 @@ impl SessionManagerActor {
             };
             let _ = handle.send(message).await;
         });
+        Ok(())
     }
 }
