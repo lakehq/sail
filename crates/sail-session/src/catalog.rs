@@ -35,11 +35,13 @@ pub fn create_catalog_manager(
                     initial_database,
                     initial_database_comment,
                 } => {
+                    let warehouse_dir =
+                        sail_plan::config::qualify_warehouse_directory("spark-warehouse");
                     let provider = MemoryCatalogProvider::new(
                         name.clone(),
                         initial_database.clone().try_into()?,
                         initial_database_comment.clone(),
-                        None,
+                        Some(warehouse_dir),
                     );
                     Ok((name.clone(), Arc::new(provider)))
                 }
@@ -48,7 +50,6 @@ pub fn create_catalog_manager(
                     uri,
                     warehouse,
                     prefix,
-                    namespace_separator,
                     oauth_access_token,
                     bearer_access_token,
                     cache,
@@ -60,12 +61,6 @@ pub fn create_catalog_manager(
                     }
                     if let Some(prefix) = prefix {
                         properties.insert("prefix".to_string(), prefix.to_string());
-                    }
-                    if let Some(namespace_separator) = namespace_separator {
-                        properties.insert(
-                            "namespace-separator".to_string(),
-                            namespace_separator.to_string(),
-                        );
                     }
                     if let Some(oauth_access_token) = oauth_access_token {
                         properties.insert(
