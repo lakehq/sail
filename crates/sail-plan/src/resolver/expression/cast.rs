@@ -15,6 +15,7 @@ use sail_function::scalar::datetime::spark_interval::{
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
@@ -45,6 +46,27 @@ impl PlanResolver<'_> {
             };
             let expr = ScalarUDF::new_from_impl(SparkCastToVariant::new()).call(vec![expr]);
             return Ok(NamedExpr::new(name, expr));
+        }
+
+        // CAST(arrays_zip(...) AS ARRAY<STRUCT<f1, f2, ...>>) →
+        // Rewrite as ArraysZip(["f1", "f2", ...])(args) without the CAST.
+        // Arrow 58.3+ requires field name overlap for struct casting, so we absorb
+        // the target field names directly into the UDF instead of relying on CAST.
+        if let Some(field_names) = extract_arrays_zip_struct_field_names(&expr, &cast_to_type) {
+            let arguments = match expr {
+                spec::Expr::UnresolvedFunction(f) => f.arguments,
+                _ => unreachable!(),
+            };
+            let mut resolved_args = Vec::with_capacity(arguments.len());
+            for arg in arguments {
+                let named = self.resolve_named_expression(arg, schema, state).await?;
+                resolved_args.push(named.expr);
+            }
+            let udf_expr = expr::Expr::ScalarFunction(expr::ScalarFunction {
+                func: Arc::new(ScalarUDF::from(ArraysZip::new(field_names))),
+                args: resolved_args,
+            });
+            return Ok(NamedExpr::new(vec!["arrays_zip(...)".to_string()], udf_expr));
         }
 
         // Extract the DayTimeInterval field unit before resolving to Arrow type,
@@ -175,6 +197,33 @@ fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {
         // Second, or Year/Month (shouldn't appear for DayTime intervals)
         _ => 1_000_000,
     }
+}
+
+/// If `expr` is an `arrays_zip(...)` call and `cast_to_type` is
+/// `List/LargeList/FixedSizeList<Struct<fields>>`, return the target struct field names.
+/// Arrow 58.3+ requires field name overlap for struct casts, so we absorb the target
+/// field names directly into the UDF instead of relying on a positional CAST.
+fn extract_arrays_zip_struct_field_names(
+    expr: &spec::Expr,
+    cast_to_type: &spec::DataType,
+) -> Option<Vec<String>> {
+    let spec::Expr::UnresolvedFunction(f) = expr else {
+        return None;
+    };
+    let parts = f.function_name.parts();
+    if parts.len() != 1 || parts[0].as_ref().to_ascii_lowercase() != "arrays_zip" {
+        return None;
+    }
+    let element_type = match cast_to_type {
+        spec::DataType::List { data_type, .. }
+        | spec::DataType::LargeList { data_type, .. }
+        | spec::DataType::FixedSizeList { data_type, .. } => data_type.as_ref(),
+        _ => return None,
+    };
+    let spec::DataType::Struct { fields } = element_type else {
+        return None;
+    };
+    Some(fields.iter().map(|f| f.name.clone()).collect())
 }
 
 fn need_rename_cast(expr: &expr::Expr) -> bool {

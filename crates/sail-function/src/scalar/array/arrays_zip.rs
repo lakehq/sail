@@ -201,7 +201,7 @@ fn struct_result_field(inner_fields: &[Arc<Field>], field_names: &[String]) -> A
             Field::new(name, f.data_type().clone(), true).with_metadata(f.metadata().clone())
         })
         .collect::<Vec<_>>();
-    Arc::new(Field::new_struct(SAIL_LIST_FIELD_NAME, fields, false))
+    Arc::new(Field::new_struct(SAIL_LIST_FIELD_NAME, fields, true))
 }
 
 fn num_rows_inner_fields_and_names(
