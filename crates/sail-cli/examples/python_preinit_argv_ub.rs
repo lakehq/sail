@@ -30,7 +30,7 @@ fn rss_kb_linux() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     for line in status.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
-            let kb = rest.trim().split_whitespace().next()?;
+            let kb = rest.split_whitespace().next()?;
             return kb.parse::<u64>().ok();
         }
     }
@@ -75,7 +75,13 @@ fn main() {
     // This example intentionally calls the Python C-API *before* initialization.
 
     let payload = "A".repeat(arg_bytes as usize);
-    let payload = CString::new(payload).expect("payload must not contain NUL");
+    let payload = match CString::new(payload) {
+        Ok(payload) => payload,
+        Err(_) => {
+            eprintln!("mre: payload contained a NUL byte unexpectedly");
+            std::process::exit(2);
+        }
+    };
 
     eprintln!(
         "mre: pid={} iters={} arg_bytes={} print_every={}",
@@ -135,4 +141,3 @@ fn main() {
         eprintln!("mre: rss_kb(end)=<unavailable>");
     }
 }
-
