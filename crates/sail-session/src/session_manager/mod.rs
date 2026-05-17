@@ -61,7 +61,10 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
 
     use datafusion::common::{internal_err, Result as DataFusionResult};
     use datafusion::execution::SendableRecordBatchStream;
@@ -96,6 +99,7 @@ mod tests {
 
     struct TestJobRunnerState {
         stop_started: Notify,
+        stop_calls: AtomicUsize,
         finish: Mutex<Option<oneshot::Receiver<()>>>,
     }
 
@@ -129,6 +133,7 @@ mod tests {
         }
 
         async fn stop(&self, history: oneshot::Sender<JobRunnerHistory>) {
+            self.state.stop_calls.fetch_add(1, Ordering::SeqCst);
             self.state.stop_started.notify_one();
             let finish = self.state.finish.lock().ok().and_then(|mut x| x.take());
             if let Some(finish) = finish {
@@ -175,6 +180,7 @@ mod tests {
         let (finish_tx, finish_rx) = oneshot::channel();
         let state = Arc::new(TestJobRunnerState {
             stop_started: Notify::new(),
+            stop_calls: AtomicUsize::new(0),
             finish: Mutex::new(Some(finish_rx)),
         });
         let manager = test_session_manager(Arc::clone(&state))?;
@@ -194,11 +200,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_delete_session_calls_wait_for_same_cleanup(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let state = Arc::new(TestJobRunnerState {
+            stop_started: Notify::new(),
+            stop_calls: AtomicUsize::new(0),
+            finish: Mutex::new(Some(finish_rx)),
+        });
+        let manager = Arc::new(test_session_manager(Arc::clone(&state))?);
+        let context = manager
+            .get_or_create_session_context("session".to_string(), "user".to_string())
+            .await?;
+        drop(context);
+
+        let first_manager = Arc::clone(&manager);
+        let first_delete =
+            tokio::spawn(async move { first_manager.delete_session("session".to_string()).await });
+        state.stop_started.notified().await;
+
+        let second_manager = Arc::clone(&manager);
+        let second_delete =
+            tokio::spawn(async move { second_manager.delete_session("session".to_string()).await });
+        tokio::task::yield_now().await;
+
+        assert_eq!(state.stop_calls.load(Ordering::SeqCst), 1);
+        assert!(!first_delete.is_finished());
+        assert!(!second_delete.is_finished());
+
+        let _ = finish_tx.send(());
+        first_delete.await??;
+        second_delete.await??;
+        assert_eq!(state.stop_calls.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn delete_missing_session_is_noop() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     {
         let (_finish_tx, finish_rx) = oneshot::channel();
         let state = Arc::new(TestJobRunnerState {
             stop_started: Notify::new(),
+            stop_calls: AtomicUsize::new(0),
             finish: Mutex::new(Some(finish_rx)),
         });
         let manager = test_session_manager(state)?;
