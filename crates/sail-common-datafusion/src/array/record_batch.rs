@@ -30,6 +30,109 @@ pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<Record
     Ok(RecordBatch::try_new(schema, columns)?)
 }
 
+/// Cast a RecordBatch to match the target schema's data types while preserving the
+/// source batch's field names. This is used when the source data has deduplicated
+/// field names (e.g., from Arrow IPC sent by PySpark) but the target schema has
+/// duplicate field names (e.g., as specified by the user in Spark). Preserving the
+/// source field names ensures that the result can be serialized back to Arrow without
+/// errors from duplicate struct field names.
+///
+/// Target field metadata is preserved on the output fields.
+pub fn cast_record_batch_preserving_names(
+    batch: RecordBatch,
+    target_schema: SchemaRef,
+) -> Result<RecordBatch> {
+    let source_schema = batch.schema();
+    let source_fields = source_schema.fields();
+    let target_fields = target_schema.fields();
+    if source_fields.len() != target_fields.len() {
+        return Err(DataFusionError::Internal(format!(
+            "source schema has {} fields but target schema has {} fields",
+            source_fields.len(),
+            target_fields.len()
+        )));
+    }
+    let (new_fields, new_columns): (Vec<FieldRef>, Vec<ArrayRef>) = source_fields
+        .iter()
+        .zip(target_fields.iter())
+        .zip(batch.columns().iter())
+        .map(|((src_field, tgt_field), column)| {
+            let new_column =
+                cast_array_preserving_names(column, src_field.data_type(), tgt_field.data_type())?;
+            let new_type = new_column.data_type().clone();
+            let new_field = Arc::new(
+                src_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(new_type)
+                    .with_metadata(tgt_field.metadata().clone()),
+            );
+            Ok((new_field, new_column))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .unzip();
+    let new_schema = Arc::new(Schema::new_with_metadata(
+        new_fields,
+        target_schema.metadata().clone(),
+    ));
+    Ok(RecordBatch::try_new(new_schema, new_columns)?)
+}
+
+/// Cast an array to the target data type while preserving the source field names for
+/// struct types. This handles duplicate field names by using positional matching.
+/// Target field metadata is preserved on output struct fields.
+fn cast_array_preserving_names(
+    column: &ArrayRef,
+    src_type: &DataType,
+    tgt_type: &DataType,
+) -> Result<ArrayRef> {
+    if src_type == tgt_type {
+        return Ok(column.clone());
+    }
+    match (src_type, tgt_type) {
+        (DataType::Struct(src_children), DataType::Struct(tgt_children))
+            if src_children.len() == tgt_children.len() =>
+        {
+            let struct_array = column
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| DataFusionError::Internal("expected StructArray".to_string()))?;
+            let (new_fields, new_arrays): (Vec<FieldRef>, Vec<ArrayRef>) = src_children
+                .iter()
+                .zip(tgt_children.iter())
+                .enumerate()
+                .map(|(i, (src_child, tgt_child))| {
+                    let child_array = struct_array.column(i);
+                    let new_child = cast_array_preserving_names(
+                        child_array,
+                        src_child.data_type(),
+                        tgt_child.data_type(),
+                    )?;
+                    let new_type = new_child.data_type().clone();
+                    let new_field = Arc::new(
+                        src_child
+                            .as_ref()
+                            .clone()
+                            .with_data_type(new_type)
+                            .with_metadata(tgt_child.metadata().clone()),
+                    );
+                    Ok((new_field, new_child))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .unzip();
+            let new_struct = StructArray::try_new(
+                Fields::from(new_fields),
+                new_arrays,
+                struct_array.nulls().cloned(),
+            )?;
+            Ok(Arc::new(new_struct))
+        }
+        _ => Ok(cast(column, tgt_type)?),
+    }
+}
+
 /// Helper function to handle timezone adjustment for timestamp arrays.
 fn adjust_timestamp_timezone<T>(array: &ArrayRef, target_tz: Option<Arc<str>>) -> Result<ArrayRef>
 where
