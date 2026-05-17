@@ -35,7 +35,7 @@ fn register_builtin_formats(registry: &Arc<TableFormatRegistry>) -> Result<()> {
     registry.register(Arc::new(SocketTableFormat))?;
     registry.register(Arc::new(RateTableFormat))?;
     registry.register(Arc::new(ConsoleTableFormat))?;
-    registry.register(Arc::new(NoopTableFormat::default()))?;
+    registry.register(Arc::new(NoopTableFormat))?;
     Ok(())
 }
 
