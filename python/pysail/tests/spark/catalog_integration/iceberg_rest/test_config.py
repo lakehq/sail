@@ -32,9 +32,12 @@ def _load_namespace(
     iceberg_rest_endpoint: str,
     namespace_parts: list[str],
     separator: str,
+    *,
+    prefix: str | None = None,
 ) -> dict[str, object]:
     namespace = _quote(separator.join(namespace_parts))
-    url = f"{iceberg_rest_endpoint}/v1/namespaces/{namespace}"
+    prefix_path = f"/{_quote(prefix)}" if prefix is not None else ""
+    url = f"{iceberg_rest_endpoint}/v1{prefix_path}/namespaces/{namespace}"
     # Safe: the URL is built from the controlled Iceberg REST fixture endpoint.
     with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
         return json.load(response)
@@ -61,10 +64,11 @@ def _spark_with_catalog(
 
 def _exercise_namespace(
     spark: SparkSession,
-    iceberg_rest_endpoint: str,
+    catalog_endpoint: str,
     *,
     namespace_id: str,
     separator: str,
+    prefix: str | None = None,
 ) -> None:
     parent = f"iceberg_rest_config_{namespace_id}"
     child = "child"
@@ -77,11 +81,18 @@ def _exercise_namespace(
 
         rows = {row.info_name: row.info_value for row in spark.sql(f"DESCRIBE DATABASE {namespace}").collect()}
         assert rows["Namespace Name"] == namespace
-        assert _load_namespace(iceberg_rest_endpoint, [parent, child], separator)["namespace"] == [parent, child]
+        assert _load_namespace(catalog_endpoint, [parent, child], separator, prefix=prefix)["namespace"] == [
+            parent,
+            child,
+        ]
     finally:
         spark.sql(f"DROP DATABASE IF EXISTS {parent} CASCADE")
 
 
+# The Apache Iceberg REST fixture hardcodes /v1/config to return empty defaults and overrides
+# regardless of any CATALOG_* env vars (see RESTCatalogAdapter.java). No off-the-shelf catalog
+# exposes per-test defaults/overrides knobs, so this proxy is the only way to drive the full
+# merge matrix (server defaults x client config x server overrides) in an integration test.
 class _ConfigProxy:
     def __init__(
         self,
@@ -90,7 +101,7 @@ class _ConfigProxy:
         defaults: dict[str, str] | None = None,
         overrides: dict[str, str] | None = None,
         expected_prefix: str | None = None,
-        expected_namespace_separator: str | None = None,
+        namespace_separator: str | None = None,
         expected_config_warehouse: str | None = None,
         reject_catalog_requests: bool = False,
     ) -> None:
@@ -98,7 +109,7 @@ class _ConfigProxy:
         self._defaults = defaults or {}
         self._overrides = overrides or {}
         self._expected_prefix = expected_prefix
-        self._expected_namespace_separator = expected_namespace_separator
+        self._namespace_separator = namespace_separator
         self._expected_config_warehouse = expected_config_warehouse
         self._reject_catalog_requests = reject_catalog_requests
         self._server: ThreadingHTTPServer | None = None
@@ -117,7 +128,7 @@ class _ConfigProxy:
         defaults = self._defaults
         overrides = self._overrides
         expected_prefix = self._expected_prefix
-        expected_namespace_separator = self._expected_namespace_separator
+        namespace_separator = self._namespace_separator
         expected_config_warehouse = self._expected_config_warehouse
         reject_catalog_requests = self._reject_catalog_requests
 
@@ -160,18 +171,34 @@ class _ConfigProxy:
                         return
                     path = f"/v1{path[len(prefix_path) :]}"
 
-                if expected_namespace_separator is not None and path.startswith("/v1/namespaces/"):
-                    namespace = path.removeprefix("/v1/namespaces/").split("/", 1)[0]
-                    decoded_namespace = urllib.parse.unquote(namespace)
-                    if "child" in decoded_namespace and expected_namespace_separator not in decoded_namespace:
-                        self._send_json(
-                            404,
-                            {"error": f"missing expected namespace separator {expected_namespace_separator!r}"},
-                        )
-                        return
+                query = parsed.query
+                if namespace_separator is not None:
+                    path = self._rewrite_namespace_path(path)
+                    query = self._rewrite_parent_query(query)
 
-                forwarded_path = urllib.parse.urlunsplit(("", "", path, parsed.query, parsed.fragment))
+                forwarded_path = urllib.parse.urlunsplit(("", "", path, query, parsed.fragment))
                 self._forward(forwarded_path)
+
+            def _rewrite_namespace_path(self, path: str) -> str:
+                namespace_prefix = "/v1/namespaces/"
+                if not path.startswith(namespace_prefix):
+                    return path
+
+                rest = path.removeprefix(namespace_prefix)
+                namespace, separator, suffix = rest.partition("/")
+                decoded_namespace = urllib.parse.unquote(namespace)
+                rewritten_namespace = self._rewrite_namespace(decoded_namespace)
+                return f"{namespace_prefix}{_quote(rewritten_namespace)}{separator}{suffix}"
+
+            def _rewrite_parent_query(self, query: str) -> str:
+                params = urllib.parse.parse_qsl(query, keep_blank_values=True)
+                rewritten = [
+                    (key, self._rewrite_namespace(value) if key == "parent" else value) for key, value in params
+                ]
+                return urllib.parse.urlencode(rewritten)
+
+            def _rewrite_namespace(self, namespace: str) -> str:
+                return namespace.replace(namespace_separator, "\x1f")
 
             def _forward(self, path: str) -> None:
                 body = None
@@ -266,9 +293,10 @@ def test_client_prefix_config_used_without_server_override(
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id="client_prefix",
             separator="\x1f",
+            prefix=prefix,
         )
 
 
@@ -290,9 +318,10 @@ def test_server_prefix_default_used_without_client_config_or_server_override(
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id="default_prefix",
             separator="\x1f",
+            prefix=prefix,
         )
 
 
@@ -316,9 +345,10 @@ def test_client_prefix_config_wins_over_server_default(
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id="client_prefix_default",
             separator="\x1f",
+            prefix=client_prefix,
         )
 
 
@@ -342,9 +372,10 @@ def test_server_prefix_override_wins_over_client_config(
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id="server_prefix",
             separator="\x1f",
+            prefix=server_prefix,
         )
 
 
@@ -357,7 +388,7 @@ def test_server_namespace_separator_default_used_without_client_config_or_server
         _ConfigProxy(
             iceberg_rest_endpoint,
             defaults={"namespace-separator": separator},
-            expected_namespace_separator=separator,
+            namespace_separator=separator,
         ) as proxy,
         _spark_with_catalog(
             proxy.endpoint,
@@ -366,7 +397,7 @@ def test_server_namespace_separator_default_used_without_client_config_or_server
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id="default_separator",
             separator=separator,
         )
@@ -382,7 +413,7 @@ def test_client_namespace_separator_config_wins_over_server_default(
         _ConfigProxy(
             iceberg_rest_endpoint,
             defaults={"namespace-separator": default_separator},
-            expected_namespace_separator=client_separator,
+            namespace_separator=client_separator,
         ) as proxy,
         _spark_with_catalog(
             proxy.endpoint,
@@ -392,7 +423,7 @@ def test_client_namespace_separator_config_wins_over_server_default(
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id="client_separator_default",
             separator=client_separator,
         )
@@ -406,7 +437,7 @@ def test_client_namespace_separator_config_used_without_server_override(
     with (
         _ConfigProxy(
             iceberg_rest_endpoint,
-            expected_namespace_separator=separator,
+            namespace_separator=separator,
         ) as proxy,
         _spark_with_catalog(
             proxy.endpoint,
@@ -416,7 +447,7 @@ def test_client_namespace_separator_config_used_without_server_override(
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id="client_separator",
             separator=separator,
         )
@@ -432,7 +463,7 @@ def test_server_namespace_separator_override_wins_over_client_config(
         _ConfigProxy(
             iceberg_rest_endpoint,
             overrides={"namespace-separator": server_separator},
-            expected_namespace_separator=server_separator,
+            namespace_separator=server_separator,
         ) as proxy,
         _spark_with_catalog(
             proxy.endpoint,
@@ -442,7 +473,7 @@ def test_server_namespace_separator_override_wins_over_client_config(
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id="server_separator",
             separator=server_separator,
         )
@@ -497,7 +528,7 @@ def test_config_request_uses_client_warehouse_query(
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id=namespace_id,
             separator="\x1f",
         )
@@ -523,7 +554,7 @@ def test_server_warehouse_override_does_not_change_initial_config_query(
     ):
         _exercise_namespace(
             spark,
-            iceberg_rest_endpoint,
+            proxy.endpoint,
             namespace_id="server_warehouse",
             separator="\x1f",
         )
