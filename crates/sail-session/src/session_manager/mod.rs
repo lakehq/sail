@@ -61,10 +61,8 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use datafusion::common::{internal_err, Result as DataFusionResult};
     use datafusion::execution::SendableRecordBatchStream;
