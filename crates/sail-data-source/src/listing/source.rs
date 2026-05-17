@@ -237,7 +237,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         };
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
-        let config = crate::listing::utils::rewrite_listing_partitions(config)?;
+        let config = crate::listing::utils::rewrite_listing_partitions(ctx, config).await?;
         Ok(provider_as_source(Arc::new(
             ListingTable::try_new(config)?.with_constraints(constraints),
         )))

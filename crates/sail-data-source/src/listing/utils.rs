@@ -18,6 +18,67 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::listing::source::ReadFormat;
 
+#[derive(Debug, Clone)]
+struct InferredPartitionType {
+    seen_value: bool,
+    all_i32: bool,
+    all_i64: bool,
+    all_f64: bool,
+}
+
+impl Default for InferredPartitionType {
+    fn default() -> Self {
+        Self {
+            seen_value: false,
+            all_i32: true,
+            all_i64: true,
+            all_f64: true,
+        }
+    }
+}
+
+fn update_inferred_partition_type(state: &mut InferredPartitionType, value: &str) {
+    // Spark uses this marker to represent NULL partition values.
+    if value.is_empty() || value == "__HIVE_DEFAULT_PARTITION__" {
+        return;
+    }
+    state.seen_value = true;
+
+    if state.all_i32 && value.parse::<i32>().is_err() {
+        state.all_i32 = false;
+    }
+    if state.all_i64 && value.parse::<i64>().is_err() {
+        state.all_i64 = false;
+    }
+    if state.all_f64 {
+        match value.parse::<f64>() {
+            Ok(v) if v.is_finite() => {}
+            _ => state.all_f64 = false,
+        }
+    }
+}
+
+fn inferred_data_type(state: &InferredPartitionType) -> Option<DataType> {
+    if !state.seen_value {
+        return None;
+    }
+    if state.all_i32 {
+        Some(DataType::Int32)
+    } else if state.all_i64 {
+        Some(DataType::Int64)
+    } else if state.all_f64 {
+        Some(DataType::Float64)
+    } else {
+        Some(DataType::Utf8)
+    }
+}
+
+fn iter_partition_segments<'a>(path: &'a str) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
+    path.split(object_store::path::DELIMITER)
+        .filter_map(|segment| segment.split_once('='))
+        .filter(|(key, _value)| !key.is_empty())
+}
+
 pub async fn resolve_listing_schema<R: ReadFormat>(
     ctx: &dyn Session,
     urls: &[ListingTableUrl],
@@ -313,19 +374,63 @@ pub async fn list_all_files<'a>(
 }
 
 /// The inferred partition columns are of `Dictionary` types by default, which cannot be
-/// understood by the Spark client. So we rewrite the type to be `Utf8`.
-pub fn rewrite_listing_partitions(mut config: ListingTableConfig) -> Result<ListingTableConfig> {
+/// understood by the Spark client.
+///
+/// For Spark parity, we also attempt to infer concrete partition types (int / double / string)
+/// from observed `key=value` directory segments, matching Spark's
+/// `spark.sql.sources.partitionColumnTypeInference.enabled=true` default behavior.
+pub async fn rewrite_listing_partitions(
+    ctx: &dyn Session,
+    mut config: ListingTableConfig,
+) -> Result<ListingTableConfig> {
     let Some(options) = config.options.as_mut() else {
         return internal_err!("listing options should be present in the config");
     };
-    options
-        .table_partition_cols
-        .iter_mut()
-        .for_each(|(_col, data_type)| {
-            // FIXME: infer concrete partition types (Int / Float / String) from observed values to match Spark's `partitionColumnTypeInference`.
-            if matches!(data_type, DataType::Dictionary(_, _)) {
+
+    if options.table_partition_cols.is_empty() {
+        return Ok(config);
+    }
+
+    let mut col_index_by_name_lower: HashMap<String, usize> = HashMap::new();
+    for (idx, (col, _)) in options.table_partition_cols.iter().enumerate() {
+        col_index_by_name_lower.insert(col.to_ascii_lowercase(), idx);
+    }
+
+    let mut inferred = vec![InferredPartitionType::default(); options.table_partition_cols.len()];
+
+    // Bound the amount of listing work per path to avoid pathological planning-time costs.
+    // This mirrors DataFusion's own use of a small sample for inference paths.
+    const MAX_FILES_PER_PATH: usize = 128;
+
+    for url in &config.table_paths {
+        let store = ctx.runtime_env().object_store(url)?;
+        let mut files = list_all_files(url, ctx, &store, "", None).await?;
+        let mut seen = 0usize;
+        while let Some(meta) = files.try_next().await? {
+            for (key, value) in iter_partition_segments(meta.location.as_ref()) {
+                if let Some(&idx) = col_index_by_name_lower.get(&key.to_ascii_lowercase()) {
+                    update_inferred_partition_type(&mut inferred[idx], value);
+                }
+            }
+            seen += 1;
+            if seen >= MAX_FILES_PER_PATH {
+                break;
+            }
+        }
+    }
+
+    for (idx, (_col, data_type)) in options.table_partition_cols.iter_mut().enumerate() {
+        // Only infer when the type is unknown / stringy. Explicit-schema types must be preserved.
+        let should_infer = matches!(data_type, DataType::Dictionary(_, _) | DataType::Utf8);
+        if should_infer {
+            if let Some(dt) = inferred_data_type(&inferred[idx]) {
+                *data_type = dt;
+            } else if matches!(data_type, DataType::Dictionary(_, _)) {
+                // No usable values observed; keep Spark-client compatibility.
                 *data_type = DataType::Utf8;
             }
-        });
+        }
+    }
+
     Ok(config)
 }
