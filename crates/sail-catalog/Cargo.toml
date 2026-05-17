@@ -10,6 +10,7 @@ workspace = true
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true }
 serde_arrow = { workspace = true }
 regex = { workspace = true }

@@ -61,6 +61,13 @@ impl PlanResolver<'_> {
                     pattern,
                 })
             }
+            CommandNode::ShowTableProperties {
+                table,
+                property_key,
+            } => self.resolve_catalog_command(CatalogCommand::ShowTableProperties {
+                table: table.into(),
+                property_key,
+            }),
             CommandNode::ListTables { database, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ListTables {
                     database: database.map(|x| x.into()).unwrap_or_default(),

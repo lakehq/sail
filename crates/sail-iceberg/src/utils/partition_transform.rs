@@ -113,4 +113,14 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn void_transform_is_rejected() {
+        let result =
+            catalog_partition_field_from_iceberg("dropped_col".to_string(), Transform::Void);
+        assert!(
+            result.is_err(),
+            "Void transform should be rejected, got: {result:?}"
+        );
+    }
 }

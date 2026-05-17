@@ -8,7 +8,6 @@ use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
 use crate::column_features::ColumnFeaturesBuilder;
-use crate::session::plan::PlanFormatter;
 
 /// Metadata key used by Spark Connect's column protocol for generation
 /// expressions. This is an input/output boundary value translated to the
@@ -157,68 +156,6 @@ impl TableKind {
             TableKind::View { definition, .. } if !definition.is_empty() => Some(definition),
             _ => None,
         }
-    }
-}
-
-impl TableStatus {
-    /// Returns metadata key-value pairs for the DESCRIBE EXTENDED output,
-    /// following Spark's CatalogTable.toLinkedHashMap row ordering.
-    pub fn describe_extended_metadata(&self) -> Vec<(String, String)> {
-        let mut rows = Vec::new();
-
-        rows.push(("Database".to_string(), self.database.join(".")));
-        rows.push(("Table".to_string(), self.name.clone()));
-        rows.push(("Type".to_string(), self.kind.type_name().to_string()));
-
-        if let Some(format) = self.kind.format() {
-            rows.push(("Provider".to_string(), format.to_string()));
-        }
-
-        if let Some(comment) = self.kind.comment() {
-            rows.push(("Comment".to_string(), comment));
-        }
-
-        if let Some(definition) = self.kind.view_definition() {
-            rows.push(("View Text".to_string(), definition.to_string()));
-        }
-
-        let properties = self.kind.properties();
-        if !properties.is_empty() {
-            let props_str = properties
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            rows.push(("Table Properties".to_string(), format!("[{props_str}]")));
-        }
-
-        if let Some(loc) = self.kind.location() {
-            rows.push(("Location".to_string(), loc.to_string()));
-        }
-
-        rows
-    }
-
-    pub fn show_table_extended_information(&self, formatter: &dyn PlanFormatter) -> Result<String> {
-        let mut output = String::new();
-
-        for (key, value) in self.describe_extended_metadata() {
-            output.push_str(&format!("{key}: {value}\n"));
-        }
-
-        output.push_str("Schema: root\n");
-        for column in self.kind.columns() {
-            let data_type = formatter
-                .data_type_to_simple_string(&column.data_type)
-                .unwrap_or_else(|_| "invalid".to_string());
-            let nullable = if column.nullable { "true" } else { "false" };
-            output.push_str(&format!(
-                " |-- {}: {} (nullable = {})\n",
-                column.name, data_type, nullable
-            ));
-        }
-
-        Ok(output)
     }
 }
 

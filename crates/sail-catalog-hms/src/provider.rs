@@ -957,13 +957,13 @@ impl CatalogProvider for HmsCatalogProvider {
 
         let db_name = validate_namespace(database)?;
         let format = HiveCatalogFormat::from_format(&format)?;
+        let columns_for_metadata = options.columns.clone();
+        let format_for_metadata = format.logical_format.to_string();
         let partition_columns: Vec<String> = options
             .partition_by
             .iter()
             .map(|field| field.column.clone())
             .collect();
-        let columns_for_metadata = options.columns.clone();
-        let format_for_metadata = format.logical_format.to_string();
         let mut hms_table = build_generic_table(
             &db_name,
             table,

@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -18,21 +19,25 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
+use object_store::path::Path as ObjectPath;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
-    find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatRegistry,
+    arrow_schema_to_columns, find_path_in_options, location_to_url, OptionLayer, PhysicalSinkMode,
+    SinkInfo, SourceInfo, StorageTableMetadata, TableFormat, TableFormatRegistry,
 };
 use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
+use crate::datasource::type_converter::iceberg_schema_to_arrow;
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::physical_plan::IcebergWriterExecOptions;
+use crate::spec::metadata::format::FormatVersion;
+use crate::spec::transform::Transform;
 use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
@@ -69,6 +74,111 @@ impl TableFormat for IcebergTableFormat {
     ) -> Result<Arc<dyn TableSource>> {
         let provider = build_iceberg_provider(ctx, info).await?;
         Ok(Arc::new(IcebergTableSource::new(provider)))
+    }
+
+    /// Load Iceberg metadata directly from storage for catalog commands.
+    ///
+    /// This method enables `DESCRIBE EXTENDED`, `SHOW TBLPROPERTIES`, and
+    /// `SHOW TABLE EXTENDED` to show storage-level metadata for Iceberg tables
+    /// registered via `CREATE TABLE ... USING ICEBERG LOCATION '...'`.
+    ///
+    /// **Limitation:** The HMS catalog provider does not support Iceberg tables.
+    /// Storage metadata hydration for Iceberg only works with catalog providers
+    /// that can register Iceberg table locations (e.g., the default in-memory
+    /// catalog or a future Iceberg REST catalog). Integration tests for Iceberg
+    /// hydration require such a catalog provider and are not yet available.
+    async fn load_storage_table_metadata(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+    ) -> Result<StorageTableMetadata> {
+        let table_url = location_to_url(path, self.name())?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata_location = find_latest_metadata_file(&object_store, &table_url).await?;
+        let metadata_data = object_store
+            .get(&ObjectPath::from(metadata_location.as_str()))
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .bytes()
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata = TableMetadata::from_json(&metadata_data)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let schema = metadata.current_schema().ok_or_else(|| {
+            DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
+        })?;
+        let arrow_schema =
+            iceberg_schema_to_arrow(schema).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let partition_columns: Vec<CatalogPartitionField> = metadata
+            .default_partition_spec()
+            .map(|spec| {
+                spec.fields()
+                    .iter()
+                    .filter(|field| field.transform != Transform::Void)
+                    .filter_map(|field| {
+                        let col_name = schema
+                            .field_by_id(field.source_id)
+                            .map(|f| f.name.clone())?;
+                        Some(catalog_partition_field_from_iceberg(
+                            col_name,
+                            field.transform,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+                    .map_err(DataFusionError::Plan)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let columns = arrow_schema_to_columns(&arrow_schema, &partition_columns);
+
+        // Deduplicate and normalize ordering for Spark-compatible table properties.
+        let mut properties: BTreeMap<String, String> =
+            metadata.properties.clone().into_iter().collect();
+        properties.insert("provider".to_string(), "iceberg".to_string());
+        properties.insert("location".to_string(), metadata.location.clone());
+        let default_file_format = metadata
+            .properties
+            .get("write.format.default")
+            .cloned()
+            .unwrap_or_else(|| "parquet".to_string());
+        properties.insert(
+            "format".to_string(),
+            format!("iceberg/{default_file_format}"),
+        );
+        properties.insert(
+            "format-version".to_string(),
+            match metadata.format_version {
+                FormatVersion::V1 => "1",
+                FormatVersion::V2 => "2",
+                FormatVersion::V3 => "3",
+            }
+            .to_string(),
+        );
+        if let Some(snapshot_id) = metadata.current_snapshot_id {
+            properties.insert("current-snapshot-id".to_string(), snapshot_id.to_string());
+        }
+        if let Some(sort_order_id) = metadata.default_sort_order_id {
+            properties.insert("sort-order".to_string(), sort_order_id.to_string());
+        }
+        let identifier_fields = schema
+            .identifier_field_ids()
+            .filter_map(|id| schema.name_by_field_id(id).map(ToString::to_string))
+            .collect::<Vec<_>>();
+        if !identifier_fields.is_empty() {
+            properties.insert("identifier-fields".to_string(), identifier_fields.join(","));
+        }
+
+        Ok(StorageTableMetadata {
+            columns,
+            comment: metadata.properties.get("comment").cloned(),
+            location: Some(metadata.location),
+            provider: "iceberg".to_string(),
+            partition_columns,
+            properties: properties.into_iter().collect(),
+        })
     }
 
     async fn create_writer(
