@@ -17,6 +17,8 @@ An Iceberg REST catalog can be configured using the following options:
 - `oauth_access_token` (optional): The OAuth 2.0 access token.
 - `bearer_access_token` (optional): The bearer token for authentication.
 
+See [Common Options](./index.md#common-options) for caching configuration.
+
 ## Examples
 
 ```bash

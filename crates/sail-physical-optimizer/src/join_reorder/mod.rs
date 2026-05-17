@@ -244,7 +244,7 @@ impl JoinReorder {
                     ));
                 }
                 ColumnMapEntry::Expression { expr, input_map } => {
-                    let rewritten_expr = self.rewrite_expr_to_final_map(
+                    let rewritten_expr = Self::rewrite_expr_to_final_map(
                         Arc::clone(expr),
                         input_map,
                         final_map,
@@ -267,7 +267,6 @@ impl JoinReorder {
     }
 
     fn rewrite_expr_to_final_map(
-        &self,
         expr: Arc<dyn datafusion::physical_expr::PhysicalExpr>,
         input_map: &ColumnMap,
         final_map: &ColumnMap,
@@ -324,7 +323,7 @@ impl JoinReorder {
                         }
 
                         // Inline nested derived expression by rewriting it against the final join schema.
-                        let rewritten_nested = self.rewrite_expr_to_final_map(
+                        let rewritten_nested = Self::rewrite_expr_to_final_map(
                             Arc::clone(nested_expr),
                             nested_input_map,
                             final_map,

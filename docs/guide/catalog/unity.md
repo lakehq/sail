@@ -18,6 +18,8 @@ Unity Catalog can be configured using the following options:
   authentication). Please refer
   to [Unity Catalog Authentication and Authorization](https://docs.unitycatalog.io/server/auth/) for more information.
 
+See [Common Options](./index.md#common-options) for caching configuration.
+
 ## Environment Variables
 
 ::: warning
