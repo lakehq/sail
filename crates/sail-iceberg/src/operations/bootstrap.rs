@@ -24,7 +24,7 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::helpers::format_version_for_schema;
-use crate::operations::{SnapshotProduceOperation, SnapshotProducer, Transaction};
+use crate::operations::{ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::PartitionSpec;
@@ -52,6 +52,63 @@ impl SnapshotProduceOperation for BootstrapOperation {
     fn operation(&self) -> &'static str {
         "append"
     }
+}
+
+pub(crate) async fn bootstrap_snapshot_action_commit(
+    table_url: &Url,
+    store_ctx: &StoreContext,
+    commit_info: &IcebergCommitInfo,
+    table_meta: &TableMetadata,
+) -> Result<ActionCommit> {
+    let mut table_meta = table_meta.clone();
+    let schema_iceberg = table_meta
+        .current_schema()
+        .cloned()
+        .ok_or_else(|| DataFusionError::Plan("No current schema in table metadata".to_string()))?;
+
+    let partition_spec = table_meta
+        .default_partition_spec()
+        .cloned()
+        .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+    let format_version = table_meta
+        .format_version
+        .max(format_version_for_schema(&schema_iceberg));
+    let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
+
+    let empty_snapshot = SnapshotBuilder::new()
+        .with_snapshot_id(0)
+        .with_sequence_number(0)
+        .with_manifest_list(String::new())
+        .with_summary(crate::spec::snapshots::Summary::new(
+            crate::spec::Operation::Append,
+        ))
+        .with_schema_id(schema_iceberg.schema_id())
+        .build()
+        .map_err(DataFusionError::Execution)?;
+
+    let tx = Transaction::new(table_url.to_string(), empty_snapshot);
+    let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
+        Arc::new(schema_iceberg.clone()),
+        schema_iceberg.schema_id(),
+        partition_spec,
+        format_version,
+        crate::spec::ManifestContentType::Data,
+    );
+
+    let producer = SnapshotProducer::new(
+        &tx,
+        commit_info.data_files.clone(),
+        Some(store_ctx.clone()),
+        Some(manifest_meta),
+    )
+    .with_bootstrap(true)
+    .with_row_lineage_start_row_id(row_lineage_start_row_id)
+    .with_write_path_mode(WritePathMode::Absolute);
+
+    producer
+        .commit(BootstrapOperation)
+        .await
+        .map_err(DataFusionError::Execution)
 }
 
 /// Bootstrap a new table when no metadata file exists
@@ -225,53 +282,12 @@ pub async fn bootstrap_first_snapshot(
         .current_schema()
         .cloned()
         .ok_or_else(|| DataFusionError::Plan("No current schema in table metadata".to_string()))?;
-
-    let partition_spec = table_meta
-        .default_partition_spec()
-        .cloned()
-        .unwrap_or_else(PartitionSpec::unpartitioned_spec);
     let format_version = table_meta
         .format_version
         .max(format_version_for_schema(&schema_iceberg));
     table_meta.format_version = format_version;
-    let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
-
-    // Create a minimal transaction context (no parent snapshot)
-    let empty_snapshot = SnapshotBuilder::new()
-        .with_snapshot_id(0)
-        .with_sequence_number(0)
-        .with_manifest_list(String::new())
-        .with_summary(crate::spec::snapshots::Summary::new(
-            crate::spec::Operation::Append,
-        ))
-        .with_schema_id(schema_iceberg.schema_id())
-        .build()
-        .map_err(DataFusionError::Execution)?;
-
-    let tx = Transaction::new(table_url.to_string(), empty_snapshot);
-    let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
-        Arc::new(schema_iceberg.clone()),
-        schema_iceberg.schema_id(),
-        partition_spec.clone(),
-        format_version,
-        crate::spec::ManifestContentType::Data,
-    );
-
-    // Use SnapshotProducer in bootstrap mode
-    let producer = SnapshotProducer::new(
-        &tx,
-        commit_info.data_files.clone(),
-        Some(store_ctx.clone()),
-        Some(manifest_meta),
-    )
-    .with_bootstrap(true)
-    .with_row_lineage_start_row_id(row_lineage_start_row_id)
-    .with_write_path_mode(WritePathMode::Absolute);
-
-    let action_commit = producer
-        .commit(BootstrapOperation)
-        .await
-        .map_err(DataFusionError::Execution)?;
+    let action_commit =
+        bootstrap_snapshot_action_commit(table_url, store_ctx, commit_info, &table_meta).await?;
 
     // Extract the new snapshot from the updates
     let updates = action_commit.into_updates();

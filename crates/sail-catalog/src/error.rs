@@ -45,6 +45,8 @@ pub enum CatalogError {
     NotFound(CatalogObject, String),
     #[error("{0} already exists: {1}")]
     AlreadyExists(CatalogObject, String),
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("not supported: {0}")]
     NotSupported(String),
     #[error("internal error: {0}")]

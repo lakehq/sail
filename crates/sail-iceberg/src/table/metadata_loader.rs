@@ -86,6 +86,18 @@ pub(crate) fn metadata_file_version_from_path(path: &str) -> Option<i32> {
         .map(|file| file.version)
 }
 
+pub(crate) fn metadata_location_to_object_path(metadata_location: &str) -> Result<ObjectPath> {
+    match Url::parse(metadata_location) {
+        Ok(url) => crate::utils::url_to_object_path(&url),
+        Err(_) => ObjectPath::parse(metadata_location.trim_start_matches('/'))
+            .map_err(|e| DataFusionError::External(Box::new(e))),
+    }
+}
+
+pub(crate) fn metadata_location_to_object_path_string(metadata_location: &str) -> Result<String> {
+    Ok(metadata_location_to_object_path(metadata_location)?.to_string())
+}
+
 fn metadata_file_codec_from_path(path: &str) -> Option<MetadataFileCodec> {
     path.rsplit('/')
         .next()
@@ -130,7 +142,7 @@ pub(crate) async fn load_metadata_file_bytes(
     object_store: &Arc<dyn object_store::ObjectStore>,
     metadata_location: &str,
 ) -> Result<Vec<u8>> {
-    let metadata_path = ObjectPath::from(metadata_location);
+    let metadata_path = metadata_location_to_object_path(metadata_location)?;
     let metadata_data = object_store
         .get(&metadata_path)
         .await
