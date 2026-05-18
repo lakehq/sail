@@ -49,7 +49,8 @@ def configure_sail_environment():
     # snapshot tests involving execution plans.
     os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
     # Set the stack size explicitly to assist the configuration removal test.
-    os.environ["SAIL_RUNTIME__STACK_SIZE"] = "8388608"
+    # And we need the larger stack size to support large query plans in the test.
+    os.environ["SAIL_RUNTIME__STACK_SIZE"] = "16777216"
 
     # Ensure the native module can be imported successfully.
     # This allows this function to be future-proof in case we ever change the native module name.

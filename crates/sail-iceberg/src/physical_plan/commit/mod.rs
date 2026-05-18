@@ -25,6 +25,7 @@ pub struct IcebergCommitInfo {
     pub manifest_list_path: String,
     pub updates: Vec<TableUpdate>,
     pub requirements: Vec<TableRequirement>,
+    pub table_properties: Vec<(String, String)>,
     pub operation: Operation,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<Schema>,

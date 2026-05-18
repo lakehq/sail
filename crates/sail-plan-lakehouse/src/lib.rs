@@ -147,6 +147,7 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
 pub fn new_lakehouse_extension_planners() -> Vec<Arc<dyn ExtensionPlanner + Send + Sync>> {
     vec![
         Arc::new(sail_delta_lake::planner::DeltaTablePhysicalPlanner),
+        Arc::new(sail_iceberg::IcebergTablePhysicalPlanner),
         Arc::new(DeltaExtensionPlanner),
     ]
 }

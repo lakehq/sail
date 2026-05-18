@@ -96,11 +96,21 @@ impl PlanResolver<'_> {
                 return Err(PlanError::invalid("invalid scalar function clause"));
             }
             if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+                if f.eval_type().is_table_function() {
+                    return Err(PlanError::AnalysisError(format!(
+                        "user-defined table function cannot be used as a scalar function: {function_name}"
+                    )));
+                }
+                let output_type = f.output_type().cloned().ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "unresolved UDF {function_name} has no scalar return type"
+                    ))
+                })?;
                 let function = PythonUdf {
                     python_version: f.python_version().to_string(),
                     eval_type: f.eval_type(),
                     command: f.command().to_vec(),
-                    output_type: f.output_type().clone(),
+                    output_type,
                 };
                 self.resolve_python_udf_expr(
                     function,

@@ -1,7 +1,9 @@
+mod cache;
 mod namespace;
 mod options;
 mod runtime;
 
+pub use cache::*;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
@@ -65,6 +67,14 @@ pub trait CatalogProvider: Send + Sync {
         database: &Namespace,
         table: &str,
         options: DropTableOptions,
+    ) -> CatalogResult<()>;
+
+    /// Alters a table in the catalog.
+    async fn alter_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
     ) -> CatalogResult<()>;
 
     /// Creates a view in the catalog.

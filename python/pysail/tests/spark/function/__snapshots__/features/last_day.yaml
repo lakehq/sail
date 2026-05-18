@@ -1,0 +1,51 @@
+# serializer version: 1
+---
+name: "test_explain_last_day_filter_on_parquet_shows_preimage_pushdown"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as d]
+      ProjectionExec: expr=[d@0 as #1]
+        FilterExec: d@0 >= 2024-04-01 AND d@0 < 2024-05-01
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_last_day_pushdown/<id>_0.zst.parquet]]}, projection=[d], file_type=parquet, predicate=d@0 >= 2024-04-01 AND d@0 < 2024-05-01, pruning_predicate=d_null_count@1 != row_count@2 AND d_max@0 >= 2024-04-01 AND d_null_count@1 != row_count@2 AND d_min@3 < 2024-05-01, required_guarantees=[]
+---
+name: "test_explain_last_day_less_or_equal_rewrites_to_upperbound_predicate"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as d]
+      ProjectionExec: expr=[d@0 as #1]
+        FilterExec: d@0 < 2024-05-01
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_last_day_lte/<id>_0.zst.parquet]]}, projection=[d], file_type=parquet, predicate=d@0 < 2024-05-01, pruning_predicate=d_null_count@1 != row_count@2 AND d_min@0 < 2024-05-01, required_guarantees=[]
+---
+name: "test_explain_last_day_not_equal_rewrites_to_disjunction_over_the_gap_month"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as d]
+      ProjectionExec: expr=[d@0 as #1]
+        FilterExec: d@0 < 2024-04-01 OR d@0 >= 2024-05-01
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_last_day_neq/<id>_0.zst.parquet]]}, projection=[d], file_type=parquet, predicate=d@0 < 2024-04-01 OR d@0 >= 2024-05-01, pruning_predicate=d_null_count@1 != row_count@2 AND d_min@0 < 2024-04-01 OR d_null_count@1 != row_count@2 AND d_max@3 >= 2024-05-01, required_guarantees=[]
+---
+name: "test_explain_last_day_with_midmonth_literal_does_not_rewrite"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as d]
+      ProjectionExec: expr=[d@0 as #1]
+        FilterExec: spark_last_day(d@0) = 2024-04-15
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_last_day_unsat/<id>_0.zst.parquet]]}, projection=[d], file_type=parquet, predicate=spark_last_day(d@0) = 2024-04-15
+---
+name: "test_explain_literal_date_filter_on_parquet__baseline"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as d], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Date32("2024-03-31")) Max=Inexact(Date32("2024-05-31")) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]], schema=[d:Date32;N]
+      ProjectionExec: expr=[d@0 as #1], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Date32("2024-03-31")) Max=Inexact(Date32("2024-05-31")) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]], schema=[#1:Date32;N]
+        FilterExec: d@0 >= 2024-04-01 AND d@0 < 2024-05-01, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, selectivity=<metric>], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Date32("2024-03-31")) Max=Inexact(Date32("2024-05-31")) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]], schema=[d:Date32;N]
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, fetch_time=<metric>, repartition_time=<metric>, send_time=<metric>], statistics=[Rows=Inexact(5), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Date32("2024-03-31")) Max=Inexact(Date32("2024-05-31")) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]], schema=[d:Date32;N]
+            DataSourceExec: file_groups={1 group: [[<tmp>/explain_last_day_baseline/<id>_0.zst.parquet]]}, projection=[d], file_type=parquet, predicate=d@0 >= 2024-04-01 AND d@0 < 2024-05-01, pruning_predicate=d_null_count@1 != row_count@2 AND d_max@0 >= 2024-04-01 AND d_null_count@1 != row_count@2 AND d_min@3 < 2024-05-01, required_guarantees=[], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, files_ranges_pruned_statistics=<metric>, row_groups_pruned_statistics=<metric>, row_groups_pruned_bloom_filter=<metric>, page_index_pages_pruned=<metric>, page_index_rows_pruned=<metric>, limit_pruned_row_groups=<metric>, batches_split=<metric>, bytes_scanned=<metric>, file_open_errors=<metric>, file_scan_errors=<metric>, num_predicate_creation_errors=<metric>, predicate_evaluation_errors=<metric>, pushdown_rows_matched=<metric>, pushdown_rows_pruned=<metric>, predicate_cache_inner_records=<metric>, predicate_cache_records=<metric>, bloom_filter_eval_time=<metric>, metadata_load_time=<metric>, page_index_eval_time=<metric>, row_pushdown_eval_time=<metric>, statistics_eval_time=<metric>, time_elapsed_opening=<metric>, time_elapsed_processing=<metric>, time_elapsed_scanning_total=<metric>, time_elapsed_scanning_until_data=<metric>, scan_efficiency_ratio=<metric>], statistics=[Rows=Inexact(5), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Date32("2024-03-31")) Max=Inexact(Date32("2024-05-31")) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]], schema=[d:Date32;N]

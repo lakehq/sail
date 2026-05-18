@@ -2349,7 +2349,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: quote"
+        "success": "ok"
       }
     },
     {
