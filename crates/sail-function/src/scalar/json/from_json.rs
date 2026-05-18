@@ -283,6 +283,10 @@ fn is_arr_and_obj_match(builder: &FieldBuilder, value: &Value) -> bool {
     )
 }
 
+
+/// [Credit] The core field builder logic is inspired by
+/// [DataFusion Comet](https://github.com/apache/datafusion-comet/blob/main/native/spark-expr/src/json_funcs/from_json.rs),
+/// licensed under the Apache License, Version 2.0.
 #[derive(Debug)]
 enum FieldBuilder {
     Boolean(BooleanBuilder),
@@ -373,7 +377,7 @@ fn create_builder(
         DataType::Int64 => Ok(FieldBuilder::Int64(Int64Builder::with_capacity(capacity))),
         DataType::List(field) => {
             let values = create_builder(field.data_type(), capacity, session_timezone)?;
-            let mut offsets = Vec::with_capacity(capacity);
+            let mut offsets = Vec::with_capacity(capacity + 1);
             offsets.push(0);
             Ok(FieldBuilder::List {
                 field: field.clone(),
@@ -399,7 +403,7 @@ fn create_builder(
             let keys_builder = create_builder(keys_field.data_type(), capacity, session_timezone)?;
             let values_builder =
                 create_builder(values_field.data_type(), capacity, session_timezone)?;
-            let mut offsets = Vec::with_capacity(capacity);
+            let mut offsets = Vec::with_capacity(capacity + 1);
             offsets.push(0);
             Ok(FieldBuilder::Map {
                 field: field.clone(),
@@ -642,9 +646,9 @@ fn append_to_builder(
         }
         FieldBuilder::TimestampMicrosecond { builder, tz } => match value {
             Value::String(string) => {
-                let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                let utc_datetime = parse_timestamp(string, tz.clone(), options)?;
                 if let Some(timestamp_microseconds) =
-                    TimestampMicrosecondType::from_datetime(naive_datetime)
+                    TimestampMicrosecondType::from_datetime(utc_datetime)
                 {
                     builder.append_value(timestamp_microseconds);
                 } else {
@@ -655,9 +659,9 @@ fn append_to_builder(
         },
         FieldBuilder::TimestampMillisecond { builder, tz } => match value {
             Value::String(string) => {
-                let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                let utc_datetime = parse_timestamp(string, tz.clone(), options)?;
                 if let Some(timestamp_milliseconds) =
-                    TimestampMillisecondType::from_datetime(naive_datetime)
+                    TimestampMillisecondType::from_datetime(utc_datetime)
                 {
                     builder.append_value(timestamp_milliseconds);
                 } else {
@@ -668,9 +672,9 @@ fn append_to_builder(
         },
         FieldBuilder::TimestampNanosecond { builder, tz } => match value {
             Value::String(string) => {
-                let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
+                let utc_datetime = parse_timestamp(string, tz.clone(), options)?;
                 if let Some(timestamp_nanoseconds) =
-                    TimestampNanosecondType::from_datetime(naive_datetime)
+                    TimestampNanosecondType::from_datetime(utc_datetime)
                 {
                     builder.append_value(timestamp_nanoseconds);
                 } else {
@@ -681,8 +685,8 @@ fn append_to_builder(
         },
         FieldBuilder::TimestampSecond { builder, tz } => match value {
             Value::String(string) => {
-                let naive_datetime = parse_timestamp(string, tz.clone(), options)?;
-                if let Some(timestamp_second) = TimestampSecondType::from_datetime(naive_datetime) {
+                let utc_datetime = parse_timestamp(string, tz.clone(), options)?;
+                if let Some(timestamp_second) = TimestampSecondType::from_datetime(utc_datetime) {
                     builder.append_value(timestamp_second);
                 } else {
                     builder.append_null();

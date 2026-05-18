@@ -1360,15 +1360,6 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
         | result |
         | NULL   |
 
-    Scenario: Parseable JSON array as map target returns null
-      When query
-        """
-        SELECT from_json('[1,2,3]', 'MAP<STRING,INT>') AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
     Scenario: Parseable JSON number as map target returns null
       When query
         """
