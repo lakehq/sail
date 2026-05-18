@@ -169,9 +169,9 @@ impl IcebergRestCatalogProvider {
                 }
 
                 let uri = if let Some(uri) = overrides.remove(REST_CATALOG_PROP_URI) {
-                    uri
+                    uri.trim_end_matches('/').to_string()
                 } else {
-                    self.catalog_config.uri.clone()
+                    self.catalog_config.uri.trim_end_matches('/').to_string()
                 };
 
                 let mut props = Self::normalize_catalog_props(config.defaults);
@@ -865,7 +865,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             schema: Box::new(schema),
             partition_spec,
             write_order,
-            stage_create: None,
+            stage_create: Some(false),
             properties: if props.is_empty() { None } else { Some(props) },
         };
 
