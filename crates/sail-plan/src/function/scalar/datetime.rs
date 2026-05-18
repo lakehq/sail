@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::expr_fn;
-use datafusion_common::ScalarValue;
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_functions::expr_fn::to_time;
@@ -470,16 +472,37 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(convert_tz(from_tz, to_tz, ts))
 }
 
+fn cast_to_session_timestamp(
+    schema: &DFSchemaRef,
+    session_timezone: Arc<str>,
+    ts: Expr,
+) -> PlanResult<Expr> {
+    match ts.get_type(schema) {
+        Ok(DataType::Timestamp(_, _)) => Ok(ts),
+        Ok(_) => Ok(cast(
+            ts,
+            DataType::Timestamp(TimeUnit::Microsecond, Some(session_timezone)),
+        )),
+        Err(e) => Err(PlanError::invalid(format!(
+            "failed to infer type for timestamp argument: {e}"
+        ))),
+    }
+}
+
 fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let session_tz = session_timezone(&input);
+    let schema = input.function_context.schema;
+    let session_timezone = Arc::clone(&input.function_context.plan_config.session_timezone);
     let (ts, to_tz) = input.arguments.two()?;
-    Ok(convert_tz(session_tz, to_tz, ts))
+    let ts = cast_to_session_timestamp(schema, session_timezone, ts)?;
+    Ok(convert_tz(lit("UTC"), to_tz, ts))
 }
 
 fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let session_tz = session_timezone(&input);
+    let schema = input.function_context.schema;
+    let session_timezone = Arc::clone(&input.function_context.plan_config.session_timezone);
     let (ts, from_tz) = input.arguments.two()?;
-    Ok(convert_tz(from_tz, session_tz, ts))
+    let ts = cast_to_session_timestamp(schema, session_timezone, ts)?;
+    Ok(convert_tz(from_tz, lit("UTC"), ts))
 }
 
 fn make_ym_interval(args: Vec<Expr>) -> PlanResult<Expr> {

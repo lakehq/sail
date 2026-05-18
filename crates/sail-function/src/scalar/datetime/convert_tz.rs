@@ -2,7 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{Local, TimeZone};
+use chrono::{Duration, Local, LocalResult, Offset, TimeZone};
 use chrono_tz::Tz;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array};
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
@@ -52,7 +52,7 @@ impl ScalarUDFImpl for ConvertTz {
             return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
         }
         match &arg_types[2] {
-            DataType::Timestamp(unit, _tz) => Ok(DataType::Timestamp(*unit, local_offset_opt())),
+            DataType::Timestamp(unit, tz) => Ok(DataType::Timestamp(*unit, tz.clone())),
             _ => Ok(DataType::Timestamp(
                 TimeUnit::Microsecond,
                 local_offset_opt(),
@@ -171,7 +171,7 @@ fn convert_tz_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let indices = (0..max_len as u64).collect::<UInt64Array>();
             take::take(&ts_arr, &indices, None)?
         } else {
-            ts_arr
+            ts_arr.clone()
         };
 
         let nanos_arr = timestamp_to_nanoseconds(&ts_arr)?;
@@ -219,12 +219,12 @@ fn convert_tz_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
     }?;
 
-    let time_unit = match args[2].data_type() {
-        DataType::Timestamp(unit, _tz) => *unit,
-        _ => TimeUnit::Microsecond,
+    let (time_unit, tz) = match ts_arr.data_type() {
+        DataType::Timestamp(unit, tz) => (*unit, tz.clone()),
+        _ => (TimeUnit::Microsecond, local_offset_opt()),
     };
 
-    nanoseconds_to_timestamp(results, &DataType::Timestamp(time_unit, local_offset_opt()))
+    nanoseconds_to_timestamp(results, &DataType::Timestamp(time_unit, tz))
 }
 
 fn local_offset_opt() -> Option<Arc<str>> {
@@ -236,12 +236,83 @@ fn tz_shifted_utc_nanos<T1: TimeZone + Clone, T2: TimeZone + Clone>(
     from_zone: &T1,
     to_zone: &T2,
 ) -> Option<i64> {
-    to_zone
-        .timestamp_nanos(ts_nanos)
-        .naive_local()
-        .and_local_timezone(from_zone.clone())
-        .single()
-        .and_then(|ts| ts.to_utc().timestamp_nanos_opt())
+    let naive = to_zone.timestamp_nanos(ts_nanos).naive_local();
+    resolve_local_datetime(from_zone, naive).and_then(|ts| ts.to_utc().timestamp_nanos_opt())
+}
+
+fn resolve_local_datetime<T: TimeZone + Clone>(
+    tz: &T,
+    naive: chrono::NaiveDateTime,
+) -> Option<chrono::DateTime<T>> {
+    match naive.and_local_timezone(tz.clone()) {
+        LocalResult::Single(ts) => Some(ts),
+        LocalResult::Ambiguous(ts1, ts2) => match (
+            ts1.to_utc().timestamp_nanos_opt(),
+            ts2.to_utc().timestamp_nanos_opt(),
+        ) {
+            (Some(n1), Some(n2)) => Some(if n1 <= n2 { ts1 } else { ts2 }),
+            _ => Some(ts1),
+        },
+        LocalResult::None => resolve_nonexistent_local_datetime(tz, naive),
+    }
+}
+
+fn resolve_nonexistent_local_datetime<T: TimeZone + Clone>(
+    tz: &T,
+    naive: chrono::NaiveDateTime,
+) -> Option<chrono::DateTime<T>> {
+    // Spark shifts nonexistent local times (DST gaps) forward by the offset change,
+    // e.g. `2025-03-09 02:30:00` in `America/Los_Angeles` becomes `03:30:00`.
+    let before = find_valid_datetime_nearby(tz, naive, -1)?;
+    let after = find_valid_datetime_nearby(tz, naive, 1)?;
+
+    let before_offset = before.offset().fix().local_minus_utc();
+    let after_offset = after.offset().fix().local_minus_utc();
+    let shift_seconds = i64::from(after_offset - before_offset);
+
+    if shift_seconds == 0 {
+        return Some(after);
+    }
+
+    let shifted = naive + Duration::seconds(shift_seconds);
+    shifted
+        .and_local_timezone(tz.clone())
+        .earliest()
+        .or_else(|| shifted.and_local_timezone(tz.clone()).latest())
+        .or(Some(after))
+}
+
+fn find_valid_datetime_nearby<T: TimeZone + Clone>(
+    tz: &T,
+    naive: chrono::NaiveDateTime,
+    direction: i32,
+) -> Option<chrono::DateTime<T>> {
+    // Look up to 24 hours away in 1-hour steps to find a valid datetime on the
+    // requested side of the gap.
+    for i in 1..=24i64 {
+        let step = Duration::hours(i);
+        let candidate = if direction < 0 {
+            naive - step
+        } else {
+            naive + step
+        };
+        let res = candidate.and_local_timezone(tz.clone());
+        let ts = match res {
+            LocalResult::Single(ts) => Some(ts),
+            LocalResult::Ambiguous(ts1, ts2) => match (
+                ts1.to_utc().timestamp_nanos_opt(),
+                ts2.to_utc().timestamp_nanos_opt(),
+            ) {
+                (Some(n1), Some(n2)) => Some(if n1 <= n2 { ts1 } else { ts2 }),
+                _ => Some(ts1),
+            },
+            LocalResult::None => None,
+        };
+        if let Some(ts) = ts {
+            return Some(ts);
+        }
+    }
+    None
 }
 
 fn timestamp_to_nanoseconds(array: &dyn Array) -> Result<Int64Array> {
@@ -268,7 +339,7 @@ fn timestamp_to_nanoseconds(array: &dyn Array) -> Result<Int64Array> {
 
 fn nanoseconds_to_timestamp(array: Int64Array, data_type: &DataType) -> Result<ArrayRef> {
     match data_type {
-        DataType::Timestamp(time_unit, _tz) => Ok(cast::cast(
+        DataType::Timestamp(time_unit, tz) => Ok(cast::cast(
             &numeric::div(
                 &array,
                 &numeric::div(
@@ -276,10 +347,7 @@ fn nanoseconds_to_timestamp(array: Int64Array, data_type: &DataType) -> Result<A
                     &Int64Array::new_scalar(time_unit_to_multiplier(time_unit)),
                 )?,
             )?,
-            &DataType::Timestamp(
-                *time_unit,
-                Some(Arc::from(Local::now().offset().to_string())),
-            ),
+            &DataType::Timestamp(*time_unit, tz.clone()),
         )?),
         _ => {
             exec_err!(
