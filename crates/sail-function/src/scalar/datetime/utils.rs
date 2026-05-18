@@ -124,10 +124,16 @@ lazy_static! {
                 // All patterns are compile-time `&str` constants, so the regex
                 // construction below cannot fail at runtime. `.unwrap()` is
                 // safe; an invalid edit to the `patterns` list above would be
-                // caught immediately by the unit tests below.
+                // caught immediately by the unit tests below. `.map_err` adds
+                // the offending pattern to the panic message so a future
+                // breakage is easy to diagnose.
                 let regex_pattern = format!(r"(?P<pre>^|[^%]){}", regex::escape(pattern));
                 #[expect(clippy::unwrap_used)]
-                let re = Regex::new(&regex_pattern).unwrap();
+                let re = Regex::new(&regex_pattern)
+                    .map_err(|e| {
+                        format!("failed to compile static spark datetime pattern '{pattern}': {e}")
+                    })
+                    .unwrap();
                 // Precompute the FULL replacement string including the
                 // `${pre}` capture group reference to avoid per-call allocation.
                 let full_replacement = format!("${{pre}}{replacement}");
@@ -144,7 +150,13 @@ pub fn spark_datetime_format_to_chrono_strftime(format: &str) -> Result<String> 
 
     let mut result = format.to_string();
     for (re, replacement) in CHRONO_REPLACEMENTS.iter() {
-        result = re.replace_all(&result, replacement.as_str()).to_string();
+        // `replace_all` returns `Cow::Borrowed` when nothing matched; in that
+        // case the input is unchanged and there is no need to allocate a new
+        // `String`. Only reassign `result` when an actual substitution
+        // happened (`Cow::Owned`).
+        if let std::borrow::Cow::Owned(new_result) = re.replace_all(&result, replacement.as_str()) {
+            result = new_result;
+        }
     }
 
     // Fix double-dot issue: chrono's %.Nf already includes a leading dot,
@@ -268,10 +280,7 @@ mod tests {
         // After `MM` substitutes to `%m`, the `m` produced must NOT be
         // re-matched by the Spark minute pattern `m`. This is the real
         // reason the `(?P<pre>^|[^%])` guard exists.
-        assert_eq!(
-            spark_datetime_format_to_chrono_strftime("MM mm")?,
-            "%m %M"
-        );
+        assert_eq!(spark_datetime_format_to_chrono_strftime("MM mm")?, "%m %M");
         Ok(())
     }
 
@@ -291,10 +300,7 @@ mod tests {
 
         // Subsecond family (S, 9 levels): if the shorter pattern matched
         // first, "SSSSSSSSS" would become "%.1f%.8f" or similar garbage.
-        assert_eq!(
-            spark_datetime_format_to_chrono_strftime("SSSSS")?,
-            "%.5f"
-        );
+        assert_eq!(spark_datetime_format_to_chrono_strftime("SSSSS")?, "%.5f");
 
         // NOTE: M-family ordering (MMMM-MMM-MM-M) is intentionally NOT
         // asserted here. Sail's current output is "%B-%b-%m-%-%-M" because
@@ -408,19 +414,66 @@ mod tests {
             " ",
             "   ",
             // Single patterns, every Spark token
-            "yyyy", "yyy", "yy", "y",
-            "MMMM", "MMM", "MM", "M",
-            "LLLL", "LLL", "LL", "L",
-            "dd", "d", "D",
-            "EEEE", "EEE", "E",
-            "hh", "h", "HH", "H", "KK", "K",
-            "mm", "m", "ss", "s", "a",
-            "S", "SS", "SSS", "SSSS", "SSSSS", "SSSSSS", "SSSSSSS", "SSSSSSSS", "SSSSSSSSS",
-            "X", "XX", "XXX", "XXXX", "XXXXX",
-            "x", "xx", "xxx", "xxxx", "xxxxx",
-            "Z", "ZZ", "ZZZ", "ZZZZ", "ZZZZZ",
-            "z", "zz", "zzz", "zzzz",
-            "OO", "OOOO", "VV",
+            "yyyy",
+            "yyy",
+            "yy",
+            "y",
+            "MMMM",
+            "MMM",
+            "MM",
+            "M",
+            "LLLL",
+            "LLL",
+            "LL",
+            "L",
+            "dd",
+            "d",
+            "D",
+            "EEEE",
+            "EEE",
+            "E",
+            "hh",
+            "h",
+            "HH",
+            "H",
+            "KK",
+            "K",
+            "mm",
+            "m",
+            "ss",
+            "s",
+            "a",
+            "S",
+            "SS",
+            "SSS",
+            "SSSS",
+            "SSSSS",
+            "SSSSSS",
+            "SSSSSSS",
+            "SSSSSSSS",
+            "SSSSSSSSS",
+            "X",
+            "XX",
+            "XXX",
+            "XXXX",
+            "XXXXX",
+            "x",
+            "xx",
+            "xxx",
+            "xxxx",
+            "xxxxx",
+            "Z",
+            "ZZ",
+            "ZZZ",
+            "ZZZZ",
+            "ZZZZZ",
+            "z",
+            "zz",
+            "zzz",
+            "zzzz",
+            "OO",
+            "OOOO",
+            "VV",
             // Spark documentation examples
             "yyyy-MM-dd",
             "yyyy-MM-dd HH:mm:ss",
@@ -561,12 +614,18 @@ mod tests {
 
         println!();
         println!("=== datetime format conversion benchmark ===");
-        println!("iterations: {iterations} x {} formats = {total_calls} calls each",
-                 formats.len());
-        println!("reference (pre-cache):  {:>10.3?}  ({:.0} ns/call)",
-                 reference_elapsed, reference_per_call);
-        println!("cached    (post-cache): {:>10.3?}  ({:.0} ns/call)",
-                 cached_elapsed, cached_per_call);
+        println!(
+            "iterations: {iterations} x {} formats = {total_calls} calls each",
+            formats.len()
+        );
+        println!(
+            "reference (pre-cache):  {:>10.3?}  ({:.0} ns/call)",
+            reference_elapsed, reference_per_call
+        );
+        println!(
+            "cached    (post-cache): {:>10.3?}  ({:.0} ns/call)",
+            cached_elapsed, cached_per_call
+        );
         println!("speedup: {speedup:.1}x");
         println!();
 
@@ -613,13 +672,11 @@ mod tests {
             // lint. A panic here would be a real test failure (wrong output
             // under concurrent reads), so we surface it as a DataFusion
             // error.
-            handle
-                .join()
-                .map_err(|_| {
-                    datafusion_common::DataFusionError::Execution(
-                        "thread panicked during concurrent stress test".to_string(),
-                    )
-                })??;
+            handle.join().map_err(|_| {
+                datafusion_common::DataFusionError::Execution(
+                    "thread panicked during concurrent stress test".to_string(),
+                )
+            })??;
         }
         Ok(())
     }
