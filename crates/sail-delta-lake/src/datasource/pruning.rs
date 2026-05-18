@@ -480,7 +480,15 @@ impl PruningStatistics for AddStatsPruningStatistics {
     }
 
     fn row_counts(&self) -> Option<datafusion::arrow::array::ArrayRef> {
-        None
+        let counts: Vec<Option<u64>> = self
+            .stats
+            .iter()
+            .map(|s| s.as_ref().map(|s| s.num_records.max(0) as u64))
+            .collect();
+        if counts.iter().all(|c| c.is_none()) {
+            return None;
+        }
+        Some(Arc::new(UInt64Array::from(counts)))
     }
 
     fn contained(

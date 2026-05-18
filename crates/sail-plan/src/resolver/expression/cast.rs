@@ -9,13 +9,13 @@ use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
-use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
@@ -66,7 +66,10 @@ impl PlanResolver<'_> {
                 func: Arc::new(ScalarUDF::from(ArraysZip::new(field_names))),
                 args: resolved_args,
             });
-            return Ok(NamedExpr::new(vec!["arrays_zip(...)".to_string()], udf_expr));
+            return Ok(NamedExpr::new(
+                vec!["arrays_zip(...)".to_string()],
+                udf_expr,
+            ));
         }
 
         // Extract the DayTimeInterval field unit before resolving to Arrow type,
@@ -211,7 +214,7 @@ fn extract_arrays_zip_struct_field_names(
         return None;
     };
     let parts = f.function_name.parts();
-    if parts.len() != 1 || parts[0].as_ref().to_ascii_lowercase() != "arrays_zip" {
+    if parts.len() != 1 || !parts[0].as_ref().eq_ignore_ascii_case("arrays_zip") {
         return None;
     }
     let element_type = match cast_to_type {
