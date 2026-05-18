@@ -69,6 +69,7 @@ mod tests {
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::{SessionConfig, SessionContext};
     use sail_common::runtime::RuntimeHandle;
+    use sail_common_datafusion::session::activity::ActivityTracker;
     use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory, JobService};
     use sail_common_datafusion::system::observable::{
         JobRunnerObserver, Observer, StateObservable,
@@ -90,7 +91,9 @@ mod tests {
             let runner = Box::new(TestJobRunner {
                 state: Arc::clone(&self.state),
             });
-            let config = SessionConfig::new().with_extension(Arc::new(JobService::new(runner)));
+            let config = SessionConfig::new()
+                .with_extension(Arc::new(ActivityTracker::new()))
+                .with_extension(Arc::new(JobService::new(runner)));
             Ok(SessionContext::new_with_config(config))
         }
     }
@@ -98,6 +101,7 @@ mod tests {
     struct TestJobRunnerState {
         stop_started: Notify,
         stop_calls: AtomicUsize,
+        send_history: bool,
         finish: Mutex<Option<oneshot::Receiver<()>>>,
     }
 
@@ -109,7 +113,8 @@ mod tests {
 
     impl SessionFactory<ServerSessionInfo> for EmptySessionFactory {
         fn create(&mut self, _info: ServerSessionInfo) -> DataFusionResult<SessionContext> {
-            Ok(SessionContext::new())
+            let config = SessionConfig::new().with_extension(Arc::new(ActivityTracker::new()));
+            Ok(SessionContext::new_with_config(config))
         }
     }
 
@@ -137,22 +142,44 @@ mod tests {
             if let Some(finish) = finish {
                 let _ = finish.await;
             }
-            let _ = history.send(JobRunnerHistory {
-                jobs: vec![],
-                stages: vec![],
-                tasks: vec![],
-                workers: vec![],
-            });
+            if self.state.send_history {
+                let _ = history.send(JobRunnerHistory {
+                    jobs: vec![],
+                    stages: vec![],
+                    tasks: vec![],
+                    workers: vec![],
+                });
+            }
         }
+    }
+
+    fn test_job_runner_state(
+        finish: oneshot::Receiver<()>,
+        send_history: bool,
+    ) -> Arc<TestJobRunnerState> {
+        Arc::new(TestJobRunnerState {
+            stop_started: Notify::new(),
+            stop_calls: AtomicUsize::new(0),
+            send_history,
+            finish: Mutex::new(Some(finish)),
+        })
     }
 
     fn test_session_manager_with_factory(
         factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
     ) -> SessionResult<SessionManager> {
+        test_session_manager_with_factory_and_timeout(factory, Duration::MAX)
+    }
+
+    fn test_session_manager_with_factory_and_timeout(
+        factory: Box<dyn Fn() -> Box<dyn SessionFactory<ServerSessionInfo>> + Send>,
+        timeout: Duration,
+    ) -> SessionResult<SessionManager> {
         let handle = tokio::runtime::Handle::current();
         let runtime = RuntimeHandle::new(handle.clone(), handle);
         let system = Arc::new(Mutex::new(ActorSystem::new()));
-        let options = SessionManagerOptions::new(runtime, system, factory);
+        let options =
+            SessionManagerOptions::new(runtime, system, factory).with_session_timeout(timeout);
         SessionManager::try_new(options)
     }
 
@@ -166,21 +193,41 @@ mod tests {
         test_session_manager_with_factory(factory)
     }
 
+    fn test_session_manager_with_timeout(
+        state: Arc<TestJobRunnerState>,
+        timeout: Duration,
+    ) -> SessionResult<SessionManager> {
+        let factory_state = Arc::clone(&state);
+        let factory = Box::new(move || {
+            Box::new(TestSessionFactory {
+                state: Arc::clone(&factory_state),
+            }) as Box<dyn SessionFactory<ServerSessionInfo>>
+        });
+        test_session_manager_with_factory_and_timeout(factory, timeout)
+    }
+
     fn test_session_manager_without_job_service() -> SessionResult<SessionManager> {
         test_session_manager_with_factory(Box::new(|| {
             Box::new(EmptySessionFactory) as Box<dyn SessionFactory<ServerSessionInfo>>
         }))
     }
 
+    fn test_session_manager_without_job_service_with_timeout(
+        timeout: Duration,
+    ) -> SessionResult<SessionManager> {
+        test_session_manager_with_factory_and_timeout(
+            Box::new(|| {
+                Box::new(EmptySessionFactory) as Box<dyn SessionFactory<ServerSessionInfo>>
+            }),
+            timeout,
+        )
+    }
+
     #[tokio::test]
     async fn delete_session_waits_for_job_runner_stop(
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (finish_tx, finish_rx) = oneshot::channel();
-        let state = Arc::new(TestJobRunnerState {
-            stop_started: Notify::new(),
-            stop_calls: AtomicUsize::new(0),
-            finish: Mutex::new(Some(finish_rx)),
-        });
+        let state = test_job_runner_state(finish_rx, true);
         let manager = test_session_manager(Arc::clone(&state))?;
         let context = manager
             .get_or_create_session_context("session".to_string(), "user".to_string())
@@ -201,11 +248,7 @@ mod tests {
     async fn concurrent_delete_session_calls_wait_for_same_cleanup(
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (finish_tx, finish_rx) = oneshot::channel();
-        let state = Arc::new(TestJobRunnerState {
-            stop_started: Notify::new(),
-            stop_calls: AtomicUsize::new(0),
-            finish: Mutex::new(Some(finish_rx)),
-        });
+        let state = test_job_runner_state(finish_rx, true);
         let manager = Arc::new(test_session_manager(Arc::clone(&state))?);
         let context = manager
             .get_or_create_session_context("session".to_string(), "user".to_string())
@@ -234,14 +277,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_completed_session_is_noop(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let state = test_job_runner_state(finish_rx, true);
+        let manager = Arc::new(test_session_manager(Arc::clone(&state))?);
+        let context = manager
+            .get_or_create_session_context("session".to_string(), "user".to_string())
+            .await?;
+        drop(context);
+
+        let delete_manager = Arc::clone(&manager);
+        let delete =
+            tokio::spawn(async move { delete_manager.delete_session("session".to_string()).await });
+        state.stop_started.notified().await;
+
+        let _ = finish_tx.send(());
+        delete.await??;
+        manager.delete_session("session".to_string()).await?;
+        assert_eq!(state.stop_calls.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_session_returns_error_when_cleanup_history_is_lost(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let state = test_job_runner_state(finish_rx, false);
+        let manager = Arc::new(test_session_manager(Arc::clone(&state))?);
+        let context = manager
+            .get_or_create_session_context("session".to_string(), "user".to_string())
+            .await?;
+        drop(context);
+
+        let delete_manager = Arc::clone(&manager);
+        let delete =
+            tokio::spawn(async move { delete_manager.delete_session("session".to_string()).await });
+        state.stop_started.notified().await;
+
+        let _ = finish_tx.send(());
+        let result = delete.await?;
+        assert!(matches!(
+            result,
+            Err(SessionError::InternalError(message))
+                if message.contains("failed to delete session: session")
+        ));
+
+        let result = manager.delete_session("session".to_string()).await;
+        assert!(matches!(
+            result,
+            Err(SessionError::InternalError(message))
+                if message.contains("failed to delete session: session")
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn idle_session_cleanup_waits_for_job_runner_stop(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let state = test_job_runner_state(finish_rx, true);
+        let manager = test_session_manager_with_timeout(Arc::clone(&state), Duration::ZERO)?;
+        let context = manager
+            .get_or_create_session_context("session".to_string(), "user".to_string())
+            .await?;
+        drop(context);
+
+        state.stop_started.notified().await;
+        assert_eq!(state.stop_calls.load(Ordering::SeqCst), 1);
+
+        let _ = finish_tx.send(());
+        manager.delete_session("session".to_string()).await?;
+        assert_eq!(state.stop_calls.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn idle_session_without_job_service_marks_session_failed(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let manager = test_session_manager_without_job_service_with_timeout(Duration::ZERO)?;
+        let context = manager
+            .get_or_create_session_context("session".to_string(), "user".to_string())
+            .await?;
+        drop(context);
+
+        let result: SessionResult<()> = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let _ = manager
+                    .get_or_create_session_context("session".to_string(), "user".to_string())
+                    .await?;
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+
+        assert!(matches!(
+            result,
+            Err(SessionError::InvalidArgument(message))
+                if message.contains("session session is not running")
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn delete_missing_session_is_noop() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     {
         let (_finish_tx, finish_rx) = oneshot::channel();
-        let state = Arc::new(TestJobRunnerState {
-            stop_started: Notify::new(),
-            stop_calls: AtomicUsize::new(0),
-            finish: Mutex::new(Some(finish_rx)),
-        });
+        let state = test_job_runner_state(finish_rx, true);
         let manager = test_session_manager(state)?;
         manager.delete_session("missing".to_string()).await?;
         Ok(())
