@@ -39,8 +39,8 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::bootstrap::{
-    bootstrap_first_snapshot, bootstrap_new_table, bootstrap_snapshot_action_commit,
-    PersistStrategy,
+    bootstrap_first_snapshot, bootstrap_new_table, bootstrap_new_table_with_style,
+    bootstrap_snapshot_action_commit, NewTableMetadataStyle, PersistStrategy,
 };
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
@@ -390,7 +390,7 @@ impl IcebergCommitExec {
         context: &Arc<TaskContext>,
         catalog_table: &[String],
         existing_properties: &[(String, String)],
-        previous_metadata_location: &str,
+        previous_metadata_location: Option<&str>,
         new_metadata_location: &str,
     ) -> Result<()> {
         let manager = context.extension::<CatalogManager>()?;
@@ -403,18 +403,17 @@ impl IcebergCommitExec {
                     .then(|| key.clone())
             })
             .unwrap_or_else(|| "metadata-location".to_string());
+        let mut properties = vec![(metadata_location_key, new_metadata_location.to_string())];
+        if let Some(previous_metadata_location) = previous_metadata_location {
+            properties.push((
+                "previous_metadata_location".to_string(),
+                previous_metadata_location.to_string(),
+            ));
+        }
         manager
             .alter_table(
                 catalog_table,
-                AlterTableOptions::SetTableProperties {
-                    properties: vec![
-                        (metadata_location_key, new_metadata_location.to_string()),
-                        (
-                            "previous_metadata_location".to_string(),
-                            previous_metadata_location.to_string(),
-                        ),
-                    ],
-                },
+                AlterTableOptions::SetTableProperties { properties },
             )
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))
@@ -565,8 +564,28 @@ impl ExecutionPlan for IcebergCommitExec {
                     || matches!(commit_info.operation, crate::spec::Operation::Append))
             {
                 Self::validate_requirements(None, &commit_info.requirements)?;
-                // Bootstrap a new table using the unified bootstrap helper
-                bootstrap_new_table(&table_url, &store_ctx, &commit_info).await?;
+                if let Some(catalog_table) = catalog_table.as_ref() {
+                    let bootstrap_result = bootstrap_new_table_with_style(
+                        &table_url,
+                        &store_ctx,
+                        &commit_info,
+                        NewTableMetadataStyle::Uuid,
+                    )
+                    .await?;
+                    let new_metadata_location =
+                        Self::table_metadata_location(&table_url, &bootstrap_result.metadata_file)?;
+                    Self::update_catalog_metadata_location(
+                        &context,
+                        catalog_table,
+                        &commit_info.table_properties,
+                        None,
+                        &new_metadata_location,
+                    )
+                    .await?;
+                } else {
+                    // Bootstrap a new table using the Hadoop/path-table convention.
+                    bootstrap_new_table(&table_url, &store_ctx, &commit_info).await?;
+                }
 
                 let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
@@ -667,6 +686,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
                         || matches!(commit_info.operation, crate::spec::Operation::Append))
                 {
+                    let mut catalog_fallback_table = catalog_table
+                        .as_ref()
+                        .filter(|_| catalog_commit_table.is_none());
                     if let Some(catalog_table) = catalog_commit_table {
                         let action_commit = bootstrap_snapshot_action_commit(
                             &table_url,
@@ -698,7 +720,9 @@ impl ExecutionPlan for IcebergCommitExec {
                                 let batch = RecordBatch::try_new(schema, vec![array])?;
                                 return Ok(batch);
                             }
-                            CatalogCommitOutcome::NotSupported => {}
+                            CatalogCommitOutcome::NotSupported => {
+                                catalog_fallback_table = Some(catalog_table);
+                            }
                             CatalogCommitOutcome::Conflict => {
                                 if attempt >= MAX_COMMIT_RETRIES {
                                     return Err(commit_conflict_error());
@@ -708,15 +732,36 @@ impl ExecutionPlan for IcebergCommitExec {
                         }
                     }
 
-                    bootstrap_first_snapshot(
+                    let persist_strategy = if catalog_fallback_table.is_some() {
+                        PersistStrategy::NewUuidVersion
+                    } else {
+                        PersistStrategy::InPlace
+                    };
+                    let bootstrap_result = bootstrap_first_snapshot(
                         &table_url,
                         &store_ctx,
                         &commit_info,
                         table_meta,
                         &latest_meta,
-                        PersistStrategy::InPlace,
+                        persist_strategy,
                     )
                     .await?;
+                    if let (Some(catalog_table), Some(previous_metadata_location)) =
+                        (catalog_fallback_table, catalog_metadata_location.as_deref())
+                    {
+                        let new_metadata_location = Self::table_metadata_location(
+                            &table_url,
+                            &bootstrap_result.metadata_file,
+                        )?;
+                        Self::update_catalog_metadata_location(
+                            &context,
+                            catalog_table,
+                            &commit_info.table_properties,
+                            Some(previous_metadata_location),
+                            &new_metadata_location,
+                        )
+                        .await?;
+                    }
 
                     let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                     let batch = RecordBatch::try_new(schema, vec![array])?;
@@ -879,7 +924,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let file_extension =
                     metadata_file_extension_from_properties(&table_meta.properties)?;
-                let use_uuid_metadata_file = catalog_metadata_location.is_some();
+                let use_uuid_metadata_file = catalog_table.is_some();
                 let new_meta_rel = if use_uuid_metadata_file {
                     format!(
                         "metadata/{next_version:05}-{}{file_extension}",
@@ -966,14 +1011,12 @@ impl ExecutionPlan for IcebergCommitExec {
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                if let (Some(catalog_table), Some(previous_metadata_location)) =
-                    (catalog_commit_table, catalog_metadata_location.as_deref())
-                {
+                if let Some(catalog_table) = catalog_table.as_ref() {
                     Self::update_catalog_metadata_location(
                         &context,
                         catalog_table,
                         &commit_info.table_properties,
-                        previous_metadata_location,
+                        catalog_metadata_location.as_deref(),
                         &new_metadata_location,
                     )
                     .await?;
