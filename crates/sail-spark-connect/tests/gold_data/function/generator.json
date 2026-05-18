@@ -350,7 +350,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nThis feature is not implemented: Unsupported CAST from List(Struct(\"0\": Int32, \"1\": Int32)) to List(Struct(\"col0\": Int32, \"col1\": Int32))"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nThis feature is not implemented: Unsupported CAST from List(non-null Struct(\"0\": Int32, \"1\": Int32)) to List(non-null Struct(\"col0\": Int32, \"col1\": Int32))"
       }
     }
   ]
