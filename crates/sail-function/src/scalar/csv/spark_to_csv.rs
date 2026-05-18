@@ -844,10 +844,7 @@ mod tests {
                 as ArrayRef;
 
         let binding = make_struct_array(fields, vec![col_ts], None);
-        let struct_arr = binding
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap();
+        let struct_arr = binding.as_any().downcast_ref::<StructArray>().unwrap();
 
         let field = &struct_arr.fields()[0];
         let result = format_field_to_csv(
