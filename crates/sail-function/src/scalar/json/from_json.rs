@@ -283,7 +283,6 @@ fn is_arr_and_obj_match(builder: &FieldBuilder, value: &Value) -> bool {
     )
 }
 
-
 /// [Credit] The core field builder logic is inspired by
 /// [DataFusion Comet](https://github.com/apache/datafusion-comet/blob/main/native/spark-expr/src/json_funcs/from_json.rs),
 /// licensed under the Apache License, Version 2.0.
