@@ -109,13 +109,6 @@ def _assert_namespace_listed(
             prefix=prefix,
             parent=parent,
         )
-        if child not in child_namespaces["namespaces"] and len(parent) > 1:
-            child_namespaces = _list_namespaces_with_parent_separator(
-                iceberg_rest_endpoint,
-                prefix=prefix,
-                parent=parent,
-                parent_separator="\x1f",
-            )
         assert child in child_namespaces["namespaces"]
 
 
@@ -132,11 +125,11 @@ def _exercise_namespace_separator(
     nested_namespace = ".".join(namespace_parts[:2])
     deeply_nested_namespace = ".".join(namespace_parts)
 
-    spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE")
+    spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
     try:
-        spark.sql(f"CREATE DATABASE {root_namespace}")
-        spark.sql(f"CREATE DATABASE {nested_namespace}")
-        spark.sql(f"CREATE DATABASE {deeply_nested_namespace}")
+        spark.sql(f"CREATE DATABASE {root_namespace}").collect()
+        spark.sql(f"CREATE DATABASE {nested_namespace}").collect()
+        spark.sql(f"CREATE DATABASE {deeply_nested_namespace}").collect()
         _assert_namespace_listed(
             iceberg_rest_endpoint,
             namespace_parts,
@@ -145,11 +138,11 @@ def _exercise_namespace_separator(
         )
     finally:
         with contextlib.suppress(Exception):
-            spark.sql(f"DROP DATABASE IF EXISTS {deeply_nested_namespace} CASCADE")
+            spark.sql(f"DROP DATABASE IF EXISTS {deeply_nested_namespace} CASCADE").collect()
         with contextlib.suppress(Exception):
-            spark.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE")
+            spark.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
         with contextlib.suppress(Exception):
-            spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE")
+            spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
 
 
 @pytest.mark.parametrize(
