@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
 use datafusion::common::{plan_err, DataFusionError, Result};
+use sail_common_datafusion::catalog::managed::{
+    is_metadata_location_key, PREVIOUS_METADATA_LOCATION_KEY,
+};
 
 use crate::spec::{FormatVersion, TableMetadata};
 
@@ -59,9 +62,8 @@ pub(crate) fn apply_table_property_changes(
 pub(crate) fn is_reserved_iceberg_table_property(key: &str) -> bool {
     if key.starts_with("__sail.")
         || key.starts_with("metadata.")
-        || key.eq_ignore_ascii_case("metadata-location")
-        || key.eq_ignore_ascii_case("metadata_location")
-        || key.eq_ignore_ascii_case("previous_metadata_location")
+        || is_metadata_location_key(key)
+        || key.eq_ignore_ascii_case(PREVIOUS_METADATA_LOCATION_KEY)
     {
         return true;
     }

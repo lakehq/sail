@@ -19,6 +19,7 @@ use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::ObjectStoreExt;
+use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
@@ -439,16 +440,13 @@ impl IcebergTableFormat {
     }
 }
 
-pub(crate) const ICEBERG_METADATA_LOCATION_KEYS: &[&str] =
-    &["metadata-location", "metadata_location"];
-
 pub(crate) fn metadata_location_from_properties(properties: &[(String, String)]) -> Option<String> {
-    properties.iter().find_map(|(key, value)| {
-        ICEBERG_METADATA_LOCATION_KEYS
+    metadata_location_value(
+        properties
             .iter()
-            .any(|candidate| key.eq_ignore_ascii_case(candidate))
-            .then(|| value.clone())
-    })
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+    .map(ToString::to_string)
 }
 
 pub(crate) fn metadata_location_from_options(options: &[OptionLayer]) -> Option<String> {

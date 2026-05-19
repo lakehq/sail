@@ -33,6 +33,10 @@ use object_store::ObjectStoreExt;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{AlterTableOptions, CommitTableOptions};
+use sail_common_datafusion::catalog::iceberg::is_iceberg_table_properties;
+use sail_common_datafusion::catalog::managed::{
+    existing_metadata_location_key, METADATA_LOCATION_KEY, PREVIOUS_METADATA_LOCATION_KEY,
+};
 use sail_common_datafusion::catalog::{TableKind, TableStatus};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
@@ -55,10 +59,7 @@ use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
     metadata_file_version_from_path, metadata_location_to_object_path_string,
 };
-use crate::table_format::{
-    catalog_table_from_properties, metadata_location_from_properties,
-    ICEBERG_METADATA_LOCATION_KEYS,
-};
+use crate::table_format::{catalog_table_from_properties, metadata_location_from_properties};
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
@@ -296,12 +297,11 @@ impl IcebergCommitExec {
     }
 
     fn is_metadata_location_catalog_table(properties: &[(String, String)]) -> bool {
-        properties.iter().any(|(key, value)| {
-            let key = key.trim();
-            let value = value.trim();
-            (key.eq_ignore_ascii_case("table_type") || key.eq_ignore_ascii_case("classification"))
-                && value.eq_ignore_ascii_case("iceberg")
-        })
+        is_iceberg_table_properties(
+            properties
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
     }
 
     fn metadata_location_from_status(status: &TableStatus) -> Option<String> {
@@ -403,19 +403,13 @@ impl IcebergCommitExec {
         new_metadata_location: &str,
     ) -> Result<()> {
         let manager = context.extension::<CatalogManager>()?;
-        let metadata_location_key = existing_properties
-            .iter()
-            .find_map(|(key, _)| {
-                ICEBERG_METADATA_LOCATION_KEYS
-                    .iter()
-                    .any(|candidate| key.eq_ignore_ascii_case(candidate))
-                    .then(|| key.clone())
-            })
-            .unwrap_or_else(|| "metadata-location".to_string());
+        let metadata_location_key = existing_metadata_location_key(existing_properties)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| METADATA_LOCATION_KEY.to_string());
         let mut properties = vec![(metadata_location_key, new_metadata_location.to_string())];
         if let Some(previous_metadata_location) = previous_metadata_location {
             properties.push((
-                "previous_metadata_location".to_string(),
+                PREVIOUS_METADATA_LOCATION_KEY.to_string(),
                 previous_metadata_location.to_string(),
             ));
         }

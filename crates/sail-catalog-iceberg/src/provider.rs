@@ -21,6 +21,7 @@ use sail_catalog::provider::{
     PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
+use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
     TableColumnStatus, TableKind, TableStatus,
@@ -433,7 +434,7 @@ impl IcebergRestCatalogProvider {
         let comment = get_property(&properties, "comment");
 
         if let Some(metadata_location) = result.metadata_location {
-            properties.insert("metadata-location".to_string(), metadata_location);
+            properties.insert(METADATA_LOCATION_KEY.to_string(), metadata_location);
         }
         properties.insert(
             "metadata.format-version".to_string(),
@@ -572,7 +573,7 @@ impl IcebergRestCatalogProvider {
 
         let comment = get_property(&properties, "comment");
 
-        properties.insert("metadata-location".to_string(), result.metadata_location);
+        properties.insert(METADATA_LOCATION_KEY.to_string(), result.metadata_location);
         properties.insert("metadata.view-uuid".to_string(), view_uuid);
         properties.insert(
             "metadata.format-version".to_string(),

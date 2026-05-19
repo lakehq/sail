@@ -13,6 +13,10 @@ use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
     Namespace, PartitionTransform,
 };
+use sail_common_datafusion::catalog::iceberg::{
+    is_iceberg_table_properties, ICEBERG_CLASSIFICATION_KEY, ICEBERG_TABLE_TYPE_KEY,
+    ICEBERG_TABLE_TYPE_VALUE,
+};
 use sail_common_datafusion::catalog::TableStatus;
 
 use crate::data_type::{arrow_to_glue_type, arrow_to_iceberg_type};
@@ -20,6 +24,16 @@ use crate::GlueCatalogProvider;
 
 /// Default Iceberg table spec version for new tables (v2 is the modern standard).
 const DEFAULT_ICEBERG_FORMAT_VERSION: &str = "2";
+
+pub(crate) fn is_iceberg_parameters(parameters: Option<&HashMap<String, String>>) -> bool {
+    parameters.is_some_and(|props| {
+        is_iceberg_table_properties(
+            props
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
+    })
+}
 
 /// Validated options for Iceberg table creation.
 pub(crate) struct ValidatedIcebergOptions {
@@ -163,11 +177,14 @@ async fn create_iceberg_table_via_table_input(
         .location(options.location)
         .build();
     let mut parameters: HashMap<String, String> = options.properties.into_iter().collect();
-    parameters.insert("table_type".to_string(), "iceberg".to_string());
+    parameters.insert(
+        ICEBERG_TABLE_TYPE_KEY.to_string(),
+        ICEBERG_TABLE_TYPE_VALUE.to_string(),
+    );
     parameters.insert("EXTERNAL".to_string(), "TRUE".to_string());
     parameters
-        .entry("classification".to_string())
-        .or_insert_with(|| "iceberg".to_string());
+        .entry(ICEBERG_CLASSIFICATION_KEY.to_string())
+        .or_insert_with(|| ICEBERG_TABLE_TYPE_VALUE.to_string());
 
     let table_input = TableInput::builder()
         .name(table)
@@ -364,5 +381,17 @@ fn partition_transform_to_string(field: &CatalogPartitionField) -> (String, Stri
         Some(PartitionTransform::Truncate(w)) => {
             (format!("truncate[{w}]"), format!("{}_trunc", field.column))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_is_iceberg_parameters_detects_case_insensitive_jvm_marker() {
+        let parameters = HashMap::from([("TABLE_TYPE".to_string(), "ICEBERG".to_string())]);
+
+        assert!(super::is_iceberg_parameters(Some(&parameters)));
     }
 }

@@ -20,7 +20,7 @@ use sail_common_datafusion::catalog::{
 use tokio::sync::OnceCell;
 
 use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
-use crate::{hive, iceberg};
+use crate::{hive, iceberg, managed_table};
 
 /// Configuration for AWS Glue Data Catalog.
 #[derive(Debug, Clone, Default)]
@@ -114,7 +114,7 @@ impl GlueCatalogProvider {
         // Extract location
         let location = storage.and_then(|sd| sd.location()).map(|s| s.to_string());
 
-        let format = if Self::is_iceberg_parameters(table.parameters()) {
+        let format = if iceberg::is_iceberg_parameters(table.parameters()) {
             "iceberg".to_string()
         } else {
             HiveDetectedFormat::detect(
@@ -256,44 +256,6 @@ impl GlueCatalogProvider {
                 properties,
             },
         })
-    }
-
-    fn is_iceberg_parameters(parameters: Option<&HashMap<String, String>>) -> bool {
-        parameters.is_some_and(|props| {
-            props
-                .get("table_type")
-                .is_some_and(|value| value.eq_ignore_ascii_case("iceberg"))
-                || props.contains_key("metadata-location")
-                || props.contains_key("metadata_location")
-        })
-    }
-
-    fn apply_alter_table_options(
-        database: &str,
-        table: &str,
-        mut parameters: HashMap<String, String>,
-        options: AlterTableOptions,
-    ) -> CatalogResult<HashMap<String, String>> {
-        match options {
-            AlterTableOptions::SetTableProperties { properties } => {
-                parameters.extend(properties);
-            }
-            AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-                for key in keys {
-                    if parameters.remove(&key).is_none() && !if_exists {
-                        return Err(CatalogError::InvalidArgument(format!(
-                            "Table property '{key}' does not exist on '{database}.{table}'"
-                        )));
-                    }
-                }
-            }
-            AlterTableOptions::AlterColumnType { .. } => {
-                return Err(CatalogError::NotSupported(
-                    "AWS Glue catalog does not support ALTER COLUMN TYPE".to_string(),
-                ));
-            }
-        }
-        Ok(parameters)
     }
 
     fn table_input_with_parameters(
@@ -719,14 +681,16 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let parameters = table_value.parameters().cloned().unwrap_or_default();
         let parameters =
-            Self::apply_alter_table_options(&database_name, table, parameters, options)?;
+            managed_table::apply_alter_table_options(&database_name, table, parameters, options)?;
         let table_input = Self::table_input_with_parameters(&table_value, parameters)?;
-        let result = client
+        let mut update_table = client
             .update_table()
             .database_name(&database_name)
-            .table_input(table_input)
-            .send()
-            .await;
+            .table_input(table_input);
+        if let Some(version_id) = table_value.version_id() {
+            update_table = update_table.version_id(version_id.to_string());
+        }
+        let result = update_table.send().await;
 
         match result {
             Ok(_) => Ok(()),
@@ -737,6 +701,11 @@ impl CatalogProvider for GlueCatalogProvider {
                         CatalogObject::Table,
                         table.to_string(),
                     ))
+                } else if service_err.is_concurrent_modification_exception() {
+                    Err(CatalogError::Conflict(format!(
+                        "Concurrent Glue update for table '{}.{}': {service_err}",
+                        database_name, table
+                    )))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to update table: {service_err}"
