@@ -23,6 +23,7 @@ from pysail.tests.spark.catalog_integration.conftest import (
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+    from pathlib import Path
 
     from pyspark.sql import SparkSession
 
@@ -163,6 +164,23 @@ def nessie_container(
     _create_s3_bucket: None,
 ) -> Generator[DockerContainer, None, None]:
     """Start a Nessie server with Iceberg REST enabled."""
+    container = make_nessie_container(
+        docker_network,
+        seaweedfs_internal_endpoint,
+    )
+    container.start()
+    wait_for_logs(container, "Nessie 0.107.5", timeout=120)
+    yield container
+    container.stop()
+
+
+def make_nessie_container(
+    docker_network: Network,
+    seaweedfs_internal_endpoint: str,
+    *,
+    config_path: Path | None = None,
+) -> DockerContainer:
+    """Build a Nessie server container with Iceberg REST enabled."""
     container = (
         DockerContainer("ghcr.io/projectnessie/nessie:0.107.5")
         .with_exposed_ports(19120)
@@ -181,10 +199,13 @@ def nessie_container(
         .with_network(docker_network)
         .with_network_aliases("nessie")
     )
-    container.start()
-    wait_for_logs(container, "Nessie 0.107.5", timeout=120)
-    yield container
-    container.stop()
+    if config_path is not None:
+        container = container.with_volume_mapping(
+            str(config_path),
+            "/tmp/nessie-application.properties",
+            "ro",
+        ).with_env("QUARKUS_CONFIG_LOCATIONS", "file:/tmp/nessie-application.properties")
+    return container
 
 
 @pytest.fixture(scope="module")

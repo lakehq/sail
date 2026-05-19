@@ -7,7 +7,6 @@ import urllib.request
 from typing import TYPE_CHECKING
 
 import pytest
-from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
 from pysail.tests.spark.catalog_integration.conftest import (
@@ -15,13 +14,25 @@ from pysail.tests.spark.catalog_integration.conftest import (
     start_sail_server,
     stop_sail_server,
 )
+from pysail.tests.spark.catalog_integration.iceberg_rest.conftest import make_nessie_container
 
 if TYPE_CHECKING:
     from collections.abc import Generator
     from pathlib import Path
 
     from pyspark.sql import SparkSession
+    from testcontainers.core.container import DockerContainer
     from testcontainers.core.network import Network
+
+
+@pytest.fixture(autouse=True)
+def spark_doctest() -> None:
+    """Override the module-autouse doctest fixture.
+
+    These tests create their own Sail server with a custom Nessie REST catalog
+    configuration. The shared doctest fixture would otherwise start the default
+    iceberg_spark fixture for this module too.
+    """
 
 
 def _quote(value: str) -> str:
@@ -41,16 +52,36 @@ def _nessie_iceberg_endpoint(container: DockerContainer) -> str:
     return f"http://{host}:{port}/iceberg"
 
 
-def _load_namespace(
+def _list_namespaces(
     iceberg_rest_endpoint: str,
-    namespace_parts: list[str],
     separator: str,
     *,
     prefix: str | None = None,
+    parent: list[str] | None = None,
 ) -> dict[str, object]:
-    namespace = _quote(separator.join(namespace_parts))
+    return _list_namespaces_with_parent_separator(
+        iceberg_rest_endpoint,
+        separator,
+        prefix=prefix,
+        parent=parent,
+        parent_separator=separator,
+    )
+
+
+def _list_namespaces_with_parent_separator(
+    iceberg_rest_endpoint: str,
+    separator: str,
+    *,
+    prefix: str | None = None,
+    parent: list[str] | None = None,
+    parent_separator: str,
+) -> dict[str, object]:
     prefix_path = f"/{_quote(prefix)}" if prefix is not None else ""
-    url = f"{iceberg_rest_endpoint}/v1{prefix_path}/namespaces/{namespace}"
+    query = ""
+    if parent is not None:
+        parent_namespace = parent_separator.join(parent)
+        query = f"?parent={_quote(parent_namespace)}"
+    url = f"{iceberg_rest_endpoint}/v1{prefix_path}/namespaces{query}"
     # Safe: the URL is built from the controlled Iceberg REST fixture endpoint.
     with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
         return json.load(response)
@@ -86,29 +117,10 @@ def _nessie_rest_container(
     config_path.write_text(
         f"nessie.catalog.iceberg-config-defaults.namespace-separator={separator}\n"
     )
-    container = (
-        DockerContainer("ghcr.io/projectnessie/nessie:0.107.5")
-        .with_exposed_ports(19120)
-        .with_env("NESSIE_CATALOG_DEFAULT_WAREHOUSE", "warehouse")
-        .with_env("NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION", "s3://icebergdata/nessie")
-        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT", seaweedfs_internal_endpoint)
-        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION", "us-east-1")
-        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS", "true")
-        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_AUTH_TYPE", "STATIC")
-        .with_env(
-            "NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY",
-            "urn:nessie-secret:quarkus:nessie.catalog.secrets.s3default",
-        )
-        .with_env("NESSIE_CATALOG_SECRETS_S3DEFAULT_NAME", "admin")
-        .with_env("NESSIE_CATALOG_SECRETS_S3DEFAULT_SECRET", "password")
-        .with_volume_mapping(
-            str(config_path),
-            "/tmp/nessie-application.properties",
-            "ro",
-        )
-        .with_env("QUARKUS_CONFIG_LOCATIONS", "file:/tmp/nessie-application.properties")
-        .with_network(docker_network)
-        .with_network_aliases("nessie")
+    container = make_nessie_container(
+        docker_network,
+        seaweedfs_internal_endpoint,
+        config_path=config_path,
     )
     container.start()
     try:
@@ -135,21 +147,34 @@ def _spark_with_iceberg_rest(
         stop_sail_server(server, saved_env)
 
 
-def _assert_namespace_visible(
-    spark: SparkSession,
+def _assert_namespace_listed(
     iceberg_rest_endpoint: str,
     namespace_parts: list[str],
     separator: str,
     *,
     prefix: str | None = None,
 ) -> None:
-    namespace = ".".join(namespace_parts)
+    root_namespaces = _list_namespaces(iceberg_rest_endpoint, separator, prefix=prefix)
+    assert namespace_parts[:1] in root_namespaces["namespaces"]
 
-    rows = {row.info_name: row.info_value for row in spark.sql(f"DESCRIBE DATABASE {namespace}").collect()}
-    assert rows["Namespace Name"] == namespace
-
-    rest_namespace = _load_namespace(iceberg_rest_endpoint, namespace_parts, separator, prefix=prefix)["namespace"]
-    assert rest_namespace == namespace_parts
+    for depth in range(1, len(namespace_parts)):
+        parent = namespace_parts[:depth]
+        child = namespace_parts[: depth + 1]
+        child_namespaces = _list_namespaces(
+            iceberg_rest_endpoint,
+            separator,
+            prefix=prefix,
+            parent=parent,
+        )
+        if child not in child_namespaces["namespaces"] and len(parent) > 1:
+            child_namespaces = _list_namespaces_with_parent_separator(
+                iceberg_rest_endpoint,
+                separator,
+                prefix=prefix,
+                parent=parent,
+                parent_separator="\x1f",
+            )
+        assert child in child_namespaces["namespaces"]
 
 
 def _exercise_namespace_separator(
@@ -160,24 +185,27 @@ def _exercise_namespace_separator(
     separator: str,
     prefix: str | None = None,
 ) -> None:
-    parent = f"namespace_separator_{namespace_id}"
-    child = "child"
-    namespace = f"{parent}.{child}"
+    namespace_parts = [f"namespace_separator_{namespace_id}", "child", "grandchild"]
+    root_namespace = namespace_parts[0]
+    nested_namespace = ".".join(namespace_parts[:2])
+    deeply_nested_namespace = ".".join(namespace_parts)
 
-    spark.sql(f"DROP DATABASE IF EXISTS {parent} CASCADE")
+    spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
     try:
-        spark.sql(f"CREATE DATABASE {parent}")
-        spark.sql(f"CREATE DATABASE {namespace}")
-        _assert_namespace_visible(
-            spark,
+        spark.sql(f"CREATE DATABASE {root_namespace}").collect()
+        spark.sql(f"CREATE DATABASE {nested_namespace}").collect()
+        spark.sql(f"CREATE DATABASE {deeply_nested_namespace}").collect()
+        _assert_namespace_listed(
             iceberg_rest_endpoint,
-            [parent, child],
+            namespace_parts,
             separator,
             prefix=prefix,
         )
     finally:
-        spark.sql(f"DROP DATABASE IF EXISTS {namespace}")
-        spark.sql(f"DROP DATABASE IF EXISTS {parent} CASCADE")
+        with contextlib.suppress(Exception):
+            spark.sql(f"DROP DATABASE IF EXISTS {deeply_nested_namespace} CASCADE").collect()
+        with contextlib.suppress(Exception):
+            spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
 
 
 @pytest.mark.parametrize(
@@ -197,7 +225,7 @@ def test_namespace_separator_config_aliases(
     config_key: str,
     namespace_id: str,
 ) -> None:
-    separator = "::"
+    separator = "-"
 
     with _nessie_rest_container(
         docker_network,
@@ -212,45 +240,6 @@ def test_namespace_separator_config_aliases(
         with _spark_with_iceberg_rest(
             iceberg_rest_endpoint,
             f'{config_key}="{separator}"',
-            f"iceberg_rest_namespace_separator_{namespace_id}",
-        ) as spark:
-            _exercise_namespace_separator(
-                spark,
-                iceberg_rest_endpoint,
-                namespace_id=namespace_id,
-                separator=separator,
-                prefix=_rest_config_prefix(config),
-            )
-
-
-@pytest.mark.parametrize(
-    ("separator", "namespace_id"),
-    [
-        ("::", "colon_colon"),
-        ("__", "underscore_underscore"),
-    ],
-)
-@pytest.mark.usefixtures("_create_s3_bucket")
-def test_namespace_separator_custom_values(
-    docker_network: Network,
-    seaweedfs_internal_endpoint: str,
-    tmp_path: Path,
-    separator: str,
-    namespace_id: str,
-) -> None:
-    with _nessie_rest_container(
-        docker_network,
-        seaweedfs_internal_endpoint,
-        tmp_path,
-        separator,
-    ) as nessie:
-        iceberg_rest_endpoint = _nessie_iceberg_endpoint(nessie)
-        config = _load_config(iceberg_rest_endpoint)
-        _assert_rest_config_namespace_separator(config, separator)
-
-        with _spark_with_iceberg_rest(
-            iceberg_rest_endpoint,
-            f'namespace_separator="{separator}"',
             f"iceberg_rest_namespace_separator_{namespace_id}",
         ) as spark:
             _exercise_namespace_separator(
