@@ -295,6 +295,15 @@ impl IcebergCommitExec {
         UnboundPartitionSpec { fields }
     }
 
+    fn is_metadata_location_catalog_table(properties: &[(String, String)]) -> bool {
+        properties.iter().any(|(key, value)| {
+            let key = key.trim();
+            let value = value.trim();
+            (key.eq_ignore_ascii_case("table_type") || key.eq_ignore_ascii_case("classification"))
+                && value.eq_ignore_ascii_case("iceberg")
+        })
+    }
+
     fn metadata_location_from_status(status: &TableStatus) -> Option<String> {
         match &status.kind {
             TableKind::Table { properties, .. } => metadata_location_from_properties(properties),
@@ -550,9 +559,11 @@ impl ExecutionPlan for IcebergCommitExec {
                 Some(location) => Ok(metadata_location_to_object_path_string(location)?),
                 None => crate::table::find_latest_metadata_file(&object_store, &table_url).await,
             };
-            let catalog_commit_table = catalog_table
-                .as_ref()
-                .filter(|_| catalog_metadata_location.is_some());
+            let is_metadata_location_catalog_table =
+                Self::is_metadata_location_catalog_table(&commit_info.table_properties);
+            let catalog_commit_table = catalog_table.as_ref().filter(|_| {
+                catalog_metadata_location.is_some() || is_metadata_location_catalog_table
+            });
             log::debug!(
                 "Iceberg catalog commit context: table={:?}, metadata_location={:?}",
                 catalog_table,
@@ -564,7 +575,10 @@ impl ExecutionPlan for IcebergCommitExec {
                     || matches!(commit_info.operation, crate::spec::Operation::Append))
             {
                 Self::validate_requirements(None, &commit_info.requirements)?;
-                if let Some(catalog_table) = catalog_table.as_ref() {
+                if let Some(catalog_table) = catalog_table
+                    .as_ref()
+                    .filter(|_| is_metadata_location_catalog_table)
+                {
                     let bootstrap_result = bootstrap_new_table_with_style(
                         &table_url,
                         &store_ctx,
@@ -686,9 +700,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
                         || matches!(commit_info.operation, crate::spec::Operation::Append))
                 {
-                    let mut catalog_fallback_table = catalog_table
-                        .as_ref()
-                        .filter(|_| catalog_commit_table.is_none());
+                    let mut catalog_fallback_table = catalog_table.as_ref().filter(|_| {
+                        catalog_commit_table.is_none() && is_metadata_location_catalog_table
+                    });
                     if let Some(catalog_table) = catalog_commit_table {
                         let action_commit = bootstrap_snapshot_action_commit(
                             &table_url,
@@ -924,7 +938,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let file_extension =
                     metadata_file_extension_from_properties(&table_meta.properties)?;
-                let use_uuid_metadata_file = catalog_table.is_some();
+                let use_uuid_metadata_file = catalog_commit_table.is_some();
                 let new_meta_rel = if use_uuid_metadata_file {
                     format!(
                         "metadata/{next_version:05}-{}{file_extension}",
@@ -1011,7 +1025,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                if let Some(catalog_table) = catalog_table.as_ref() {
+                if let Some(catalog_table) = catalog_commit_table {
                     Self::update_catalog_metadata_location(
                         &context,
                         catalog_table,

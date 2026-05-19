@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import re
 import urllib.parse
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -28,10 +27,11 @@ def _glue_parameters(moto_endpoint: str, database: str, table: str) -> dict[str,
 
 
 def _metadata_location(moto_endpoint: str, database: str, table: str) -> str:
-    properties = ",".join(f"{key}={value}" for key, value in _glue_parameters(moto_endpoint, database, table).items())
-    match = re.search(r"(?:metadata-location|metadata_location)=([^,\]]+)", properties)
-    assert match, properties
-    return match.group(1)
+    properties = _glue_parameters(moto_endpoint, database, table)
+    for key in ("metadata-location", "metadata_location"):
+        if key in properties:
+            return properties[key]
+    raise AssertionError(properties)
 
 
 def _metadata_filename(location: str) -> str:

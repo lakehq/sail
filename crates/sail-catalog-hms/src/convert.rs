@@ -197,14 +197,20 @@ pub(crate) fn build_generic_table(
     let (regular_columns, partition_keys) = build_columns(columns, &partition_columns)?;
     let mut parameters = vec_to_map(properties);
     insert_comment(&mut parameters, comment);
+    let table_parameters = parameters.get_or_insert_with(AHashMap::new);
     if format.logical_format.eq_ignore_ascii_case("delta") {
-        parameters.get_or_insert_with(AHashMap::new).insert(
+        table_parameters.insert(
             FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
             FastStr::from_static_str("delta"),
         );
+    } else if format.logical_format.eq_ignore_ascii_case("iceberg") {
+        table_parameters.insert(
+            FastStr::from_static_str("table_type"),
+            FastStr::from_static_str("iceberg"),
+        );
     }
 
-    parameters.get_or_insert_with(AHashMap::new).insert(
+    table_parameters.insert(
         FastStr::from_static_str(EXTERNAL_KEY),
         FastStr::from_static_str(EXTERNAL_TRUE),
     );
