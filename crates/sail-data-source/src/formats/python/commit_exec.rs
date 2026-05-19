@@ -131,8 +131,11 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             return internal_err!("PythonDataSourceWriteCommitExec should have exactly one child");
         }
         let child = children[0].clone();
-        let expected_partitions =
-            find_write_exec_partition_count(child.as_ref()).unwrap_or(self.expected_partitions);
+        let Some(expected_partitions) = find_write_exec_partition_count(child.as_ref()) else {
+            return internal_err!(
+                "PythonDataSourceWriteCommitExec: PythonDataSourceWriteExec not found in child plan tree"
+            );
+        };
         Ok(Arc::new(Self::new(
             child,
             self.pickled_writer.clone(),
