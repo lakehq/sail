@@ -1704,16 +1704,58 @@ mod tests {
 
     #[test]
     fn test_namespace_separator_aliases_are_canonicalized() {
-        let props = IcebergRestCatalogProvider::normalize_catalog_props(HashMap::from([(
-            "namespace_separator".to_string(),
-            "::".to_string(),
-        )]));
+        for alias in [
+            "namespace_separator",
+            "namespace-separator",
+            "namespaceSeparator",
+            "namespaceseparator",
+        ] {
+            let props = IcebergRestCatalogProvider::normalize_catalog_props(HashMap::from([(
+                alias.to_string(),
+                "::".to_string(),
+            )]));
 
+            assert_eq!(
+                props
+                    .get(REST_CATALOG_PROP_NAMESPACE_SEPARATOR)
+                    .map(String::as_str),
+                Some("::")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_catalog_config_merge_precedence_for_properties() {
+        let key = "rest-page-size".to_string();
+
+        let config = load_merged_test_config(
+            HashMap::from([(key.clone(), "defaults".to_string())]),
+            HashMap::new(),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_eq!(config.props.get(&key).map(String::as_str), Some("defaults"));
+
+        let config = load_merged_test_config(
+            HashMap::from([(key.clone(), "defaults".to_string())]),
+            HashMap::from([(key.clone(), "client".to_string())]),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_eq!(config.props.get(&key).map(String::as_str), Some("client"));
+
+        let config = load_merged_test_config(
+            HashMap::from([(key.clone(), "defaults".to_string())]),
+            HashMap::from([(key.clone(), "client".to_string())]),
+            HashMap::from([(key.clone(), "overrides".to_string())]),
+            None,
+        )
+        .await;
         assert_eq!(
-            props
-                .get(REST_CATALOG_PROP_NAMESPACE_SEPARATOR)
-                .map(String::as_str),
-            Some("::")
+            config.props.get(&key).map(String::as_str),
+            Some("overrides")
         );
     }
 

@@ -202,7 +202,7 @@ def make_nessie_container(
     if config_path is not None:
         container = container.with_volume_mapping(
             str(config_path),
-            "/tmp/nessie-application.properties",
+            "/tmp/nessie-application.properties",  # noqa: S108
             "ro",
         ).with_env("QUARKUS_CONFIG_LOCATIONS", "file:/tmp/nessie-application.properties")
     return container

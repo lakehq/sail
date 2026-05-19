@@ -70,7 +70,6 @@ def _list_namespaces(
 
 def _list_namespaces_with_parent_separator(
     iceberg_rest_endpoint: str,
-    separator: str,
     *,
     prefix: str | None = None,
     parent: list[str] | None = None,
@@ -114,9 +113,7 @@ def _nessie_rest_container(
     separator: str,
 ) -> Generator[DockerContainer, None, None]:
     config_path = tmp_path / "nessie-application.properties"
-    config_path.write_text(
-        f"nessie.catalog.iceberg-config-defaults.namespace-separator={separator}\n"
-    )
+    config_path.write_text(f"nessie.catalog.iceberg-config-defaults.namespace-separator={separator}\n")
     container = make_nessie_container(
         docker_network,
         seaweedfs_internal_endpoint,
@@ -169,7 +166,6 @@ def _assert_namespace_listed(
         if child not in child_namespaces["namespaces"] and len(parent) > 1:
             child_namespaces = _list_namespaces_with_parent_separator(
                 iceberg_rest_endpoint,
-                separator,
                 prefix=prefix,
                 parent=parent,
                 parent_separator="\x1f",
