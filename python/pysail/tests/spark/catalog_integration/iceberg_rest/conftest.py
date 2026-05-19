@@ -293,9 +293,17 @@ def nessie_spark_custom_separator(
 def nessie_spark_incorrect_default_separator(
     nessie_custom_separator_iceberg_rest_endpoint: str,
 ) -> Generator[SparkSession, None, None]:
-    """Start Sail without the custom separator against a custom-separator Nessie server."""
-    catalog_config = f'[{{name="sail", type="iceberg-rest", uri="{nessie_custom_separator_iceberg_rest_endpoint}"}}]'
-    server, remote, saved_env = start_sail_server(catalog_list=catalog_config)
+    """Start Sail with default-separator catalogs against a custom-separator Nessie server."""
+    catalogs = ", ".join(
+        f'{{name="{name}", type="iceberg-rest", uri="{nessie_custom_separator_iceberg_rest_endpoint}", '
+        f'{config_key}="%1F"}}'
+        for name, config_key in NESSIE_NAMESPACE_SEPARATOR_CATALOGS
+    )
+    default_catalog = NESSIE_NAMESPACE_SEPARATOR_CATALOGS[0][0]
+    server, remote, saved_env = start_sail_server(
+        catalog_list=f"[{catalogs}]",
+        extra_env={"SAIL_CATALOG__DEFAULT_CATALOG": default_catalog},
+    )
     spark = create_spark_session(remote, "nessie_iceberg_rest_default_separator_test")
     yield spark
     with contextlib.suppress(Exception):

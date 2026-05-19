@@ -190,6 +190,7 @@ def test_namespace_separator_default_config_cannot_list_custom_separator_namespa
     namespace_parts = [root_namespace, "child"]
 
     nessie_spark_custom_separator.catalog.setCurrentCatalog(catalog_name)
+    nessie_spark_incorrect_default_separator.catalog.setCurrentCatalog(catalog_name)
     nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
     nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
 
