@@ -61,7 +61,6 @@ def _list_namespaces(
 ) -> dict[str, object]:
     return _list_namespaces_with_parent_separator(
         iceberg_rest_endpoint,
-        separator,
         prefix=prefix,
         parent=parent,
         parent_separator=separator,
