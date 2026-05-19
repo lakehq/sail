@@ -450,10 +450,6 @@ impl AddStatsPruningStatistics {
         })
     }
 
-    #[cfg(test)]
-    fn compute_row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.build_count_array(column, |_a, s| s.map(|s| s.num_records.max(0) as u64))
-    }
 }
 
 impl PruningStatistics for AddStatsPruningStatistics {
@@ -561,11 +557,9 @@ mod tests {
         referenced_columns.insert("dec_col".to_string());
 
         let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
-        let array = stats
-            .compute_row_counts(&Column::from_name("dec_col"))
-            .ok_or_else(|| {
-                DataFusionError::Internal("row count stats should be available".to_string())
-            })?;
+        let array = PruningStatistics::row_counts(&stats).ok_or_else(|| {
+            DataFusionError::Internal("row count stats should be available".to_string())
+        })?;
 
         assert_eq!(array.data_type(), &DataType::UInt64);
         let values = array

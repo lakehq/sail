@@ -135,6 +135,7 @@ impl ScanByDataFilesState {
                 },
                 partition_values: vec![],
                 range: None,
+                table_reference: None,
                 statistics: None,
                 ordering: None,
                 extensions: Default::default(),

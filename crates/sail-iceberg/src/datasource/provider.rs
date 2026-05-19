@@ -401,6 +401,7 @@ impl IcebergTableProvider {
                 object_meta,
                 partition_values,
                 range: None,
+                table_reference: None,
                 statistics: Some(Arc::new(self.create_file_statistics(&data_file))),
                 ordering: None,
                 extensions: Default::default(),

@@ -71,6 +71,7 @@ pub fn partitioned_file_from_action(
         partition_values,
         extensions: Default::default(),
         range: None,
+        table_reference: None,
         statistics: None,
         ordering: None,
         metadata_size_hint: None,
