@@ -62,7 +62,7 @@ Feature: to_csv converts a struct value to a CSV string
         """
       Then query result
         | to_csv(named_struct(a, 1, b, 2)) |
-        | 1|2                               |
+        | 1\|2                               |
 
     Scenario: Custom separator via delimiter option
       When query
