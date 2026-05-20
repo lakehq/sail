@@ -299,10 +299,21 @@ impl PlanResolver<'_> {
             nullable,
             metadata,
         } = field;
-        let mut metadata: HashMap<_, _> = metadata
-            .iter()
-            .map(|(k, v)| (format!("metadata.{k}"), v.to_string()))
-            .collect();
+        let mut arrow_metadata: HashMap<String, String> = HashMap::new();
+        if !metadata.is_empty() {
+            let spark_metadata = metadata
+                .iter()
+                .map(|(k, v)| {
+                    let parsed = serde_json::from_str::<serde_json::Value>(v)
+                        .unwrap_or_else(|_| serde_json::Value::String(v.clone()));
+                    (k.clone(), parsed)
+                })
+                .collect::<serde_json::Map<String, serde_json::Value>>();
+            arrow_metadata.insert(
+                spec::SPARK_METADATA_JSON_KEY.to_string(),
+                serde_json::Value::Object(spark_metadata).to_string(),
+            );
+        }
         let data_type = match data_type {
             spec::DataType::UserDefined {
                 jvm_class,
@@ -311,13 +322,13 @@ impl PlanResolver<'_> {
                 sql_type,
             } => {
                 if let Some(jvm_class) = jvm_class {
-                    metadata.insert("udt.jvm_class".to_string(), jvm_class.to_string());
+                    arrow_metadata.insert("udt.jvm_class".to_string(), jvm_class.to_string());
                 }
                 if let Some(python_class) = python_class {
-                    metadata.insert("udt.python_class".to_string(), python_class.to_string());
+                    arrow_metadata.insert("udt.python_class".to_string(), python_class.to_string());
                 }
                 if let Some(serialized_python_class) = serialized_python_class {
-                    metadata.insert(
+                    arrow_metadata.insert(
                         "udt.serialized_python_class".to_string(),
                         serialized_python_class.to_string(),
                     );
@@ -330,7 +341,7 @@ impl PlanResolver<'_> {
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
                 // Edges default to planar in GeoArrow, so we omit them for Geometry.
-                metadata.insert(
+                arrow_metadata.insert(
                     spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
@@ -338,7 +349,7 @@ impl PlanResolver<'_> {
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert(
+                arrow_metadata.insert(
                     spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                     ext.to_string(),
                 );
@@ -349,7 +360,7 @@ impl PlanResolver<'_> {
                 // Add geoarrow extension type metadata for WKB-encoded geographies.
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
-                metadata.insert(
+                arrow_metadata.insert(
                     spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
@@ -357,14 +368,14 @@ impl PlanResolver<'_> {
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert(
+                arrow_metadata.insert(
                     spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                     ext.to_string(),
                 );
                 data_type
             }
             spec::DataType::Variant => {
-                metadata.insert(
+                arrow_metadata.insert(
                     spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     spec::VARIANT_EXTENSION_NAME.to_string(),
                 );
@@ -374,7 +385,7 @@ impl PlanResolver<'_> {
         };
         Ok(
             adt::Field::new(name, self.resolve_data_type(data_type, state)?, *nullable)
-                .with_metadata(metadata),
+                .with_metadata(arrow_metadata),
         )
     }
 

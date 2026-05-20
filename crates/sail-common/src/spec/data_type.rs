@@ -19,6 +19,13 @@ pub use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 /// Arrow extension type name for Variant.
 pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
 
+/// Spark column metadata key for Arrow field metadata.
+///
+/// Spark stores the entire column metadata dictionary as a JSON-encoded object
+/// under this single key to avoid collisions with other Arrow field metadata
+/// (e.g. extension type keys).
+pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
+
 /// Field name for list type.
 pub const SAIL_LIST_FIELD_NAME: &str = "item";
 /// Field name for map type's entries.
