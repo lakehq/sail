@@ -46,12 +46,12 @@ A single `SparkSession.builder.master("local[*]")` call takes 20 to 45 seconds t
 
 Most teams ship PySpark code with thin testing because the feedback loop is too slow to iterate on. AI coding agents make the cost worse, not better. Every test-fix cycle stretches into minutes or hours of dead time, and the faster the agent the more painful the wait.
 
-| Approach | First-time setup | Per-cycle startup |
-|---|---|---|
-| **Sail (`sail spark run`)** | **< 1 minute.** Two `pip install` commands. No Java, no Docker, no cluster. | **Sub-second** |
-| Local PySpark (`local[*]`) | > 10 minutes. Install Java, match version to PySpark, set `JAVA_HOME`, configure `SparkSession`. | ~45 seconds (JVM warmup) |
-| Docker-based Spark | > 15 minutes. Install Docker, pull Spark image, match Spark and Java versions, allocate memory, mount volumes. | Minutes |
-| Databricks Connect | > 30 minutes. Install `databricks-connect` (runtime-matched), authenticate, run a live cluster, maintain network access. | Many minutes (cold cluster: more) |
+| Approach                    | First-time setup                                                                                                         | Per-cycle startup                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| **Sail (`sail spark run`)** | **< 1 minute.** Two `pip install` commands. No Java, no Docker, no cluster.                                              | **Sub-second**                    |
+| Local PySpark (`local[*]`)  | > 10 minutes. Install Java, match version to PySpark, set `JAVA_HOME`, configure `SparkSession`.                         | ~45 seconds (JVM warmup)          |
+| Docker-based Spark          | > 15 minutes. Install Docker, pull Spark image, match Spark and Java versions, allocate memory, mount volumes.           | Minutes                           |
+| Databricks Connect          | > 30 minutes. Install `databricks-connect` (runtime-matched), authenticate, run a live cluster, maintain network access. | Many minutes (cold cluster: more) |
 
 Sail collapses both axes: setup in under a minute, sub-second per cycle.
 
@@ -71,12 +71,12 @@ Sail is the only tool that runs your actual PySpark code, unmodified, as written
 
 If you're considering switching engines entirely, alternatives like DuckDB, Polars, and Daft require an API rewrite. Sail is the only one of these that runs your unmodified PySpark code.
 
-| Tool | PySpark compatible | Runs locally | No JVM |
-|---|---|---|---|
-| **Sail** | **Yes** | **Yes** | **Yes** |
-| DuckDB | No (SQL-first) | Yes | Yes |
-| Polars | No (own API) | Yes | Yes |
-| Daft | No (Spark Connect removed in v0.7) | Yes | Yes |
+| Tool     | PySpark compatible                 | Runs locally | No JVM  |
+| -------- | ---------------------------------- | ------------ | ------- |
+| **Sail** | **Yes**                            | **Yes**      | **Yes** |
+| DuckDB   | No (SQL-first)                     | Yes          | Yes     |
+| Polars   | No (own API)                       | Yes          | Yes     |
+| Daft     | No (Spark Connect removed in v0.7) | Yes          | Yes     |
 
 For Spark-API-compatible alternatives (local PySpark, Databricks Connect), see the comparison in [Sail Solves the Dev Testing Loop](#sail-solves-the-dev-testing-loop) above.
 
