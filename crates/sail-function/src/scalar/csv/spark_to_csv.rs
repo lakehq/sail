@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use chrono::prelude::*;
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
@@ -21,7 +20,7 @@ const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 ///
 /// Parameters:
 /// - `args[0]`: a `StructArray` — each row is one struct to serialize.
-/// - `args[1]` (optional): a `MapArray` of CSV options (e.g. `sep`, `timestampFormat`).
+/// - `args[1]` (optional): a `MapArray` of CSV options (e.g. `sep`, `timestampFormat`, `dateFormat`).
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToCsv {
     session_timezone: Arc<str>,
@@ -44,7 +43,7 @@ impl SparkToCsvOptions {
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
 
     // Default formats matching Spark's defaults
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%d %H:%M:%S";
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3fZ";
     pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
 
     /// Build `SparkToCsvOptions` from a DataFusion `MapArray` of key-value pairs.
@@ -89,12 +88,11 @@ impl SparkToCsv {
     /// Constructor for the UDF.
     ///
     /// `session_timezone` is the Spark session timezone (e.g. `"UTC"`, `"Asia/Shanghai"`).
-    /// It is used when formatting `TIMESTAMP` values that carry a timezone.
+    /// It is stored for codec serialization (distributed execution) but not used
+    /// during formatting, since `to_csv` always outputs timestamps in UTC.
     pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
             session_timezone,
-            // - args[0]: StructArray to serialize
-            // - args[1] (optional): MapArray of options
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
@@ -154,11 +152,13 @@ impl ScalarUDFImpl for SparkToCsv {
 /// # Parameters
 /// - `args[0]`: `StructArray` — rows to serialize.
 /// - `args[1]` (optional): `MapArray` — CSV options (sep, timestampFormat, dateFormat).
+/// - `_session_timezone`: kept for API consistency with `from_csv` but unused,
+///   since `to_csv` always outputs timestamps in UTC.
 ///
 /// # Returns
 /// A `StringArray` where each entry is the CSV representation of the struct row,
 /// or `null` if the input row was null.
-fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef> {
+fn spark_to_csv_inner(args: &[ArrayRef], _session_timezone: &str) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 2 {
         return exec_err!(
             "`{}` function requires 1 or 2 arguments, got {}",
@@ -206,7 +206,7 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
         for (col_idx, field) in fields.iter().enumerate() {
             let col = &columns[col_idx];
             let value_str =
-                format_field_to_csv(col, row_idx, field.data_type(), &options, session_timezone)?;
+                format_field_to_csv(col, row_idx, field.data_type(), &options)?;
             parts.push(value_str);
         }
 
@@ -217,17 +217,16 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
 }
 
 /// Extracts a timestamp value from an Arrow array at `row_idx` as microseconds,
-/// then formats it using the session timezone and the configured `timestamp_format`.
+/// then formats it as a UTC string using the configured `timestampFormat` option.
 ///
-/// All timestamp variants (Second, Millisecond, Microsecond, Nanosecond) are
-/// normalised to microseconds before formatting so the rest of the logic stays simple.
+/// Timestamps are always output in UTC with a Z suffix, matching Spark's default
+/// behaviour. All time unit variants (Second, Millisecond, Microsecond, Nanosecond)
+/// are normalised to microseconds before formatting.
 fn format_timestamp_field(
     array: &ArrayRef,
     row_idx: usize,
     time_unit: &TimeUnit,
-    tz_opt: &Option<Arc<str>>,
     options: &SparkToCsvOptions,
-    session_timezone: &str,
 ) -> Result<String> {
     // Normalise every variant to microseconds for uniform handling.
     let micros = match time_unit {
@@ -269,22 +268,12 @@ fn format_timestamp_field(
         }
     };
 
-    // Prefer column-level timezone; fall back to the session timezone.
-    let tz_str = tz_opt
-        .as_ref()
-        .map(|s| s.as_ref())
-        .unwrap_or(session_timezone);
-
-    let tz: Tz = tz_str
-        .parse()
-        .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{tz_str}': {e}")))?;
-
-    let secs = micros / 1_000_000;
-    let nanos = ((micros % 1_000_000) * 1_000) as u32;
+    let secs = micros.div_euclid(1_000_000);
+    let nanos = (micros.rem_euclid(1_000_000) * 1_000) as u32;
     let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos)
         .ok_or_else(|| DataFusionError::Execution(format!("Timestamp out of range: {micros}")))?;
-    let local_dt = utc_dt.with_timezone(&tz);
-    Ok(local_dt.format(&options.timestamp_format).to_string())
+    // Spark always outputs UTC with Z suffix regardless of session timezone
+    Ok(utc_dt.format(&options.timestamp_format).to_string())
 }
 
 /// Converts a single struct field cell from an Arrow array into its CSV string representation.
@@ -298,7 +287,6 @@ fn format_field_to_csv(
     row_idx: usize,
     data_type: &DataType,
     options: &SparkToCsvOptions,
-    session_timezone: &str,
 ) -> Result<String> {
     // Null cell → empty string (Spark behaviour)
     if array.is_null(row_idx) {
@@ -306,9 +294,9 @@ fn format_field_to_csv(
     }
 
     match data_type {
-        // --- Timestamps: delegate to dedicated helper to keep nesting flat ---
-        DataType::Timestamp(time_unit, tz_opt) => {
-            format_timestamp_field(array, row_idx, time_unit, tz_opt, options, session_timezone)
+        // Timezone is ignored, Spark always serializes timestamps in UTC with Z suffix.
+        DataType::Timestamp(time_unit, _tz_opt) => {
+            format_timestamp_field(array, row_idx, time_unit, options)
         }
 
         // --- Dates: format with user-specified or default dateFormat ---
@@ -318,9 +306,10 @@ fn format_field_to_csv(
                 .downcast_ref::<Date32Array>()
                 .ok_or_else(|| DataFusionError::Execution("Expected Date32Array".to_string()))?;
             let days = arr.value(row_idx);
-            // Arrow Date32 = days since Unix epoch (1970-01-01)
+            // Arrow Date32 = signed days since Unix epoch (1970-01-01)
+            // Negative values represent pre-epoch dates (e.g. -1 = 1969-12-31)
             let date = NaiveDate::from_ymd_opt(1970, 1, 1)
-                .and_then(|epoch| epoch.checked_add_days(chrono::Days::new(days as u64)))
+                .and_then(|epoch| epoch.checked_add_signed(chrono::Duration::days(days as i64)))
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!("Date32 value out of range: {days}"))
                 })?;
@@ -345,8 +334,8 @@ fn format_field_to_csv(
         // --- All other types: use ScalarValue display ---
         _ => {
             let scalar = ScalarValue::try_from_array(array, row_idx)?;
-            // ScalarValue::to_string includes type info for some variants,
-            // so we extract the inner value string directly.
+            // Use ScalarValue::to_string alternatives that return the raw value
+            // without type annotations (e.g. "42" not "Int32(42)")
             Ok(scalar_to_display_string(&scalar))
         }
     }
@@ -378,12 +367,15 @@ fn scalar_to_display_string(scalar: &ScalarValue) -> String {
                 v.to_string()
             } else {
                 let factor = 10i128.pow(*scale as u32);
-                let int_part = v / factor;
-                let frac_part = (v % factor).abs();
-                format!("{int_part}.{frac_part:0>width$}", width = *scale as usize)
+                let abs_val = v.abs();
+                let int_part = abs_val / factor;
+                let frac_part = abs_val % factor;
+                let sign = if *v < 0 { "-" } else { "" };
+                format!("{sign}{int_part}.{frac_part:0>width$}", width = *scale as usize)
             }
         }
-        // Null of any type → empty string (Spark behaviour)
+        // Null of any type, or unhandled complex types (List, Map, Struct) returns empty string
+        // Complex types are not natively supported in CSV serialization per Spark's behaviour
         _ => String::new(),
     }
 }
@@ -594,8 +586,8 @@ mod tests {
         let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
 
         let output = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(output.value(0), "9.99,2023-01-01 00:00:00");
-        assert_eq!(output.value(1), ",2023-01-01 00:00:00"); // null price → ""
+        assert_eq!(output.value(0), "9.99,2023-01-01T00:00:00.000Z");
+        assert_eq!(output.value(1), ",2023-01-01T00:00:00.000Z"); // null price → ""
         Ok(())
     }
 
@@ -617,7 +609,7 @@ mod tests {
         let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
 
         let output = result.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(output.value(0), "2015-08-26 00:00:00");
+        assert_eq!(output.value(0), "2015-08-26T00:00:00.000Z");
         Ok(())
     }
 
@@ -642,7 +634,7 @@ mod tests {
 
         let output = result.as_any().downcast_ref::<StringArray>().unwrap();
         // UTC epoch localised to Asia/Shanghai is 08:00:00
-        assert_eq!(output.value(0), "1970-01-01 08:00:00");
+        assert_eq!(output.value(0), "1970-01-01T00:00:00.000Z");
         Ok(())
     }
 
@@ -707,7 +699,6 @@ mod tests {
                     0,
                     f.data_type(),
                     &options,
-                    DEFAULT_SESSION_TIMEZONE,
                 )
             })
             .collect::<Result<_>>()?;
@@ -816,7 +807,7 @@ mod tests {
         let struct_sec = make_struct_array(fields_sec, vec![col_sec], None);
         let result_sec = spark_to_csv_inner(&[struct_sec], DEFAULT_SESSION_TIMEZONE)?;
         let output_sec = result_sec.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(output_sec.value(0), "2015-08-26 00:00:00");
+        assert_eq!(output_sec.value(0), "2015-08-26T00:00:00.000Z");
 
         // Similar for Millisecond and Nanosecond...
         Ok(())
@@ -852,7 +843,6 @@ mod tests {
             0,
             field.data_type(),
             &options,
-            DEFAULT_SESSION_TIMEZONE,
         )?;
 
         assert_eq!(result, "26/08/2015");
