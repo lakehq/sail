@@ -756,15 +756,12 @@ class PySparkGroupMapUdf:
 
                 [(output, output_type)] = list(self._udf(None, (pandas_batch_iter(),)))
                 # output is a generator of pandas DataFrames - convert each and concatenate
-                struct_arrays = [
-                    _pandas_to_arrow_array(df, output_type, self._serializer) for df in output
-                ]
+                struct_arrays = [_pandas_to_arrow_array(df, output_type, self._serializer) for df in output]
                 if not struct_arrays:
                     return pa.array([], type=output_type)
                 return pa.concat_arrays(struct_arrays)
-            else:
-                [[(output, output_type)]] = list(self._udf(None, (inputs,)))
-                return _pandas_to_arrow_array(output, output_type, self._serializer)
+            [[(output, output_type)]] = list(self._udf(None, (inputs,)))
+            return _pandas_to_arrow_array(output, output_type, self._serializer)
 
         # Arrow paths (eval_type 209 non-iter and 215 iter)
         rb = pa.RecordBatch.from_arrays(args, self._input_names)
@@ -772,10 +769,7 @@ class PySparkGroupMapUdf:
             # For iter arrow (eval_type 215), split RecordBatch into multiple batches
             # of at most max_records_per_batch rows.
             n = len(rb)
-            if n == 0:
-                batches = [rb]
-            else:
-                batches = [rb.slice(i, min(m, n - i)) for i in range(0, n, m)]
+            batches = [rb] if n == 0 else [rb.slice(i, min(m, n - i)) for i in range(0, n, m)]
         else:
             batches = [rb]
         [(output, output_type)] = list(self._udf(None, (batches,)))

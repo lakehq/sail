@@ -188,7 +188,7 @@ impl PlanResolver<'_> {
                 | spec::PySparkUdfType::GroupedMapArrowIter
         ) {
             return Err(PlanError::invalid(
-                "only GroupedMapArrow/GroupedMapPandas UDF is supported in GroupedMap",
+                "only GroupedMapArrow/GroupedMapPandas and iterator variants are supported in GroupedMap",
             ));
         }
         let is_pandas = matches!(
