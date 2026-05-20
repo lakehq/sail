@@ -185,16 +185,11 @@ impl PlanEnumerator {
     }
 
     /// Creates a new plan enumerator.
-    #[cfg(test)]
-    pub fn new(query_graph: QueryGraph) -> Self {
-        Self::with_options(query_graph, JoinReorderOptions::default())
-    }
-
-    pub fn with_options(query_graph: QueryGraph, options: JoinReorderOptions) -> Self {
+    pub fn new(query_graph: QueryGraph, options: JoinReorderOptions) -> Self {
         let (anchor_relations, enable_fact_anchor_heuristic) =
             Self::derive_anchor_relations(&query_graph, &options);
         let cardinality_estimator = CardinalityEstimator::new(query_graph.clone());
-        let cost_model = CostModel::with_options(&options);
+        let cost_model = CostModel::new(&options);
 
         Self {
             query_graph,
@@ -773,7 +768,8 @@ mod tests {
             )) as Arc<dyn PhysicalExpr>;
 
             let edge = JoinEdge::new(
-                JoinSet::new_singleton(center)? | JoinSet::new_singleton(relation_id)?,
+                JoinSet::new_singleton(center)?,
+                JoinSet::new_singleton(relation_id)?,
                 join_filter,
                 JoinType::Inner,
                 vec![(
@@ -826,7 +822,8 @@ mod tests {
         )) as Arc<dyn PhysicalExpr>;
 
         let edge = JoinEdge::new(
-            JoinSet::new_singleton(left)? | JoinSet::new_singleton(right)?,
+            JoinSet::new_singleton(left)?,
+            JoinSet::new_singleton(right)?,
             join_filter,
             JoinType::Inner,
             vec![(
@@ -885,7 +882,7 @@ mod tests {
     #[test]
     fn test_plan_enumerator_creation() {
         let graph = create_test_graph_with_relations(2);
-        let enumerator = PlanEnumerator::new(graph);
+        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
         assert_eq!(enumerator.query_graph.relation_count(), 2);
         assert!(enumerator.dp_table.is_empty());
     }
@@ -893,7 +890,7 @@ mod tests {
     #[test]
     fn test_init_leaf_plans() {
         let graph = create_test_graph_with_relations(2);
-        let mut enumerator = PlanEnumerator::new(graph);
+        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
 
         match enumerator.init_leaf_plans() {
             Ok(()) => (),
@@ -912,7 +909,7 @@ mod tests {
     #[test]
     fn test_create_all_relations_set() -> Result<()> {
         let graph = create_test_graph_with_relations(3);
-        let enumerator = PlanEnumerator::new(graph);
+        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
 
         let all_set = enumerator.create_all_relations_set()?;
         assert_eq!(all_set.bits(), 7); // 111 in binary = 7
@@ -929,7 +926,7 @@ mod tests {
         graph.relations[1].base_cardinality = 10.0;
         add_equi_join_edge(&mut graph, 0, 1)?;
 
-        let mut enumerator = PlanEnumerator::new(graph);
+        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
         let plan = enumerator
             .solve()?
             .ok_or_else(|| DataFusionError::Internal("expected two-way join plan".to_string()))?;
@@ -953,7 +950,7 @@ mod tests {
     #[test]
     fn test_solve_greedy_generates_strict_left_deep_plan() -> Result<()> {
         let graph = create_star_graph(&[1_000_000.0, 4_000.0, 3_000.0, 2_000.0, 1_500.0], 0)?;
-        let mut enumerator = PlanEnumerator::new(graph);
+        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
 
         let plan = enumerator.solve_greedy()?;
         assert_eq!(plan.join_set.cardinality(), 5);
@@ -965,7 +962,7 @@ mod tests {
     #[test]
     fn test_solve_greedy_starts_from_largest_relation() -> Result<()> {
         let graph = create_star_graph(&[1_000.0, 2_000.0, 50_000.0, 3_000.0], 2)?;
-        let mut enumerator = PlanEnumerator::new(graph);
+        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
 
         let plan = enumerator.solve_greedy()?;
         let start_relation = leftmost_relation_id(&plan, &enumerator.dp_table);
@@ -991,7 +988,7 @@ mod tests {
             ],
             0,
         )?;
-        let mut enumerator = PlanEnumerator::new(graph);
+        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
 
         let neighbors = enumerator.neighbors(JoinSet::new_singleton(0)?, JoinSet::new());
 
@@ -1012,7 +1009,7 @@ mod tests {
         let _edge_04 = add_equi_join_edge(&mut graph, 0, 4)?;
         let edge_12 = add_equi_join_edge(&mut graph, 1, 2)?;
 
-        let enumerator = PlanEnumerator::new(graph);
+        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
         assert!(enumerator.enable_fact_anchor_heuristic);
 
         let dim_parent = JoinSet::from_iter([1, 2])?;
@@ -1035,7 +1032,7 @@ mod tests {
         let _edge_04 = add_equi_join_edge(&mut graph, 0, 4)?;
         let edge_12 = add_equi_join_edge(&mut graph, 1, 2)?;
 
-        let enumerator = PlanEnumerator::new(graph);
+        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
         assert!(enumerator.enable_fact_anchor_heuristic);
 
         let dim_parent = JoinSet::from_iter([1, 2])?;
@@ -1049,7 +1046,7 @@ mod tests {
         let distinct_stats = [None, None, None, None, None];
         let graph = create_graph_with_custom_distinct_stats(&cardinalities, &distinct_stats)?;
 
-        let enumerator = PlanEnumerator::new(graph);
+        let enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
         assert!(!enumerator.enable_fact_anchor_heuristic);
         Ok(())
     }

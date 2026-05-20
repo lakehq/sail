@@ -61,11 +61,7 @@ pub struct GraphBuilder {
 }
 
 impl GraphBuilder {
-    pub fn new() -> Self {
-        Self::with_options(JoinReorderOptions::default())
-    }
-
-    pub fn with_options(options: JoinReorderOptions) -> Self {
+    pub fn new(options: JoinReorderOptions) -> Self {
         Self {
             graph: QueryGraph::new(),
             relation_counter: 0,
@@ -283,7 +279,7 @@ impl GraphBuilder {
 
         for ((left_endpoint, right_endpoint), preds) in grouped {
             let (filter, equi_pairs) = Self::combine_predicates(preds)?;
-            let mut edge = JoinEdge::new_with_endpoints(
+            let mut edge = JoinEdge::new(
                 left_endpoint,
                 right_endpoint,
                 filter,
@@ -958,7 +954,7 @@ impl GraphBuilder {
 
 impl Default for GraphBuilder {
     fn default() -> Self {
-        Self::new()
+        Self::new(JoinReorderOptions::default())
     }
 }
 
@@ -977,14 +973,14 @@ mod tests {
 
     #[test]
     fn test_graph_builder_creation() {
-        let builder = GraphBuilder::new();
+        let builder = GraphBuilder::default();
         assert_eq!(builder.relation_counter, 0);
         assert!(builder.graph.relations.is_empty() && builder.graph.edges.is_empty());
     }
 
     #[test]
     fn test_build_with_simple_plan() -> Result<()> {
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col1",
             DataType::Int32,
@@ -1002,7 +998,7 @@ mod tests {
 
     #[test]
     fn test_build_with_single_relation() -> Result<()> {
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, false),
@@ -1018,7 +1014,7 @@ mod tests {
 
     #[test]
     fn test_visit_plan_identifies_base_relations() {
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col1",
             DataType::Int32,
@@ -1054,7 +1050,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Create two base relations
         let schema1 = Arc::new(Schema::new(vec![
@@ -1123,13 +1119,13 @@ mod tests {
             false,
         )?) as Arc<dyn ExecutionPlan>;
 
-        let mut disabled = GraphBuilder::new();
+        let mut disabled = GraphBuilder::default();
         assert!(
             disabled.build(join_plan.clone())?.is_none(),
             "non-inner joins remain boundaries unless explicitly enabled"
         );
 
-        let mut enabled = GraphBuilder::with_options(JoinReorderOptions {
+        let mut enabled = GraphBuilder::new(JoinReorderOptions {
             enable_non_inner: true,
             ..Default::default()
         });
@@ -1153,7 +1149,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // A(a_id) JOIN B(b_id) -> (a_id, b_id)
         let schema_a = Arc::new(Schema::new(vec![Field::new(
@@ -1238,7 +1234,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // A(a_id) JOIN B(b_id) -> (a_id, b_id)
         let schema_a = Arc::new(Schema::new(vec![Field::new(
@@ -1323,7 +1319,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // A(a_id) JOIN B(b_id) -> (a_id, b_id)
         let schema_a = Arc::new(Schema::new(vec![Field::new(
@@ -1408,7 +1404,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // A(a_id) JOIN B(b_id) -> (a_id, b_id)
         let schema_a = Arc::new(Schema::new(vec![Field::new(
@@ -1508,7 +1504,7 @@ mod tests {
         let filter = FilterExec::try_new(pred, input)?.with_default_selectivity(50)?;
         let filter: Arc<dyn ExecutionPlan> = Arc::new(filter);
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
         let _ = builder.visit_plan(filter.clone())?;
 
         assert_eq!(builder.graph.relation_count(), 1);
@@ -1544,7 +1540,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Create three base relations for complex join testing
         let schema1 = Arc::new(Schema::new(vec![
@@ -1627,7 +1623,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Each table has a single column "id" to keep join key construction simple.
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
@@ -1733,7 +1729,7 @@ mod tests {
         use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Three base relations with distinct column names to avoid name ambiguity.
         let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
@@ -1834,7 +1830,7 @@ mod tests {
         use datafusion::logical_expr::JoinType;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Two base relations, each with 2 columns, to test projection reorder/drop.
         let schema_left = Arc::new(Schema::new(vec![

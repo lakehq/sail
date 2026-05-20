@@ -62,18 +62,14 @@ pub struct JoinReorder {
 }
 
 impl JoinReorder {
-    pub fn new() -> Self {
-        Self::with_options(JoinReorderOptions::default())
-    }
-
-    pub fn with_options(options: JoinReorderOptions) -> Self {
+    pub fn new(options: JoinReorderOptions) -> Self {
         Self { options }
     }
 }
 
 impl Default for JoinReorder {
     fn default() -> Self {
-        Self::new()
+        Self::new(JoinReorderOptions::default())
     }
 }
 
@@ -151,7 +147,7 @@ impl JoinReorder {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // Attempt to build a query graph starting from the current node.
         // The GraphBuilder will traverse downwards to find a complete reorderable region.
-        let mut graph_builder = GraphBuilder::with_options(self.options.clone());
+        let mut graph_builder = GraphBuilder::new(self.options.clone());
         let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? else {
             return Ok(None);
         };
@@ -167,7 +163,7 @@ impl JoinReorder {
             query_graph.edges.len()
         );
 
-        let mut enumerator = PlanEnumerator::with_options(query_graph, self.options.clone());
+        let mut enumerator = PlanEnumerator::new(query_graph, self.options.clone());
         let best_plan = match enumerator.solve()? {
             Some(plan) => {
                 trace!("JoinReorder: DP optimization completed successfully");
@@ -464,7 +460,7 @@ mod tests {
         )?);
 
         // Test our recursive optimizer
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let optimized_plan = join_reorder.find_and_optimize_regions(aggregate.clone())?;
 
         // Should complete without errors and preserve the structure
@@ -561,7 +557,7 @@ mod tests {
         let root_plan = Arc::new(ProjectionExec::try_new(projection_exprs, aggregate)?);
 
         // Now test our recursive optimizer
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let optimized_plan = join_reorder.find_and_optimize_regions(root_plan.clone())?;
 
         // The optimized plan should have the same structure at the top level
@@ -667,7 +663,7 @@ mod tests {
         )?);
 
         // Test optimization
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let optimized_plan = join_reorder.find_and_optimize_regions(upper_aggregate.clone())?;
 
         // Should complete without errors and preserve the aggregate boundaries
@@ -752,7 +748,7 @@ mod tests {
             false, // null_aware
         )?);
 
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let optimized_plan = join_reorder.find_and_optimize_regions(root)?;
 
         // Root region should be optimized (>= 3 relations), producing a ProjectionExec.
@@ -846,7 +842,7 @@ mod tests {
         let original_plan = Arc::new(ProjectionExec::try_new(proj_exprs, join_abc)?);
 
         // 4. Run the optimizer
-        let optimizer = JoinReorder::new();
+        let optimizer = JoinReorder::default();
         let optimized_plan = optimizer.find_and_optimize_regions(original_plan.clone())?;
 
         // 5. Assertions
@@ -940,7 +936,7 @@ mod tests {
             input_map: outer_input_map,
         }];
 
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let plan = join_reorder.build_final_projection(
             Arc::clone(&input_plan),
             &final_map,

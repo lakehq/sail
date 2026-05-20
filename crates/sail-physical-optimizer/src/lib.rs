@@ -43,7 +43,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
     rules.push(Arc::new(AggregateStatistics::new()));
     if options.enable_join_reorder {
-        rules.push(Arc::new(JoinReorder::with_options(options.join_reorder)));
+        rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));

@@ -13,11 +13,7 @@ pub struct CostModel {
 }
 
 impl CostModel {
-    pub fn new() -> Self {
-        Self::with_options(&JoinReorderOptions::default())
-    }
-
-    pub fn with_options(options: &JoinReorderOptions) -> Self {
+    pub fn new(options: &JoinReorderOptions) -> Self {
         Self {
             build_side_weight: options.build_side_weight,
             probe_side_weight: options.probe_side_weight,
@@ -42,7 +38,7 @@ impl CostModel {
 
 impl Default for CostModel {
     fn default() -> Self {
-        Self::new()
+        Self::new(&JoinReorderOptions::default())
     }
 }
 
@@ -53,13 +49,13 @@ mod tests {
 
     #[test]
     fn test_cost_model_creation() {
-        let _model = CostModel::new();
+        let _model = CostModel::new(&JoinReorderOptions::default());
         let _default_model = CostModel::default();
     }
 
     #[test]
     fn test_compute_cost() {
-        let model = CostModel::new();
+        let model = CostModel::default();
 
         let left_plan = DPPlan::new_leaf(0, 1000.0).unwrap();
         let right_plan = DPPlan::new_leaf(1, 2000.0).unwrap();
@@ -72,7 +68,7 @@ mod tests {
 
     #[test]
     fn test_compute_cost_with_existing_costs() {
-        let model = CostModel::new();
+        let model = CostModel::default();
 
         let mut left_plan = DPPlan::new_leaf(0, 1000.0).unwrap();
         left_plan.cost = 100.0;

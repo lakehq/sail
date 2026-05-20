@@ -117,18 +117,7 @@ pub struct JoinEdge {
 }
 
 impl JoinEdge {
-    #[cfg(test)]
     pub fn new(
-        join_set: JoinSet,
-        filter: Arc<dyn PhysicalExpr>,
-        join_type: JoinType,
-        equi_pairs: Vec<(StableColumn, StableColumn)>,
-    ) -> Self {
-        let (left_endpoint, right_endpoint) = Self::infer_endpoints(join_set);
-        Self::new_with_endpoints(left_endpoint, right_endpoint, filter, join_type, equi_pairs)
-    }
-
-    pub fn new_with_endpoints(
         left_endpoint: JoinSet,
         right_endpoint: JoinSet,
         filter: Arc<dyn PhysicalExpr>,
@@ -144,17 +133,6 @@ impl JoinEdge {
             null_equality: NullEquality::NullEqualsNothing,
             equi_pairs,
         }
-    }
-
-    #[cfg(test)]
-    fn infer_endpoints(join_set: JoinSet) -> (JoinSet, JoinSet) {
-        let mut iter = join_set.iter();
-        let Some(first) = iter.next() else {
-            return (JoinSet::new(), JoinSet::new());
-        };
-        let left = JoinSet::from_bits(1u64 << first);
-        let right = join_set - left;
-        (left, right)
     }
 }
 
@@ -452,17 +430,27 @@ mod tests {
         }
 
         // Create a join edge between relations 0 and 1
-        let join_set_01 = JoinSet::from_iter([0, 1]).unwrap();
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
-        let edge = JoinEdge::new(join_set_01, filter, JoinType::Inner, vec![]);
+        let edge = JoinEdge::new(
+            JoinSet::new_singleton(0).unwrap(),
+            JoinSet::new_singleton(1).unwrap(),
+            filter,
+            JoinType::Inner,
+            vec![],
+        );
         graph.add_edge(edge).unwrap();
 
         // Create a join edge between relations 1 and 2
-        let join_set_12 = JoinSet::from_iter([1, 2]).unwrap();
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
-        let edge = JoinEdge::new(join_set_12, filter, JoinType::Inner, vec![]);
+        let edge = JoinEdge::new(
+            JoinSet::new_singleton(1).unwrap(),
+            JoinSet::new_singleton(2).unwrap(),
+            filter,
+            JoinType::Inner,
+            vec![],
+        );
         graph.add_edge(edge).unwrap();
 
         // Test neighbor lookup for relation 0
@@ -519,7 +507,7 @@ mod tests {
         // Create a complex join edge with endpoint {0, 1} connected to endpoint {2}.
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
-        let edge = JoinEdge::new_with_endpoints(
+        let edge = JoinEdge::new(
             JoinSet::from_iter([0, 1]).unwrap(),
             JoinSet::new_singleton(2).unwrap(),
             filter,
@@ -562,7 +550,7 @@ mod tests {
 
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
-        let left_join = JoinEdge::new_with_endpoints(
+        let left_join = JoinEdge::new(
             JoinSet::new_singleton(0).unwrap(),
             JoinSet::new_singleton(1).unwrap(),
             filter,
@@ -573,7 +561,7 @@ mod tests {
 
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
-        let outside_inner = JoinEdge::new_with_endpoints(
+        let outside_inner = JoinEdge::new(
             JoinSet::from_iter([0, 1]).unwrap(),
             JoinSet::new_singleton(2).unwrap(),
             filter,

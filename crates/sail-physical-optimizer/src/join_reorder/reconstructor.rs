@@ -1261,14 +1261,14 @@ mod tests {
             Statistics::new_unknown(&schema_b),
         ));
 
-        let join_set = JoinSet::from_iter([0usize, 1usize])?;
         let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("R0.C0", 0)),
             Operator::Eq,
             Arc::new(Column::new("R1.C0", 0)),
         ));
         graph.add_edge(JoinEdge::new(
-            join_set,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![(
@@ -1341,14 +1341,14 @@ mod tests {
             Statistics::new_unknown(&schema_b),
         ));
 
-        let join_set = JoinSet::from_iter([0usize, 1usize])?;
         let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("R0.C0", 0)),
             Operator::Eq,
             Arc::new(Column::new("R1.C0", 0)),
         ));
         graph.add_edge(JoinEdge::new(
-            join_set,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![(
@@ -1418,14 +1418,14 @@ mod tests {
             Statistics::new_unknown(&schema_b),
         ));
 
-        let join_set = JoinSet::from_iter([0usize, 1usize])?;
         let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("R0.C0", 0)),
             Operator::Eq,
             Arc::new(Column::new("R1.C0", 0)),
         ));
         let mut edge = JoinEdge::new(
-            join_set,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![(
@@ -1680,7 +1680,6 @@ mod tests {
             Statistics::new_unknown(&dummy_schema),
         ));
 
-        let join_set_01 = JoinSet::from_iter([0usize, 1usize])?;
         let equi_pairs = vec![(
             StableColumn {
                 relation_id: 0,
@@ -1710,7 +1709,8 @@ mod tests {
             non_equi,
         ));
         graph.add_edge(JoinEdge::new(
-            join_set_01,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             equi_pairs,
@@ -1788,10 +1788,10 @@ mod tests {
         }
 
         // One edge connecting relations 0 and 1.
-        let join_set_01 = JoinSet::from_iter([0usize, 1usize])?;
         let filter = Arc::new(Column::new("R0.C0", 0)) as Arc<dyn PhysicalExpr>;
         graph.add_edge(JoinEdge::new(
-            join_set_01,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![(
@@ -1875,14 +1875,19 @@ mod tests {
         }
 
         // Join predicate: R0.C0 < R1.C0 (no equi_pairs recorded).
-        let join_set_01 = JoinSet::from_iter([0usize, 1usize])?;
         let filter = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("R0.C0", 0)),
             Operator::Lt,
             Arc::new(Column::new("R1.C0", 0)),
         )) as Arc<dyn PhysicalExpr>;
         // Use a non-inner join type to ensure we support theta join beyond inner joins.
-        graph.add_edge(JoinEdge::new(join_set_01, filter, JoinType::Left, vec![]))?;
+        graph.add_edge(JoinEdge::new(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            filter,
+            JoinType::Left,
+            vec![],
+        ))?;
 
         // DP table with leaves and the join using the single edge at index 0.
         let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
