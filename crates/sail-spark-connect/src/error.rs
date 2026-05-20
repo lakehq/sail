@@ -217,7 +217,6 @@ pub(crate) enum SparkThrowable {
     #[expect(dead_code)]
     StreamingQueryException(String),
     QueryExecutionException(String),
-    #[expect(dead_code)]
     NumberFormatException(String),
     IllegalArgumentException(String),
     ArithmeticException(String),
@@ -342,6 +341,18 @@ impl From<SparkThrowable> for Status {
     }
 }
 
+/// Returns `true` when the Arrow cast error message indicates a failed string-to-number
+/// conversion. In Spark, such failures are reported as `NumberFormatException`.
+///
+/// The Arrow cast kernel produces messages of the form:
+///   "Cannot cast string '{value}' to value of {type} type"
+/// where `{type}` is a numeric Arrow data type name.
+fn is_number_format_error(message: &str) -> bool {
+    message.starts_with("Cannot cast string '")
+        && message.contains("' to value of ")
+        && message.ends_with(" type")
+}
+
 impl From<CommonErrorCause> for SparkThrowable {
     fn from(value: CommonErrorCause) -> Self {
         match value {
@@ -380,8 +391,14 @@ impl From<CommonErrorCause> for SparkThrowable {
                 };
                 SparkThrowable::PythonException(message)
             }
-            CommonErrorCause::ArrowCast(x)
-            | CommonErrorCause::Schema(x)
+            CommonErrorCause::ArrowCast(x) => {
+                if is_number_format_error(&x) {
+                    SparkThrowable::NumberFormatException(x)
+                } else {
+                    SparkThrowable::AnalysisException(x)
+                }
+            }
+            CommonErrorCause::Schema(x)
             | CommonErrorCause::Plan(x)
             | CommonErrorCause::Configuration(x) => SparkThrowable::AnalysisException(x),
             CommonErrorCause::Execution(x) => {
