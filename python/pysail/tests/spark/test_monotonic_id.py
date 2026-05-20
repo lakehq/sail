@@ -1,4 +1,7 @@
+import pyspark.sql.functions as F  # noqa: N812
 import pytest
+
+from pysail.testing.spark.utils.sql import parse_show_string
 
 
 def test_monotonically_increasing_id_smoke(spark):
@@ -22,6 +25,24 @@ def test_monotonically_increasing_id_increases_within_partition(spark):
     ids = [r["id"] for r in rows]
     assert ids == sorted(ids)
     assert len(set(ids)) == len(ids)
+
+
+def test_monotonically_increasing_id_uses_input_partition_ids(spark):
+    df = spark.range(0, 10, 1, 2).select(
+        "*",
+        F.spark_partition_id(),
+        F.monotonically_increasing_id(),
+    )
+
+    assert df.columns == ["id", "SPARK_PARTITION_ID()", "monotonically_increasing_id()"]
+    expected = [(i, 0, i) for i in range(5)] + [(i, 1, (1 << 33) + i - 5) for i in range(5, 10)]
+    assert sorted((row[0], row[1], row[2]) for row in df.collect()) == expected
+
+    shown = df._show_string(n=20, truncate=False)  # noqa: SLF001
+    assert parse_show_string(shown) == [
+        ["id", "SPARK_PARTITION_ID()", "monotonically_increasing_id()"],
+        *[[str(row_id), str(pid), str(mid)] for row_id, pid, mid in expected],
+    ]
 
 
 def test_monotonically_increasing_id_same_when_called_twice_in_select(spark):

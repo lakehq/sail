@@ -36,7 +36,7 @@ impl ScalarUDFImpl for SparkPartitionId {
     }
 
     fn name(&self) -> &str {
-        "spark_partition_id"
+        "SPARK_PARTITION_ID"
     }
 
     fn signature(&self) -> &Signature {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_expr::{lit, Extension, Limit, LogicalPlan};
+use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringNode, ShowStringStyle};
 
@@ -21,7 +21,6 @@ impl PlanResolver<'_> {
             vertical,
         } = show;
         let input = self.resolve_query_plan(*input, state).await?;
-        let input = Self::rewrite_show_input_with_limit(input, num_rows);
         let style = match vertical {
             true => ShowStringStyle::Vertical,
             false => ShowStringStyle::Default,
@@ -50,7 +49,6 @@ impl PlanResolver<'_> {
             truncate,
         } = html;
         let input = self.resolve_query_plan(*input, state).await?;
-        let input = Self::rewrite_show_input_with_limit(input, num_rows);
         let format = ShowStringFormat::new(ShowStringStyle::Html, truncate);
         let names = Self::get_field_names(input.schema(), state)?;
         Ok(LogicalPlan::Extension(Extension {
@@ -62,15 +60,5 @@ impl PlanResolver<'_> {
                 "html_string".to_string(),
             )?),
         }))
-    }
-
-    /// Adds a `Limit` plan so that the optimizer can push down the limit to the show input.
-    fn rewrite_show_input_with_limit(input: LogicalPlan, num_rows: usize) -> LogicalPlan {
-        LogicalPlan::Limit(Limit {
-            skip: Some(Box::new(lit(0))),
-            // fetch one more row so that the proper message can be displayed if there is more data
-            fetch: Some(Box::new(lit(num_rows as i64 + 1))),
-            input: Arc::new(input),
-        })
     }
 }
