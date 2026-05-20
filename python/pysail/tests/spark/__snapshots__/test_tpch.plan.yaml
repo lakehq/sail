@@ -542,11 +542,11 @@ data:
             AggregateExec: mode=Partial, gby=[], aggr=[sum(lineitem.#5 * Some(1),10,0 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@0, #1@0)], filter=#19@1 = Brand#21 AND #22@3 IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND #4@0 >= Some(800),4,2 AND #4@0 <= Some(1800),4,2 AND #21@2 <= 5 OR #19@1 = Brand#13 AND #22@3 IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND #4@0 >= Some(2000),4,2 AND #4@0 <= Some(3000),4,2 AND #21@2 <= 10 OR #19@1 = Brand#52 AND #22@3 IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND #4@0 >= Some(3000),4,2 AND #4@0 <= Some(4000),4,2 AND #21@2 <= 15, projection=[#5@6, #6@7]
                 ProjectionExec: expr=[_0@0 as #16, _3@1 as #19, _5@2 as #21, _6@3 as #22]
-                  FilterExec: (_3@1 = Brand#21 AND _6@3 IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND _5@2 <= 5 OR _3@1 = Brand#13 AND _6@3 IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND _5@2 <= 10 OR _3@1 = Brand#52 AND _6@3 IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND _5@2 <= 15) AND _5@2 >= 1
+                  FilterExec: _5@2 >= 1 AND (_3@1 = Brand#21 AND _6@3 IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND _5@2 <= 5 OR _3@1 = Brand#13 AND _6@3 IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND _5@2 <= 10 OR _3@1 = Brand#52 AND _6@3 IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND _5@2 <= 15)
                     DataSourceExec: partitions=1, partition_sizes=[1]
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                   ProjectionExec: expr=[_1@0 as #1, _4@1 as #4, _5@2 as #5, _6@3 as #6]
-                    FilterExec: (_4@1 >= Some(800),4,2 AND _4@1 <= Some(1800),4,2 OR _4@1 >= Some(2000),4,2 AND _4@1 <= Some(3000),4,2 OR _4@1 >= Some(3000),4,2 AND _4@1 <= Some(4000),4,2) AND (_14@5 = AIR OR _14@5 = AIR REG) AND _13@4 = DELIVER IN PERSON, projection=[_1@0, _4@1, _5@2, _6@3]
+                    FilterExec: (_14@5 = AIR OR _14@5 = AIR REG) AND _13@4 = DELIVER IN PERSON AND (_4@1 >= Some(800),4,2 AND _4@1 <= Some(1800),4,2 OR _4@1 >= Some(2000),4,2 AND _4@1 <= Some(3000),4,2 OR _4@1 >= Some(3000),4,2 AND _4@1 <= Some(4000),4,2), projection=[_1@0, _4@1, _5@2, _6@3]
                       DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[20]"

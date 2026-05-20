@@ -783,13 +783,13 @@ data:
                         ProjectionExec: expr=[#61@0 as #61, #64@1 as #64, CAST(#61@0 AS Float64) as CAST(household_demographics.#61 AS Float64)]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             ProjectionExec: expr=[_0@0 as #61, _3@1 as #64]
-                              FilterExec: (__common_expr_2@0 OR _3@2 = 1) AND __common_expr_2@0, projection=[_0@1, _3@2]
+                              FilterExec: __common_expr_2@0 AND (__common_expr_2@0 OR _3@2 = 1), projection=[_0@1, _3@2]
                                 ProjectionExec: expr=[_3@1 = 3 OR _3@1 = 1 as __common_expr_2, _0@0 as _0, _3@1 as _3]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                     ProjectionExec: expr=[#66@0 as #66, #74@1 as #74, CAST(#66@0 AS Float64) as CAST(customer_address.#66 AS Float64)]
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                         ProjectionExec: expr=[_0@0 as #66, _8@1 as #74]
-                          FilterExec: (_8@1 = CO OR _8@1 = MI OR _8@1 = MN OR _8@1 = NC OR _8@1 = NY OR _8@1 = TX OR _8@1 = CA OR _8@1 = NE OR _8@1 = TN) AND _8@1 IN (SET) ([CO, MI, MN, NC, NY, TX, CA, NE, TN]) AND _10@2 = United States, projection=[_0@0, _8@1]
+                          FilterExec: _10@2 = United States AND _8@1 IN (SET) ([CO, MI, MN, NC, NY, TX, CA, NE, TN]) AND (_8@1 = CO OR _8@1 = MI OR _8@1 = MN OR _8@1 = NC OR _8@1 = NY OR _8@1 = TX OR _8@1 = CA OR _8@1 = NE OR _8@1 = TN), projection=[_0@0, _8@1]
                             DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[_0@0 as #79, CAST(_0@0 AS Float64) as CAST(date_dim.#79 AS Float64)]
                   FilterExec: _6@1 = 2001, projection=[_0@0]
@@ -2816,7 +2816,7 @@ data:
                                         ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[_0@0 as #40, _8@1 as #48]
-                                  FilterExec: _8@2 = 1 AND _6@1 = 2001, projection=[_0@0, _8@2]
+                                  FilterExec: _6@1 = 2001 AND _8@2 = 1, projection=[_0@0, _8@2]
                                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                       DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[#69@1 as #75, #70@2 as #76, #71@3 as #77, #73@5 as #79, CASE WHEN __common_expr_3@0 THEN NULL ELSE #72@4 / CASE WHEN __common_expr_3@0 THEN CAST(raise_error(Division by zero) AS Float64) ELSE #73@5 END END as #80]
@@ -2838,7 +2838,7 @@ data:
                                       ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[_0@0 as #40, _8@1 as #48]
-                                FilterExec: _8@2 = 2 AND _6@1 = 2001, projection=[_0@0, _8@2]
+                                FilterExec: _6@1 = 2001 AND _8@2 = 2, projection=[_0@0, _8@2]
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -2854,7 +2854,7 @@ data:
               CoalescePartitionsExec
                 ProjectionExec: expr=[#69@1 as #75, #70@2 as #76, #71@3 as #77, #73@5 as #79, CASE WHEN __common_expr_1@0 THEN NULL ELSE #72@4 / CASE WHEN __common_expr_1@0 THEN CAST(raise_error(Division by zero) AS Float64) ELSE #73@5 END END as #80]
                   ProjectionExec: expr=[avg(inventory.#3)@0 = 0 as __common_expr_1, #26@1 as #69, #4@2 as #70, #48@3 as #71, stddev(inventory.#3)@4 as #72, avg(inventory.#3)@0 as #73]
-                    FilterExec: CAST(CASE WHEN __common_expr_7@0 THEN NULL ELSE stddev(inventory.#3)@4 / CASE WHEN __common_expr_7@0 THEN CAST(raise_error(Division by zero) AS Float64) ELSE avg(inventory.#3)@5 END END AS Decimal128(30, 15)) > Some(1500000000000000),30,15 AND CASE WHEN __common_expr_7@0 THEN 0 ELSE stddev(inventory.#3)@4 / CASE WHEN __common_expr_7@0 THEN CAST(raise_error(Division by zero) AS Float64) ELSE avg(inventory.#3)@5 END END > 1, projection=[avg(inventory.#3)@5, #26@1, #4@2, #48@3, stddev(inventory.#3)@4]
+                    FilterExec: CASE WHEN __common_expr_7@0 THEN 0 ELSE stddev(inventory.#3)@4 / CASE WHEN __common_expr_7@0 THEN CAST(raise_error(Division by zero) AS Float64) ELSE avg(inventory.#3)@5 END END > 1 AND CAST(CASE WHEN __common_expr_7@0 THEN NULL ELSE stddev(inventory.#3)@4 / CASE WHEN __common_expr_7@0 THEN CAST(raise_error(Division by zero) AS Float64) ELSE avg(inventory.#3)@5 END END AS Decimal128(30, 15)) > Some(1500000000000000),30,15, projection=[avg(inventory.#3)@5, #26@1, #4@2, #48@3, stddev(inventory.#3)@4]
                       ProjectionExec: expr=[avg(inventory.#3)@5 = 0 as __common_expr_7, #26@1 as #26, #4@2 as #4, #48@3 as #48, stddev(inventory.#3)@4 as stddev(inventory.#3), avg(inventory.#3)@5 as avg(inventory.#3)]
                         AggregateExec: mode=FinalPartitioned, gby=[#28@0 as #28, #26@1 as #26, #4@2 as #4, #48@3 as #48], aggr=[stddev(inventory.#3), avg(inventory.#3)], ordering_mode=PartiallySorted([3])
                           RepartitionExec: partitioning=Hash([#28@0, #26@1, #4@2, #48@3], 4), input_partitions=4
@@ -2871,7 +2871,7 @@ data:
                                         ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[_0@0 as #40, _8@1 as #48]
-                                  FilterExec: _8@2 = 1 AND _6@1 = 2001, projection=[_0@0, _8@2]
+                                  FilterExec: _6@1 = 2001 AND _8@2 = 1, projection=[_0@0, _8@2]
                                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                       DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[#69@1 as #75, #70@2 as #76, #71@3 as #77, #73@5 as #79, CASE WHEN __common_expr_3@0 THEN NULL ELSE #72@4 / CASE WHEN __common_expr_3@0 THEN CAST(raise_error(Division by zero) AS Float64) ELSE #73@5 END END as #80]
@@ -2893,7 +2893,7 @@ data:
                                       ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[_0@0 as #40, _8@1 as #48]
-                                FilterExec: _8@2 = 2 AND _6@1 = 2001, projection=[_0@0, _8@2]
+                                FilterExec: _6@1 = 2001 AND _8@2 = 2, projection=[_0@0, _8@2]
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -3269,7 +3269,7 @@ data:
                     ProjectionExec: expr=[#61@0 as #61, #69@1 as #69, CAST(#61@0 AS Float64) as CAST(customer_address.#61 AS Float64)]
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                         ProjectionExec: expr=[_0@0 as #61, _8@1 as #69]
-                          FilterExec: (_8@1 = IL OR _8@1 = KY OR _8@1 = OR OR _8@1 = VA OR _8@1 = FL OR _8@1 = AL OR _8@1 = OK OR _8@1 = IA OR _8@1 = TX) AND _8@1 IN (SET) ([IL, KY, OR, VA, FL, AL, OK, IA, TX]) AND _10@2 = United States, projection=[_0@0, _8@1]
+                          FilterExec: _10@2 = United States AND _8@1 IN (SET) ([IL, KY, OR, VA, FL, AL, OK, IA, TX]) AND (_8@1 = IL OR _8@1 = KY OR _8@1 = OR OR _8@1 = VA OR _8@1 = FL OR _8@1 = AL OR _8@1 = OK OR _8@1 = IA OR _8@1 = TX), projection=[_0@0, _8@1]
                             DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[_0@0 as #74, CAST(_0@0 AS Float64) as CAST(date_dim.#74 AS Float64)]
                   FilterExec: _6@1 = 2001, projection=[_0@0]
@@ -4878,7 +4878,7 @@ data:
                                 ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _8@2 as #8, _9@3 as #9, CAST(_0@0 AS Float64) as CAST(customer.#0 AS Float64)]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[_0@0 as #41, _6@1 as #47, CAST(_0@0 AS Float64) as CAST(date_dim.#41 AS Float64)]
-                                FilterExec: _6@1 = 2002
+                                FilterExec: (_6@1 = 2001 OR _6@1 = 2002) AND _6@1 = 2002
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[#76@0 as #69, stddev(web_sales.#122)@4 as #73]
@@ -4892,7 +4892,7 @@ data:
                           ProjectionExec: expr=[_0@0 as #75, _1@1 as #76, _8@2 as #83, _9@3 as #84, CAST(_0@0 AS Float64) as CAST(customer.#75 AS Float64)]
                             DataSourceExec: partitions=1, partition_sizes=[1]
                         ProjectionExec: expr=[_0@0 as #127, _6@1 as #133, CAST(_0@0 AS Float64) as CAST(date_dim.#127 AS Float64)]
-                          FilterExec: _6@1 = 2002
+                          FilterExec: (_6@1 = 2001 OR _6@1 = 2002) AND _6@1 = 2002
                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                               DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -5668,7 +5668,7 @@ data:
                               ProjectionExec: expr=[#90@0 as #90, #98@1 as #98, CAST(#90@0 AS Float64) as CAST(customer_address.#90 AS Float64)]
                                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                   ProjectionExec: expr=[_0@0 as #90, _8@1 as #98]
-                                    FilterExec: (_8@1 = SC OR _8@1 = IN OR _8@1 = VA OR _8@1 = WA OR _8@1 = KS OR _8@1 = KY OR _8@1 = SD OR _8@1 = WI OR _8@1 = NE) AND _8@1 IN (SET) ([SC, IN, VA, WA, KS, KY, SD, WI, NE]) AND _10@2 = United States, projection=[_0@0, _8@1]
+                                    FilterExec: _10@2 = United States AND _8@1 IN (SET) ([SC, IN, VA, WA, KS, KY, SD, WI, NE]) AND (_8@1 = SC OR _8@1 = IN OR _8@1 = VA OR _8@1 = WA OR _8@1 = KS OR _8@1 = KY OR _8@1 = SD OR _8@1 = WI OR _8@1 = NE), projection=[_0@0, _8@1]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                           ProjectionExec: expr=[_0@0 as #103, CAST(_0@0 AS Float64) as CAST(date_dim.#103 AS Float64)]
                             FilterExec: _6@1 = 2001, projection=[_0@0]
