@@ -148,5 +148,5 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('price', CAST(-0.99 AS DECIMAL(5,2))))
         """
       Then query result
-        | to_csv(named_struct(price, CAST(-0.99 AS DECIMAL(5,2)))) |
+        | to_csv(named_struct(price, CAST((-0.99) AS DECIMAL(5,2)))) |
         | -0.99                                                      |
