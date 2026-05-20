@@ -1313,3 +1313,58 @@ Feature: from_json function parses JSON strings into structured types
         | {2}    |
         | {3}    |
         | {4}    |
+
+Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
+    Scenario: Parseable JSON number as struct target returns struct with null fields
+      When query
+        """
+        SELECT from_json('42', 'a INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parseable JSON string as struct target returns struct with null fields
+      When query
+        """
+        SELECT from_json('"hello"', 'a INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parseable JSON array as struct target returns struct with null fields
+      When query
+        """
+        SELECT from_json('[1,2,3]', 'a INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parseable JSON boolean as struct target returns struct with null fields
+      When query
+        """
+        SELECT from_json('true', 'a INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parseable JSON number as array target returns null
+      When query
+        """
+        SELECT from_json('42', 'ARRAY<INT>') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Parseable JSON number as map target returns null
+      When query
+        """
+        SELECT from_json('42', 'MAP<STRING,INT>') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
