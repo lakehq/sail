@@ -449,7 +449,6 @@ impl AddStatsPruningStatistics {
                 .map(|v| v.max(0) as u64)
         })
     }
-
 }
 
 impl PruningStatistics for AddStatsPruningStatistics {
