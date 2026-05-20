@@ -100,7 +100,6 @@ message ExtendedScalarUdf {
     SparkAbsUdf spark_abs = 20;
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
-    SparkArrayFilterUdf spark_array_filter = 23;
   }
 }
 
@@ -207,18 +206,6 @@ message SparkTimeUdf {
   bool is_try = 1;
 }
 
-message SparkArrayFilterUdf {
-  bytes lambda_expr = 1;
-  bytes element_type = 2;
-  string column_name = 3;
-  optional string index_column_name = 4;
-  repeated OuterColumnRef outer_columns = 5;
-}
-
-message OuterColumnRef {
-  string name = 1;
-  bytes data_type = 2;
-}
 
 message SparkFromJsonUdf {
   string session_timezone = 1;

@@ -7,12 +7,12 @@ use datafusion_expr::expr::Expr;
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{LambdaFunction, ScalarFunction};
+use crate::function::common::ScalarFunction;
 
 mod aggregate;
 pub(crate) mod common;
 mod generator;
-pub(crate) mod scalar;
+mod scalar;
 mod table;
 mod window;
 
@@ -26,8 +26,6 @@ lazy_static! {
         HashMap::from_iter(generator::list_built_in_generator_functions());
     pub static ref BUILT_IN_TABLE_FUNCTIONS: HashMap<&'static str, Arc<TableFunction>> =
         HashMap::from_iter(table::list_built_in_table_functions());
-    pub static ref BUILT_IN_LAMBDA_FUNCTIONS: HashMap<&'static str, LambdaFunction> =
-        HashMap::from_iter(scalar::lambda::list_built_in_higher_order_functions());
 }
 
 pub fn get_built_in_function(name: &str) -> PlanResult<ScalarFunction> {
@@ -47,10 +45,6 @@ pub fn get_built_in_table_function(name: &str) -> PlanResult<Arc<TableFunction>>
 
 pub fn is_built_in_generator_function(name: &str) -> bool {
     BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name)
-}
-
-pub fn get_built_in_lambda_function(name: &str) -> Option<LambdaFunction> {
-    BUILT_IN_LAMBDA_FUNCTIONS.get(name).cloned()
 }
 
 pub use generator::get_outer_built_in_generator_functions;

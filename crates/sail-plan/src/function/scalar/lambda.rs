@@ -1,21 +1,10 @@
-use std::sync::Arc;
-
-use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::expr::{self, HigherOrderFunction, Lambda, LambdaVariable};
-use datafusion_expr::{lit, Expr, ScalarUDF};
+use datafusion_common::ScalarValue;
+use datafusion_expr::{expr, lit};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::higher_order::spark_array_filter::SparkArrayFilter;
-use sail_function::scalar::array::spark_array_filter_expr::{
-    build_batch_schema, SparkArrayFilterExpr,
-};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{
-    LambdaFunction, LambdaFunctionInput, ScalarFunction, ScalarFunctionInput,
-};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 /// Spark's array_sort always puts NULLs last, regardless of sort direction
 /// https://spark.apache.org/docs/latest/api/sql/index.html#array_sort
@@ -53,8 +42,6 @@ fn array_sort(input: ScalarFunctionInput) -> PlanResult<datafusion_expr::Expr> {
     array_sort_spark(array, lit(true))
 }
 
-/// Scalar functions that may or may not use lambdas.
-/// These are called when NO lambda is present (e.g., array_sort without comparator).
 pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -62,149 +49,7 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
         ("aggregate", F::unknown("aggregate")),
         ("array_sort", F::custom(array_sort)),
         ("exists", F::unknown("exists")),
-        ("forall", F::unknown("forall")),
-        ("map_filter", F::unknown("map_filter")),
-        ("map_zip_with", F::unknown("map_zip_with")),
-        ("reduce", F::unknown("reduce")),
-        ("transform", F::unknown("transform")),
-        ("transform_keys", F::unknown("transform_keys")),
-        ("transform_values", F::unknown("transform_values")),
-        ("zip_with", F::unknown("zip_with")),
-    ]
-}
-
-/// Handler for filter(array, lambda) - filters array elements using a predicate lambda.
-///
-/// Uses DataFusion's native HigherOrderUDF when no outer-column captures are needed.
-/// Falls back to SparkArrayFilterExpr (ScalarUDF) for outer-column capture until DF
-/// resolves https://github.com/apache/datafusion/issues/21172.
-fn filter_lambda(input: LambdaFunctionInput) -> PlanResult<Expr> {
-    let LambdaFunctionInput {
-        array_expr,
-        resolved_lambda,
-        element_type,
-        element_column_name,
-        element_var_name,
-        index_column_name,
-        index_var_name,
-        outer_columns,
-        outer_column_exprs,
-        function_context,
-    } = input;
-
-    // Native HigherOrderUDF path — element type is known, and at most 1 lambda param.
-    // Outer column captures are handled by DF's spread_captures mechanism.
-    // 2-param lambdas are excluded: a DF bug in LambdaExpr::new incorrectly includes
-    // LambdaVariable indices in used_column_indices, causing index remapping that misaligns
-    // the evaluation batch when only the second param is used (TODO: fix upstream in DF).
-    if element_type != DataType::Null && index_var_name.is_none() {
-        let body = replace_synthetic_columns_with_lambda_vars(
-            resolved_lambda,
-            &element_column_name,
-            &element_var_name,
-            &element_type,
-            index_column_name.as_deref(),
-            index_var_name.as_deref(),
-        )?;
-
-        let mut params = vec![element_var_name];
-        if let Some(idx_name) = index_var_name {
-            params.push(idx_name);
-        }
-
-        let lambda_expr = Expr::Lambda(Lambda::new(params, body));
-        return Ok(Expr::HigherOrderFunction(HigherOrderFunction::new(
-            Arc::new(SparkArrayFilter::new()),
-            vec![array_expr, lambda_expr],
-        )));
-    }
-
-    // Fallback: ScalarUDF path for 2-param lambdas (element + index).
-    // DF's LambdaExpr::new incorrectly includes LambdaVariable indices in
-    // used_column_indices, which misaligns the eval batch when only the index
-    // param is used. SparkArrayFilterExpr avoids this by compiling the predicate
-    // directly as a PhysicalExpr. TODO: remove once fixed upstream in DF.
-    // Compile the PhysicalExpr once at planning time using the session state.
-    let schema = build_batch_schema(
-        &element_column_name,
-        &element_type,
-        index_column_name.as_deref(),
-        &outer_columns,
-    );
-    let df_schema = DFSchema::try_from(Arc::clone(&schema))
-        .map_err(|e| PlanError::internal(format!("filter lambda: failed to build schema: {e}")))?;
-    let physical_expr = function_context
-        .session_context
-        .state()
-        .create_physical_expr(resolved_lambda.clone(), &df_schema)
-        .map_err(|e| PlanError::internal(format!("filter lambda: compile failed: {e}")))?;
-
-    let mut udf_args = vec![array_expr];
-    udf_args.extend(outer_column_exprs);
-
-    let filter_udf = SparkArrayFilterExpr::with_precompiled(
-        resolved_lambda,
-        physical_expr,
-        element_type,
-        element_column_name,
-        index_column_name,
-        outer_columns,
-    );
-
-    Ok(Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(filter_udf)),
-        args: udf_args,
-    }))
-}
-
-/// Walk `expr` replacing `Column(synthetic_id)` references with `LambdaVariable` nodes.
-fn replace_synthetic_columns_with_lambda_vars(
-    expr: Expr,
-    elem_id: &str,
-    elem_name: &str,
-    elem_type: &DataType,
-    idx_id: Option<&str>,
-    idx_name: Option<&str>,
-) -> PlanResult<Expr> {
-    let elem_field = Arc::new(Field::new(elem_name, elem_type.clone(), true));
-    let idx_field = idx_name.map(|name| Arc::new(Field::new(name, DataType::Int64, false)));
-
-    let result = expr.transform(|e| match &e {
-        Expr::Column(Column {
-            name,
-            relation: None,
-            ..
-        }) if name.as_str() == elem_id => Ok(Transformed::yes(Expr::LambdaVariable(
-            LambdaVariable::new(elem_name.to_string(), Some(Arc::clone(&elem_field))),
-        ))),
-        Expr::Column(Column {
-            name,
-            relation: None,
-            ..
-        }) if idx_id.is_some_and(|id| name.as_str() == id) => {
-            let field = idx_field
-                .as_ref()
-                .and_then(|_f| idx_name.map(|n| Arc::new(Field::new(n, DataType::Int64, false))));
-            Ok(Transformed::yes(Expr::LambdaVariable(LambdaVariable::new(
-                idx_name.unwrap_or("i").to_string(),
-                field,
-            ))))
-        }
-        _ => Ok(Transformed::no(e)),
-    })?;
-    Ok(result.data)
-}
-
-/// Higher-order (lambda) function handlers.
-/// These are called when a lambda IS present in the function call.
-pub fn list_built_in_higher_order_functions() -> Vec<(&'static str, LambdaFunction)> {
-    use crate::function::common::LambdaFunctionBuilder as F;
-
-    vec![
-        ("aggregate", F::unknown("aggregate")),
-        ("array_sort", F::unknown("array_sort with comparator")),
-        ("exists", F::unknown("exists")),
-        ("filter", F::custom(filter_lambda)),
+        ("filter", F::unknown("filter")),
         ("forall", F::unknown("forall")),
         ("map_filter", F::unknown("map_filter")),
         ("map_zip_with", F::unknown("map_zip_with")),
