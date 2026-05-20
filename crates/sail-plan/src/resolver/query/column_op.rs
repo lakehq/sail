@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion_common::Column;
+use datafusion_common::{Column, DFSchema};
 use datafusion_expr::{
     cast, col, lit, Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias,
 };
@@ -182,6 +182,11 @@ impl PlanResolver<'_> {
         aliases: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        // `AliasEntry` is `(resolved_expr, seen, explicit_metadata)` where `explicit_metadata` is
+        // `Some(meta)` when the user explicitly provided metadata via `withMetadata` (even empty),
+        // and `None` when no metadata was specified on the alias.
+        type AliasEntry = (Expr, bool, Option<Vec<(String, String)>>);
+
         let input = self.resolve_query_plan(input, state).await?;
         // If the input is a SubqueryAlias, save the alias and re-apply it after building the
         // projection. A Projection node strips qualifiers from its output schema, so without
@@ -191,8 +196,13 @@ impl PlanResolver<'_> {
             _ => None,
         };
         let schema = input.schema();
+        // `metadata_overrides` tracks columns where the user explicitly specified metadata via
+        // `withMetadata`. For those columns, we need to *override* (not merge) the metadata on the
+        // output field. The key is the user-visible column name, and the value is the exact
+        // metadata map the user provided (may be empty, which clears all metadata).
+        let mut metadata_overrides: HashMap<String, Vec<(String, String)>> = HashMap::new();
         // We use `IndexMap` to ensure the result schema has a deterministic column order.
-        let mut aliases: IndexMap<String, (Expr, bool, Vec<_>)> = async {
+        let mut aliases: IndexMap<String, AliasEntry> = async {
             let mut results = IndexMap::new();
             for alias in aliases {
                 let (name, expr, metadata) = match alias {
@@ -204,12 +214,17 @@ impl PlanResolver<'_> {
                         let name = name
                             .one()
                             .map_err(|_| PlanError::invalid("multi-alias for column"))?;
-                        (name, *expr, metadata.unwrap_or(Vec::new()))
+                        (name, *expr, metadata)
                     }
                     _ => return Err(PlanError::invalid("alias expression expected for column")),
                 };
+                let name_str: String = name.into();
+                if let Some(ref meta) = metadata {
+                    // User explicitly specified metadata (via `withMetadata`), record the override.
+                    metadata_overrides.insert(name_str.clone(), meta.clone());
+                }
                 let expr = self.resolve_expression(expr, schema, state).await?;
-                results.insert(name.into(), (expr, false, metadata));
+                results.insert(name_str, (expr, false, metadata));
             }
             Ok(results) as PlanResult<_>
         }
@@ -222,9 +237,14 @@ impl PlanResolver<'_> {
                 match aliases.get_mut(name) {
                     Some((e, exists, metadata)) => {
                         *exists = true;
-                        if !metadata.is_empty() {
+                        let named_meta: Vec<(String, String)> = metadata
+                            .as_ref()
+                            .filter(|m| !m.is_empty())
+                            .cloned()
+                            .unwrap_or_default();
+                        if !named_meta.is_empty() {
                             Ok(NamedExpr::new(vec![name.to_string()], e.clone())
-                                .with_metadata(metadata.clone()))
+                                .with_metadata(named_meta))
                         } else {
                             Ok(NamedExpr::new(vec![name.to_string()], e.clone()))
                         }
@@ -235,10 +255,14 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         for (name, (e, exists, metadata)) in &aliases {
             if !exists {
-                if !metadata.is_empty() {
+                let named_meta: Vec<(String, String)> = metadata
+                    .as_ref()
+                    .filter(|m| !m.is_empty())
+                    .cloned()
+                    .unwrap_or_default();
+                if !named_meta.is_empty() {
                     expr.push(
-                        NamedExpr::new(vec![name.clone()], e.clone())
-                            .with_metadata(metadata.clone()),
+                        NamedExpr::new(vec![name.clone()], e.clone()).with_metadata(named_meta),
                     );
                 } else {
                     expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
@@ -253,7 +277,75 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
-        let result = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
+        // Build a mapping from internal field ID to user-specified override metadata.
+        // `rewrite_named_expressions` registers each user-visible name as a new field ID via
+        // `state.register_field_name`. We reverse-resolve the field ID back to the user-visible
+        // name to find which output fields should have their metadata replaced.
+        let field_id_overrides: HashMap<String, Vec<(String, String)>> =
+            if metadata_overrides.is_empty() {
+                HashMap::new()
+            } else {
+                expr.iter()
+                    .filter_map(|e| {
+                        if let Expr::Alias(alias) = e {
+                            let field_id = &alias.name;
+                            if let Ok(info) = state.get_field_info(field_id) {
+                                if let Some(new_meta) = metadata_overrides.get(info.name()) {
+                                    return Some((field_id.clone(), new_meta.clone()));
+                                }
+                            }
+                        }
+                        None
+                    })
+                    .collect()
+            };
+        let result = if field_id_overrides.is_empty() {
+            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?)
+        } else {
+            // Some columns have explicit metadata overrides (from `withMetadata`). DataFusion's
+            // `Alias::to_field` *merges* the base expression's existing field metadata with the
+            // alias metadata, but `withMetadata` should *replace* the metadata entirely.
+            // We post-process the projection schema to substitute the exact user-specified metadata
+            // for each overridden field, discarding any metadata inherited through the merge.
+            let Projection {
+                expr: proj_exprs,
+                input: proj_input,
+                schema: proj_schema,
+                ..
+            } = Projection::try_new(expr, Arc::new(input))?;
+            let qualified_fields: Vec<(
+                Option<datafusion_common::TableReference>,
+                Arc<arrow::datatypes::Field>,
+            )> = proj_schema
+                .iter()
+                .map(|(qualifier, field)| {
+                    if let Some(new_meta) = field_id_overrides.get(field.name()) {
+                        // Replace metadata: preserve only truly-internal keys (UDT info,
+                        // Arrow extension type metadata), and apply the user-specified metadata.
+                        let mut final_meta: HashMap<String, String> = field
+                            .metadata()
+                            .iter()
+                            .filter(|(k, _)| {
+                                k.starts_with("udt.") || k.starts_with("ARROW:extension:")
+                            })
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        final_meta.extend(new_meta.iter().cloned());
+                        let patched = Arc::new((**field).clone().with_metadata(final_meta));
+                        (qualifier.cloned(), patched)
+                    } else {
+                        (qualifier.cloned(), field.clone())
+                    }
+                })
+                .collect();
+            let new_schema =
+                DFSchema::new_with_metadata(qualified_fields, proj_schema.metadata().clone())?;
+            LogicalPlan::Projection(Projection::try_new_with_schema(
+                proj_exprs,
+                proj_input,
+                Arc::new(new_schema),
+            )?)
+        };
         if let Some(alias) = input_alias {
             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
                 Arc::new(result),

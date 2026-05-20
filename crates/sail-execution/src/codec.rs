@@ -129,7 +129,7 @@ use sail_function::scalar::datetime::spark_interval::{
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
-use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
+use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_time::SparkTime;
@@ -137,7 +137,6 @@ use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
-use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -2208,6 +2207,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkToNumber::new(safe))));
             }
+            UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
+            }
+            UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
+                    is_try,
+                ))));
+            }
+            UdfKind::ConvertTz(gen::ConvertTzUdf { classic }) => {
+                return Ok(Arc::new(ScalarUDF::from(ConvertTz::new(classic))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -2217,7 +2227,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
-            "convert_tz" => Ok(Arc::new(ScalarUDF::from(ConvertTz::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(LeastFunc::new()))),
@@ -2294,7 +2303,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_to_binary" | "try_to_binary" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
             }
-            "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
             "spark_bit_count" | "bit_count" => Ok(Arc::new(ScalarUDF::from(SparkBitCount::new()))),
             "spark_bit_get" | "bit_get" | "getbit" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
@@ -2318,12 +2326,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_make_ym_interval" | "make_ym_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
-            }
-            "spark_make_timestamp_ntz" | "make_timestamp_ntz" => {
-                Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
-            }
-            "spark_try_make_timestamp_ntz" | "try_make_timestamp_ntz" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryMakeTimestampNtz::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
@@ -2391,7 +2393,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<BitmapCount>()
-            || node_inner.is::<ConvertTz>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
@@ -2415,7 +2416,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
             || node_inner.is::<RewriteLikePatternFunc>()
-            || node_inner.is::<SparkAbs>()
             || node_inner.is::<SparkAESDecrypt>()
             || node_inner.is::<SparkAESEncrypt>()
             || node_inner.is::<SparkArray>()
@@ -2449,8 +2449,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
             || node_inner.is::<SparkMakeInterval>()
-            || node_inner.is::<SparkMakeTimestampNtz>()
-            || node_inner.is::<SparkTryMakeTimestampNtz>()
             || node_inner.is::<SparkMakeTime>()
             || node_inner.is::<SparkTimeDiff>()
             || node_inner.is::<SparkTimeTrunc>()
@@ -2600,6 +2598,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkToNumber>() {
             let safe = func.safe();
             UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkAbs>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
+        } else if let Some(func) = node
+            .inner()
+            .as_any()
+            .downcast_ref::<SparkMakeTimestampNtz>()
+        {
+            let is_try = func.is_try();
+            UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<ConvertTz>() {
+            let classic = func.classic();
+            UdfKind::ConvertTz(gen::ConvertTzUdf { classic })
         } else {
             return Ok(());
         };
