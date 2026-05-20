@@ -16,22 +16,26 @@ pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()
         return Ok(());
     }
 
-    ensure(
-        is_variant_field(field),
-        "field does not have extension type VariantType",
-    )?;
+    if !is_variant_field(field) && !is_variant_storage_type(field.data_type()) {
+        return exec_err!("field does not have extension type VariantType");
+    }
 
-    let variant_type = VariantType;
-    variant_type.supports_data_type(field.data_type())?;
+    VariantType.supports_data_type(field.data_type())?;
 
     Ok(())
 }
-pub fn ensure(pred: bool, err_msg: &str) -> datafusion_common::Result<()> {
-    if !pred {
-        return exec_err!("{}", err_msg);
-    }
 
-    Ok(())
+fn is_variant_storage_type(data_type: &DataType) -> bool {
+    let DataType::Struct(fields) = data_type else {
+        return false;
+    };
+    fields.iter().any(|field| {
+        field.name() == "metadata"
+            && matches!(
+                field.data_type(),
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+            )
+    })
 }
 pub fn try_parse_variant_scalar(scalar: &ScalarValue) -> datafusion_common::Result<VariantArray> {
     let v = match scalar {

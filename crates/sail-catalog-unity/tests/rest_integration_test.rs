@@ -670,7 +670,6 @@ async fn test_create_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
             },
         )
@@ -686,8 +685,8 @@ async fn test_create_table() {
         partition_by,
         sort_by,
         bucket_by,
-        options,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");
@@ -714,7 +713,6 @@ async fn test_create_table() {
     assert_eq!(partition_by, Vec::<CatalogPartitionField>::new());
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
-    assert_eq!(options, Vec::<(String, String)>::new());
     assert_eq!(columns.len(), 4);
     assert!(
         columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
@@ -804,7 +802,6 @@ async fn test_create_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
             },
         )
@@ -826,7 +823,6 @@ async fn test_create_table() {
                 bucket_by: None,
                 if_not_exists: true,
                 replace: false,
-                options: vec![],
                 properties: vec![],
             },
         )
@@ -877,8 +873,8 @@ async fn test_create_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![("key1".to_string(), "value1".to_string())],
                 properties: vec![
+                    ("option.key1".to_string(), "value1".to_string()),
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
@@ -896,8 +892,8 @@ async fn test_create_table() {
         partition_by,
         sort_by,
         bucket_by,
-        options,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");
@@ -922,8 +918,8 @@ async fn test_create_table() {
     );
     assert!(sort_by.is_empty());
     assert_eq!(bucket_by, None);
-    assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
-    assert_eq!(properties.len(), 7);
+    assert_eq!(properties.len(), 8);
+    assert!(properties.contains(&("option.key1".to_string(), "value1".to_string())));
     assert!(properties.contains(&("owner".to_string(), "mr. meow".to_string())));
     assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
     assert_eq!(columns.len(), 3);
@@ -1042,8 +1038,8 @@ async fn test_get_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![("key1".to_string(), "value1".to_string())],
                 properties: vec![
+                    ("option.key1".to_string(), "value1".to_string()),
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
@@ -1065,20 +1061,21 @@ async fn test_get_table() {
         partition_by,
         sort_by,
         bucket_by,
-        options,
         properties,
+        is_external: _,
     } = table_ns.kind
     else {
         panic!("Expected TableKind::Table");
     };
 
     let properties: HashMap<String, String> = properties.into_iter().collect();
-    assert_eq!(properties.len(), 7);
+    assert_eq!(properties.len(), 8);
     assert!(properties.contains_key("updated_at"));
     assert!(properties.contains_key("created_at"));
     assert!(properties.contains_key("table_id"));
     assert_eq!(properties.get("comment"), Some(&"test table".to_string()));
     assert_eq!(properties.get("table_type"), Some(&"EXTERNAL".to_string()));
+    assert_eq!(properties.get("option.key1"), Some(&"value1".to_string()));
     assert_eq!(properties.get("owner"), Some(&"mr. meow".to_string()));
     assert_eq!(properties.get("team"), Some(&"data-eng".to_string()));
 
@@ -1101,7 +1098,6 @@ async fn test_get_table() {
     );
     assert!(sort_by.is_empty());
     assert_eq!(bucket_by, None);
-    assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
     assert_eq!(columns.len(), 3);
     assert!(
         columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
@@ -1197,7 +1193,6 @@ async fn test_list_tables() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
             },
         )
@@ -1219,7 +1214,6 @@ async fn test_list_tables() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
             },
         )
@@ -1290,7 +1284,6 @@ async fn test_drop_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
             },
         )
