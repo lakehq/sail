@@ -1299,13 +1299,7 @@ fn columns_to_nested_fields(
         // `default` is not supported until Iceberg V3.
         let default_literal = if let Some(default) = default {
             if format_version >= FormatVersion::V3 {
-                let json_default: serde_json::Value =
-                    serde_json::from_str(default).map_err(|e| {
-                        CatalogError::InvalidArgument(format!(
-                            "Failed to parse default value as JSON for column '{name}': {e}"
-                        ))
-                    })?;
-                Some(Literal::try_from_json(json_default, &field_type)
+                Some(Literal::try_from_str(default, &field_type)
                     .map_err(|e| {
                         CatalogError::InvalidArgument(format!(
                             "Failed to convert default value to Iceberg literal for column '{name}': {e}"

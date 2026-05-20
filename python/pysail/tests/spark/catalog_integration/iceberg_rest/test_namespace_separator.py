@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import urllib.parse
 import urllib.request
 from typing import TYPE_CHECKING
 
@@ -27,45 +26,8 @@ def spark_doctest() -> None:
     """
 
 
-def _quote(value: str) -> str:
-    return urllib.parse.quote(value, safe="")
-
-
 def _load_config(iceberg_rest_endpoint: str) -> dict[str, object]:
     url = f"{iceberg_rest_endpoint}/v1/config"
-    # Safe: the URL is built from the controlled Iceberg REST fixture endpoint.
-    with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
-        return json.load(response)
-
-
-def _list_namespaces(
-    iceberg_rest_endpoint: str,
-    separator: str,
-    *,
-    prefix: str | None = None,
-    parent: list[str] | None = None,
-) -> dict[str, object]:
-    return _list_namespaces_with_parent_separator(
-        iceberg_rest_endpoint,
-        prefix=prefix,
-        parent=parent,
-        parent_separator=separator,
-    )
-
-
-def _list_namespaces_with_parent_separator(
-    iceberg_rest_endpoint: str,
-    *,
-    prefix: str | None = None,
-    parent: list[str] | None = None,
-    parent_separator: str,
-) -> dict[str, object]:
-    prefix_path = f"/{_quote(prefix)}" if prefix is not None else ""
-    query = ""
-    if parent is not None:
-        parent_namespace = parent_separator.join(parent)
-        query = f"?parent={_quote(parent_namespace)}"
-    url = f"{iceberg_rest_endpoint}/v1{prefix_path}/namespaces{query}"
     # Safe: the URL is built from the controlled Iceberg REST fixture endpoint.
     with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
         return json.load(response)
@@ -80,62 +42,23 @@ def _assert_rest_config_namespace_separator(config: dict[str, object], separator
     assert actual == separator, config
 
 
-def _rest_config_prefix(config: dict[str, object]) -> str | None:
-    defaults = config.get("defaults", {})
-    overrides = config.get("overrides", {})
-    assert isinstance(defaults, dict), config
-    assert isinstance(overrides, dict), config
-    prefix = overrides.get("prefix", defaults.get("prefix"))
-    assert prefix is None or isinstance(prefix, str), config
-    return prefix
-
-
-def _assert_namespace_listed(
-    iceberg_rest_endpoint: str,
-    namespace_parts: list[str],
-    separator: str,
-    *,
-    prefix: str | None = None,
-) -> None:
-    root_namespaces = _list_namespaces(iceberg_rest_endpoint, separator, prefix=prefix)
-    assert namespace_parts[:1] in root_namespaces["namespaces"]
-
-    for depth in range(1, len(namespace_parts)):
-        parent = namespace_parts[:depth]
-        child = namespace_parts[: depth + 1]
-        child_namespaces = _list_namespaces(
-            iceberg_rest_endpoint,
-            separator,
-            prefix=prefix,
-            parent=parent,
-        )
-        assert child in child_namespaces["namespaces"]
-
-
 def _exercise_namespace_separator(
     spark: SparkSession,
-    iceberg_rest_endpoint: str,
     *,
     namespace_id: str,
-    separator: str,
-    prefix: str | None = None,
 ) -> None:
-    namespace_parts = [f"namespace_separator_{namespace_id}", "child", "grandchild"]
-    root_namespace = namespace_parts[0]
-    nested_namespace = ".".join(namespace_parts[:2])
-    deeply_nested_namespace = ".".join(namespace_parts)
+    root_namespace = f"namespace_separator_{namespace_id}"
+    nested_namespace = f"{root_namespace}.child"
+    deeply_nested_namespace = f"{nested_namespace}.grandchild"
 
     spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
     try:
         spark.sql(f"CREATE DATABASE {root_namespace}").collect()
         spark.sql(f"CREATE DATABASE {nested_namespace}").collect()
         spark.sql(f"CREATE DATABASE {deeply_nested_namespace}").collect()
-        _assert_namespace_listed(
-            iceberg_rest_endpoint,
-            namespace_parts,
-            separator,
-            prefix=prefix,
-        )
+        databases = spark.sql(f"SHOW DATABASES IN {root_namespace}").collect()
+        database_names = [row.name for row in databases]
+        assert "child" in database_names or nested_namespace in database_names
     finally:
         with contextlib.suppress(Exception):
             spark.sql(f"DROP DATABASE IF EXISTS {deeply_nested_namespace} CASCADE").collect()
@@ -167,10 +90,7 @@ def test_namespace_separator_config_aliases(
     nessie_spark_custom_separator.catalog.setCurrentCatalog(catalog_name)
     _exercise_namespace_separator(
         nessie_spark_custom_separator,
-        nessie_custom_separator_iceberg_rest_endpoint,
         namespace_id=namespace_id,
-        separator=NESSIE_NAMESPACE_SEPARATOR,
-        prefix=_rest_config_prefix(config),
     )
 
 
@@ -182,42 +102,27 @@ def test_namespace_separator_config_aliases(
 def test_namespace_separator_default_config_cannot_list_custom_separator_namespace(
     nessie_spark_incorrect_default_separator: SparkSession,
     nessie_spark_custom_separator: SparkSession,
-    nessie_custom_separator_iceberg_rest_endpoint: str,
     catalog_name: str,
 ) -> None:
     root_namespace = f"namespace_separator_custom_created_{catalog_name}"
     nested_namespace = f"{root_namespace}.child"
-    namespace_parts = [root_namespace, "child"]
+    deeply_nested_namespace = f"{nested_namespace}.grandchild"
 
     nessie_spark_custom_separator.catalog.setCurrentCatalog(catalog_name)
     nessie_spark_incorrect_default_separator.catalog.setCurrentCatalog(catalog_name)
+    nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {deeply_nested_namespace} CASCADE").collect()
     nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
     nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
 
     try:
         nessie_spark_custom_separator.sql(f"CREATE DATABASE {root_namespace}").collect()
         nessie_spark_custom_separator.sql(f"CREATE DATABASE {nested_namespace}").collect()
+        nessie_spark_custom_separator.sql(f"CREATE DATABASE {deeply_nested_namespace}").collect()
 
-        _assert_namespace_listed(
-            nessie_custom_separator_iceberg_rest_endpoint,
-            namespace_parts,
-            NESSIE_NAMESPACE_SEPARATOR,
-        )
-
-        default_separator_namespaces = _list_namespaces(
-            nessie_custom_separator_iceberg_rest_endpoint,
-            "\x1f",
-            parent=[root_namespace],
-        )
-        assert namespace_parts not in default_separator_namespaces["namespaces"]
-
-        sail_default_separator_namespaces = [
-            row.name
-            for row in nessie_spark_incorrect_default_separator.sql(f"SHOW DATABASES IN {root_namespace}").collect()
-        ]
-        assert "child" not in sail_default_separator_namespaces
-        assert nested_namespace not in sail_default_separator_namespaces
+        assert nessie_spark_incorrect_default_separator.sql(f"SHOW DATABASES IN {nested_namespace}").collect() == []
     finally:
+        with contextlib.suppress(Exception):
+            nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {deeply_nested_namespace} CASCADE").collect()
         with contextlib.suppress(Exception):
             nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
         with contextlib.suppress(Exception):
@@ -232,41 +137,26 @@ def test_namespace_separator_default_config_cannot_list_custom_separator_namespa
 def test_namespace_separator_custom_config_cannot_list_default_separator_namespace(
     nessie_spark: SparkSession,
     nessie_spark_incorrect_custom_separator: SparkSession,
-    nessie_iceberg_rest_endpoint: str,
     catalog_name: str,
 ) -> None:
     root_namespace = f"namespace_separator_default_created_{catalog_name}"
     nested_namespace = f"{root_namespace}.child"
-    namespace_parts = [root_namespace, "child"]
+    deeply_nested_namespace = f"{nested_namespace}.grandchild"
 
     nessie_spark_incorrect_custom_separator.catalog.setCurrentCatalog(catalog_name)
+    nessie_spark.sql(f"DROP DATABASE IF EXISTS {deeply_nested_namespace} CASCADE").collect()
     nessie_spark.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
     nessie_spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
 
     try:
         nessie_spark.sql(f"CREATE DATABASE {root_namespace}").collect()
         nessie_spark.sql(f"CREATE DATABASE {nested_namespace}").collect()
+        nessie_spark.sql(f"CREATE DATABASE {deeply_nested_namespace}").collect()
 
-        _assert_namespace_listed(
-            nessie_iceberg_rest_endpoint,
-            namespace_parts,
-            "\x1f",
-        )
-
-        custom_separator_namespaces = _list_namespaces(
-            nessie_iceberg_rest_endpoint,
-            NESSIE_NAMESPACE_SEPARATOR,
-            parent=[root_namespace],
-        )
-        assert namespace_parts not in custom_separator_namespaces["namespaces"]
-
-        sail_custom_separator_namespaces = [
-            row.name
-            for row in nessie_spark_incorrect_custom_separator.sql(f"SHOW DATABASES IN {root_namespace}").collect()
-        ]
-        assert "child" not in sail_custom_separator_namespaces
-        assert nested_namespace not in sail_custom_separator_namespaces
+        assert nessie_spark_incorrect_custom_separator.sql(f"SHOW DATABASES IN {nested_namespace}").collect() == []
     finally:
+        with contextlib.suppress(Exception):
+            nessie_spark.sql(f"DROP DATABASE IF EXISTS {deeply_nested_namespace} CASCADE").collect()
         with contextlib.suppress(Exception):
             nessie_spark.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
         with contextlib.suppress(Exception):

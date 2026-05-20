@@ -7410,6 +7410,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-sql-analyzer",
  "serde",
  "serde_arrow",
  "serde_json",
