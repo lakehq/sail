@@ -70,6 +70,12 @@ def _assert_table_listed(spark: SparkSession, namespace: str, table_name: str) -
     assert table_name in table_names
 
 
+def _assert_table_not_listed(spark: SparkSession, namespace: str, table_name: str) -> None:
+    tables = spark.sql(f"SHOW TABLES IN {namespace}").collect()
+    table_names = [row.tableName for row in tables]
+    assert table_name not in table_names
+
+
 @pytest.mark.parametrize(
     ("catalog_name", "namespace_id"),
     [
@@ -101,43 +107,7 @@ def test_namespace_separator_config_aliases(
     [name for name, _ in NESSIE_NAMESPACE_SEPARATOR_CATALOGS],
 )
 @pytest.mark.usefixtures("_create_s3_bucket")
-def test_namespace_separator_default_config_cannot_resolve_custom_separator_namespace(
-    nessie_spark_incorrect_default_separator: SparkSession,
-    nessie_spark_custom_separator: SparkSession,
-    catalog_name: str,
-) -> None:
-    root_namespace = f"namespace_separator_custom_created_{catalog_name}"
-    nested_namespace = f"{root_namespace}.child"
-    table_name = "t1"
-    table = f"{nested_namespace}.{table_name}"
-
-    nessie_spark_custom_separator.catalog.setCurrentCatalog(catalog_name)
-    nessie_spark_incorrect_default_separator.catalog.setCurrentCatalog(catalog_name)
-    nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
-    nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
-
-    try:
-        nessie_spark_custom_separator.sql(f"CREATE DATABASE {root_namespace}").collect()
-        nessie_spark_custom_separator.sql(f"CREATE DATABASE {nested_namespace}").collect()
-        nessie_spark_custom_separator.sql(f"CREATE TABLE {table} (id INT) USING iceberg").collect()
-        _assert_table_listed(nessie_spark_custom_separator, nested_namespace, table_name)
-
-        with pytest.raises(Exception, match=r"Failed to list tables|404"):
-            nessie_spark_incorrect_default_separator.sql(f"SHOW TABLES IN {nested_namespace}").collect()
-    finally:
-        with contextlib.suppress(Exception):
-            nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
-        with contextlib.suppress(Exception):
-            nessie_spark_custom_separator.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
-
-
-@pytest.mark.parametrize(
-    "catalog_name",
-    [name for name, _ in NESSIE_NAMESPACE_SEPARATOR_CATALOGS],
-)
-@pytest.mark.usefixtures("_create_s3_bucket")
 def test_namespace_separator_custom_config_cannot_resolve_default_separator_namespace(
-    nessie_spark: SparkSession,
     nessie_spark_incorrect_custom_separator: SparkSession,
     catalog_name: str,
 ) -> None:
@@ -146,20 +116,23 @@ def test_namespace_separator_custom_config_cannot_resolve_default_separator_name
     table_name = "t1"
     table = f"{nested_namespace}.{table_name}"
 
+    nessie_spark_incorrect_custom_separator.catalog.setCurrentCatalog("sail")
+    nessie_spark_incorrect_custom_separator.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
+    nessie_spark_incorrect_custom_separator.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
     nessie_spark_incorrect_custom_separator.catalog.setCurrentCatalog(catalog_name)
-    nessie_spark.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
-    nessie_spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
 
     try:
-        nessie_spark.sql(f"CREATE DATABASE {root_namespace}").collect()
-        nessie_spark.sql(f"CREATE DATABASE {nested_namespace}").collect()
-        nessie_spark.sql(f"CREATE TABLE {table} (id INT) USING iceberg").collect()
-        _assert_table_listed(nessie_spark, nested_namespace, table_name)
+        nessie_spark_incorrect_custom_separator.catalog.setCurrentCatalog("sail")
+        nessie_spark_incorrect_custom_separator.sql(f"CREATE DATABASE {root_namespace}").collect()
+        nessie_spark_incorrect_custom_separator.sql(f"CREATE DATABASE {nested_namespace}").collect()
+        nessie_spark_incorrect_custom_separator.sql(f"CREATE TABLE {table} (id INT) USING iceberg").collect()
+        _assert_table_listed(nessie_spark_incorrect_custom_separator, nested_namespace, table_name)
 
-        with pytest.raises(Exception, match=r"Failed to list tables|404"):
-            nessie_spark_incorrect_custom_separator.sql(f"SHOW TABLES IN {nested_namespace}").collect()
+        nessie_spark_incorrect_custom_separator.catalog.setCurrentCatalog(catalog_name)
+        _assert_table_not_listed(nessie_spark_incorrect_custom_separator, nested_namespace, table_name)
     finally:
+        nessie_spark_incorrect_custom_separator.catalog.setCurrentCatalog("sail")
         with contextlib.suppress(Exception):
-            nessie_spark.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
+            nessie_spark_incorrect_custom_separator.sql(f"DROP DATABASE IF EXISTS {nested_namespace} CASCADE").collect()
         with contextlib.suppress(Exception):
-            nessie_spark.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
+            nessie_spark_incorrect_custom_separator.sql(f"DROP DATABASE IF EXISTS {root_namespace} CASCADE").collect()
