@@ -150,9 +150,9 @@ Agents that read `CLAUDE.md` (Claude Code) or `AGENTS.md` (Cursor, Aider, Copilo
 
 Sail is compatible with Spark 3.5.x, Spark 4.x, and later versions. Existing PySpark code works out of the box once you connect over the Spark Connect protocol, with no code rewrites required.
 
-For the supported API surface, see the [DataFrame Guide](/guide/dataframe) and [SQL Functions](/guide/functions) reference. The [Migration Guide](/introduction/migrating-from-spark/) covers the high-level supported features matrix (SQL, DataFrame, Structured Streaming, RDD) and notable behavior differences from Spark. To check an existing codebase, Sail ships an experimental [PySpark function compatibility check script](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/#check-your-code-for-compatibility).
+For the supported API surface, see the [DataFrame Guide](/guide/dataframe/) and [SQL Functions](/guide/functions/) reference. The [Migration Guide](/introduction/migrating-from-spark/) covers the high-level supported features matrix (SQL, DataFrame, Structured Streaming, RDD) and notable behavior differences from Spark. To check an existing codebase, Sail ships an experimental [PySpark function compatibility check script](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/#check-your-code-for-compatibility).
 
-For Spark Connect specific gotchas (no `sparkContext` access, no RDD operations), see [Troubleshooting](/guide/troubleshooting).
+For Spark Connect specific gotchas (no `sparkContext` access, no RDD operations), see [Troubleshooting](/guide/troubleshooting/).
 
 ## FAQ
 
@@ -206,7 +206,7 @@ See [AI Coding Agents](#ai-coding-agents) above for a copy-pasteable `CLAUDE.md`
 
 ## See Also
 
-- [Command Line Interface](/guide/cli): full `sail spark` command reference
+- [Command Line Interface](/guide/cli/): full `sail spark` command reference
 - [Configuration](/guide/configuration/): Sail server settings and Spark configuration mapping
 - [Agent Skills](/guide/integrations/agent-skills): Sail as a tool inside Claude Code, Cursor, and other AI coding agents
 - [MCP Server](/guide/integrations/mcp-server): set up Sail as an MCP server for AI coding agents
