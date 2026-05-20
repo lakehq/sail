@@ -1,3 +1,7 @@
+use std::collections::BTreeSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -135,13 +139,15 @@ pub(crate) async fn handle_analyze_input_files(
         .create_physical_plan(&logical_plan, &session_state)
         .await?;
 
-    let mut files = Vec::new();
+    let mut files = BTreeSet::new();
     collect_input_files(physical_plan.as_ref(), &mut files);
 
-    Ok(InputFilesResponse { files })
+    Ok(InputFilesResponse {
+        files: files.into_iter().collect(),
+    })
 }
 
-fn collect_input_files(plan: &dyn ExecutionPlan, files: &mut Vec<String>) {
+fn collect_input_files(plan: &dyn ExecutionPlan, files: &mut BTreeSet<String>) {
     if let Some(ds_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
         if let Some(file_scan_config) = ds_exec
             .data_source()
@@ -149,18 +155,26 @@ fn collect_input_files(plan: &dyn ExecutionPlan, files: &mut Vec<String>) {
             .downcast_ref::<FileScanConfig>()
         {
             let base_url = file_scan_config.object_store_url.as_str();
-            let base_url = base_url.trim_end_matches('/');
             for file_group in &file_scan_config.file_groups {
                 for file in file_group.iter() {
                     let location = file.object_meta.location.as_ref();
-                    let url = format!("{}/{}", base_url, location);
-                    files.push(url);
+                    files.insert(format_input_file_url(base_url, location));
                 }
             }
         }
     }
     for child in plan.children() {
         collect_input_files(child.as_ref(), files);
+    }
+}
+
+fn format_input_file_url(base_url: &str, location: &str) -> String {
+    let base_url = base_url.trim_end_matches('/');
+    let location = location.trim_start_matches('/');
+    if base_url == "file:" {
+        format!("file:///{location}")
+    } else {
+        format!("{base_url}/{location}")
     }
 }
 
@@ -193,23 +207,22 @@ pub(crate) async fn handle_analyze_same_semantics(
         target_plan,
         other_plan,
     } = request;
-    let target_repr = resolve_plan_repr(ctx, target_plan).await?;
-    let other_repr = resolve_plan_repr(ctx, other_plan).await?;
+    let target_plan = target_plan.required("target plan")?;
+    let other_plan = other_plan.required("other plan")?;
+    let target_plan = resolve_logical_plan(ctx, target_plan).await?;
+    let other_plan = resolve_logical_plan(ctx, other_plan).await?;
     Ok(SameSemanticsResponse {
-        result: target_repr == other_repr,
+        result: target_plan == other_plan,
     })
 }
 
-async fn resolve_plan_repr(ctx: &SessionContext, plan: Option<sc::Plan>) -> SparkResult<String> {
-    let Some(plan) = plan else {
-        return Ok(String::new());
-    };
+async fn resolve_logical_plan(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<LogicalPlan> {
     let spark = ctx.extension::<SparkSession>()?;
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
     let NamedPlan { plan, .. } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
-    Ok(format!("{}", plan.display()))
+    Ok(plan)
 }
 
 pub(crate) async fn handle_analyze_semantic_hash(
@@ -217,8 +230,11 @@ pub(crate) async fn handle_analyze_semantic_hash(
     request: SemanticHashRequest,
 ) -> SparkResult<SemanticHashResponse> {
     let SemanticHashRequest { plan } = request;
-    let repr = resolve_plan_repr(ctx, plan).await?;
-    let hash = crc32fast::hash(repr.as_bytes()) as i32;
+    let plan = plan.required("plan")?;
+    let plan = resolve_logical_plan(ctx, plan).await?;
+    let mut hasher = DefaultHasher::new();
+    plan.hash(&mut hasher);
+    let hash = hasher.finish() as i32;
     Ok(SemanticHashResponse { result: hash })
 }
 

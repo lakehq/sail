@@ -60,6 +60,7 @@ def test_input_files_parquet(spark, tmp_path):
     read_df = spark.read.parquet(path)
     files = read_df.inputFiles()
     assert len(files) > 0
+    assert all(f.startswith("file:///") for f in files)
     assert all(".parquet" in f or "part-" in f for f in files)
 
 
@@ -73,6 +74,7 @@ def test_input_files_csv(spark, tmp_path):
     read_df = spark.read.csv(path, header=True)
     files = read_df.inputFiles()
     assert len(files) > 0
+    assert all(f.startswith("file:///") for f in files)
 
 
 def test_input_files_in_memory(spark):

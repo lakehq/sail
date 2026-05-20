@@ -2,6 +2,11 @@
 
 import zipfile
 
+from pyspark.sql.functions import udf
+from pyspark.sql.types import IntegerType
+
+EXPECTED_ARTIFACT_VALUE = 42
+
 
 def _make_zip(path, module_name, code):
     """Create a zip archive containing a single Python module."""
@@ -12,14 +17,22 @@ def _make_zip(path, module_name, code):
 def test_add_artifact_zip_as_pyfile(spark, tmp_path):
     """Adding a zip archive as a pyfile artifact should succeed without error.
 
-    PySpark Connect's addArtifact only accepts .zip/.egg/.whl when pyfile=True;
-    raw .py files or plain .zip files are rejected by the client.
+    The module must also be importable when a Python UDF is deserialized and
+    executed by the Sail server.
     """
     zip_path = tmp_path / "sail_test_module.zip"
-    _make_zip(zip_path, "sail_test_module.py", "VALUE = 42\n")
+    _make_zip(zip_path, "sail_test_module.py", f"VALUE = {EXPECTED_ARTIFACT_VALUE}\n")
 
-    # Should not raise
     spark.addArtifact(str(zip_path), pyfile=True)
+
+    @udf(IntegerType())
+    def read_artifact_value(_):
+        import sail_test_module
+
+        return sail_test_module.VALUE
+
+    rows = spark.range(1).select(read_artifact_value("id").alias("value")).collect()
+    assert rows[0].value == EXPECTED_ARTIFACT_VALUE
 
 
 def test_add_multiple_artifacts_as_pyfiles(spark, tmp_path):
