@@ -61,7 +61,7 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('a', 1, 'b', 2), map('sep', '|'))
         """
       Then query result
-        | to_csv(named_struct('a', 1, 'b', 2), map('sep', '|')) |
+        | to_csv(named_struct('a', 1, 'b', 2), map('sep', '\|')) |
         | 1\|2                               |
 
     Scenario: Custom separator via delimiter option
@@ -70,7 +70,7 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('a', 1, 'b', 2), map('delimiter', '|'))
         """
       Then query result
-        | to_csv(named_struct('a', 1, 'b', 2), map('delimiter', '|')) |
+        | to_csv(named_struct('a', 1, 'b', 2), map('delimiter', '\|')) |
         | 1\|2                               |
 
   Rule: Timestamp formatting
