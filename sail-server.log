@@ -1,0 +1,14 @@
+nohup: ignoring input
+Python environment: /home/runner/work/sail/sail/.venvs/test-spark.spark-3.5.7
+Python version: 3.11
+Sail working directory: /home/runner/work/sail/sail/.venvs/test-spark.spark-3.5.7/lib/python3.11/site-packages/pyspark
+[2026-05-20T23:36:04Z INFO sail_cli::spark::server] Starting the Spark Connect server on 127.0.0.1:50051...
+[2026-05-20T23:37:36Z INFO sail_cli::spark::server] Shutting down the Spark Connect server...
+[2026-05-20T23:37:36Z INFO sail_cli::spark::server] The Spark Connect server has stopped.
+Traceback (most recent call last):
+  File "/home/runner/work/sail/sail/.venvs/test-spark.spark-3.5.7/bin/sail", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/runner/work/sail/sail/.venvs/test-spark.spark-3.5.7/lib/python3.11/site-packages/pysail/cli.py", line 9, in main
+    _native.main(sys.argv)
+KeyboardInterrupt
