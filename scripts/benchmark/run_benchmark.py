@@ -13,13 +13,19 @@ Subcommands
     chart.  A ``--ylim`` cap keeps a single slow query from squashing the rest
     of the chart; bars that exceed the cap are clipped and annotated with the
     real value above the cap line.
+* ``plan`` - collect ``EXPLAIN`` output for benchmark queries without executing
+    them and persist a manifest plus one text file per query statement/mode.
+* ``plan-compare`` - compare plan manifests by label or path, with optional
+    unified diff files for changed query plans.
 * ``list`` - list available queries for a suite.
 * ``results`` - list benchmark result files and their labels.
+* ``plan-results`` - list captured plan manifests and their labels.
 
 Layout (everything lives in the gitignored ``opt/`` tree):
 
 * Generated parquet data       : ``opt/benchmark-data/<suite>_sf<sf>_rg<mb>mb_<codec>/``
 * JSON benchmark result files  : ``opt/benchmark-results/``
+* Captured plan manifests      : ``opt/benchmark-results/plans/``
 * Generated comparison plots   : ``opt/benchmark-results/plots/``
 
 The query texts come from ``python/pysail/data/{tpch,tpcds}/queries`` so the
@@ -30,6 +36,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import difflib
+import hashlib
 import json
 import re
 import shutil
@@ -54,9 +62,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = REPO_ROOT / "opt" / "benchmark-data"
 RESULTS_ROOT = REPO_ROOT / "opt" / "benchmark-results"
 PLOTS_ROOT = RESULTS_ROOT / "plots"
+PLANS_ROOT = RESULTS_ROOT / "plans"
 DATASET_LAYOUT_VERSION = 2
 DEFAULT_TARGET_ROW_GROUP_SIZE_MB = 128
 DEFAULT_COMPRESSION = "zstd"
+DEFAULT_EXPLAIN_MODE = "formatted"
 SAMPLE_ROWS = 1_000_000
 SF_TOLERANCE = 1e-12
 MIN_COMPARISON_DATASETS = 2
@@ -112,6 +122,15 @@ TABLE_NAMES = {
         "web_sales",
         "web_site",
     ),
+}
+EXPLAIN_MODE_SQL = {
+    "simple": "",
+    "extended": "EXTENDED",
+    "codegen": "CODEGEN",
+    "cost": "COST",
+    "formatted": "FORMATTED",
+    "analyze": "ANALYZE",
+    "verbose": "VERBOSE",
 }
 
 
@@ -502,6 +521,20 @@ def generate_dataset(
     return out_dir
 
 
+def _resolve_data_dir(path: str) -> Path:
+    data_dir = Path(path).expanduser()
+    if not data_dir.is_absolute():
+        data_dir = REPO_ROOT / data_dir
+    data_dir = data_dir.resolve()
+    if not data_dir.exists():
+        msg = f"data directory not found: {data_dir}"
+        raise FileNotFoundError(msg)
+    if not _parquet_table_paths(data_dir):
+        msg = f"no parquet benchmark tables found under {data_dir}"
+        raise RuntimeError(msg)
+    return data_dir
+
+
 # ---------------------------------------------------------------------------
 # Spark / Sail setup
 # ---------------------------------------------------------------------------
@@ -610,6 +643,230 @@ def run_query(spark: SparkSession, suite: str, query: str) -> tuple[float, int]:
     return elapsed, rows
 
 
+# ---------------------------------------------------------------------------
+# Plan capture and comparison
+# ---------------------------------------------------------------------------
+
+
+def _normalize_explain_modes(modes: list[str] | None) -> list[str]:
+    modes = modes or [DEFAULT_EXPLAIN_MODE]
+    normalized = []
+    seen = set()
+    for mode in modes:
+        value = mode.strip().lower()
+        if value not in EXPLAIN_MODE_SQL:
+            supported = ", ".join(EXPLAIN_MODE_SQL)
+            msg = f"unsupported explain mode {mode!r}; expected one of: {supported}"
+            raise ValueError(msg)
+        if value not in seen:
+            normalized.append(value)
+            seen.add(value)
+    return normalized
+
+
+def _explain_sql(mode: str, sql: str) -> str:
+    mode_sql = EXPLAIN_MODE_SQL[mode]
+    return f"EXPLAIN {mode_sql} {sql}" if mode_sql else f"EXPLAIN {sql}"
+
+
+def _is_cleanup_statement(sql: str) -> bool:
+    return re.match(r"^\s*drop\s+", sql, flags=re.IGNORECASE) is not None
+
+
+def _is_setup_statement(sql: str) -> bool:
+    return (
+        re.match(
+            r"^\s*create\s+(?:or\s+replace\s+)?(?:temporary\s+|temp\s+)?view\b",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def _statement_preview(sql: str, limit: int = 160) -> str:
+    one_line = " ".join(sql.split())
+    return one_line if len(one_line) <= limit else f"{one_line[: limit - 3]}..."
+
+
+def _collect_explain_plan(spark: SparkSession, mode: str, sql: str) -> str:
+    rows = spark.sql(_explain_sql(mode, sql)).collect()
+    if not rows:
+        msg = "EXPLAIN returned no rows"
+        raise RuntimeError(msg)
+    values = []
+    for row in rows:
+        if len(row) != 1:
+            msg = f"expected single EXPLAIN column, got {len(row)} columns"
+            raise RuntimeError(msg)
+        values.append(str(row[0]))
+    plan = "\n".join(values).strip()
+    if not plan:
+        msg = "EXPLAIN returned empty plan text"
+        raise RuntimeError(msg)
+    return plan
+
+
+def _write_plan_file(out_dir: Path, key: str, mode: str, plan: str) -> dict[str, str | int]:
+    filename = f"{_safe_name(key)}_{mode}.txt"
+    path = out_dir / filename
+    path.write_text(plan)
+    encoded = plan.encode()
+    return {
+        "file": filename,
+        "bytes": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _run_statement(spark: SparkSession, sql: str) -> None:
+    spark.sql(sql).collect()
+
+
+def collect_query_plans(
+    spark: SparkSession,
+    suite: str,
+    query: str,
+    *,
+    modes: list[str],
+    out_dir: Path,
+    fail_fast: bool,
+) -> dict:
+    statements = read_query_statements(suite, query)
+    explain_indexes = [
+        index
+        for index, sql in enumerate(statements, start=1)
+        if not _is_setup_statement(sql) and not _is_cleanup_statement(sql)
+    ]
+    explain_ordinals = {index: ordinal for ordinal, index in enumerate(explain_indexes, start=1)}
+
+    result: dict = {"statements": []}
+    cleanup: list[str] = []
+    try:
+        for index, sql in enumerate(statements, start=1):
+            if _is_cleanup_statement(sql):
+                cleanup.append(sql)
+                continue
+            if _is_setup_statement(sql):
+                try:
+                    _run_statement(spark, sql)
+                    print(f"[plan] {query} setup statement {index}: ok")
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    result["statements"].append(
+                        {
+                            "key": f"{query}_setup{index}",
+                            "statement_index": index,
+                            "kind": "setup",
+                            "preview": _statement_preview(sql),
+                            "error": error,
+                        }
+                    )
+                    print(f"[plan] {query} setup statement {index} FAILED: {error}")
+                    if fail_fast:
+                        raise
+                continue
+
+            ordinal = explain_ordinals[index]
+            key = query if len(explain_indexes) == 1 else f"{query}_s{ordinal}"
+            statement_result: dict = {
+                "key": key,
+                "statement_index": index,
+                "kind": "query",
+                "preview": _statement_preview(sql),
+                "plans": {},
+            }
+            for mode in modes:
+                try:
+                    plan = _collect_explain_plan(spark, mode, sql)
+                    statement_result["plans"][mode] = _write_plan_file(out_dir, key, mode, plan)
+                    print(f"[plan] {key} {mode}: wrote {statement_result['plans'][mode]['file']}")
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    statement_result.setdefault("errors", {})[mode] = error
+                    print(f"[plan] {key} {mode} FAILED: {error}")
+                    if fail_fast:
+                        raise
+            result["statements"].append(statement_result)
+    finally:
+        for sql in cleanup:
+            with contextlib.suppress(Exception):
+                _run_statement(spark, sql)
+
+    return result
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    suite = args.suite
+    sf = args.sf
+    try:
+        modes = _normalize_explain_modes(args.explain_mode)
+        queries = parse_query_arg(args.queries, suite)
+        if args.data_dir:
+            data_dir = _resolve_data_dir(args.data_dir)
+            print(f"[plan] using data at {data_dir}")
+        else:
+            data_dir = generate_dataset(
+                suite,
+                sf,
+                force=args.regenerate_data,
+                target_row_group_size_mb=args.target_row_group_size_mb,
+                compression=args.compression,
+                duckdb_threads=args.duckdb_threads,
+                tpchgen_workers=args.tpchgen_workers,
+            )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    label = args.label or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        safe_label = _safe_name(label)
+        out_dir = PLANS_ROOT / f"{suite}_sf{_format_sf(sf)}_{safe_label}_{stamp}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "label": label,
+        "suite": suite,
+        "sf": sf,
+        "url": args.url,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data_dir": str(data_dir),
+        "data_layout_version": DATASET_LAYOUT_VERSION,
+        "data_generator": "external" if args.data_dir else ("tpchgen-rs" if suite == "tpch" else "duckdb"),
+        "target_row_group_size_mb": args.target_row_group_size_mb,
+        "compression": _normalize_compression(args.compression),
+        "explain_modes": modes,
+        "queries": {},
+    }
+
+    has_errors = False
+    with sail_session(args.url) as spark:
+        tables = load_tables(spark, data_dir)
+        print(f"[plan] loaded {len(tables)} tables: {', '.join(tables)}")
+        for query in queries:
+            query_result = collect_query_plans(
+                spark,
+                suite,
+                query,
+                modes=modes,
+                out_dir=out_dir,
+                fail_fast=args.fail_fast,
+            )
+            payload["queries"][query] = query_result
+            has_errors = has_errors or any(
+                statement.get("error") or statement.get("errors") for statement in query_result.get("statements", [])
+            )
+
+    manifest = out_dir / "manifest.json"
+    manifest.write_text(json.dumps(payload, indent=2))
+    print(f"[plan] wrote manifest to {manifest}")
+    return 1 if has_errors else 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     suite = args.suite
     sf = args.sf
@@ -691,8 +948,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _query_sort_key(q: str) -> tuple[int, str]:
-    if q.startswith("q") and q[1:].isdigit():
-        return (int(q[1:]), q)
+    match = re.match(r"^q(\d+)(?:\D.*)?$", q)
+    if match:
+        return (int(match.group(1)), q)
     return (10**9, q)
 
 
@@ -780,6 +1038,291 @@ def _resolve_result_ref(ref: str, *, suite: str | None, sf: float | None, result
     else:
         print(f"[plot] label {ref!r} -> {_relative_path(chosen.path)}")
     return chosen.path
+
+
+@dataclass(frozen=True)
+class PlanRecord:
+    path: Path
+    label: str
+    suite: str
+    sf: float | None
+    timestamp: str
+    modes: tuple[str, ...]
+
+
+def _manifest_path(path: Path) -> Path:
+    return path / "manifest.json" if path.is_dir() else path
+
+
+def _read_plan_record(path: Path) -> PlanRecord | None:
+    path = _manifest_path(path)
+    if path.name != "manifest.json":
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    label = payload.get("label")
+    suite = payload.get("suite")
+    if not isinstance(label, str) or suite not in QUERY_COUNTS:
+        return None
+    sf = payload.get("sf")
+    modes = tuple(str(mode) for mode in payload.get("explain_modes") or ())
+    return PlanRecord(
+        path=path,
+        label=label,
+        suite=suite,
+        sf=float(sf) if sf is not None else None,
+        timestamp=str(payload.get("timestamp") or ""),
+        modes=modes,
+    )
+
+
+def _iter_plan_records(plans_dir: Path) -> list[PlanRecord]:
+    records = []
+    for path in sorted(plans_dir.glob("*/manifest.json")):
+        record = _read_plan_record(path)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _resolve_plan_ref(ref: str, *, suite: str | None, sf: float | None, plans_dir: Path) -> Path:
+    path = _manifest_path(Path(ref))
+    if path.is_file():
+        return path
+    if path.suffix == ".json" or "/" in ref or "\\" in ref:
+        msg = f"plan manifest not found: {ref}"
+        raise FileNotFoundError(msg)
+
+    matches = [record for record in _iter_plan_records(plans_dir) if record.label == ref]
+    if suite is not None:
+        matches = [record for record in matches if record.suite == suite]
+    if sf is not None:
+        matches = [record for record in matches if _same_sf(record.sf, sf)]
+
+    if not matches:
+        available = sorted({record.label for record in _iter_plan_records(plans_dir)})
+        hint = f" Available labels: {', '.join(available)}" if available else " No plan manifests found."
+        msg = f"could not resolve plan label {ref!r}.{hint}"
+        raise FileNotFoundError(msg)
+
+    matches.sort(key=lambda record: (record.timestamp, record.path.parent.name), reverse=True)
+    chosen = matches[0]
+    if len(matches) > 1:
+        print(
+            f"[plan-compare] label {ref!r} matched {len(matches)} manifests; using latest: {_relative_path(chosen.path)}"
+        )
+    else:
+        print(f"[plan-compare] label {ref!r} -> {_relative_path(chosen.path)}")
+    return chosen.path
+
+
+def _load_plan_manifest(path: Path) -> dict:
+    return json.loads(path.read_text())
+
+
+def _plan_entries(manifest_path: Path, manifest: dict, mode: str, query_filter: set[str] | None) -> dict[str, dict]:
+    entries = {}
+    queries = manifest.get("queries") or {}
+    for query, query_result in queries.items():
+        if query_filter is not None and query not in query_filter:
+            continue
+        for statement in query_result.get("statements") or []:
+            key = statement.get("key")
+            if not isinstance(key, str):
+                continue
+            plan = (statement.get("plans") or {}).get(mode)
+            errors = statement.get("errors") or {}
+            if isinstance(plan, dict) and isinstance(plan.get("file"), str):
+                entries[key] = {
+                    "path": manifest_path.parent / plan["file"],
+                    "sha256": plan.get("sha256"),
+                    "error": None,
+                }
+            elif isinstance(errors, dict) and mode in errors:
+                entries[key] = {"path": None, "sha256": None, "error": errors[mode]}
+    return entries
+
+
+def _read_plan_text(entry: dict | None) -> str | None:
+    if not entry or entry.get("path") is None:
+        return None
+    path = entry["path"]
+    return path.read_text() if path.is_file() else None
+
+
+def _write_plan_diff(
+    *,
+    diff_dir: Path,
+    mode: str,
+    key: str,
+    base_label: str,
+    other_label: str,
+    base_text: str,
+    other_text: str,
+) -> Path | None:
+    diff = "\n".join(
+        difflib.unified_diff(
+            base_text.splitlines(),
+            other_text.splitlines(),
+            fromfile=f"{base_label}/{key}/{mode}",
+            tofile=f"{other_label}/{key}/{mode}",
+            lineterm="",
+        )
+    )
+    if not diff:
+        return None
+    diff_dir.mkdir(parents=True, exist_ok=True)
+    path = diff_dir / f"{_safe_name(mode)}_{_safe_name(key)}_{_safe_name(base_label)}_vs_{_safe_name(other_label)}.diff"
+    path.write_text(f"{diff}\n")
+    return path
+
+
+def cmd_plan_compare(args: argparse.Namespace) -> int:
+    refs = [*(args.refs or []), *(args.files or [])]
+    if len(refs) < MIN_COMPARISON_DATASETS:
+        print("plan-compare requires at least two labels or manifest paths", file=sys.stderr)
+        return 2
+
+    try:
+        files = [_resolve_plan_ref(ref, suite=args.suite, sf=args.sf, plans_dir=Path(args.plans_dir)) for ref in refs]
+        manifests = [_load_plan_manifest(path) for path in files]
+        requested_modes = _normalize_explain_modes(args.explain_mode) if args.explain_mode else None
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    suites = {manifest.get("suite") for manifest in manifests}
+    if len(suites) > 1:
+        print(f"refusing to compare mixed suites: {suites}", file=sys.stderr)
+        return 2
+    suite = suites.pop()
+    if suite not in QUERY_COUNTS:
+        print(f"unknown suite in plan manifests: {suite}", file=sys.stderr)
+        return 2
+
+    scale_factors = {manifest.get("sf") for manifest in manifests}
+    if len(scale_factors) > 1:
+        print(f"refusing to compare mixed scale factors: {scale_factors}", file=sys.stderr)
+        return 2
+
+    common_modes = set(manifests[0].get("explain_modes") or [])
+    for manifest in manifests[1:]:
+        common_modes &= set(manifest.get("explain_modes") or [])
+    modes = requested_modes or (
+        [DEFAULT_EXPLAIN_MODE] if DEFAULT_EXPLAIN_MODE in common_modes else sorted(common_modes)
+    )
+    missing_modes = [mode for mode in modes if mode not in common_modes]
+    if missing_modes:
+        print(f"requested mode(s) not present in every manifest: {', '.join(missing_modes)}", file=sys.stderr)
+        return 2
+
+    query_filter = set(parse_query_arg(args.queries, suite)) if args.queries else None
+    labels = [
+        args.labels[i] if args.labels and i < len(args.labels) else manifest.get("label") or files[i].parent.name
+        for i, manifest in enumerate(manifests)
+    ]
+    if args.labels and len(args.labels) != len(manifests):
+        print("the number of --label values must match the number of compared manifests", file=sys.stderr)
+        return 2
+
+    diff_dir = Path(args.diff_dir) if args.diff_dir else None
+    total = 0
+    different = 0
+    error_or_missing = 0
+    diff_files: list[Path] = []
+    pairwise_summary = {label: {"same": 0, "diff": 0, "error": 0, "missing": 0} for label in labels[1:]}
+
+    for mode in modes:
+        entries_by_manifest = [
+            _plan_entries(path, manifest, mode, query_filter) for path, manifest in zip(files, manifests, strict=True)
+        ]
+        all_keys = sorted({key for entries in entries_by_manifest for key in entries}, key=_query_sort_key)
+        print(f"\n[plan-compare] mode={mode}")
+        print(f"  {'query':12}  " + "  ".join(label[:24].ljust(24) for label in labels[1:]))
+        for key in all_keys:
+            base_entry = entries_by_manifest[0].get(key)
+            base_text = _read_plan_text(base_entry)
+            row_statuses = []
+            row_different = False
+            for label, entries in zip(labels[1:], entries_by_manifest[1:], strict=True):
+                entry = entries.get(key)
+                if base_entry is None or entry is None:
+                    status = "missing"
+                    pairwise_summary[label]["missing"] += 1
+                    error_or_missing += 1
+                elif base_entry.get("error") or entry.get("error"):
+                    status = "error"
+                    pairwise_summary[label]["error"] += 1
+                    error_or_missing += 1
+                else:
+                    other_text = _read_plan_text(entry)
+                    if base_text is None or other_text is None:
+                        status = "missing"
+                        pairwise_summary[label]["missing"] += 1
+                        error_or_missing += 1
+                    elif base_entry.get("sha256") == entry.get("sha256"):
+                        status = "same"
+                        pairwise_summary[label]["same"] += 1
+                    else:
+                        status = "diff"
+                        pairwise_summary[label]["diff"] += 1
+                        row_different = True
+                        if diff_dir is not None:
+                            diff_path = _write_plan_diff(
+                                diff_dir=diff_dir,
+                                mode=mode,
+                                key=key,
+                                base_label=str(labels[0]),
+                                other_label=str(label),
+                                base_text=base_text,
+                                other_text=other_text,
+                            )
+                            if diff_path is not None:
+                                diff_files.append(diff_path)
+                row_statuses.append(status.ljust(24))
+            total += 1
+            different += int(row_different)
+            print(f"  {key:12}  " + "  ".join(row_statuses))
+
+    print(
+        f"\n[plan-compare] differing query statements: {different}/{total}; error/missing comparisons: {error_or_missing}"
+    )
+    print(f"[plan-compare] pairwise summary vs {labels[0]}:")
+    for label, summary in pairwise_summary.items():
+        print(
+            f"  {label}: same={summary['same']} diff={summary['diff']} "
+            f"error={summary['error']} missing={summary['missing']}"
+        )
+    if diff_files:
+        print(f"[plan-compare] wrote {len(diff_files)} diff file(s) under {_relative_path(diff_files[0].parent)}")
+    return 1 if args.fail_on_diff and (different or error_or_missing) else 0
+
+
+def cmd_plan_results(args: argparse.Namespace) -> int:
+    records = _iter_plan_records(Path(args.plans_dir))
+    if args.suite is not None:
+        records = [record for record in records if record.suite == args.suite]
+    if args.sf is not None:
+        records = [record for record in records if _same_sf(record.sf, args.sf)]
+    if args.label is not None:
+        records = [record for record in records if record.label == args.label]
+    records.sort(key=lambda record: (record.suite, record.sf or -1.0, record.label, record.timestamp))
+
+    if not records:
+        print("no plan manifests found")
+        return 0
+
+    print(f"{'label':24} {'suite':6} {'sf':8} {'modes':22} {'timestamp':35} path")
+    for record in records:
+        sf = "" if record.sf is None else f"{record.sf:g}"
+        modes = ",".join(record.modes)
+        print(
+            f"{record.label[:24]:24} {record.suite:6} {sf:8} {modes[:22]:22} "
+            f"{record.timestamp[:35]:35} {_relative_path(record.path)}"
+        )
+    return 0
 
 
 def cmd_plot(args: argparse.Namespace) -> int:
@@ -1031,6 +1574,99 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--regenerate-data", action="store_true", help="force re-running DuckDB data generation")
     p_run.set_defaults(func=cmd_run)
 
+    p_plan = sub.add_parser("plan", help="capture EXPLAIN plans for a benchmark suite")
+    p_plan.add_argument("--suite", choices=["tpch", "tpcds"], required=True)
+    p_plan.add_argument("--sf", type=float, default=1.0, help="scale factor (default: 1.0)")
+    p_plan.add_argument(
+        "--queries",
+        type=str,
+        default="all",
+        help="comma-separated list / ranges, e.g. 'q1,q3,q5-q8' or 'all' (default: all)",
+    )
+    p_plan.add_argument("--label", type=str, default=None, help="label embedded in the plan manifest")
+    p_plan.add_argument(
+        "--explain-mode",
+        action="append",
+        choices=sorted(EXPLAIN_MODE_SQL),
+        default=None,
+        help=(
+            f"EXPLAIN mode to collect; repeatable. Default: {DEFAULT_EXPLAIN_MODE}. "
+            "Use formatted for final physical plan + stats/schema, codegen for optimizer snapshots."
+        ),
+    )
+    p_plan.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="existing benchmark data directory to load instead of generating/resolving by suite and scale factor",
+    )
+    p_plan.add_argument(
+        "--target-row-group-size-mb",
+        type=int,
+        default=DEFAULT_TARGET_ROW_GROUP_SIZE_MB,
+        help=f"target parquet row-group size in MiB for generated data (default: {DEFAULT_TARGET_ROW_GROUP_SIZE_MB})",
+    )
+    p_plan.add_argument(
+        "--compression",
+        type=str,
+        default=DEFAULT_COMPRESSION,
+        help=f"parquet compression for generated data (default: {DEFAULT_COMPRESSION}; TPC-H maps zstd to ZSTD(1))",
+    )
+    p_plan.add_argument(
+        "--duckdb-threads",
+        type=int,
+        default=None,
+        help="DuckDB thread count used during TPC-DS data generation (default: DuckDB decides)",
+    )
+    p_plan.add_argument(
+        "--tpchgen-workers",
+        type=int,
+        default=None,
+        help="parallel tpchgen-cli workers for TPC-H data generation (default: Python executor default)",
+    )
+    p_plan.add_argument(
+        "--url",
+        type=str,
+        default=None,
+        help="remote Spark Connect URL (sc://...). Default: start an in-process Sail server.",
+    )
+    p_plan.add_argument(
+        "--output-dir", type=str, default=None, help="plan output directory (auto-generated if omitted)"
+    )
+    p_plan.add_argument("--regenerate-data", action="store_true", help="force re-running data generation")
+    p_plan.add_argument("--fail-fast", action="store_true", help="stop at the first EXPLAIN failure")
+    p_plan.set_defaults(func=cmd_plan)
+
+    p_plan_compare = sub.add_parser("plan-compare", help="compare captured benchmark plan manifests")
+    p_plan_compare.add_argument(
+        "refs",
+        nargs="*",
+        help="plan labels, manifest paths, or plan output directories; labels resolve to the latest matching manifest",
+    )
+    p_plan_compare.add_argument("--file", dest="files", action="append", help="plan manifest path (repeatable)")
+    p_plan_compare.add_argument(
+        "--suite", choices=["tpch", "tpcds"], default=None, help="suite filter for label lookup"
+    )
+    p_plan_compare.add_argument("--sf", type=float, default=None, help="scale-factor filter for label lookup")
+    p_plan_compare.add_argument("--plans-dir", type=str, default=str(PLANS_ROOT), help="directory to search for labels")
+    p_plan_compare.add_argument(
+        "--explain-mode",
+        action="append",
+        choices=sorted(EXPLAIN_MODE_SQL),
+        default=None,
+        help=f"mode to compare; repeatable. Default: {DEFAULT_EXPLAIN_MODE} when available, otherwise all common modes",
+    )
+    p_plan_compare.add_argument(
+        "--queries",
+        type=str,
+        default=None,
+        help="optional comma-separated query list/ranges to compare",
+    )
+    p_plan_compare.add_argument("--label", dest="labels", action="append", help="optional display label per manifest")
+    p_plan_compare.add_argument("--diff-dir", type=str, default=None, help="write unified diffs for changed plans here")
+    p_plan_compare.add_argument("--fail-on-diff", action="store_true", help="exit with status 1 when plans differ")
+    p_plan_compare.set_defaults(func=cmd_plan_compare)
+
     p_plot = sub.add_parser("plot", help="plot/compare benchmark result files")
     p_plot.add_argument(
         "refs",
@@ -1073,6 +1709,13 @@ def main(argv: list[str] | None = None) -> int:
     p_results.add_argument("--label", type=str, default=None)
     p_results.add_argument("--results-dir", type=str, default=str(RESULTS_ROOT))
     p_results.set_defaults(func=cmd_results)
+
+    p_plan_results = sub.add_parser("plan-results", help="list captured plan labels and manifests")
+    p_plan_results.add_argument("--suite", choices=["tpch", "tpcds"], default=None)
+    p_plan_results.add_argument("--sf", type=float, default=None)
+    p_plan_results.add_argument("--label", type=str, default=None)
+    p_plan_results.add_argument("--plans-dir", type=str, default=str(PLANS_ROOT))
+    p_plan_results.set_defaults(func=cmd_plan_results)
 
     args = parser.parse_args(argv)
     return args.func(args)
