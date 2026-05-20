@@ -528,7 +528,7 @@ fn utc_ntz_timestamp_and_unit(
         }
         x => {
             return Err(PlanError::invalid(format!(
-                "invalid UTC timestamp type for `convert_timezone`: {x:?}"
+                "invalid UTC NTZ timestamp type: {x:?}"
             )))
         }
     };

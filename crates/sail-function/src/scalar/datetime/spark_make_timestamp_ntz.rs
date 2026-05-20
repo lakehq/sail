@@ -142,7 +142,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
         }
 
         exec_err!(
-            "Spark `make_timestamp_ntz` function requires 6 arguments, got {}",
+            "Spark `make_timestamp_ntz` function requires 2 or 6 arguments, got {}",
             args.len()
         )
     }
