@@ -7034,6 +7034,7 @@ version = "0.6.2"
 dependencies = [
  "arrow",
  "async-trait",
+ "percent-encoding",
  "reqwest",
  "sail-catalog",
  "sail-common",
@@ -7409,6 +7410,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-sql-analyzer",
  "serde",
  "serde_arrow",
  "serde_json",
