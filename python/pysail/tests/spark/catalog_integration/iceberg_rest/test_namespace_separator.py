@@ -76,7 +76,7 @@ def _assert_no_tables_listed(spark: SparkSession, namespace: str) -> None:
 
 
 @pytest.mark.usefixtures("_create_s3_bucket")
-def test_namespace_separator_custom_server_catalogs_work_with_config_aliases(
+def test_namespace_separator_custom_server_catalog_work_with_config(
     nessie_spark_custom_separator: SparkSession,
     nessie_custom_separator_iceberg_rest_endpoint: str,
 ) -> None:
