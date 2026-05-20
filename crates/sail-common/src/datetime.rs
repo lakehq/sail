@@ -8,7 +8,7 @@ pub fn get_system_timezone() -> CommonResult<String> {
     get_timezone().map_err(|e| CommonError::invalid(format!("failed to get system time zone: {e}")))
 }
 
-pub fn time_unit_to_multiplier(time_unit: &TimeUnit) -> i64 {
+pub const fn time_unit_to_multiplier(time_unit: &TimeUnit) -> i64 {
     match time_unit {
         TimeUnit::Second => 1i64,
         TimeUnit::Millisecond => 1000i64,

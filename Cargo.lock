@@ -705,9 +705,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.145.0"
+version = "1.145.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95190a2c2e0be9088d0f26ad4931d91defed3a5f584559ecb71189de6d4bc238"
+checksum = "6eaa019d39389807e4681e6a040a2268fa5dce7c2be4407117d54f52c0c77bb5"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -1904,9 +1904,9 @@ dependencies = [
 
 [[package]]
 name = "dashmap"
-version = "6.1.0"
+version = "6.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
@@ -6978,7 +6978,10 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "lazy_static",
+ "log",
+ "moka",
  "regex",
+ "sail-common",
  "sail-common-datafusion",
  "serde",
  "serde_arrow",
@@ -7017,6 +7020,7 @@ dependencies = [
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
+ "serde_json",
  "tempfile",
  "testcontainers",
  "tokio",
@@ -7030,6 +7034,7 @@ version = "0.6.2"
 dependencies = [
  "arrow",
  "async-trait",
+ "percent-encoding",
  "reqwest",
  "sail-catalog",
  "sail-common",
@@ -7286,6 +7291,7 @@ dependencies = [
  "sail-python-udf",
  "sail-server",
  "sail-telemetry",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -7404,6 +7410,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-sql-analyzer",
  "serde",
  "serde_arrow",
  "serde_json",

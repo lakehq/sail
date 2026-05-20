@@ -26,8 +26,8 @@ use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats}
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaDiscoveryExec, DeltaPhysicalExprAdapterFactory, DeltaScanByAddsExec,
-    DeltaWriterExecOptions,
+    prepare_delta_write_context, DeltaCommitContext, DeltaDiscoveryExec,
+    DeltaPhysicalExprAdapterFactory, DeltaScanByAddsExec, DeltaWriterExecOptions,
 };
 
 pub async fn build_delete_plan(
@@ -118,19 +118,31 @@ pub async fn build_delete_plan(
     let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,
     });
+    let writer_options = DeltaWriterExecOptions::from(ctx.options().clone());
+    let write_context = prepare_delta_write_context(
+        ctx.table_url(),
+        Some(snapshot_state.as_ref()),
+        &writer_options,
+        ctx.metadata_configuration(),
+        &partition_columns,
+        &sail_common_datafusion::datasource::PhysicalSinkMode::Append,
+        ctx.table_exists(),
+        &filter_exec.schema(),
+        operation,
+    )?;
 
     assemble_commit_plan(
         filter_exec,
         Some(find_files_exec),
         Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
-        DeltaWriterExecOptions::from(ctx.options().clone()),
+        writer_options,
         ctx.metadata_configuration().clone(),
         partition_columns,
         ctx.table_exists(),
         table_schema,
-        operation,
         ctx.options().user_metadata.clone(),
+        write_context,
     )
 }
 
@@ -237,5 +249,6 @@ pub async fn build_delete_plan_mor(
         table_schema,
         sail_common_datafusion::datasource::PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
+        DeltaCommitContext::from_snapshot(snapshot_state.as_ref()),
     )))
 }

@@ -45,6 +45,15 @@ pub enum TableKind {
         sort_by: Vec<CatalogTableSort>,
         bucket_by: Option<CatalogTableBucketBy>,
         properties: Vec<(String, String)>,
+        /// Whether the table is external. When `false` the table is managed.
+        ///
+        /// This flag is purely informational at present: Sail always creates
+        /// tables as external (`EXTERNAL=TRUE`, `table_type = EXTERNAL_TABLE`)
+        /// and does not differentiate managed vs external behavior for
+        /// operations like `DROP TABLE` (metadata-only; data is preserved). The flag
+        /// exists so that `type_name()` correctly reports the table type that
+        /// was recorded in the HMS metastore by other engines (e.g. Spark).
+        is_external: bool,
     },
     View {
         definition: String,
@@ -87,7 +96,12 @@ impl TableKind {
 
     pub fn type_name(&self) -> &str {
         match self {
-            TableKind::Table { .. } => "MANAGED",
+            TableKind::Table {
+                is_external: true, ..
+            } => "EXTERNAL",
+            TableKind::Table {
+                is_external: false, ..
+            } => "MANAGED",
             TableKind::View { .. } => "VIEW",
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",

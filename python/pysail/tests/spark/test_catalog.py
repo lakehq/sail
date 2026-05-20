@@ -4,7 +4,11 @@ PySpark maps tableName from the server to name in the client Table namedtuple.
 The camelCase fields (tableType, isTemporary) are passed through directly.
 """
 
+from pathlib import Path
+
 import pytest
+
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 class TestListTables:
@@ -72,6 +76,50 @@ class TestListTables:
 
         metadata_marker = next(row for row in rows if row.col_name == "# Detailed Table Information")
         assert metadata_marker.data_type == ""
+
+    @pytest.mark.catalog_integration
+    def test_persistent_table_defaults_to_managed(self, spark):
+        """Persistent tables without an explicit location are managed."""
+        table_name = "test_external_default"
+        try:
+            spark.sql(f"CREATE TABLE {table_name} (id INT) USING PARQUET")
+
+            table = spark.catalog.getTable(table_name)
+            assert table.tableType == "MANAGED"
+
+            show_rows = spark.sql(f"SHOW TABLE EXTENDED LIKE '{table_name}'").collect()
+            show_row = next(row for row in show_rows if row.tableName == table_name)
+            assert "Type: MANAGED" in show_row.information
+
+            describe_rows = spark.sql(f"DESCRIBE EXTENDED {table_name}").collect()
+            type_row = next(row for row in describe_rows if row.col_name == "Type")
+            assert type_row.data_type == "MANAGED"
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    @pytest.mark.catalog_integration
+    def test_persistent_table_with_location_is_external(self, spark, tmp_path):
+        """Persistent table created with LOCATION surfaces EXTERNAL type."""
+        table_name = "test_external_with_location"
+        location = str(tmp_path / table_name)
+        Path(location).mkdir(parents=True, exist_ok=True)
+        try:
+            spark.sql(
+                f"CREATE TABLE {table_name} (id INT) USING PARQUET LOCATION '{escape_sql_string_literal(location)}'"
+            )
+
+            table = spark.catalog.getTable(table_name)
+            assert table.tableType == "EXTERNAL"
+
+            show_rows = spark.sql(f"SHOW TABLE EXTENDED LIKE '{table_name}'").collect()
+            show_row = next(row for row in show_rows if row.tableName == table_name)
+            assert "Type: EXTERNAL" in show_row.information
+
+            describe_rows = spark.sql(f"DESCRIBE EXTENDED {table_name}").collect()
+            type_row = next(row for row in describe_rows if row.col_name == "Type")
+            assert type_row.data_type == "EXTERNAL"
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
 class TestListDatabases:
