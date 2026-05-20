@@ -7,9 +7,8 @@ use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
@@ -93,6 +92,10 @@ impl ExecutionPlan for ShowStringExec {
         &self.properties
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
+    }
+
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
     }
@@ -126,16 +129,13 @@ impl ExecutionPlan for ShowStringExec {
         if partition != 0 {
             return exec_err!("partition index out of range: {}", partition);
         }
+        if self.input.output_partitioning().partition_count() != 1 {
+            return exec_err!("ShowStringExec should have one input partition");
+        }
         let input = rename_physical_plan(self.input.clone(), &self.names)?;
-        let input_partitions = input.output_partitioning().partition_count();
-        let schema = input.schema();
-        let streams = (0..input_partitions)
-            .map(|partition| input.execute(partition, context.clone()))
-            .collect::<Result<Vec<_>>>()?;
-        let stream =
-            RecordBatchStreamAdapter::new(schema, futures::stream::iter(streams).flatten());
+        let stream = input.execute(partition, context)?;
         Ok(Box::pin(ShowStringStream::new(
-            Box::pin(stream),
+            stream,
             self.limit,
             self.format.clone(),
             self.schema.clone(),
