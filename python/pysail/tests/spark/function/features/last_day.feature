@@ -231,3 +231,379 @@ Feature: last_day comprehensive tests
       Then query result
         | result     |
         | 0001-01-31 |
+
+  Rule: Filter pushdown — preimage rewrite preserves semantics for all 5 operators
+
+    Scenario: last_day equality with valid last day returns whole month
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-03-31'),
+          (DATE '2024-04-01'),
+          (DATE '2024-04-15'),
+          (DATE '2024-04-30'),
+          (DATE '2024-05-01'),
+          (DATE '2024-05-31')
+          AS t(d)
+        WHERE last_day(d) = DATE '2024-04-30'
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2024-04-01 |
+        | 2024-04-15 |
+        | 2024-04-30 |
+
+    Scenario: last_day strict less than excludes target month
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-03-31'),
+          (DATE '2024-04-01'),
+          (DATE '2024-04-30'),
+          (DATE '2024-05-01')
+          AS t(d)
+        WHERE last_day(d) < DATE '2024-04-30'
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2024-03-31 |
+
+    Scenario: last_day less or equal includes target month
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-03-31'),
+          (DATE '2024-04-01'),
+          (DATE '2024-04-30'),
+          (DATE '2024-05-01')
+          AS t(d)
+        WHERE last_day(d) <= DATE '2024-04-30'
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2024-03-31 |
+        | 2024-04-01 |
+        | 2024-04-30 |
+
+    Scenario: last_day strict greater than excludes target month
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-03-31'),
+          (DATE '2024-04-01'),
+          (DATE '2024-04-30'),
+          (DATE '2024-05-01'),
+          (DATE '2024-05-31')
+          AS t(d)
+        WHERE last_day(d) > DATE '2024-04-30'
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2024-05-01 |
+        | 2024-05-31 |
+
+    Scenario: last_day greater or equal includes target month
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-03-31'),
+          (DATE '2024-04-01'),
+          (DATE '2024-04-30'),
+          (DATE '2024-05-01'),
+          (DATE '2024-05-31')
+          AS t(d)
+        WHERE last_day(d) >= DATE '2024-04-30'
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2024-04-01 |
+        | 2024-04-30 |
+        | 2024-05-01 |
+        | 2024-05-31 |
+
+  Rule: Filter pushdown — unsatisfiable literal returns empty (no over-approx)
+
+    # Canary against over-approximation: D not being a month-end must
+    # leave the predicate unrewritten so per-row eval yields zero rows.
+
+    Scenario: last_day equality with mid-month date returns empty
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-04-01'),
+          (DATE '2024-04-15'),
+          (DATE '2024-04-30')
+          AS t(d)
+        WHERE last_day(d) = DATE '2024-04-15'
+        """
+      Then query result
+        | d |
+
+    Scenario: last_day equality with first of month returns empty
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-04-15'),
+          (DATE '2024-04-30')
+          AS t(d)
+        WHERE last_day(d) = DATE '2024-04-01'
+        """
+      Then query result
+        | d |
+
+    Scenario: last_day equality with day 30 in 31-day month returns empty
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-12-30'),
+          (DATE '2024-12-31')
+          AS t(d)
+        WHERE last_day(d) = DATE '2024-12-30'
+        """
+      Then query result
+        | d |
+
+  Rule: Filter pushdown — boundary cases for valid last days
+
+    Scenario: last_day equality at leap-year February 29
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-02-01'),
+          (DATE '2024-02-29'),
+          (DATE '2024-03-01')
+          AS t(d)
+        WHERE last_day(d) = DATE '2024-02-29'
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2024-02-01 |
+        | 2024-02-29 |
+
+    Scenario: last_day equality at non-leap February 28
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2025-02-01'),
+          (DATE '2025-02-28'),
+          (DATE '2025-03-01')
+          AS t(d)
+        WHERE last_day(d) = DATE '2025-02-28'
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2025-02-01 |
+        | 2025-02-28 |
+
+    Scenario: last_day equality at year-end December 31
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-11-30'),
+          (DATE '2024-12-01'),
+          (DATE '2024-12-31'),
+          (DATE '2025-01-01')
+          AS t(d)
+        WHERE last_day(d) = DATE '2024-12-31'
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2024-12-01 |
+        | 2024-12-31 |
+
+  Rule: Filter pushdown — NULL handling
+
+    Scenario: last_day equality drops NULL rows
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-04-15'),
+          (CAST(NULL AS DATE)),
+          (DATE '2024-04-30')
+          AS t(d)
+        WHERE last_day(d) = DATE '2024-04-30'
+        ORDER BY d
+        """
+      Then query result ordered
+        | d          |
+        | 2024-04-15 |
+        | 2024-04-30 |
+
+    Scenario: last_day equality with NULL literal returns empty
+      When query
+        """
+        SELECT d FROM VALUES
+          (DATE '2024-04-15'),
+          (DATE '2024-04-30')
+          AS t(d)
+        WHERE last_day(d) = CAST(NULL AS DATE)
+        """
+      Then query result
+        | d |
+
+  Rule: Filter pushdown — Timestamp input via implicit cast
+
+    Scenario: last_day on Timestamp column matches whole month
+      When query
+        """
+        SELECT ts FROM VALUES
+          (CAST('2024-04-30 00:00:00' AS TIMESTAMP)),
+          (CAST('2024-04-30 23:59:59' AS TIMESTAMP)),
+          (CAST('2024-05-01 00:00:00' AS TIMESTAMP)),
+          (CAST('2024-05-15 12:00:00' AS TIMESTAMP))
+          AS t(ts)
+        WHERE last_day(ts) = DATE '2024-04-30'
+        ORDER BY ts
+        """
+      Then query result ordered
+        | ts                  |
+        | 2024-04-30 00:00:00 |
+        | 2024-04-30 23:59:59 |
+
+    Scenario: last_day on Timestamp_NTZ column matches whole month
+      When query
+        """
+        SELECT ts FROM VALUES
+          (CAST('2024-04-15 10:30:00' AS TIMESTAMP_NTZ)),
+          (CAST('2024-05-01 00:00:00' AS TIMESTAMP_NTZ))
+          AS t(ts)
+        WHERE last_day(ts) = DATE '2024-04-30'
+        ORDER BY ts
+        """
+      Then query result ordered
+        | ts                  |
+        | 2024-04-15 10:30:00 |
+
+  Rule: Plan snapshot — filter pushdown on Parquet (preimage)
+
+    @sail-only
+    Scenario: EXPLAIN literal Date filter on Parquet — baseline
+      Given variable location for temporary directory explain_last_day_baseline
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_last_day_baseline_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_last_day_baseline_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (DATE '2024-03-31'),
+          (DATE '2024-04-01'),
+          (DATE '2024-04-15'),
+          (DATE '2024-04-30'),
+          (DATE '2024-05-31')
+        AS t(d)
+        """
+      When query
+        """
+        EXPLAIN ANALYZE SELECT d FROM explain_last_day_baseline_parquet WHERE d >= DATE '2024-04-01' AND d < DATE '2024-05-01'
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN last_day filter on Parquet shows preimage pushdown
+      Given variable location for temporary directory explain_last_day_pushdown
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_last_day_pushdown_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_last_day_pushdown_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (DATE '2024-03-31'),
+          (DATE '2024-04-01'),
+          (DATE '2024-04-15'),
+          (DATE '2024-04-30'),
+          (DATE '2024-05-31')
+        AS t(d)
+        """
+      When query
+        """
+        EXPLAIN SELECT d FROM explain_last_day_pushdown_parquet WHERE last_day(d) = DATE '2024-04-30'
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN last_day with mid-month literal does NOT rewrite
+      Given variable location for temporary directory explain_last_day_unsat
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_last_day_unsat_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_last_day_unsat_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (DATE '2024-04-15'),
+          (DATE '2024-04-30')
+        AS t(d)
+        """
+      When query
+        """
+        EXPLAIN SELECT d FROM explain_last_day_unsat_parquet WHERE last_day(d) = DATE '2024-04-15'
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN last_day less or equal rewrites to upper-bound predicate
+      Given variable location for temporary directory explain_last_day_lte
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_last_day_lte_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_last_day_lte_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (DATE '2024-03-31'),
+          (DATE '2024-04-30'),
+          (DATE '2024-05-31')
+        AS t(d)
+        """
+      When query
+        """
+        EXPLAIN SELECT d FROM explain_last_day_lte_parquet WHERE last_day(d) <= DATE '2024-04-30'
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN last_day not equal rewrites to disjunction over the gap month
+      Given variable location for temporary directory explain_last_day_neq
+      Given final statement
+        """
+        DROP TABLE IF EXISTS explain_last_day_neq_parquet
+        """
+      Given statement template
+        """
+        CREATE TABLE explain_last_day_neq_parquet
+        USING PARQUET
+        LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES
+          (DATE '2024-03-31'),
+          (DATE '2024-04-15'),
+          (DATE '2024-04-30'),
+          (DATE '2024-05-31')
+        AS t(d)
+        """
+      When query
+        """
+        EXPLAIN SELECT d FROM explain_last_day_neq_parquet WHERE last_day(d) != DATE '2024-04-30'
+        """
+      Then query plan matches snapshot

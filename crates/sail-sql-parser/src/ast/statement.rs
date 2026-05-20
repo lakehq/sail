@@ -12,12 +12,12 @@ use crate::ast::keywords::{
     Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain,
     Extended, External, Fields, Fileformat, First, For, Format, Formatted, From, Function,
     Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy,
-    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options,
-    Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
-    Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
-    Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary,
-    Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View,
-    Views, When, With, Zone,
+    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Namespace, Namespaces, Noscan,
+    Not, Null, On, Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions,
+    Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde,
+    Serdeproperties, Set, Show, Sorted, Source, Statistics, Stored, Table, Tables, Target,
+    Tblproperties, Temp, Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use,
+    Using, Values, Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -39,7 +39,7 @@ pub enum Statement {
     },
     UseDatabase {
         r#use: Use,
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         name: ObjectName,
     },
     UseCatalog {
@@ -49,27 +49,27 @@ pub enum Statement {
     },
     CreateDatabase {
         create: Create,
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         if_not_exists: Option<(If, Not, Exists)>,
         name: ObjectName,
         clauses: Vec<CreateDatabaseClause>,
     },
     AlterDatabase {
         alter: Alter,
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         name: ObjectName,
         operation: AlterDatabaseOperation,
     },
     DropDatabase {
         drop: Drop,
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
         specifier: Option<Either<Restrict, Cascade>>,
     },
     ShowDatabases {
         show: Show,
-        databases: Either<Databases, Schemas>,
+        databases: DatabasesKeyword,
         from: Option<(Either<From, In>, ObjectName)>,
         like: Option<(Option<Like>, StringLiteral)>,
     },
@@ -97,6 +97,7 @@ pub enum Statement {
     },
     ReplaceTable {
         replace: Replace,
+        external: Option<External>,
         table: Table,
         name: ObjectName,
         #[parser(function = |(_, _, e, d), o| compose((e, d), o))]
@@ -335,7 +336,7 @@ pub enum Statement {
         value: CommentValue,
     },
     CommentOnDatabase {
-        comment: (Comment, On, Either<Database, Schema>),
+        comment: (Comment, On, DatabaseKeyword),
         name: ObjectName,
         is: Is,
         value: CommentValue,
@@ -508,6 +509,20 @@ pub enum CreateDatabaseClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum DatabaseKeyword {
+    Database(Database),
+    Schema(Schema),
+    Namespace(Namespace),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum DatabasesKeyword {
+    Databases(Databases),
+    Schemas(Schemas),
+    Namespaces(Namespaces),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, Query, DataType)")]
 pub enum CreateTableClause {
     /// The `PARTITIONED BY` clause for table.
@@ -522,7 +537,8 @@ pub enum CreateTableClause {
         Either<Clustered, Distributed>,
         By,
         IdentList,
-        Option<(Sorted, By, SortColumnList)>,
+        #[parser(function = |(e, q, d), o| compose((e, q, d), o).or_not())]
+        Option<SortColumnClause>,
         Into,
         IntegerLiteral,
         Buckets,
@@ -544,15 +560,28 @@ pub enum CreateTableClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Expr, Query, DataType)")]
+pub struct SortColumnClause {
+    pub sorted: Sorted,
+    pub by: By,
+    #[parser(function = |(e, q, d), o| compose((e, q, d), o))]
+    pub columns: SortColumnList,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Expr, Query, DataType)")]
 pub struct SortColumnList {
     pub left: LeftParenthesis,
+    #[parser(function = |(e, q, d), o| sequence(compose((e, q, d), o), unit(o)))]
     pub columns: Sequence<SortColumn, Comma>,
     pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Expr, Query, DataType)")]
 pub struct SortColumn {
-    pub column: Ident,
+    #[parser(function = |(e, q, d), o| compose((e, q, d), o))]
+    pub column: Expr,
     pub direction: Option<OrderDirection>,
 }
 
@@ -955,7 +984,7 @@ pub enum DescribeItem {
         item: ObjectName,
     },
     Database {
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         extended: Option<Extended>,
         item: ObjectName,
     },

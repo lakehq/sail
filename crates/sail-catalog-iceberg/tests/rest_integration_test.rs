@@ -591,8 +591,8 @@ async fn test_create_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await
@@ -607,8 +607,8 @@ async fn test_create_table() {
         partition_by,
         sort_by,
         bucket_by,
-        options,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");
@@ -677,7 +677,6 @@ async fn test_create_table() {
     assert_eq!(partition_by, Vec::<CatalogPartitionField>::new());
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
-    assert_eq!(options, Vec::<(String, String)>::new());
     assert_eq!(columns.len(), 3);
     assert!(
         columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
@@ -734,8 +733,8 @@ async fn test_create_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await;
@@ -756,8 +755,8 @@ async fn test_create_table() {
                 bucket_by: None,
                 if_not_exists: true,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await;
@@ -793,11 +792,12 @@ async fn test_create_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![("key1".to_string(), "value1".to_string())],
                 properties: vec![
+                    ("option.key1".to_string(), "value1".to_string()),
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                is_external: true,
             },
         )
         .await
@@ -812,8 +812,8 @@ async fn test_create_table() {
         partition_by,
         sort_by,
         bucket_by,
-        options,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");
@@ -850,8 +850,8 @@ async fn test_create_table() {
         ascending: true,
     }));
     assert_eq!(bucket_by, None);
-    assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
-    assert_eq!(properties.len(), 17);
+    assert_eq!(properties.len(), 18);
+    assert!(properties.contains(&("option.key1".to_string(), "value1".to_string())));
     assert!(properties.contains(&("owner".to_string(), "mr. meow".to_string())));
     assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
     assert_eq!(columns.len(), 3);
@@ -982,11 +982,12 @@ async fn test_get_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![("key1".to_string(), "value1".to_string())],
                 properties: vec![
+                    ("option.key1".to_string(), "value1".to_string()),
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                is_external: true,
             },
         )
         .await
@@ -1002,8 +1003,8 @@ async fn test_get_table() {
         partition_by,
         sort_by,
         bucket_by,
-        options,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");
@@ -1045,12 +1046,13 @@ async fn test_get_table() {
             "write.parquet.compression-codec".to_string(),
             "zstd".to_string(),
         ),
+        ("option.key1".to_string(), "value1".to_string()),
         ("owner".to_string(), "mr. meow".to_string()),
         ("team".to_string(), "data-eng".to_string()),
     ];
     expected_properties.sort();
 
-    assert_eq!(properties.len(), 17);
+    assert_eq!(properties.len(), 18);
     assert_eq!(static_properties, expected_properties);
     assert!(properties.iter().any(|(k, v)| k == "metadata-location"
         && v.starts_with("s3://icebergdata/custom/path/meow/metadata/")));
@@ -1092,7 +1094,6 @@ async fn test_get_table() {
         ascending: true,
     }));
     assert_eq!(bucket_by, None);
-    assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
     assert_eq!(columns.len(), 3);
     assert!(
         columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
@@ -1182,8 +1183,8 @@ async fn test_list_tables() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await
@@ -1204,8 +1205,8 @@ async fn test_list_tables() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await
@@ -1269,8 +1270,8 @@ async fn test_drop_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await
@@ -1333,8 +1334,8 @@ async fn test_drop_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await
@@ -1861,8 +1862,8 @@ async fn create_partitioned_table(
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await

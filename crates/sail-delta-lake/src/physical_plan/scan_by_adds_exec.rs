@@ -15,9 +15,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::BooleanArray;
+use datafusion::arrow::array::{ArrayRef, BooleanArray, Int64Array};
 use datafusion::arrow::buffer::BooleanBuffer;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::stats::ColumnStatistics;
 use datafusion::execution::context::TaskContext;
@@ -158,6 +158,7 @@ impl ScanByAddsStreamState {
         let logical_schema = df_logical_schema(
             snapshot_state.as_ref(),
             &scan_config.file_column_name,
+            &scan_config.row_index_column_name,
             &scan_config.commit_version_column_name,
             &scan_config.commit_timestamp_column_name,
             scan_config.schema.clone(),
@@ -255,10 +256,86 @@ impl ScanByAddsStreamState {
         // Files without DVs are scanned in bulk (fast path). Files with DVs are scanned
         // individually so that we can track per-file row indices and filter deleted rows.
         let adds = std::mem::take(&mut self.pending_adds);
+        let mut all_streams: Vec<SendableRecordBatchStream> = Vec::new();
+        let row_index_column = self
+            .scan_config
+            .row_index_column_name
+            .clone()
+            .filter(|name| self.output_schema.field_with_name(name).is_ok());
+        if let Some(row_index_column) = row_index_column {
+            let bitmaps: Vec<Option<DeletionVectorBitmap>> =
+                if adds.iter().any(|add| add.deletion_vector.is_some()) {
+                    let table_url = self.table_url.clone();
+                    let object_store = self
+                        .context
+                        .runtime_env()
+                        .object_store_registry
+                        .get_store(&table_url)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    let dv_futures = adds.iter().map(|add| {
+                        let store = Arc::clone(&object_store);
+                        let url = table_url.clone();
+                        let dv_descriptor = add.deletion_vector.clone();
+                        async move {
+                            let Some(descriptor) = dv_descriptor else {
+                                return Ok(None);
+                            };
+                            let bitmap = crate::deletion_vector::read_deletion_vector(
+                                store.as_ref(),
+                                &url,
+                                &descriptor,
+                            )
+                            .await
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                            Ok::<_, DataFusionError>(Some(bitmap))
+                        }
+                    });
+                    futures::future::try_join_all(dv_futures).await?
+                } else {
+                    (0..adds.len()).map(|_| None).collect()
+                };
+
+            for (add, maybe_bitmap) in adds.iter().zip(bitmaps) {
+                let file_streams = self.build_bulk_scan(
+                    snapshot,
+                    log_store,
+                    session_state,
+                    std::slice::from_ref(add),
+                    file_schema.clone(),
+                    &logical_names,
+                )?;
+
+                let maybe_bitmap = maybe_bitmap.map(Arc::new);
+                for inner in file_streams {
+                    let stream = append_row_index_stream(inner, row_index_column.clone())?;
+                    if let Some(bitmap) = &maybe_bitmap {
+                        all_streams.push(dv_filter_stream(stream, Arc::clone(bitmap)));
+                    } else {
+                        all_streams.push(stream);
+                    }
+                }
+            }
+            let output_schema = Arc::clone(&self.output_schema);
+            let combined = stream::iter(all_streams)
+                .map(Ok::<_, DataFusionError>)
+                .try_flatten()
+                .and_then(move |batch| {
+                    let output_schema = Arc::clone(&output_schema);
+                    async move {
+                        let casted = cast_record_batch_relaxed_tz(&batch, &output_schema)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        Ok(casted)
+                    }
+                });
+            self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.output_schema),
+                combined,
+            )));
+            return Ok(());
+        }
         let (dv_adds, plain_adds): (Vec<_>, Vec<_>) =
             adds.into_iter().partition(|a| a.deletion_vector.is_some());
-
-        let mut all_streams: Vec<SendableRecordBatchStream> = Vec::new();
 
         // ── Fast path: bulk scan for files without deletion vectors ──────────
         if !plain_adds.is_empty() {
@@ -350,14 +427,41 @@ impl ScanByAddsStreamState {
         file_schema: SchemaRef,
         logical_names: &[String],
     ) -> Result<Vec<SendableRecordBatchStream>> {
+        let mut scan_config = self.scan_config.clone();
+        let row_index_idx = scan_config
+            .row_index_column_name
+            .as_ref()
+            .and_then(|name| logical_names.iter().position(|x| x == name));
+        scan_config.row_index_column_name = None;
+
+        let file_projection = match (self.projection.as_ref(), row_index_idx) {
+            (Some(projection), Some(row_index_idx)) => Some(
+                projection
+                    .iter()
+                    .copied()
+                    .filter(|idx| *idx != row_index_idx)
+                    .collect::<Vec<_>>(),
+            ),
+            (Some(projection), None) => Some(projection.clone()),
+            (None, _) => None,
+        };
+        let file_logical_names = match row_index_idx {
+            Some(row_index_idx) => logical_names
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, name)| (idx != row_index_idx).then_some(name.clone()))
+                .collect::<Vec<_>>(),
+            None => logical_names.to_vec(),
+        };
+
         let file_scan_config = build_file_scan_config(
             snapshot,
             log_store,
             adds,
-            &self.scan_config,
+            &scan_config,
             FileScanParams {
                 pruning_mask: None,
-                projection: self.projection.as_ref(),
+                projection: file_projection.as_ref(),
                 limit: self.limit,
                 pushdown_filter: self.pushdown_filter.clone(),
                 sort_order: None,
@@ -371,9 +475,12 @@ impl ScanByAddsStreamState {
         let partitions = file_scan_config.file_groups.len().max(1);
         let scan_exec =
             datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
-        let scan_exec =
-            rename_projected_physical_plan(scan_exec, logical_names, self.projection.as_ref())
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let scan_exec = rename_projected_physical_plan(
+            scan_exec,
+            &file_logical_names,
+            file_projection.as_ref(),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let mut streams = Vec::with_capacity(partitions);
         for partition in 0..partitions {
@@ -393,6 +500,49 @@ impl ScanByAddsStreamState {
             .unwrap_or_else(|| meta_adds::infer_partition_columns_from_schema(&batch.schema()));
         meta_adds::decode_adds_from_meta_batch(batch, Some(&partition_columns))
     }
+}
+
+/// Append a file-local row-index column to a single-file scan stream.
+///
+/// Callers must only use this for streams that read one physical file, so the counter
+/// starts at zero for each file and matches Delta deletion-vector row positions.
+fn append_row_index_stream(
+    inner: SendableRecordBatchStream,
+    column_name: String,
+) -> Result<SendableRecordBatchStream> {
+    let mut fields = inner.schema().fields().iter().cloned().collect::<Vec<_>>();
+    fields.push(Arc::new(Field::new(column_name, DataType::Int64, false)));
+    let output_schema = Arc::new(Schema::new(fields));
+    let stream_schema = Arc::clone(&output_schema);
+
+    let stream = stream::try_unfold((inner, 0_i64), move |(mut inner, mut row_offset)| {
+        let schema = Arc::clone(&stream_schema);
+        async move {
+            match inner.try_next().await? {
+                Some(batch) => {
+                    let num_rows_i64 = i64::try_from(batch.num_rows()).map_err(|_| {
+                        DataFusionError::Execution(
+                            "record batch row count exceeds i64::MAX".to_string(),
+                        )
+                    })?;
+                    let row_indices =
+                        Int64Array::from_iter_values(row_offset..row_offset + num_rows_i64);
+                    row_offset += num_rows_i64;
+
+                    let mut columns = batch.columns().to_vec();
+                    columns.push(Arc::new(row_indices) as ArrayRef);
+                    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+                    Ok(Some((batch, (inner, row_offset))))
+                }
+                None => Ok(None),
+            }
+        }
+    });
+
+    Ok(Box::pin(RecordBatchStreamAdapter::new(
+        output_schema,
+        stream,
+    )))
 }
 
 /// Wrap a record-batch stream so that rows whose file-level indices appear in the

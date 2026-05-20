@@ -78,7 +78,11 @@ impl PlanResolver<'_> {
                             expr: Box::new(value),
                             data_type: field.data_type().clone(),
                         });
-                        when(column_expr.clone().is_null(), value).otherwise(column_expr)?
+                        let is_null_or_nan = column_expr
+                            .clone()
+                            .is_null()
+                            .or(self.is_nan_float(column_expr.clone(), field.data_type()));
+                        when(is_null_or_nan, value).otherwise(column_expr)?
                     } else {
                         column_expr
                     }
@@ -130,13 +134,7 @@ impl PlanResolver<'_> {
                 })
                 .then(|| {
                     col(column.clone()).get_type(schema).ok().map(|col_type| {
-                        let is_nan = match col_type {
-                            DataType::Float16 => {
-                                isnan(cast(col(column.clone()), DataType::Float32))
-                            }
-                            DataType::Float32 | DataType::Float64 => isnan(col(column.clone())),
-                            _ => lit(false),
-                        };
+                        let is_nan = self.is_nan_float(col(column.clone()), &col_type);
                         col(column).is_not_null().and(is_false(is_nan))
                     })
                 })
@@ -162,5 +160,13 @@ impl PlanResolver<'_> {
             filter_expr,
             Arc::new(input),
         )?))
+    }
+
+    fn is_nan_float(&self, expr: Expr, data_type: &DataType) -> Expr {
+        match data_type {
+            DataType::Float16 => isnan(cast(expr, DataType::Float32)),
+            DataType::Float32 | DataType::Float64 => isnan(expr),
+            _ => lit(false),
+        }
     }
 }

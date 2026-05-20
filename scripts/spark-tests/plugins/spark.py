@@ -308,6 +308,10 @@ SKIPPED_SPARK_TESTS = [
         reason="Segmentation fault",
     ),
     TestMarker(
+        keywords=["test_recursion_handling_for_plan_logging"],
+        reason="Stack overflow due to large query plan",
+    ),
+    TestMarker(
         keywords=["test_reattach.py"],
         reason="Slow test not working yet",
     ),
@@ -368,6 +372,10 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["connect", "client", "test_client.py"],
         reason="Subsequent tests would have setup errors after these tests",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.listCatalogs"],
+        reason="Sail exposes an additional 'system' catalog that Spark does not have; ported to PySail test suite",
     ),
 ]
 

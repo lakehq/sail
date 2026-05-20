@@ -19,12 +19,12 @@ use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
+use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractAll;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
-use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -297,6 +297,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("overlay", F::var_arg(overlay)),
         ("position", F::custom(position)),
         ("printf", F::udf(FormatStringFunc::new())),
+        ("quote", F::udf(SparkQuote::new())),
         ("randstr", F::udf(Randstr::new())),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::custom(regexp_extract)),
@@ -320,12 +321,12 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("substring_index", F::ternary(expr_fn::substr_index)),
         ("to_binary", F::udf(SparkToBinary::new())),
         ("to_char", F::unknown("to_char")),
-        ("to_number", F::udf(SparkToNumber::new())),
+        ("to_number", F::udf(SparkToNumber::new(false))),
         ("to_varchar", F::unknown("to_varchar")),
         ("translate", F::ternary(expr_fn::translate)),
         ("trim", F::var_arg(rev_args(expr_fn::trim))),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
-        ("try_to_number", F::udf(SparkTryToNumber::new())),
+        ("try_to_number", F::udf(SparkToNumber::new(true))),
         ("try_validate_utf8", F::custom(try_validate_utf8)),
         ("ucase", F::custom(upper)),
         ("unbase64", F::udf(SparkUnbase64::new())),

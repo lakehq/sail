@@ -3,10 +3,9 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::{DataType, Schema};
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
-use datafusion::datasource::provider_as_source;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
@@ -22,14 +21,25 @@ use crate::logical_expr::ExprWithSource;
 /// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
 pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
 
-/// Row-level operation type column appended to the expanded MERGE output.
+/// File-local row index metadata column for row-level modifications that write deletion vectors.
+pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
+
+/// Row-level operation type column appended to expanded row-level write output.
+///
+/// This is internal Sail metadata. Format writers may use it to route rows,
+/// collect operation metrics, or produce low-level delete artifacts, but must
+/// remove it before persisting user data.
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
+
+/// Internal column carrying pre-aggregated MERGE source row counts on
+/// [`RowLevelOperationType::SourceMetric`] rows.
+pub const MERGE_SOURCE_METRIC_COLUMN: &str = "__sail_merge_source_metric";
 
 /// A layer of options that can be applied to a data source.
 /// Multiple layers are used to represent different sources of options,
 /// applied in order so that later layers override earlier ones.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum OptionLayer {
     /// Options stored as table properties in a catalog.
     TablePropertyList { items: Vec<(String, String)> },
@@ -63,13 +73,34 @@ impl OptionLayer {
     }
 }
 
-/// Row-level operation type tag.
+/// Internal row intent tag for row-level write plans.
+///
+/// The numeric values are not table-format protocol values. They are stable
+/// within Sail physical plans so logical expansion and format writers can share
+/// a compact representation of per-row intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum RowLevelOperationType {
+    /// Existing target row is rewritten unchanged.
+    Copy = 0,
+    /// Existing target row is deleted.
     Delete = 1,
+    /// Existing target row is rewritten with updated values.
     Update = 2,
+    /// Source row is inserted as a new target row.
     Insert = 3,
+    /// Source row participates in metrics or checks but is not written.
+    Noop = 4,
+    /// Matched target row is deleted by a MERGE clause.
+    MatchedDelete = 5,
+    /// Matched target row is updated by a MERGE clause.
+    MatchedUpdate = 6,
+    /// Target-only row is deleted by a MERGE clause.
+    NotMatchedBySourceDelete = 7,
+    /// Target-only row is updated by a MERGE clause.
+    NotMatchedBySourceUpdate = 8,
+    /// Metric-only row carrying a MERGE source row count.
+    SourceMetric = 9,
 }
 
 impl RowLevelOperationType {
@@ -102,6 +133,12 @@ pub trait MergeCapableSource: Send + Sync {
 
     /// Returns a reconfigured source with the file column enabled.
     fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
+
+    /// Returns the file-local row index column name if already configured.
+    fn row_index_column_name(&self) -> Option<&str>;
+
+    /// Returns a reconfigured source with the file-local row index column enabled.
+    fn with_row_index_column(&self, name: &str) -> Result<Arc<dyn TableSource>>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -158,7 +195,6 @@ pub struct SinkInfo {
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Option<LexRequirement>,
-    pub table_properties: HashMap<String, String>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
@@ -170,51 +206,32 @@ pub struct SinkInfo {
     pub logical_schema: Option<datafusion_common::DFSchemaRef>,
 }
 
-impl SinkInfo {
-    /// Returns the path from options, or an empty string if not set.
-    /// Checks the `"path"` key first, then `"location"`.
-    /// Key comparison is case-insensitive.
-    pub fn path(&self) -> String {
-        let find = |key: &str| -> Option<String> {
-            for layer in self.options.iter().rev() {
-                let items = match layer {
-                    OptionLayer::OptionList { items } => items,
-                    OptionLayer::TablePropertyList { items } => items,
-                    _ => continue,
-                };
-                if let Some(v) = items.iter().find_map(|(k, v)| {
-                    if k.eq_ignore_ascii_case(key) {
-                        Some(v.clone())
-                    } else {
-                        None
-                    }
-                }) {
-                    return Some(v);
+/// Returns the path from options, or `None` if not set.
+/// Checks the `"path"` key first, then `"location"`.
+/// Key comparison is case-insensitive.
+pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
+    let find = |key: &str| -> Option<String> {
+        for layer in options.iter().rev() {
+            let items = match layer {
+                OptionLayer::OptionList { items } => items,
+                OptionLayer::TablePropertyList { items } => items,
+                _ => continue,
+            };
+            if let Some(v) = items.iter().find_map(|(k, v)| {
+                if k.eq_ignore_ascii_case(key) {
+                    Some(v.clone())
+                } else {
+                    None
                 }
+            }) {
+                return Some(v);
             }
-            None
-        };
-        find("path")
-            .or_else(|| find("location"))
-            .unwrap_or_default()
-    }
-}
-
-/// Searches option sets in reverse order for a case-insensitive key match.
-/// Returns the value from the last option set that contains the key, or `None`.
-pub fn find_option(options: &[HashMap<String, String>], key: &str) -> Option<String> {
-    for set in options.iter().rev() {
-        if let Some(value) = set.iter().find_map(|(k, v)| {
-            if k.eq_ignore_ascii_case(key) {
-                Some(v.clone())
-            } else {
-                None
-            }
-        }) {
-            return Some(value);
         }
-    }
-    None
+        None
+    };
+    find("path")
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| find("location").filter(|v| !v.trim().is_empty()))
 }
 
 /// The kind of row-level DML command being executed.
@@ -264,6 +281,8 @@ pub struct RowLevelWriteInfo {
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths (MERGE targeted rewrite).
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
+    pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
     pub with_schema_evolution: bool,
     /// Override for commit operation metadata.
     pub operation_override: Option<OperationOverride>,
@@ -283,23 +302,16 @@ pub trait TableFormat: Send + Sync {
     fn name(&self) -> &str;
 
     /// Creates a logical [`TableSource`] for read.
-    ///
-    /// Default implementation wraps [`Self::create_provider`] using DataFusion's
-    /// `DefaultTableSource` adapter to preserve backwards compatibility.
     async fn create_source(
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<Arc<dyn TableSource>> {
-        Ok(provider_as_source(self.create_provider(ctx, info).await?))
-    }
+    ) -> Result<Arc<dyn TableSource>>;
 
-    /// Creates a `TableProvider` for read.
-    async fn create_provider(
-        &self,
-        ctx: &dyn Session,
-        info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>>;
+    /// Infers the logical schema for planning without requiring callers to construct a read source.
+    async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
+        Ok(self.create_source(ctx, info).await?.schema())
+    }
 
     /// Creates a `ExecutionPlan` for write.
     async fn create_writer(
@@ -347,6 +359,21 @@ pub trait TableFormat: Send + Sync {
             self.name()
         )
     }
+
+    /// Alters the type of a table column.
+    async fn alter_table_column_type(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        data_type: datafusion::arrow::datatypes::DataType,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, column_path, data_type);
+        not_impl_err!(
+            "Column type alteration not supported for {} format",
+            self.name()
+        )
+    }
 }
 
 /// Thread-safe registry of available `TableFormat` implementations.
@@ -379,7 +406,20 @@ impl TableFormatRegistry {
         formats
             .get(&name.to_lowercase())
             .cloned()
-            .ok_or_else(|| plan_datafusion_err!("No table format found for: {name}"))
+            .ok_or_else(|| missing_table_format_error(name))
+    }
+}
+
+fn missing_table_format_error(name: &str) -> datafusion::common::DataFusionError {
+    if name.eq_ignore_ascii_case("jdbc") {
+        plan_datafusion_err!(
+            "No table format found for: {name}. \
+             The JDBC data source is provided by pysail and must be registered before use: \
+             `from pysail.spark.datasource.jdbc import JdbcDataSource`; \
+             `spark.dataSource.register(JdbcDataSource)`"
+        )
+    } else {
+        plan_datafusion_err!("No table format found for: {name}")
     }
 }
 
@@ -441,4 +481,39 @@ pub fn get_partition_columns_and_file_schema(
         .collect::<Vec<_>>();
     let file_schema = Schema::new(file_schema_fields);
     Ok((partition_columns, file_schema))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_jdbc_table_format_error_includes_registration_hint(
+    ) -> std::result::Result<(), String> {
+        let registry = TableFormatRegistry::new();
+        let error = match registry.get("jdbc") {
+            Ok(_) => return Err("expected missing jdbc table format error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("No table format found for: jdbc"));
+        assert!(error.contains("from pysail.spark.datasource.jdbc import JdbcDataSource"));
+        assert!(error.contains("spark.dataSource.register(JdbcDataSource)"));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_non_jdbc_table_format_error_stays_generic() -> std::result::Result<(), String> {
+        let registry = TableFormatRegistry::new();
+        let error = match registry.get("unknown") {
+            Ok(_) => return Err("expected missing unknown table format error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(
+            error,
+            "Error during planning: No table format found for: unknown"
+        );
+        Ok(())
+    }
 }

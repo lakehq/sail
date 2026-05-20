@@ -22,14 +22,14 @@ use std::fmt;
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
 use object_store::ObjectStore;
 use url::Url;
 
-use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+use crate::datasource::{df_logical_schema, DeltaScanConfig};
 pub mod features;
 pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
@@ -242,56 +242,6 @@ fn create_logstore_with_object_store(
     Ok(log_store)
 }
 
-/// Creates a Delta Lake table provider
-pub async fn create_delta_provider(
-    ctx: &dyn Session,
-    table_url: Url,
-    schema: Option<Schema>,
-    options: DeltaReadOptions,
-) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
-    let url = ListingTableUrl::try_new(table_url.clone(), None)?;
-    let object_store = ctx.runtime_env().object_store(&url)?;
-    let storage_config = StorageConfig;
-    let log_store =
-        create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
-
-    let table_config = if options.metadata_as_data_read {
-        DeltaSnapshotConfig {
-            require_files: false,
-            ..Default::default()
-        }
-    } else {
-        Default::default()
-    };
-    let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
-
-    load_table_by_options(&mut deltalake_table, &options).await?;
-
-    let snapshot = deltalake_table.snapshot()?.clone();
-
-    let scan_config = DeltaScanConfig {
-        file_column_name: None,
-        wrap_partition_values: false,
-        enable_parquet_pushdown: true,
-        schema: match schema {
-            Some(ref s) if s.fields().is_empty() => None,
-            Some(s) => Some(Arc::new(s)),
-            None => None,
-        },
-        commit_version_column_name: None,
-        commit_timestamp_column_name: None,
-        delta_log_replay_strategy: options.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
-    };
-
-    let mut table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
-    if !options.metadata_as_data_read && !snapshot.adds().is_empty() {
-        table_provider = table_provider.with_files(snapshot.adds().to_vec());
-    }
-
-    Ok(Arc::new(table_provider))
-}
-
 /// Creates a Delta Lake table source for logical planning.
 pub async fn create_delta_source(
     ctx: &dyn Session,
@@ -299,6 +249,43 @@ pub async fn create_delta_source(
     schema: Option<Schema>,
     options: DeltaReadOptions,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
+    let (snapshot, log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, false).await?;
+
+    Ok(Arc::new(DeltaTableSource::try_new(
+        snapshot,
+        log_store,
+        scan_config,
+    )?))
+}
+
+/// Infers the Delta logical schema for planning without constructing a logical read source.
+pub async fn infer_delta_logical_schema(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: DeltaReadOptions,
+) -> Result<SchemaRef> {
+    let (snapshot, _log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, true).await?;
+
+    Ok(df_logical_schema(
+        snapshot.as_ref(),
+        &scan_config.file_column_name,
+        &scan_config.row_index_column_name,
+        &scan_config.commit_version_column_name,
+        &scan_config.commit_timestamp_column_name,
+        scan_config.schema,
+    )?)
+}
+
+async fn load_delta_read_state(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: DeltaReadOptions,
+    metadata_only: bool,
+) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
     let storage_config = StorageConfig;
@@ -307,7 +294,7 @@ pub async fn create_delta_source(
 
     // Create a new DeltaTable instance but do not load it yet.
     // For metadata-as-data reads, avoid eagerly loading active file metadata on the driver.
-    let table_config = if options.metadata_as_data_read {
+    let table_config = if metadata_only || options.metadata_as_data_read {
         DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
@@ -324,6 +311,7 @@ pub async fn create_delta_source(
 
     let scan_config = DeltaScanConfig {
         file_column_name: None,
+        row_index_column_name: None,
         wrap_partition_values: false,
         enable_parquet_pushdown: true,
         schema: match schema {
@@ -337,11 +325,7 @@ pub async fn create_delta_source(
         delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
     };
 
-    Ok(Arc::new(DeltaTableSource::try_new(
-        snapshot,
-        log_store,
-        scan_config,
-    )?))
+    Ok((snapshot, log_store, scan_config))
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.
