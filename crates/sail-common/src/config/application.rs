@@ -519,12 +519,7 @@ pub enum CatalogType {
         warehouse: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         prefix: Option<String>,
-        #[serde(
-            alias = "namespace-separator",
-            alias = "namespaceSeparator",
-            alias = "namespaceseparator",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(skip_serializing_if = "Option::is_none")]
         namespace_separator: Option<String>,
         #[serde(
             skip_serializing_if = "Option::is_none",

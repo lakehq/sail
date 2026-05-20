@@ -872,6 +872,10 @@ pub struct HtmlString {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDefinition {
+    /// Whether the table is explicitly marked as external.
+    /// Note that the table may still be considered external semantically
+    /// when the location or path is specified, even when this field is `false`.
+    pub external: bool,
     pub columns: Vec<TableColumnDefinition>,
     pub comment: Option<String>,
     pub constraints: Vec<TableConstraint>,
@@ -886,7 +890,6 @@ pub struct TableDefinition {
     pub replace: bool,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
-    pub is_external: bool,
 }
 
 /// Returns whether a non-empty path or location is specified,

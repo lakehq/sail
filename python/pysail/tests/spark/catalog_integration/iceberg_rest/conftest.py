@@ -28,12 +28,6 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 NESSIE_NAMESPACE_SEPARATOR = "-"
-NESSIE_NAMESPACE_SEPARATOR_CATALOGS = [
-    ("sail_snake_case", "namespace_separator"),
-    ("sail_kebab_case", "namespace-separator"),
-    ("sail_camel_case", "namespaceSeparator"),
-    ("sail_flat_case", "namespaceseparator"),
-]
 
 
 @pytest.fixture(scope="module")
@@ -273,11 +267,10 @@ def nessie_spark_custom_separator(
 ) -> Generator[SparkSession, None, None]:
     """Start Sail with Nessie catalogs for each supported namespace separator config alias."""
     custom_separator_catalogs = [
-        f'{{name="{name}", type="iceberg-rest", uri="{nessie_custom_separator_iceberg_rest_endpoint}", '
-        f'{config_key}="{NESSIE_NAMESPACE_SEPARATOR}"}}'
-        for name, config_key in NESSIE_NAMESPACE_SEPARATOR_CATALOGS
+        f'{{name="sail_custom_separator", type="iceberg-rest", uri="{nessie_custom_separator_iceberg_rest_endpoint}", '
+        f'namespace_separator="{NESSIE_NAMESPACE_SEPARATOR}"}}'
     ]
-    default_catalog = NESSIE_NAMESPACE_SEPARATOR_CATALOGS[0][0]
+    default_catalog = "sail_custom_separator"
     server, remote, saved_env = start_sail_server(
         catalog_list=f"[{', '.join(custom_separator_catalogs)}]",
         extra_env={"SAIL_CATALOG__DEFAULT_CATALOG": default_catalog},
@@ -296,9 +289,8 @@ def nessie_spark_incorrect_custom_separator(
     """Start Sail with default and custom-separator catalogs against a default-separator Nessie server."""
     default_separator_catalog = f'{{name="sail", type="iceberg-rest", uri="{nessie_iceberg_rest_endpoint}"}}'
     custom_separator_catalogs = [
-        f'{{name="{name}", type="iceberg-rest", uri="{nessie_iceberg_rest_endpoint}", '
-        f'{config_key}="{NESSIE_NAMESPACE_SEPARATOR}"}}'
-        for name, config_key in NESSIE_NAMESPACE_SEPARATOR_CATALOGS
+        f'{{name="sail_custom_separator", type="iceberg-rest", uri="{nessie_iceberg_rest_endpoint}", '
+        f'namespace_separator="{NESSIE_NAMESPACE_SEPARATOR}"}}'
     ]
     server, remote, saved_env = start_sail_server(
         catalog_list=f"[{', '.join([default_separator_catalog, *custom_separator_catalogs])}]",
