@@ -41,7 +41,7 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(CAST(NULL AS STRUCT<a:INT, b:INT>))
         """
       Then query result
-        | to_csv(NULL) |
+        | to_csv(CAST(NULL AS STRUCT<a:INT, b:INT>)) |
         | NULL         |
 
     Scenario: Struct with NULL field serializes null field as empty string
@@ -50,7 +50,7 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('a', 1, 'b', CAST(NULL AS INT)))
         """
       Then query result
-        | to_csv(named_struct(a, 1, b, NULL)) |
+        | to_csv(named_struct('a', 1, 'b', CAST(NULL AS INT))) |
         | 1,                                   |
 
   Rule: Separator options
@@ -61,7 +61,7 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('a', 1, 'b', 2), map('sep', '|'))
         """
       Then query result
-        | to_csv(named_struct(a, 1, b, 2)) |
+        | to_csv(named_struct('a', 1, 'b', 2), map('sep', '|')) |
         | 1\|2                               |
 
     Scenario: Custom separator via delimiter option
@@ -70,7 +70,7 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('a', 1, 'b', 2), map('delimiter', '|'))
         """
       Then query result
-        | to_csv(named_struct(a, 1, b, 2)) |
+        | to_csv(named_struct('a', 1, 'b', 2), map('delimiter', '|')) |
         | 1\|2                               |
 
   Rule: Timestamp formatting
@@ -99,7 +99,7 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'))
         """
       Then query result
-        | to_csv(named_struct(time, to_timestamp(2015-08-26, yyyy-MM-dd))) |
+        | to_csv(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy')) |
         | 26/08/2015                                                         |
 
   Rule: Date formatting
@@ -128,7 +128,7 @@ Feature: to_csv converts a struct value to a CSV string
         SELECT to_csv(named_struct('d', DATE '2015-08-26'), map('dateFormat', 'dd/MM/yyyy'))
         """
       Then query result
-        | to_csv(named_struct(d, DATE '2015-08-26')) |
+        | to_csv(named_struct('d', DATE '2015-08-26'), map('dateFormat', 'dd/MM/yyyy')) |
         | 26/08/2015                                  |
 
   Rule: Decimal formatting
