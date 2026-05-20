@@ -132,6 +132,16 @@ fn sail_literal_from_str(
     fn parse_error(e: impl std::fmt::Display) -> String {
         e.to_string()
     }
+    fn parse_bool(value: &str) -> Result<bool, String> {
+        if value.eq_ignore_ascii_case("true") {
+            Ok(true)
+        } else if value.eq_ignore_ascii_case("false") {
+            Ok(false)
+        } else {
+            value.parse::<bool>().map_err(parse_error)
+        }
+    }
+
     match data_type {
         Type::Primitive(PrimitiveType::Boolean)
         | Type::Primitive(PrimitiveType::Int)
@@ -141,7 +151,7 @@ fn sail_literal_from_str(
         | Type::Primitive(PrimitiveType::Decimal { .. }) => {
             let literal = match data_type {
                 Type::Primitive(PrimitiveType::Boolean) => sail_spec::Literal::Boolean {
-                    value: Some(value.parse::<bool>().map_err(parse_error)?),
+                    value: Some(parse_bool(value)?),
                 },
                 Type::Primitive(PrimitiveType::Int) => {
                     parse_i32_string(value).map_err(parse_error)?
@@ -901,6 +911,30 @@ impl<'de> Deserialize<'de> for RawLiteral {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::types::{PrimitiveType, Type};
+
+    #[test]
+    fn test_boolean_string_defaults_are_case_insensitive() {
+        let data_type = Type::Primitive(PrimitiveType::Boolean);
+
+        assert_eq!(
+            Literal::try_from_str("TRUE", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
+        );
+        assert_eq!(
+            Literal::try_from_str("FALSE", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(false))))
+        );
+        assert_eq!(
+            Literal::try_from_str("TrUe", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
+        );
+        assert_eq!(
+            Literal::try_from_str(" true ", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
+        );
+        assert!(Literal::try_from_str("not_bool", &data_type).is_err());
+    }
 
     #[test]
     fn test_primitive_literal_ordering_same_type() {
