@@ -205,8 +205,7 @@ fn spark_to_csv_inner(args: &[ArrayRef], _session_timezone: &str) -> Result<Arra
 
         for (col_idx, field) in fields.iter().enumerate() {
             let col = &columns[col_idx];
-            let value_str =
-                format_field_to_csv(col, row_idx, field.data_type(), &options)?;
+            let value_str = format_field_to_csv(col, row_idx, field.data_type(), &options)?;
             parts.push(value_str);
         }
 
@@ -371,7 +370,10 @@ fn scalar_to_display_string(scalar: &ScalarValue) -> String {
                 let int_part = abs_val / factor;
                 let frac_part = abs_val % factor;
                 let sign = if *v < 0 { "-" } else { "" };
-                format!("{sign}{int_part}.{frac_part:0>width$}", width = *scale as usize)
+                format!(
+                    "{sign}{int_part}.{frac_part:0>width$}",
+                    width = *scale as usize
+                )
             }
         }
         // Null of any type, or unhandled complex types (List, Map, Struct) returns empty string
@@ -693,14 +695,7 @@ mod tests {
         let parts: Vec<String> = fields
             .iter()
             .enumerate()
-            .map(|(i, f)| {
-                format_field_to_csv(
-                    &columns[i],
-                    0,
-                    f.data_type(),
-                    &options,
-                )
-            })
+            .map(|(i, f)| format_field_to_csv(&columns[i], 0, f.data_type(), &options))
             .collect::<Result<_>>()?;
 
         assert_eq!(parts.join(&options.sep), "1|2");
@@ -838,12 +833,7 @@ mod tests {
         let struct_arr = binding.as_any().downcast_ref::<StructArray>().unwrap();
 
         let field = &struct_arr.fields()[0];
-        let result = format_field_to_csv(
-            &struct_arr.columns()[0],
-            0,
-            field.data_type(),
-            &options,
-        )?;
+        let result = format_field_to_csv(&struct_arr.columns()[0], 0, field.data_type(), &options)?;
 
         assert_eq!(result, "26/08/2015");
         Ok(())
