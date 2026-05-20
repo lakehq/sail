@@ -70,10 +70,10 @@ def _assert_table_listed(spark: SparkSession, namespace: str, table_name: str) -
     assert table_name in table_names
 
 
-def _assert_table_not_listed(spark: SparkSession, namespace: str, table_name: str) -> None:
+def _assert_no_tables_listed(spark: SparkSession, namespace: str) -> None:
     tables = spark.sql(f"SHOW TABLES IN {namespace}").collect()
     table_names = [row.tableName for row in tables]
-    assert table_name not in table_names
+    assert table_names == []
 
 
 @pytest.mark.parametrize(
@@ -86,7 +86,7 @@ def _assert_table_not_listed(spark: SparkSession, namespace: str, table_name: st
     ],
 )
 @pytest.mark.usefixtures("_create_s3_bucket")
-def test_namespace_separator_config_aliases(
+def test_namespace_separator_custom_server_accepts_config_alias_catalogs(
     nessie_spark_custom_separator: SparkSession,
     nessie_custom_separator_iceberg_rest_endpoint: str,
     catalog_name: str,
@@ -129,7 +129,7 @@ def test_namespace_separator_custom_config_cannot_resolve_default_separator_name
         _assert_table_listed(nessie_spark_incorrect_custom_separator, nested_namespace, table_name)
 
         nessie_spark_incorrect_custom_separator.catalog.setCurrentCatalog(catalog_name)
-        _assert_table_not_listed(nessie_spark_incorrect_custom_separator, nested_namespace, table_name)
+        _assert_no_tables_listed(nessie_spark_incorrect_custom_separator, nested_namespace)
     finally:
         nessie_spark_incorrect_custom_separator.catalog.setCurrentCatalog("sail")
         with contextlib.suppress(Exception):

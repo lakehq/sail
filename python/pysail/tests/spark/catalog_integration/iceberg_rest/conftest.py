@@ -34,7 +34,6 @@ NESSIE_NAMESPACE_SEPARATOR_CATALOGS = [
     ("sail_camel_case", "namespaceSeparator"),
     ("sail_flat_case", "namespaceseparator"),
 ]
-NESSIE_DEFAULT_SEPARATOR_CATALOG_SUFFIX = "_default_separator"
 
 
 @pytest.fixture(scope="module")
@@ -278,39 +277,12 @@ def nessie_spark_custom_separator(
         f'{config_key}="{NESSIE_NAMESPACE_SEPARATOR}"}}'
         for name, config_key in NESSIE_NAMESPACE_SEPARATOR_CATALOGS
     ]
-    default_separator_catalogs = [
-        f'{{name="{name}{NESSIE_DEFAULT_SEPARATOR_CATALOG_SUFFIX}", type="iceberg-rest", '
-        f'uri="{nessie_custom_separator_iceberg_rest_endpoint}", {config_key}="%1F"}}'
-        for name, config_key in NESSIE_NAMESPACE_SEPARATOR_CATALOGS
-    ]
     default_catalog = NESSIE_NAMESPACE_SEPARATOR_CATALOGS[0][0]
     server, remote, saved_env = start_sail_server(
-        catalog_list=f"[{', '.join(custom_separator_catalogs + default_separator_catalogs)}]",
+        catalog_list=f"[{', '.join(custom_separator_catalogs)}]",
         extra_env={"SAIL_CATALOG__DEFAULT_CATALOG": default_catalog},
     )
     spark = create_spark_session(remote, "nessie_iceberg_rest_custom_separator_test", new_session=True)
-    yield spark
-    with contextlib.suppress(Exception):
-        spark.stop()
-    stop_sail_server(server, saved_env)
-
-
-@pytest.fixture(scope="module")
-def nessie_spark_incorrect_default_separator(
-    nessie_custom_separator_iceberg_rest_endpoint: str,
-) -> Generator[SparkSession, None, None]:
-    """Start Sail with default-separator catalogs against a custom-separator Nessie server."""
-    catalogs = ", ".join(
-        f'{{name="{name}", type="iceberg-rest", uri="{nessie_custom_separator_iceberg_rest_endpoint}", '
-        f'{config_key}="%1F"}}'
-        for name, config_key in NESSIE_NAMESPACE_SEPARATOR_CATALOGS
-    )
-    default_catalog = NESSIE_NAMESPACE_SEPARATOR_CATALOGS[0][0]
-    server, remote, saved_env = start_sail_server(
-        catalog_list=f"[{catalogs}]",
-        extra_env={"SAIL_CATALOG__DEFAULT_CATALOG": default_catalog},
-    )
-    spark = create_spark_session(remote, "nessie_iceberg_rest_default_separator_test", new_session=True)
     yield spark
     with contextlib.suppress(Exception):
         spark.stop()
