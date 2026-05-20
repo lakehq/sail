@@ -222,7 +222,6 @@ pub(crate) enum SparkThrowable {
     IllegalArgumentException(String),
     ArithmeticException(String),
     UnsupportedOperationException(String),
-    #[expect(dead_code)]
     ArrayIndexOutOfBoundsException(String),
     #[expect(dead_code)]
     DateTimeException(String),
@@ -389,6 +388,9 @@ impl From<CommonErrorCause> for SparkThrowable {
                 SparkThrowable::AnalysisException(x)
             }
             CommonErrorCause::DeltaTable(x) => SparkThrowable::QueryExecutionException(x),
+            CommonErrorCause::ArrayIndexOutOfBounds(x) => {
+                SparkThrowable::ArrayIndexOutOfBoundsException(x)
+            }
         }
     }
 }

@@ -5,16 +5,17 @@ use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{expr, lit, when, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions_nested::expr_fn::{array_element, map_extract};
+use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
+use sail_function::scalar::misc::raise_array_index_error::RaiseArrayIndexError;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
@@ -288,14 +289,34 @@ impl PlanResolver<'_> {
             | DataType::LargeList(_)
             | DataType::FixedSizeList(_, _)
             | DataType::ListView(_)
-            | DataType::LargeListView(_) => array_element(
-                expr,
-                expr::Expr::BinaryExpr(BinaryExpr::new(
+            | DataType::LargeListView(_) => {
+                let index_expr = expr::Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(expr::Expr::Literal(extraction, None)),
                     Operator::Plus,
                     Box::new(lit(1i64)),
-                )),
-            ),
+                ));
+                let element_expr = array_element(expr.clone(), index_expr.clone());
+                if self.config.ansi_mode {
+                    // In ANSI mode, Spark throws ArrayIndexOutOfBoundsException
+                    // for out-of-bounds access. The bracket operator uses 0-based
+                    // indexing, while `array_element` uses 1-based indexing.
+                    // We check whether the 1-based index is within [1, length].
+                    let len = array_length(expr);
+                    let out_of_bounds = index_expr
+                        .clone()
+                        .lt(lit(1i64))
+                        .or(index_expr.gt(len));
+                    when(
+                        out_of_bounds,
+                        ScalarUDF::from(RaiseArrayIndexError::new()).call(vec![lit(
+                            "[INVALID_ARRAY_INDEX] The index is out of bounds.",
+                        )]),
+                    )
+                    .otherwise(element_expr)?
+                } else {
+                    element_expr
+                }
+            }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
                     return Err(PlanError::AnalysisError(format!(

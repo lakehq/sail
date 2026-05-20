@@ -5,6 +5,15 @@ use datafusion_common::DataFusionError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// An error indicating an array index is out of bounds.
+///
+/// When wrapped in [`DataFusionError::External`], this error is
+/// recognized by [`CommonErrorCause`] and mapped to
+/// [`CommonErrorCause::ArrayIndexOutOfBounds`].
+#[derive(Debug, Clone, Error)]
+#[error("{0}")]
+pub struct ArrayIndexOutOfBoundsError(pub String);
+
 /// A Python error in text form. This could be a remote error from a worker.
 #[derive(Debug, Clone, Error)]
 #[error("remote Python error: {summary}")]
@@ -77,6 +86,7 @@ pub enum CommonErrorCause {
     Schema(String),
     Configuration(String),
     Execution(String),
+    ArrayIndexOutOfBounds(String),
     DeltaTable(String),
 }
 
@@ -90,6 +100,9 @@ impl CommonErrorCause {
             return Self::Unknown("circular error reference".to_string());
         }
         seen.insert(ptr);
+        if let Some(e) = error.downcast_ref::<ArrayIndexOutOfBoundsError>() {
+            return Self::ArrayIndexOutOfBounds(e.0.clone());
+        }
         if let Some(e) = error.downcast_ref::<ArrowError>() {
             return match e {
                 ArrowError::NotYetImplemented(x) => Self::NotImplemented(x.clone()),

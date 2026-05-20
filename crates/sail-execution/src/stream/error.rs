@@ -109,6 +109,7 @@ impl From<CommonErrorCause> for TaskStreamError {
             | CommonErrorCause::Schema(x)
             | CommonErrorCause::Configuration(x)
             | CommonErrorCause::Execution(x)
+            | CommonErrorCause::ArrayIndexOutOfBounds(x)
             | CommonErrorCause::DeltaTable(x) => Self::Unknown(x),
             CommonErrorCause::Python(cause) => {
                 Self::External(Arc::new(RemotePythonError::from(cause)))
