@@ -147,7 +147,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             create: _,
             or_replace,
             temporary: _, // TODO: handle temporary tables
-            external: _,  // TODO: handle external tables
+            external,
             table: _,
             if_not_exists,
             name,
@@ -169,7 +169,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 query: r#as,
             };
             let table = from_ast_object_name(name)?;
-            let (definition, query) = from_ast_table_definition(definition)?;
+            let (definition, query) = from_ast_table_definition(definition, external.is_some())?;
             let node = if let Some(query) = query {
                 spec::CommandNode::CreateTableAsSelect {
                     table,
@@ -183,6 +183,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         }
         Statement::ReplaceTable {
             replace: _,
+            external,
             table: _,
             name,
             columns,
@@ -199,7 +200,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 query: r#as,
             };
             let table = from_ast_object_name(name)?;
-            let (definition, query) = from_ast_table_definition(definition)?;
+            let (definition, query) = from_ast_table_definition(definition, external.is_some())?;
             let node = if let Some(query) = query {
                 spec::CommandNode::CreateTableAsSelect {
                     table,
@@ -1154,6 +1155,7 @@ struct TableDefinition {
 
 fn from_ast_table_definition(
     definition: TableDefinition,
+    explicit_external: bool,
 ) -> SqlResult<(spec::TableDefinition, Option<Box<QueryPlan>>)> {
     let TableDefinition {
         or_replace,
@@ -1249,11 +1251,15 @@ fn from_ast_table_definition(
     let options = options.map(from_ast_property_list).transpose()?;
     let properties = properties.map(from_ast_property_list).transpose()?;
     let columns = from_ast_table_columns(columns)?;
+    let location = location.map(from_ast_string).transpose()?;
+    let options: Vec<(String, String)> = options.into_iter().flatten().collect();
+    let is_external =
+        explicit_external || spec::has_path_or_location(location.as_deref(), &options);
     let definition = spec::TableDefinition {
         columns,
         comment: comment.map(from_ast_string).transpose()?,
         constraints: vec![],
-        location: location.map(from_ast_string).transpose()?,
+        location,
         file_format,
         row_format,
         partition_by,
@@ -1262,8 +1268,9 @@ fn from_ast_table_definition(
         cluster_by,
         if_not_exists,
         replace: or_replace,
-        options: options.into_iter().flatten().collect(),
+        options,
         properties: properties.into_iter().flatten().collect(),
+        is_external,
     };
     let query = query
         .map(|AsQueryClause { r#as: _, query }| from_ast_query(query).map(Box::new))

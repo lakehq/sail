@@ -38,6 +38,7 @@ impl PlanResolver<'_> {
             replace,
             options,
             properties,
+            is_external,
         } = definition;
 
         if row_format.is_some() {
@@ -77,6 +78,7 @@ impl PlanResolver<'_> {
                 if_not_exists,
                 replace,
                 properties,
+                is_external,
             },
         };
         self.resolve_catalog_command(command)
@@ -105,6 +107,7 @@ impl PlanResolver<'_> {
             replace,
             options,
             properties,
+            is_external,
         } = definition;
         if row_format.is_some() {
             return Err(PlanError::todo(
@@ -187,6 +190,7 @@ impl PlanResolver<'_> {
             .with_format(format)
             .with_partition_by(partition_by)
             .with_table_properties(properties)
+            .with_table_is_external(is_external)
             .with_options(write_options);
 
         self.resolve_write_with_builder(input, builder, state).await

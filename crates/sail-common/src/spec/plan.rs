@@ -886,6 +886,19 @@ pub struct TableDefinition {
     pub replace: bool,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+    pub is_external: bool,
+}
+
+/// Returns whether a non-empty path or location is specified,
+/// either via the `location` argument or via `"path"` / `"location"` keys in options.
+/// Key comparison is case-insensitive and empty-string values are ignored.
+pub fn has_path_or_location(location: Option<&str>, options: &[(String, String)]) -> bool {
+    let has_location = location.is_some_and(|s| !s.trim().is_empty());
+    let has_path_in_options = options.iter().any(|(k, v)| {
+        !v.trim().is_empty()
+            && (k.eq_ignore_ascii_case("path") || k.eq_ignore_ascii_case("location"))
+    });
+    has_location || has_path_in_options
 }
 
 /// A column reference or typed column definition used in a `PARTITIONED BY` clause.
