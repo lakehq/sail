@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
@@ -13,11 +14,8 @@ use sail_common_datafusion::datasource::{
     RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
-use sail_data_source::error::DataSourceResult;
-use sail_data_source::options::gen::{
-    DeltaReadOptions, DeltaReadPartialOptions, DeltaWriteOptions, DeltaWritePartialOptions,
-};
-use sail_data_source::options::{BuildPartialOptions, PartialOptions};
+use sail_data_source::options::gen::{DeltaReadOptions, DeltaWriteOptions};
+use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
@@ -26,11 +24,19 @@ use crate::physical_plan::planner::{
     plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
     DeltaPlannerConfig, PlannerContext,
 };
+use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
+use crate::schema::{
+    add_type_widening_metadata, collect_type_changes, evolve_schema, format_type_change_path,
+    is_supported_type_change_for_write, protocol_can_write_type_widening,
+};
 use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
-    DeltaOperation,
+    DataType as DeltaDataType, DeltaOperation, Protocol, StructField, StructType, TableFeature,
 };
-use crate::table::{open_table_with_object_store, open_table_with_object_store_and_table_config};
+use crate::table::{
+    infer_delta_logical_schema, open_table_with_object_store,
+    open_table_with_object_store_and_table_config,
+};
 use crate::{create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
@@ -65,9 +71,25 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = resolve_delta_read_options(options)
+        let options = DeltaReadOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         create_delta_source(ctx, table_url, schema, options).await
+    }
+
+    async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
+        let SourceInfo {
+            paths,
+            schema,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
+            options,
+        } = info;
+        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let options = DeltaReadOptions::resolve(ctx, options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        infer_delta_logical_schema(ctx, table_url, schema, options).await
     }
 
     async fn create_writer(
@@ -104,7 +126,7 @@ impl TableFormat for DeltaTableFormat {
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let (options, table_properties) = split_delta_write_options_and_table_properties(options);
-        let delta_options = resolve_delta_write_options(options)
+        let delta_options = DeltaWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let object_store = ctx
@@ -131,6 +153,15 @@ impl TableFormat for DeltaTableFormat {
             Err(err) => return Err(DataFusionError::External(Box::new(err))),
         };
         let table_exists = table.is_some();
+        let table_snapshot = table
+            .as_ref()
+            .map(|table| {
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))
+                    .cloned()
+            })
+            .transpose()?;
         let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -153,24 +184,16 @@ impl TableFormat for DeltaTableFormat {
         let table_schema_for_cond = None;
 
         // Get existing partition columns from table metadata if available
-        let existing_partition_columns = if let Some(table) = &table {
-            Some(
-                table
-                    .snapshot()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .metadata()
-                    .partition_columns()
-                    .clone(),
-            )
-        } else {
-            None
-        };
+        let existing_partition_columns = table_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.metadata().partition_columns().clone());
 
         // Validate partition column mismatch for append/overwrite operations
         if let Some(existing_partitions) = &existing_partition_columns {
             if !partition_by.is_empty() && partition_by != *existing_partitions {
-                // Allow partition column changes only when overwriting with schema changes
-                // For append mode, this is always an error
+                // Allow partition column changes only for full-table overwrite with schema changes.
+                // Append and overwrite-if leave some existing files active, so changing table-wide
+                // partition metadata would make those active files inconsistent with the snapshot.
                 match unified_mode {
                     PhysicalSinkMode::Append => {
                         return plan_err!(
@@ -180,7 +203,15 @@ impl TableFormat for DeltaTableFormat {
                             partition_by
                         );
                     }
-                    PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwriteIf { .. }
+                    PhysicalSinkMode::OverwriteIf { .. } => {
+                        return plan_err!(
+                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                            Cannot change partitioning with replaceWhere or conditional overwrite.",
+                            existing_partitions,
+                            partition_by
+                        );
+                    }
+                    PhysicalSinkMode::Overwrite
                         // For overwrite mode, check if schema overwrite is allowed
                         if !delta_options.overwrite_schema => {
                             return plan_err!(
@@ -195,10 +226,17 @@ impl TableFormat for DeltaTableFormat {
             }
         }
 
-        let partition_columns = if !partition_by.is_empty() {
-            partition_by
-        } else {
-            existing_partition_columns.unwrap_or_default()
+        let partition_columns = match (&existing_partition_columns, &unified_mode) {
+            (
+                Some(existing_partitions),
+                PhysicalSinkMode::Append | PhysicalSinkMode::OverwriteIf { .. },
+            ) if partition_by.is_empty() => existing_partitions.clone(),
+            (Some(existing_partitions), PhysicalSinkMode::Overwrite)
+                if partition_by.is_empty() && !delta_options.overwrite_schema =>
+            {
+                existing_partitions.clone()
+            }
+            _ => partition_by,
         };
 
         let table_config = DeltaPlannerConfig::new(
@@ -209,7 +247,8 @@ impl TableFormat for DeltaTableFormat {
             table_schema_for_cond,
             table_exists,
         )
-        .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()));
+        .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
+        .with_table_snapshot(table_snapshot);
         let planner_ctx = PlannerContext::new(ctx, table_config);
         let planner = DeltaPhysicalPlanner::new(planner_ctx);
         let sink_exec = planner.create_plan(input, unified_mode, sort_order).await?;
@@ -243,7 +282,7 @@ impl TableFormat for DeltaTableFormat {
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
                 })?;
-                let delta_options = resolve_delta_write_options(info.target.options)?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options)?;
                 let delete_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -258,7 +297,7 @@ impl TableFormat for DeltaTableFormat {
             // ── Merge-on-Read MERGE ──────────────────────────────────────────
             (MergeStrategy::MergeOnRead, RowLevelCommand::Merge) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options.clone())?;
                 let merge_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -281,7 +320,7 @@ impl TableFormat for DeltaTableFormat {
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
                 })?;
-                let delta_options = resolve_delta_write_options(info.target.options)?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options)?;
                 let delete_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -296,7 +335,7 @@ impl TableFormat for DeltaTableFormat {
             // ── Copy-on-Write MERGE ──────────────────────────────────────────
             (MergeStrategy::Eager, RowLevelCommand::Merge) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options.clone())?;
                 let merge_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -322,8 +361,7 @@ impl TableFormat for DeltaTableFormat {
         if_exists: bool,
     ) -> Result<()> {
         use crate::kernel::transaction::CommitBuilder;
-        use crate::schema::manager::protocol_for_create;
-        use crate::spec::TableProperties;
+        use crate::schema::protocol_for_metadata;
 
         // Parse the location into a URL. Handles both absolute filesystem paths
         // (e.g. `/tmp/table`) and fully-qualified URLs (`file://`, `s3://`, ...).
@@ -397,15 +435,13 @@ impl TableFormat for DeltaTableFormat {
         // Derive the desired protocol from the new configuration and merge it with the
         // existing protocol. We only ever upgrade: features already present on the table
         // are preserved, and new feature requirements are added.
-        let new_config = new_metadata.configuration().clone();
-        let desired_protocol = protocol_for_create(
-            false,
-            false,
-            TableProperties::from(new_config.iter()).enable_in_commit_timestamps(),
-            false,
-            &new_config,
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired_protocol = protocol_for_metadata(&new_metadata)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            snapshot.protocol(),
+            &desired_protocol,
+            new_metadata.configuration(),
+        );
 
         let existing_protocol = snapshot.protocol();
         let (merged_protocol, protocol_upgraded) =
@@ -437,6 +473,239 @@ impl TableFormat for DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         Ok(())
+    }
+
+    async fn alter_table_column_type(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        data_type: ArrowDataType,
+    ) -> Result<()> {
+        use crate::kernel::transaction::CommitBuilder;
+
+        let url = parse_location_to_url(path)?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let table = open_table_with_object_store_and_table_config(
+            url,
+            object_store,
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .clone();
+        let current_metadata = snapshot.metadata();
+        let current_kernel = StructType::try_from(snapshot.schema())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let target_type = DeltaDataType::try_from(&data_type)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let candidate_kernel =
+            alter_delta_column_type(&current_kernel, &column_path, &column_path, target_type)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let type_changes = collect_type_changes(&current_kernel, &candidate_kernel)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        if type_changes.is_empty() {
+            return Ok(());
+        }
+        if !snapshot.table_properties().enable_type_widening() {
+            return plan_err!(
+                "Delta ALTER COLUMN TYPE requires table property delta.enableTypeWidening=true"
+            );
+        }
+        if !protocol_can_write_type_widening(snapshot.protocol()) {
+            return plan_err!(
+                "Delta ALTER COLUMN TYPE requires the typeWidening reader and writer table features"
+            );
+        }
+        for (field_path, change) in &type_changes {
+            if !is_supported_type_change_for_write(
+                snapshot.protocol(),
+                &change.from_type,
+                &change.to_type,
+            ) {
+                return plan_err!(
+                    "Delta ALTER COLUMN TYPE change at {} is not supported by Iceberg-compatible Delta tables: {} -> {}",
+                    format_type_change_path(field_path, &change.field_path),
+                    change.from_type,
+                    change.to_type
+                );
+            }
+        }
+
+        let operation_column = operation_column_json(&candidate_kernel, &column_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let candidate_kernel = add_type_widening_metadata(&current_kernel, &candidate_kernel)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let kmode = snapshot.effective_column_mapping_mode();
+        let (_final_kernel, updated_metadata) =
+            evolve_schema(&current_kernel, &candidate_kernel, current_metadata, kmode)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let actions = vec![CommitAction::Metadata(updated_metadata)];
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(snapshot),
+                table.log_store(),
+                DeltaOperation::AlterColumn {
+                    column: operation_column,
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+fn operation_column_json(
+    schema: &StructType,
+    column_path: &[String],
+) -> crate::spec::DeltaResult<serde_json::Value> {
+    let field = resolve_operation_column_field(schema, column_path)?;
+    let metadata = serde_json::to_value(field.metadata()).map_err(DeltaTableError::generic_err)?;
+    Ok(serde_json::json!({
+        "name": column_path.join("."),
+        "type": field.data_type().to_string(),
+        "nullable": field.is_nullable(),
+        "metadata": metadata,
+    }))
+}
+
+fn resolve_operation_column_field(
+    schema: &StructType,
+    column_path: &[String],
+) -> crate::spec::DeltaResult<StructField> {
+    let Some((name, nested_path)) = column_path.split_first() else {
+        return Err(DeltaTableError::schema(
+            "ALTER COLUMN TYPE requires a column name",
+        ));
+    };
+    let field = schema
+        .field(name)
+        .ok_or_else(|| DeltaTableError::missing_column(column_path.join(".")))?;
+    if nested_path.is_empty() {
+        Ok(field.clone())
+    } else {
+        resolve_operation_nested_field(field.data_type(), nested_path, column_path)
+    }
+}
+
+fn resolve_operation_nested_field(
+    data_type: &DeltaDataType,
+    path: &[String],
+    full_path: &[String],
+) -> crate::spec::DeltaResult<StructField> {
+    let Some((name, nested_path)) = path.split_first() else {
+        return Err(DeltaTableError::schema(
+            "ALTER COLUMN TYPE requires a column name",
+        ));
+    };
+
+    match data_type {
+        DeltaDataType::Struct(struct_type) => {
+            let field = struct_type
+                .field(name)
+                .ok_or_else(|| DeltaTableError::missing_column(full_path.join(".")))?;
+            if nested_path.is_empty() {
+                Ok(field.clone())
+            } else {
+                resolve_operation_nested_field(field.data_type(), nested_path, full_path)
+            }
+        }
+        DeltaDataType::Array(array) if name == "element" => synthetic_operation_field(
+            name,
+            array.element_type(),
+            array.contains_null(),
+            nested_path,
+            full_path,
+        ),
+        DeltaDataType::Map(map) if name == "key" => {
+            synthetic_operation_field(name, map.key_type(), false, nested_path, full_path)
+        }
+        DeltaDataType::Map(map) if name == "value" => synthetic_operation_field(
+            name,
+            map.value_type(),
+            map.value_contains_null(),
+            nested_path,
+            full_path,
+        ),
+        DeltaDataType::Array(_) => Err(DeltaTableError::schema(format!(
+            "expected 'element' for array column path, found '{name}'"
+        ))),
+        DeltaDataType::Map(_) => Err(DeltaTableError::schema(format!(
+            "expected 'key' or 'value' for map column path, found '{name}'"
+        ))),
+        other => Err(DeltaTableError::schema(format!(
+            "cannot resolve ALTER COLUMN TYPE path segment '{name}' through {other}"
+        ))),
+    }
+}
+
+fn synthetic_operation_field(
+    name: &str,
+    data_type: &DeltaDataType,
+    nullable: bool,
+    nested_path: &[String],
+    full_path: &[String],
+) -> crate::spec::DeltaResult<StructField> {
+    if nested_path.is_empty() {
+        Ok(StructField::new(name, data_type.clone(), nullable))
+    } else {
+        resolve_operation_nested_field(data_type, nested_path, full_path)
+    }
+}
+
+fn protocol_without_feature(protocol: &Protocol, feature: TableFeature) -> Protocol {
+    let reader_features = protocol.reader_features().map(|features| {
+        features
+            .iter()
+            .filter(|item| **item != feature)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    let writer_features = protocol.writer_features().map(|features| {
+        features
+            .iter()
+            .filter(|item| **item != feature)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    Protocol::new(
+        protocol.min_reader_version(),
+        protocol.min_writer_version(),
+        reader_features,
+        writer_features,
+    )
+}
+
+fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+    existing: &Protocol,
+    desired: &Protocol,
+    configuration: &HashMap<String, String>,
+) -> Protocol {
+    let existing_supports_preview = existing.has_reader_feature(&TableFeature::TypeWideningPreview)
+        || existing.has_writer_feature(&TableFeature::TypeWideningPreview);
+    let stable_explicitly_requested = configuration
+        .keys()
+        .any(|key| key.eq_ignore_ascii_case("delta.feature.typeWidening"));
+
+    if existing_supports_preview && !stable_explicitly_requested {
+        protocol_without_feature(desired, TableFeature::TypeWidening)
+    } else {
+        desired.clone()
     }
 }
 
@@ -586,24 +855,6 @@ async fn detect_merge_strategy(
     }
 }
 
-pub fn resolve_delta_read_options(options: Vec<OptionLayer>) -> DataSourceResult<DeltaReadOptions> {
-    let mut partial = DeltaReadPartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
-    }
-    partial.finalize()
-}
-
-pub fn resolve_delta_write_options(
-    options: Vec<OptionLayer>,
-) -> DataSourceResult<DeltaWriteOptions> {
-    let mut partial = DeltaWritePartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
-    }
-    partial.finalize()
-}
-
 fn resolve_delta_metadata_configuration(
     table_properties: &HashMap<String, String>,
 ) -> crate::spec::DeltaResult<HashMap<String, String>> {
@@ -639,7 +890,7 @@ fn split_delta_write_options_and_table_properties(
                         table_properties.insert(property_key, value);
                     } else if key.starts_with("option.") {
                         // Write option from the OPTIONS clause; keep in clean items
-                        // so that resolve_delta_write_options can process it.
+                        // so that DeltaWriteOptions::resolve_options can process it.
                         clean_items.push((key, value));
                     } else {
                         // Custom user table property (e.g. from TBLPROPERTIES); include

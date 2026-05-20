@@ -19,6 +19,7 @@ edition = { workspace = true }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
+sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 # DataFusion dependencies
 datafusion = { workspace = true }
@@ -32,6 +33,7 @@ chrono = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
+flate2 = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 uuid = { workspace = true }
 parquet = { workspace = true }

@@ -36,6 +36,7 @@ pub struct CreateTableOptions {
     pub if_not_exists: bool,
     pub replace: bool,
     pub properties: Vec<(String, String)>,
+    pub is_external: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -100,6 +101,15 @@ pub struct DropTemporaryViewOptions {
 /// Options for altering a table in a catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum AlterTableOptions {
-    SetTableProperties { properties: Vec<(String, String)> },
-    UnsetTableProperties { keys: Vec<String>, if_exists: bool },
+    SetTableProperties {
+        properties: Vec<(String, String)>,
+    },
+    UnsetTableProperties {
+        keys: Vec<String>,
+        if_exists: bool,
+    },
+    AlterColumnType {
+        name: Vec<String>,
+        data_type: DataType,
+    },
 }

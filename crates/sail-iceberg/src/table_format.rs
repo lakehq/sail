@@ -13,31 +13,38 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
+use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
     TableFormatRegistry,
 };
-use sail_data_source::error::DataSourceResult;
-use sail_data_source::options::gen::{
-    IcebergReadOptions, IcebergReadPartialOptions, IcebergWriteOptions, IcebergWritePartialOptions,
-};
-use sail_data_source::options::{BuildPartialOptions, PartialOptions};
+use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
+use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
+use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::physical_plan::IcebergWriterExecOptions;
-use crate::spec::{PartitionSpec, Schema, Snapshot};
+use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
+use crate::table::metadata_loader::{
+    encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
+    metadata_file_version_from_path,
+};
 use crate::table::{find_latest_metadata_file, Table};
+use crate::utils::metadata::metadata_files_for_version;
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_exprs,
 };
+
+const MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES: usize = 5;
 
 /// Iceberg implementation of [`TableFormat`].
 #[derive(Debug, Default)]
@@ -89,7 +96,8 @@ impl TableFormat for IcebergTableFormat {
         }
 
         let table_url = Self::parse_table_url(vec![path]).await?;
-        let iceberg_options = resolve_iceberg_write_options(options)
+        let (options, table_properties) = split_iceberg_write_options_and_table_properties(options);
+        let iceberg_options = IcebergWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let store = ctx
@@ -155,11 +163,13 @@ impl TableFormat for IcebergTableFormat {
             existing_partition_columns.unwrap_or_default()
         };
 
+        let mut options = IcebergWriterExecOptions::from(iceberg_options);
+        options.table_properties = table_properties;
         let table_config = IcebergTableConfig {
             table_url,
             partition_columns: resolved_partition_columns,
             table_exists,
-            options: IcebergWriterExecOptions::from(iceberg_options),
+            options,
         };
 
         let physical_sort = sort_order.map(|req| {
@@ -175,6 +185,134 @@ impl TableFormat for IcebergTableFormat {
         let exec = builder.build().await?;
         Ok(exec)
     }
+
+    async fn alter_table_properties(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        changes: Vec<(String, Option<String>)>,
+        if_exists: bool,
+    ) -> Result<()> {
+        let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
+
+        let initial_latest_meta = find_latest_metadata_file(&object_store, &table_url).await?;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let latest_meta = if attempt == 1 {
+                initial_latest_meta.clone()
+            } else {
+                find_latest_metadata_file(&object_store, &table_url).await?
+            };
+
+            let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
+            let mut table_meta = TableMetadata::from_json(&bytes)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            crate::properties::apply_table_property_changes(&mut table_meta, &changes, if_exists)?;
+
+            let current_version = metadata_file_version_from_path(&latest_meta).unwrap_or(0);
+            let next_version = current_version + 1;
+            let existing_for_next = metadata_files_for_version(&store_ctx, next_version).await?;
+            if !existing_for_next.is_empty() {
+                log::warn!(
+                    "Detected existing Iceberg metadata files for version {}: {:?}. Retrying attempt {}",
+                    next_version,
+                    existing_for_next,
+                    attempt
+                );
+                if attempt >= MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES {
+                    return Err(alter_table_properties_conflict_error());
+                }
+                continue;
+            }
+
+            let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
+            table_meta.last_updated_ms = timestamp_ms;
+            table_meta.metadata_log.push(MetadataLog {
+                timestamp_ms,
+                metadata_file: latest_meta.clone(),
+            });
+
+            let new_meta_bytes = table_meta
+                .to_json()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
+            let new_meta_rel = format!("metadata/v{next_version}{file_extension}");
+            let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_bytes)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+            let put_opts = object_store::PutOptions {
+                mode: object_store::PutMode::Create,
+                ..Default::default()
+            };
+            let payload = object_store::PutPayload::from(Bytes::from(new_meta_bytes));
+            match store_ctx
+                .prefixed
+                .put_opts(&new_meta_path, payload, put_opts)
+                .await
+            {
+                Ok(_) => {}
+                Err(object_store::Error::AlreadyExists { .. }) => {
+                    log::warn!(
+                        "Iceberg metadata file {} already exists for version {}. Retrying attempt {}",
+                        new_meta_rel,
+                        next_version,
+                        attempt
+                    );
+                    if attempt >= MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES {
+                        return Err(alter_table_properties_conflict_error());
+                    }
+                    continue;
+                }
+                Err(e) => return Err(DataFusionError::External(Box::new(e))),
+            }
+
+            let version_files = metadata_files_for_version(&store_ctx, next_version).await?;
+            let conflict_after_write = version_files.iter().any(|path| path != &new_meta_rel);
+            if conflict_after_write {
+                log::warn!(
+                    "Concurrent Iceberg metadata writes detected for version {}: {:?}. Retrying attempt {}",
+                    next_version,
+                    version_files,
+                    attempt
+                );
+                if let Err(err) = store_ctx.prefixed.delete(&new_meta_path).await {
+                    log::warn!(
+                        "Failed to delete conflicted Iceberg metadata file {}: {:?}",
+                        new_meta_rel,
+                        err
+                    );
+                }
+                if attempt >= MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES {
+                    return Err(alter_table_properties_conflict_error());
+                }
+                continue;
+            }
+
+            let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+            store_ctx
+                .prefixed
+                .put(
+                    &hint_path,
+                    object_store::PutPayload::from(Bytes::from(next_version.to_string())),
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            return Ok(());
+        }
+    }
+
+    // TODO: Implement row-level DELETE/UPDATE/MERGE for this format. Expanded
+    // inputs should consume Sail row intent tags to decide which rows rewrite
+    // data files and which rows produce low-level delete artifacts, then strip
+    // all internal metadata before writing user data.
 }
 
 /// Create an Iceberg table provider for reading.
@@ -211,7 +349,7 @@ async fn build_iceberg_provider(
     } = info;
 
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
-    let iceberg_options = resolve_iceberg_read_options(options)
+    let iceberg_options = IcebergReadOptions::resolve(ctx, options)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     create_iceberg_provider_concrete(ctx, table_url, iceberg_options).await
 }
@@ -285,20 +423,86 @@ impl IcebergTableFormat {
     }
 }
 
-fn resolve_iceberg_read_options(options: Vec<OptionLayer>) -> DataSourceResult<IcebergReadOptions> {
-    let mut partial = IcebergReadPartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
-    }
-    partial.finalize()
+fn split_iceberg_write_options_and_table_properties(
+    options: Vec<OptionLayer>,
+) -> (Vec<OptionLayer>, Vec<(String, String)>) {
+    let mut table_properties = Vec::new();
+    let clean_options = options
+        .into_iter()
+        .inspect(|layer| {
+            if let OptionLayer::TablePropertyList { items } = layer {
+                // Catalog-encoded OPTIONS are stored as `option.*` table properties.
+                // Keep them for option resolution, but do not commit them to Iceberg metadata.
+                table_properties.extend(
+                    items
+                        .iter()
+                        .filter(|(key, _)| !key.starts_with("option."))
+                        .cloned(),
+                );
+            }
+        })
+        .collect();
+    (clean_options, table_properties)
 }
 
-fn resolve_iceberg_write_options(
-    options: Vec<OptionLayer>,
-) -> DataSourceResult<IcebergWriteOptions> {
-    let mut partial = IcebergWritePartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
+fn alter_table_properties_conflict_error() -> DataFusionError {
+    DataFusionError::Execution(format!(
+        "Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES failed after {MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES} retries due to concurrent metadata updates"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_iceberg_write_options_keeps_catalog_options_out_of_table_properties() {
+        let options = vec![
+            OptionLayer::TablePropertyList {
+                items: vec![
+                    ("option.metadataAsDataRead".to_string(), "true".to_string()),
+                    ("write.data.path".to_string(), "custom_data".to_string()),
+                    (
+                        "write.folder-storage.path".to_string(),
+                        "legacy_data".to_string(),
+                    ),
+                    ("custom.key".to_string(), "custom-value".to_string()),
+                ],
+            },
+            OptionLayer::OptionList {
+                items: vec![
+                    ("mergeSchema".to_string(), "true".to_string()),
+                    ("path".to_string(), "/tmp/table".to_string()),
+                ],
+            },
+        ];
+
+        let (clean_options, table_properties) =
+            split_iceberg_write_options_and_table_properties(options);
+
+        assert_eq!(
+            table_properties,
+            vec![
+                ("write.data.path".to_string(), "custom_data".to_string()),
+                (
+                    "write.folder-storage.path".to_string(),
+                    "legacy_data".to_string(),
+                ),
+                ("custom.key".to_string(), "custom-value".to_string()),
+            ]
+        );
+        let ctx = datafusion::execution::context::SessionContext::default();
+        let state = ctx.state();
+        #[expect(clippy::unwrap_used)]
+        let iceberg_options = IcebergWriteOptions::resolve(&state, clean_options).unwrap();
+        assert!(iceberg_options.merge_schema);
+        assert_eq!(
+            iceberg_options.write_data_path.as_deref(),
+            Some("custom_data")
+        );
+        assert_eq!(
+            iceberg_options.write_folder_storage_path.as_deref(),
+            Some("legacy_data")
+        );
     }
-    partial.finalize()
 }

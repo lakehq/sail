@@ -496,6 +496,25 @@ impl PlanFormatter for SparkPlanFormatter {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
+            "from_json" => {
+                let (arg, rest) = arguments.at_least_one()?;
+                // In Spark, from_json with a MAP schema uses "entries" as the display name.
+                if let Some(schema) = rest.first() {
+                    let s = schema.trim();
+                    let upper = s.to_uppercase();
+                    let is_map = upper.starts_with("MAP<")
+                        || upper == "MAP"
+                        || (s.starts_with('{')
+                            && serde_json::from_str::<serde_json::Value>(s)
+                                .ok()
+                                .and_then(|v| v.get("type")?.as_str().map(|t| t == "map"))
+                                .unwrap_or(false));
+                    if is_map {
+                        return Ok("entries".to_string());
+                    }
+                }
+                Ok(format!("{name}({arg})"))
+            }
             "from_csv" | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
@@ -596,6 +615,10 @@ impl PlanFormatter for SparkPlanFormatter {
             "explode" | "explode_outer" => Ok("col".to_string()),
             "stack" => Ok("col0".to_string()),
             "current_database" => Ok("current_schema()".to_string()),
+            "spark_partition_id" => {
+                let arguments = arguments.join(", ");
+                Ok(format!("{}({arguments})", name.to_uppercase()))
+            }
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "exp"
             | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "rlike"
             | "signum" | "sqrt" | "cos" | "cosh" | "cot" | "degrees" | "power" | "radians"

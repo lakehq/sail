@@ -12,6 +12,7 @@ These tests are marked with ``@pytest.mark.catalog_integration`` and are
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -21,10 +22,11 @@ if TYPE_CHECKING:
 
     from pysail.spark import SparkConnectServer
 
-
-# We skip the tests for now since it may cause issues
-# when running the tests in installed packages.
-pytest.skip("not working", allow_module_level=True)
+CATALOG_SPARK_FIXTURES = {
+    "glue": "glue_spark",
+    "iceberg_rest": "iceberg_spark",
+    "unity": "unity_spark",
+}
 
 
 def start_sail_server(
@@ -70,7 +72,12 @@ def stop_sail_server(
             os.environ[key] = old_value
 
 
-def create_spark_session(remote: str, app_name: str = "catalog_test") -> SparkSession:
+def create_spark_session(
+    remote: str,
+    app_name: str = "catalog_test",
+    *,
+    new_session: bool = False,
+) -> SparkSession:
     """Create a Spark session connected to the given remote."""
     # Deferred imports so pysail._native is not loaded at module collection time.
     from pyspark.sql import SparkSession
@@ -80,10 +87,28 @@ def create_spark_session(remote: str, app_name: str = "catalog_test") -> SparkSe
         patch_spark_connect_session,
     )
 
-    spark = SparkSession.builder.remote(remote).appName(app_name).getOrCreate()
+    builder = SparkSession.builder.remote(remote).appName(app_name)
+    spark = builder.create() if new_session else builder.getOrCreate()
     configure_spark_session(spark)
     patch_spark_connect_session(spark)
     return spark
+
+
+@pytest.fixture(scope="module")
+def spark(request: pytest.FixtureRequest) -> SparkSession:
+    """Dispatch the shared BDD ``spark`` fixture to the matching catalog backend.
+
+    When tests are collected from an installed package outside pytest's rootdir,
+    nested conftest fixtures can become visible globally. In that case this
+    fixture may be used by non-catalog tests too, so it must fall back to the
+    default Spark session unless the requesting test is under catalog_integration.
+    """
+    test_path = Path(str(request.node.fspath)).resolve()
+    this_dir = Path(__file__).parent.resolve()
+    for name, fixture_name in CATALOG_SPARK_FIXTURES.items():
+        if test_path.is_relative_to(this_dir / name):
+            return request.getfixturevalue(fixture_name)
+    return request.getfixturevalue("default_spark")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -96,10 +121,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     or ``-m 'not catalog_integration'``), pytest's built-in marker filter applies
     and this hook performs no additional deselection.
 
-    This approach works correctly with ``pytest --pyargs <package>`` because it
-    relies only on the standard ``-m`` option rather than a custom CLI flag that
-    would need to be registered at the root ``conftest.py`` (which is not part
-    of the installed package).
+    The ``spark`` fixture above also guards bare ``pytest --pyargs <package>``
+    runs where pytest may load installed-package conftests outside its rootdir.
     """
     this_dir = os.path.dirname(os.path.abspath(__file__))
     markexpr = config.getoption("markexpr") or ""

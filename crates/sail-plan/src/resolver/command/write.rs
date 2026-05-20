@@ -114,6 +114,7 @@ pub(super) struct WritePlanBuilder {
     cluster_by: Vec<spec::ObjectName>,
     options: Vec<Vec<(String, String)>>,
     table_properties: Vec<(String, String)>,
+    table_is_external: bool,
 }
 
 impl WritePlanBuilder {
@@ -130,6 +131,7 @@ impl WritePlanBuilder {
             cluster_by: vec![],
             options: vec![],
             table_properties: vec![],
+            table_is_external: false,
         }
     }
 
@@ -188,6 +190,11 @@ impl WritePlanBuilder {
         self.table_properties = properties;
         self
     }
+
+    pub fn with_table_is_external(mut self, is_external: bool) -> Self {
+        self.table_is_external = is_external;
+        self
+    }
 }
 
 impl PlanResolver<'_> {
@@ -209,6 +216,7 @@ impl PlanResolver<'_> {
             cluster_by,
             options,
             table_properties,
+            table_is_external,
         } = builder;
 
         let Some(mode) = mode else {
@@ -250,6 +258,22 @@ impl PlanResolver<'_> {
                 }
                 if file_write_options.format.is_empty() {
                     file_write_options.format = self.config.default_table_file_format.clone();
+                }
+                let should_rewrite_existing_delta_generated_columns =
+                    !(matches!(&mode, WriteMode::ErrorIfExists | WriteMode::IgnoreIfExists)
+                        || matches!(&mode, WriteMode::Replace { .. })
+                            && Self::has_truthy_option(
+                                &file_write_options.options,
+                                &["overwriteSchema", "overwrite_schema"],
+                            ));
+                if should_rewrite_existing_delta_generated_columns {
+                    input = self
+                        .rewrite_data_source_delta_generated_columns(
+                            input,
+                            &file_write_options,
+                            state,
+                        )
+                        .await?;
                 }
                 let schema_for_cond =
                     matches!(mode, WriteMode::TruncateIf { .. }).then_some(input_schema.as_ref());
@@ -333,6 +357,8 @@ impl PlanResolver<'_> {
                         },
                     );
                 } else {
+                    let write_options_had_location =
+                        find_path_in_options(&file_write_options.options).is_some();
                     file_write_options.options.insert(
                         0,
                         OptionLayer::TablePropertyList {
@@ -432,6 +458,7 @@ impl PlanResolver<'_> {
                             if_not_exists,
                             replace,
                             properties,
+                            is_external: table_is_external || write_options_had_location,
                         },
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
@@ -523,6 +550,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 properties,
+                is_external: _,
             } => {
                 // When a table is created without column definitions
                 // (e.g. `CREATE TABLE t USING fmt`), the catalog stores an empty column list.
@@ -550,16 +578,15 @@ impl PlanResolver<'_> {
                             items: properties.to_vec(),
                         }],
                     };
-                    let source = table_format
-                        .create_source(&self.ctx.state(), info)
+                    let schema = table_format
+                        .infer_schema(&self.ctx.state(), info)
                         .await
                         .map_err(|e| {
                             PlanError::invalid(format!(
                                 "failed to infer schema for table `{table:?}` from format `{format}`: {e}",
                             ))
                         })?;
-                    columns = source
-                        .schema()
+                    columns = schema
                         .fields()
                         .iter()
                         .map(|f| {
@@ -595,6 +622,84 @@ impl PlanResolver<'_> {
             }
             _ => Ok(None),
         }
+    }
+
+    async fn rewrite_data_source_delta_generated_columns(
+        &self,
+        input: LogicalPlan,
+        options: &FileWriteOptions,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if !options.format.eq_ignore_ascii_case("delta") {
+            return Ok(input);
+        }
+        let Some(path) = find_path_in_options(&options.options) else {
+            return Ok(input);
+        };
+
+        let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+            PlanError::invalid(format!(
+                "failed to access table format registry for Delta path `{path}`: {e}",
+            ))
+        })?;
+        let table_format = registry.get(&options.format).map_err(|e| {
+            PlanError::invalid(format!(
+                "failed to resolve table format `{}` for Delta path `{path}`: {e}",
+                options.format
+            ))
+        })?;
+        let info = SourceInfo {
+            paths: vec![path.clone()],
+            schema: None,
+            constraints: Default::default(),
+            partition_by: vec![],
+            bucket_by: None,
+            sort_order: vec![],
+            options: vec![],
+        };
+        let schema = match table_format.infer_schema(&self.ctx.state(), info).await {
+            Ok(schema) => schema,
+            Err(e) => {
+                log::debug!(
+                    "skipping generated column rewrite for Delta path `{path}` because existing table schema could not be loaded: {e}"
+                );
+                return Ok(input);
+            }
+        };
+
+        let columns = schema
+            .fields()
+            .iter()
+            .map(|field| TableColumnStatus {
+                name: field.name().clone(),
+                data_type: field.data_type().clone(),
+                nullable: field.is_nullable(),
+                comment: None,
+                default: None,
+                generated_always_as: ColumnFeatures::from_field(field).generation_expression(),
+                is_partition: false,
+                is_bucket: false,
+                is_cluster: false,
+            })
+            .collect::<Vec<_>>();
+        if !columns
+            .iter()
+            .any(|column| column.generated_always_as.is_some())
+        {
+            return Ok(input);
+        }
+
+        let info = TableInfo {
+            columns,
+            location: Some(path),
+            format: options.format.clone(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            properties: vec![],
+        };
+        self.rewrite_write_input(input, WriteColumnMatch::ByName, &info, state)
+            .await
     }
 
     async fn rewrite_write_input(
@@ -1042,6 +1147,18 @@ impl PlanResolver<'_> {
                 num_buckets,
             }
         }))
+    }
+
+    fn has_truthy_option(options: &[OptionLayer], keys: &[&str]) -> bool {
+        options.iter().rev().any(|layer| match layer {
+            OptionLayer::OptionList { items } | OptionLayer::TablePropertyList { items } => {
+                items.iter().any(|(key, value)| {
+                    keys.iter().any(|k| key.eq_ignore_ascii_case(k))
+                        && value.eq_ignore_ascii_case("true")
+                })
+            }
+            _ => false,
+        })
     }
 }
 

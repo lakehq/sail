@@ -110,3 +110,11 @@ def test_dataframe_with_column_alias(spark):
             }
         ).astype({"id": "int32", "col1": "int32", "col3": "int32"}),
     )
+
+
+def test_with_metadata(spark):
+    df = spark.sql("SELECT 1 AS a")
+    assert df.schema["a"].metadata == {}
+    assert df.withMetadata("a", {"m": "x"}).schema["a"].metadata == {"m": "x"}
+    assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {"n": "y"}).schema["a"].metadata == {"n": "y"}
+    assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {}).schema["a"].metadata == {}

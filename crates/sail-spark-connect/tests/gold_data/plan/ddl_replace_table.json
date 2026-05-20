@@ -9,6 +9,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -265,6 +266,7 @@
                 "mydb",
                 "page_view"
               ],
+              "external": false,
               "columns": [],
               "comment": "This is the staging page view table",
               "constraints": [],
@@ -341,6 +343,7 @@
               "table": [
                 "table_name"
               ],
+              "external": false,
               "columns": [],
               "comment": null,
               "constraints": [],
@@ -388,6 +391,7 @@
                 "1m",
                 "2g"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -430,6 +434,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -504,6 +509,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -588,6 +594,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -645,6 +652,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -708,6 +716,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -774,6 +783,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -840,6 +850,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -896,6 +907,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -962,6 +974,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1028,6 +1041,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1093,6 +1107,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1159,6 +1174,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1218,6 +1234,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1282,6 +1299,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1357,6 +1375,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1455,6 +1474,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1519,6 +1539,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1585,6 +1606,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [],
               "comment": null,
               "constraints": [],
@@ -1628,6 +1650,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -1682,6 +1705,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -1747,6 +1771,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -1797,6 +1822,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -1922,6 +1948,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -1992,6 +2019,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2055,6 +2083,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2128,6 +2157,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2182,6 +2212,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2236,6 +2267,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",

@@ -1,8 +1,10 @@
+from datetime import date
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
+from pyspark.sql.types import DateType, IntegerType, Row, StringType, StructField, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
@@ -413,6 +415,55 @@ def test_sql_dataframe_argument(spark):
     assert_frame_equal(actual, expected)
 
 
+def _date_df(spark):
+    schema = StructType([StructField("date_col", DateType(), True)])
+    return spark.createDataFrame([(date(2024, 1, 15),)], schema)
+
+
+def _assert_coalesce_string_date_ansi_error(df):
+    actual = df.select(F.coalesce(F.lit("default"), F.col("date_col")).alias("c"))
+    assert actual.schema.simpleString() == "struct<c:date>"
+    with pytest.raises(Exception, match=r"."):
+        actual.collect()
+
+
+def test_coalesce_string_literal_and_date_default_ansi_enabled(spark):
+    # This configuration is enabled by test fixture.
+    assert spark.conf.get("spark.sql.ansi.enabled") == "true"
+    df = _date_df(spark)
+    _assert_coalesce_string_date_ansi_error(df)
+
+
+def test_coalesce_string_literal_and_date_ansi_disabled(spark):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    try:
+        df = _date_df(spark)
+        actual = df.select(F.coalesce(F.lit("default"), F.col("date_col")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:string>"
+        assert actual.collect() == [Row(c="default")]
+
+        actual = df.select(F.coalesce(F.col("date_col"), F.lit("default")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:string>"
+        assert actual.collect() == [Row(c="2024-01-15")]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
+def test_coalesce_string_literal_and_date_ansi_enabled(spark):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        df = _date_df(spark)
+        _assert_coalesce_string_date_ansi_error(df)
+
+        actual = df.select(F.coalesce(F.col("date_col"), F.lit("default")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:date>"
+        assert actual.collect() == [Row(c=date(2024, 1, 15))]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
 def test_select_expression(df):
     assert_frame_equal(df.selectExpr("b.foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
     assert_frame_equal(df.selectExpr("b.*").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
@@ -421,3 +472,14 @@ def test_select_expression(df):
 @pytest.mark.skip(reason="not implemented")
 def test_stream(spark):
     spark.readStream.format("rate").load().writeStream.format("console").start()
+
+
+def test_large_plan_no_proto_recursion_limit(spark):
+    # Build a large plan and make sure the protocol buffers message can be handled correctly
+    # without hitting the default recursion limit (100) of the prost library.
+    # Note that this test requires a large stack size beyond the default,
+    # so the test setup contains configuration to accommodate this.
+    df = spark.range(0, 10)
+    for i in range(50):
+        df = df.withColumn(f"c{i}", F.lit("v"))
+    assert df.count() == 10  # noqa: PLR2004

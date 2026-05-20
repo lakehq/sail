@@ -1005,3 +1005,366 @@ Feature: from_json function parses JSON strings into structured types
         SELECT from_json('{"a":1}', '   ') AS result
         """
       Then query error .*
+
+  Rule: Spark JSON schema format
+    Scenario: Parse struct using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"a": 1}', '{"type":"struct","fields":[{"name":"a","type":"integer","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result |
+        | {1}    |
+
+    Scenario: Parse struct with multiple fields using JSON schema
+      When query
+        """
+        SELECT from_json('{"a": 1, "b": "hello"}', '{"type":"struct","fields":[{"name":"a","type":"integer","nullable":true,"metadata":{}},{"name":"b","type":"string","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result      |
+        | {1, hello}  |
+
+    Scenario: Parse array using Spark JSON schema
+      When query
+        """
+        SELECT from_json('[1, 2, 3]', '{"type":"array","elementType":"integer","containsNull":true}') AS result
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
+    Scenario: Parse map using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"a":1, "b":2}', '{"type":"map","keyType":"string","valueType":"integer","valueContainsNull":true}') AS result
+        """
+      Then query result
+        | result            |
+        | {a -> 1, b -> 2}  |
+
+    Scenario: Parse decimal type using JSON schema
+      When query
+        """
+        SELECT from_json('{"v":3.14}', '{"type":"struct","fields":[{"name":"v","type":"decimal(10,2)","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result |
+        | {3.14} |
+
+    Scenario: Parse nested struct using JSON schema
+      When query
+        """
+        SELECT from_json('{"a":{"b":42}}', '{"type":"struct","fields":[{"name":"a","type":{"type":"struct","fields":[{"name":"b","type":"integer","nullable":true,"metadata":{}}]},"nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result   |
+        | {{42}}   |
+
+    Scenario: Invalid JSON schema string returns error
+      When query
+        """
+        SELECT from_json('{"a":1}', '{"type":"struct"') AS result
+        """
+      Then query error .*
+
+    Scenario: Parse struct with time field using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"t":"12:00:00"}', '{"type":"struct","fields":[{"name":"t","type":"time","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parse struct with time(0) field using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"t":"12:00:00"}', '{"type":"struct","fields":[{"name":"t","type":"time(0)","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parse struct with char and varchar fields using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"c":"abc","v":"hello"}', '{"type":"struct","fields":[{"name":"c","type":"char(3)","nullable":true,"metadata":{}},{"name":"v","type":"varchar(5)","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result       |
+        | {abc, hello} |
+
+    Scenario: Parse nested char and varchar fields using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"items":["a","b"],"m":{"k":"value"}}', '{"type":"struct","fields":[{"name":"items","type":{"type":"array","elementType":"char(1)","containsNull":true},"nullable":true,"metadata":{}},{"name":"m","type":{"type":"map","keyType":"string","valueType":"varchar(5)","valueContainsNull":true},"nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result                      |
+        | {[a, b], {k -> value}}      |
+
+    Scenario: Parse struct with interval fields using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"cal":null,"ym":null,"dt":null}', '{"type":"struct","fields":[{"name":"cal","type":"interval","nullable":true,"metadata":{}},{"name":"ym","type":"interval year to month","nullable":true,"metadata":{}},{"name":"dt","type":"interval day to second","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result              |
+        | {NULL, NULL, NULL}  |
+
+    Scenario: Parse struct with variant and geospatial fields using Spark JSON schema
+      When query
+        """
+        SELECT from_json('{"v":null,"g":null,"p":null}', '{"type":"struct","fields":[{"name":"v","type":"variant","nullable":true,"metadata":{}},{"name":"g","type":"geometry(ANY)","nullable":true,"metadata":{}},{"name":"p","type":"geography(ANY, spherical)","nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result              |
+        | {NULL, NULL, NULL}  |
+
+    Scenario: Parse UDT field using its Spark JSON sqlType
+      When query
+        """
+        SELECT from_json('{"point":{"x":1.5,"y":2.5}}', '{"type":"struct","fields":[{"name":"point","type":{"type":"udt","pyClass":"example.PointUDT","serializedClass":"abc","sqlType":{"type":"struct","fields":[{"name":"x","type":"double","nullable":false,"metadata":{}},{"name":"y","type":"double","nullable":false,"metadata":{}}]}},"nullable":true,"metadata":{}}]}') AS result
+        """
+      Then query result
+        | result       |
+        | {{1.5, 2.5}} |
+
+  Rule: Column display names
+    Scenario: from_json column name shows only input column for struct
+      When query
+        """
+        SELECT from_json(value, 'a INT')
+        FROM VALUES ('{"a":1}') AS t(value)
+        """
+      Then query result
+        | from_json(value) |
+        | {1}              |
+
+    Scenario: from_json column name shows entries for MAP schema
+      When query
+        """
+        SELECT from_json(value, 'MAP<STRING, INT>')
+        FROM VALUES ('{"a":1}') AS t(value)
+        """
+      Then query result
+        | entries   |
+        | {a -> 1}  |
+
+    Scenario: from_json column name shows entries for MAP JSON schema
+      When query
+        """
+        SELECT from_json(value, '{"type":"map","keyType":"string","valueType":"integer","valueContainsNull":true}')
+        FROM VALUES ('{"a":1}') AS t(value)
+        """
+      Then query result
+        | entries   |
+        | {a -> 1}  |
+
+    Scenario: from_json column name for struct with nested map does not use entries
+      When query
+        """
+        SELECT from_json(value, 'STRUCT<m: MAP<STRING, INT>>')
+        FROM VALUES ('{"m":{"x":1}}') AS t(value)
+        """
+      Then query result
+        | from_json(value) |
+        | {{x -> 1}}       |
+
+  Rule: DDL schema with column reference
+    Scenario: Parse struct with DDL schema from column values
+      When query
+        """
+        SELECT from_json(value, 'a INT') AS json
+        FROM VALUES ('{"a": 1}') AS t(value)
+        """
+      Then query result
+        | json |
+        | {1}  |
+
+  Rule: Constant-fold schema expression at planning time
+    Scenario: from_json with schema_of_json as the schema argument
+      When query
+        """
+        SELECT from_json(value, schema_of_json('{"a":1,"b":"hello"}')) AS result
+        FROM VALUES ('{"a":42,"b":"world"}') AS t(value)
+        """
+      Then query result
+        | result        |
+        | {42, world}   |
+
+    Scenario: from_json with schema_of_json handles multiple rows
+      When query
+        """
+        SELECT from_json(value, schema_of_json('{"x":1}')) AS result
+        FROM VALUES ('{"x":10}'), ('{"x":20}'), ('{"x":30}') AS t(value)
+        ORDER BY result.x
+        """
+      Then query result ordered
+        | result |
+        | {10}   |
+        | {20}   |
+        | {30}   |
+
+    Scenario: from_json with schema_of_json options as the schema argument
+      When query
+        """
+        SELECT from_json(value, schema_of_json('{"a":1}', map('mode', 'PERMISSIVE'))) AS result
+        FROM VALUES ('{"a":42}') AS t(value)
+        """
+      Then query result
+        | result |
+        | {42}   |
+
+    Scenario: from_json with schema_of_json non-default options as the schema argument
+      When query
+        """
+        SELECT from_json(value, schema_of_json('{"a":1}', map('mode', 'FAILFAST'))) AS result
+        FROM VALUES ('{"a":42}') AS t(value)
+        """
+      Then query result
+        | result |
+        | {42}   |
+
+  Rule: Single value wrapping for array schema
+    Scenario: Single JSON object with array schema wraps into singleton array
+      When query
+        """
+        SELECT from_json('{"a":1}', 'ARRAY<STRUCT<a: INT>>') AS result
+        """
+      Then query result
+        | result   |
+        | [{1}]    |
+
+  Rule: Binary field type
+    Scenario: Parse binary field returns null value
+      When query
+        """
+        SELECT from_json('{"b":"aGVsbG8="}', 'b BINARY') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+  Rule: Null propagation through nested structures
+    Scenario: Null in array of structs
+      When query
+        """
+        SELECT from_json('[{"a":1}, null, {"a":3}]', 'ARRAY<STRUCT<a: INT>>') AS result
+        """
+      Then query result
+        | result              |
+        | [{1}, NULL, {3}]    |
+
+    Scenario: Null values in map
+      When query
+        """
+        SELECT from_json('{"a":1, "b":null}', 'MAP<STRING, INT>') AS result
+        """
+      Then query result
+        | result                |
+        | {a -> 1, b -> NULL}   |
+
+  Rule: Unicode handling
+    Scenario: Parse JSON with unicode characters
+      When query
+        """
+        SELECT from_json('{"name":"héllo wörld"}', 'name STRING') AS result
+        """
+      Then query result
+        | result           |
+        | {héllo wörld}    |
+
+  Rule: Escaped strings in JSON
+    Scenario: Parse JSON with escaped quotes
+      When query
+        """
+        SELECT from_json('{"a":"he said \\"hello\\""}', 'a STRING') AS result
+        """
+      Then query result
+        | result              |
+        | {he said "hello"}   |
+
+  Rule: Large batch processing
+    Scenario: Parse many rows with mixed valid and null inputs
+      When query
+        """
+        SELECT from_json(json_str, 'x INT') AS result
+        FROM VALUES
+          ('{"x":1}'),
+          (NULL),
+          ('{"x":2}'),
+          ('invalid'),
+          ('{"x":3}'),
+          (NULL),
+          ('{}'),
+          ('{"x":4}')
+        AS t(json_str)
+        ORDER BY result.x
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | NULL   |
+        | {NULL} |
+        | {NULL} |
+        | {1}    |
+        | {2}    |
+        | {3}    |
+        | {4}    |
+
+Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
+    Scenario: Parseable JSON number as struct target returns struct with null fields
+      When query
+        """
+        SELECT from_json('42', 'a INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parseable JSON string as struct target returns struct with null fields
+      When query
+        """
+        SELECT from_json('"hello"', 'a INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parseable JSON array as struct target returns struct with null fields
+      When query
+        """
+        SELECT from_json('[1,2,3]', 'a INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parseable JSON boolean as struct target returns struct with null fields
+      When query
+        """
+        SELECT from_json('true', 'a INT') AS result
+        """
+      Then query result
+        | result  |
+        | {NULL}  |
+
+    Scenario: Parseable JSON number as array target returns null
+      When query
+        """
+        SELECT from_json('42', 'ARRAY<INT>') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Parseable JSON number as map target returns null
+      When query
+        """
+        SELECT from_json('42', 'MAP<STRING,INT>') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
