@@ -1,0 +1,72 @@
+>>> from pyspark.sql.functions import from_json
+>>> from pyspark.sql.types import *
+
+>>> data = [(1, '''{"a": 1}''')]
+>>> schema = StructType([StructField("a", IntegerType())])
+>>> df = spark.createDataFrame(data, ("key", "value"))
+>>> df.select(from_json(df.value, schema).alias("json")).show(truncate=False)
++----+
+|json|
++----+
+|{1} |
++----+
+<BLANKLINE>
+
+>>> df.select(from_json(df.value, "a INT").alias("json")).show(truncate=False)
++----+
+|json|
++----+
+|{1} |
++----+
+<BLANKLINE>
+
+>>> df.select(from_json(df.value, "MAP<STRING,INT>").alias("json")).show(truncate=False)
++--------+
+|json    |
++--------+
+|{a -> 1}|
++--------+
+<BLANKLINE>
+
+>>> schema = ArrayType(StructType([StructField("a", IntegerType())]))
+>>> df.select(from_json(df.value, schema).alias("json")).show(truncate=False)
++-----+
+|json |
++-----+
+|[{1}]|
++-----+
+<BLANKLINE>
+
+>>> data = [(1, '''{"a": 1}'''), (2, '''{"a": 2}'''), (3, None)]
+>>> df = spark.createDataFrame(data, ("key", "value"))
+>>> df.select(from_json(df.value, "a INT").alias("json")).orderBy("key").show(truncate=False)
++----+
+|json|
++----+
+|{1} |
+|{2} |
+|NULL|
++----+
+<BLANKLINE>
+
+>>> data = [(1, '''{"a": 1, "b": "hello"}''')]
+>>> df = spark.createDataFrame(data, ("key", "value"))
+>>> schema = StructType([StructField("a", IntegerType()), StructField("b", StringType())])
+>>> df.select(from_json(df.value, schema).alias("json")).show(truncate=False)
++----------+
+|json      |
++----------+
+|{1, hello}|
++----------+
+<BLANKLINE>
+
+>>> data = [(1, '''{"price": 19.99}''')]
+>>> df = spark.createDataFrame(data, ("key", "value"))
+>>> schema = StructType([StructField("price", DecimalType(10, 2))])
+>>> df.select(from_json(df.value, schema).alias("json")).show(truncate=False)
++-------+
+|json   |
++-------+
+|{19.99}|
++-------+
+<BLANKLINE>

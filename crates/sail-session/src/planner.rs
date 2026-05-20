@@ -20,7 +20,6 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
-use sail_delta_lake::logical::RewriteDeltaTableSource;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
@@ -67,7 +66,8 @@ impl QueryPlanner for ExtensionQueryPlanner {
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // TODO: show rewriters and the final logical plan in `EXPLAIN`
-        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![Box::new(RewriteDeltaTableSource)];
+        // Note: the rewriter list is currently empty but may be useful for future logical rewrites.
+        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan)?.data
