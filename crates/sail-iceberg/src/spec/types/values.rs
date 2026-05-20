@@ -110,7 +110,11 @@ fn sail_literal_from_str(
     value: &str,
     data_type: &crate::spec::types::Type,
 ) -> Result<sail_spec::Literal, String> {
+    use std::str::FromStr;
+
     use chrono::{NaiveDate, NaiveTime, Timelike};
+    use datafusion::arrow::array::timezone::Tz;
+    use sail_common_datafusion::utils::datetime::localize_with_fallback;
     use sail_sql_analyzer::expression::from_ast_expression;
     use sail_sql_analyzer::literal::numeric::{
         parse_decimal_128_string, parse_f32_string, parse_f64_string, parse_i32_string,
@@ -179,17 +183,33 @@ fn sail_literal_from_str(
                 microseconds: Some(microseconds),
             })
         }
-        Type::Primitive(PrimitiveType::Timestamp | PrimitiveType::Timestamptz) => {
+        Type::Primitive(PrimitiveType::Timestamp) => {
             let timestamp = parse_timestamp(value)
                 .or_else(|_| parse_timestamp(unquote_str(value)))
                 .map_err(parse_error)?;
             let (timestamp, _) = timestamp.into_naive().map_err(parse_error)?;
             Ok(sail_spec::Literal::TimestampMicrosecond {
                 microseconds: Some(timestamp.and_utc().timestamp_micros()),
-                timestamp_type: sail_spec::TimestampType::Configured,
+                timestamp_type: sail_spec::TimestampType::WithoutTimeZone,
             })
         }
-        Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs) => {
+        Type::Primitive(PrimitiveType::Timestamptz) => {
+            let timestamp = parse_timestamp(value)
+                .or_else(|_| parse_timestamp(unquote_str(value)))
+                .map_err(parse_error)?;
+            let (timestamp, timezone) = timestamp.into_naive().map_err(parse_error)?;
+            let timestamp = if timezone.is_empty() {
+                timestamp.and_utc()
+            } else {
+                let timezone = Tz::from_str(timezone).map_err(parse_error)?;
+                localize_with_fallback(&timezone, &timestamp).map_err(parse_error)?
+            };
+            Ok(sail_spec::Literal::TimestampMicrosecond {
+                microseconds: Some(timestamp.timestamp_micros()),
+                timestamp_type: sail_spec::TimestampType::WithLocalTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::TimestampNs) => {
             let timestamp = parse_timestamp(value)
                 .or_else(|_| parse_timestamp(unquote_str(value)))
                 .map_err(parse_error)?;
@@ -201,7 +221,27 @@ fn sail_literal_from_str(
                         .timestamp_nanos_opt()
                         .ok_or("timestamp nanoseconds out of range")?,
                 ),
-                timestamp_type: sail_spec::TimestampType::Configured,
+                timestamp_type: sail_spec::TimestampType::WithoutTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::TimestamptzNs) => {
+            let timestamp = parse_timestamp(value)
+                .or_else(|_| parse_timestamp(unquote_str(value)))
+                .map_err(parse_error)?;
+            let (timestamp, timezone) = timestamp.into_naive().map_err(parse_error)?;
+            let timestamp = if timezone.is_empty() {
+                timestamp.and_utc()
+            } else {
+                let timezone = Tz::from_str(timezone).map_err(parse_error)?;
+                localize_with_fallback(&timezone, &timestamp).map_err(parse_error)?
+            };
+            Ok(sail_spec::Literal::TimestampNanosecond {
+                nanoseconds: Some(
+                    timestamp
+                        .timestamp_nanos_opt()
+                        .ok_or("timestamp nanoseconds out of range")?,
+                ),
+                timestamp_type: sail_spec::TimestampType::WithLocalTimeZone,
             })
         }
         Type::Primitive(PrimitiveType::String | PrimitiveType::Uuid) => {

@@ -1307,7 +1307,7 @@ fn columns_to_nested_fields(
                     })?
                     .ok_or_else(|| {
                         CatalogError::InvalidArgument(format!(
-                            "column '{name}' has JSON null default; null defaults are not supported here"
+                            "column '{name}' has NULL/null default; null defaults are not supported here"
                         ))
                     })?)
             } else {
