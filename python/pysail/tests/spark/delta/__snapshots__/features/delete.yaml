@@ -373,9 +373,6 @@ data:
     physical_plan after OptimizeAggregateOrder:
     SAME TEXT AS ABOVE
   
-    physical_plan after WindowTopN:
-    SAME TEXT AS ABOVE
-  
     physical_plan after ProjectionPushdown:
     SAME TEXT AS ABOVE
   
@@ -414,13 +411,7 @@ data:
     physical_plan after LimitPushPastWindows:
     SAME TEXT AS ABOVE
   
-    physical_plan after HashJoinBuffering:
-    SAME TEXT AS ABOVE
-  
     physical_plan after LimitPushdown:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after TopKRepartition:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:
@@ -517,7 +508,7 @@ data:
                 FilterExec: NOT year@3 = 2024 AND value@2 > 650
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=1, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                      FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                         DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                           DeltaLogReplayExec(table_path=file://<tmp>/x/, version=1)
                             SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -528,7 +519,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                   DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                     DeltaLogReplayExec(table_path=file://<tmp>/x/, version=1)
                       SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -550,7 +541,7 @@ data:
                 FilterExec: NOT year@3 = 2024 AND value@2 > 650
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=2, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                      FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                         DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                           DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2)
                             SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -561,7 +552,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                   DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                     DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2)
                       SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -583,7 +574,7 @@ data:
                 FilterExec: NOT year@3 = 2024 AND value@2 > 650
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=0, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                      FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                         DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                           DeltaLogReplayExec(table_path=file://<tmp>/x/, version=0)
                             SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -594,7 +585,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                   DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                     DeltaLogReplayExec(table_path=file://<tmp>/x/, version=0)
                       SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -616,21 +607,21 @@ data:
                 FilterExec: NOT year@3 = 2023
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=0, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: CAST(year@5 AS Int32) = 2023
+                      FilterExec: year@5 = CAST(2023 AS Utf8)
                         DeltaLogReplayExec(table_path=file://<tmp>/x/, version=0)
-                          SortExec: expr=[__sail_delta_replay_path@8 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@9 ASC NULLS LAST], preserve_partitioning=[true]
-                            RepartitionExec: partitioning=Hash([__sail_delta_replay_path@8], 4), input_partitions=4
-                              ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, year), 1) as year, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                          SortExec: expr=[__sail_delta_replay_path@7 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@8 ASC NULLS LAST], preserve_partitioning=[true]
+                            RepartitionExec: partitioning=Hash([__sail_delta_replay_path@7], 4), input_partitions=4
+                              ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, year), 1) as year, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
                                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                   DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: CAST(year@5 AS Int32) = 2023
+                FilterExec: year@5 = CAST(2023 AS Utf8)
                   DeltaLogReplayExec(table_path=file://<tmp>/x/, version=0)
-                    SortExec: expr=[__sail_delta_replay_path@8 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@9 ASC NULLS LAST], preserve_partitioning=[true]
-                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@8], 4), input_partitions=4
-                        ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, year), 1) as year, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                    SortExec: expr=[__sail_delta_replay_path@7 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@8 ASC NULLS LAST], preserve_partitioning=[true]
+                      RepartitionExec: partitioning=Hash([__sail_delta_replay_path@7], 4), input_partitions=4
+                        ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, array_element(map_extract(CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, partitionValues) END, year), 1) as year, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: file_groups={1 group: [[<tmp>/x/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
 ---
@@ -643,13 +634,9 @@ data:
   operationMetrics:
     executionTimeMs: <time_ms>
     numAddedBytes: 1837
-    numAddedChangeFiles: 0
     numAddedFiles: 1
     numCopiedRows: 5
     numDeletedRows: 3
-    numDeletionVectorsAdded: 0
-    numDeletionVectorsRemoved: 0
-    numDeletionVectorsUpdated: 0
     numFiles: 1
     numOutputBytes: 1837
     numOutputFiles: 1

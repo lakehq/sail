@@ -278,9 +278,6 @@ data:
     physical_plan after OptimizeAggregateOrder:
     SAME TEXT AS ABOVE
   
-    physical_plan after WindowTopN:
-    SAME TEXT AS ABOVE
-  
     physical_plan after ProjectionPushdown:
     SAME TEXT AS ABOVE
   
@@ -299,13 +296,7 @@ data:
     physical_plan after LimitPushPastWindows:
     SAME TEXT AS ABOVE
   
-    physical_plan after HashJoinBuffering:
-    SAME TEXT AS ABOVE
-  
     physical_plan after LimitPushdown:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after TopKRepartition:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:
