@@ -24,19 +24,20 @@ fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
     let (element, count) = input.arguments.two()?;
     let count = cast(count, DataType::Int64);
-    let output_type = with_list_value_nullability(
+    let output_type = make_nullable_array_type(
         &expr_fn::array_repeat(element.clone(), count.clone()).get_type(schema.as_ref())?,
-        true,
     );
-    array_repeat_with_nullable_element(element, count, output_type)
+    array_repeat_with_nullable_element(element, count, output_type, schema)
 }
 
 fn array_repeat_with_nullable_element(
     element: expr::Expr,
     count: expr::Expr,
     output_type: DataType,
+    schema: &datafusion_common::DFSchemaRef,
 ) -> PlanResult<expr::Expr> {
-    let nullable_element = when(lit(true), element).end()?;
+    let element_type = make_nullable_array_type(&element.get_type(schema.as_ref())?);
+    let nullable_element = when(lit(true), cast(element, element_type)).end()?;
     Ok(cast(
         expr_fn::array_repeat(nullable_element, count),
         output_type,
@@ -184,11 +185,12 @@ fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     .when(
         pos_from_zero.clone().lt(lit(0)),
         expr_fn::array_concat(vec![
-            array_repeat_with_nullable_element(value.clone(), lit(1), output_type.clone())?,
+            array_repeat_with_nullable_element(value.clone(), lit(1), output_type.clone(), schema)?,
             array_repeat_with_nullable_element(
                 lit(ScalarValue::Null),
                 -pos_from_zero.clone(),
                 output_type.clone(),
+                schema,
             )?,
             array_input.clone(),
         ]),
@@ -203,7 +205,7 @@ fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             .between(lit(1), array_len.clone() - lit(1)),
         expr_fn::array_concat(vec![
             expr_fn::array_slice(array_input.clone(), lit(1), pos_from_zero.clone(), None),
-            array_repeat_with_nullable_element(value.clone(), lit(1), output_type.clone())?,
+            array_repeat_with_nullable_element(value.clone(), lit(1), output_type.clone(), schema)?,
             expr_fn::array_slice(
                 array_input.clone(),
                 pos_from_zero.clone() + lit(1),
@@ -224,8 +226,9 @@ fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 lit(ScalarValue::Null),
                 pos_from_zero - array_len,
                 output_type.clone(),
+                schema,
             )?,
-            array_repeat_with_nullable_element(value, lit(1), output_type)?,
+            array_repeat_with_nullable_element(value, lit(1), output_type, schema)?,
         ]),
     )
     .end()?)

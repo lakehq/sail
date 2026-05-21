@@ -107,6 +107,18 @@ def test_udtf_kwargs_reversed_order(udtf_concat):
     )
 
 
+def test_udtf_row_output_invalid_scalar_raises_pickle_exception():
+    from pyspark.errors.exceptions.connect import PickleException
+
+    @udtf(returnType="x: boolean")
+    class RowOutputUDTF:
+        def eval(self):
+            yield (Row(a=0, b=1.1, c=2),)
+
+    with pytest.raises(PickleException, match="PickleException"):
+        RowOutputUDTF().collect()
+
+
 @pytest.mark.skipif(
     tuple(int(x) for x in pyspark.__version__.split(".")[:2]) < (4, 1),
     reason="UDTF analyze tests require PySpark 4.1+",

@@ -229,6 +229,7 @@ pub(crate) enum SparkThrowable {
     SparkRuntimeException(String),
     #[expect(dead_code)]
     SparkUpgradeException(String),
+    SparkException(String),
     PythonException(String),
 }
 
@@ -247,6 +248,7 @@ impl SparkThrowable {
             | SparkThrowable::DateTimeException(message)
             | SparkThrowable::SparkRuntimeException(message)
             | SparkThrowable::SparkUpgradeException(message)
+            | SparkThrowable::SparkException(message)
             | SparkThrowable::PythonException(message) => message,
         }
     }
@@ -275,6 +277,7 @@ impl SparkThrowable {
             SparkThrowable::DateTimeException(_) => "java.time.DateTimeException",
             SparkThrowable::SparkRuntimeException(_) => "org.apache.spark.SparkRuntimeException",
             SparkThrowable::SparkUpgradeException(_) => "org.apache.spark.SparkUpgradeException",
+            SparkThrowable::SparkException(_) => "org.apache.spark.SparkException",
             SparkThrowable::PythonException(_) => "org.apache.spark.api.python.PythonException",
         }
     }
@@ -288,9 +291,9 @@ impl SparkThrowable {
 /// - `grpc-status-details-bin`: base64-encoded protobuf (~4/3x expansion)
 ///
 /// Combined worst-case encoding overhead is approximately 4.33x the raw message length
-/// (3x + 4/3x). A cap of 3700 bytes keeps the combined encoded size under 16384 bytes
-/// even in the worst case (3700 * 4.33 ≈ 16,021), with some margin for other headers.
-const MAX_GRPC_STATUS_MESSAGE_LEN: usize = 3700;
+/// (3x + 4/3x). A cap of 2500 bytes leaves room for `ErrorInfo` details and other
+/// gRPC headers in addition to the duplicated status message.
+const MAX_GRPC_STATUS_MESSAGE_LEN: usize = 2500;
 
 const TRUNCATED_SUFFIX: &str = "\n[truncated]";
 
@@ -378,7 +381,11 @@ impl From<CommonErrorCause> for SparkThrowable {
                 } else {
                     format!("{summary}\n")
                 };
-                SparkThrowable::PythonException(message)
+                if message.contains("net.razorvine.pickle.PickleException") {
+                    SparkThrowable::SparkException(message)
+                } else {
+                    SparkThrowable::PythonException(message)
+                }
             }
             CommonErrorCause::ArrowCast(x)
             | CommonErrorCause::Schema(x)
