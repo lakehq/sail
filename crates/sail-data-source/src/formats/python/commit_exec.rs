@@ -364,21 +364,43 @@ mod tests {
     #[test]
     #[expect(clippy::unwrap_used)]
     fn test_with_new_children() {
-        let schema = Arc::new(Schema::new(vec![
+        let data_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let inputs: Vec<Arc<dyn ExecutionPlan>> = (0..4)
+            .map(|_| {
+                Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                    data_schema.clone(),
+                )) as Arc<dyn ExecutionPlan>
+            })
+            .collect();
+        let write_exec = Arc::new(PythonDataSourceWriteExec::new(
+            datafusion::physical_plan::union::UnionExec::try_new(inputs).unwrap(),
+            vec![],
+            true,
+        ));
+        let coalesce: Arc<dyn ExecutionPlan> = Arc::new(
+            datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec::new(write_exec),
+        );
+
+        let commit_schema = Arc::new(Schema::new(vec![
             Field::new(COL_PARTITION_ID, DataType::UInt64, false),
             Field::new(COL_COMMIT_MESSAGE, DataType::Binary, true),
             Field::new(COL_ERROR, DataType::Utf8, true),
         ]));
-        let input1 = Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-            schema.clone(),
+        let exec = Arc::new(PythonDataSourceWriteCommitExec::new(
+            Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                commit_schema,
+            )),
+            vec![],
+            2,
         ));
-        let input2 = Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-            schema.clone(),
-        ));
-        let exec = Arc::new(PythonDataSourceWriteCommitExec::new(input1, vec![], 2));
 
-        let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
+        let new_exec = exec.clone().with_new_children(vec![coalesce]).unwrap();
         assert!(new_exec.as_any().is::<PythonDataSourceWriteCommitExec>());
+        let new_commit = new_exec
+            .as_any()
+            .downcast_ref::<PythonDataSourceWriteCommitExec>()
+            .unwrap();
+        assert_eq!(new_commit.expected_partitions(), 4,);
     }
 
     #[test]
