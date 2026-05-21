@@ -9,6 +9,7 @@ use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
+use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
@@ -62,6 +63,7 @@ pub struct ServerSessionFactory {
     system: Arc<Mutex<ActorSystem>>,
     mutator: Box<dyn ServerSessionMutator>,
     runtime_env: RuntimeEnvFactory,
+    catalog_cache_manager: Arc<CatalogCacheManager>,
 }
 
 impl ServerSessionFactory {
@@ -78,6 +80,7 @@ impl ServerSessionFactory {
             system,
             mutator,
             runtime_env,
+            catalog_cache_manager: Arc::new(CatalogCacheManager::new()),
         }
     }
 }
@@ -114,6 +117,7 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),
+                self.catalog_cache_manager.clone(),
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))

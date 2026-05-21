@@ -13,7 +13,10 @@
 - key: runtime.stack_size
   type: number
   default: "8388608"
-  description: The stack size in bytes for each thread.
+  description: |
+    The stack size in bytes for each thread.
+    The default value works well for common cases, but complex queries involving deeply nested expressions or plans
+    may require a larger stack size to avoid stack overflow during query planning.
 
 - key: runtime.memory_pool.type
   type: string

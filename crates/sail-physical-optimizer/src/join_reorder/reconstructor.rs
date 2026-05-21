@@ -1084,7 +1084,6 @@ impl<'a> PlanReconstructor<'a> {
     }
 
     fn add_relation_bits_from_expr(
-        &self,
         expr: &Arc<dyn PhysicalExpr>,
         input_map: &ColumnMap,
         bits: &mut u64,
@@ -1110,7 +1109,7 @@ impl<'a> PlanReconstructor<'a> {
                     *bits |= Self::relation_bit(*relation_id);
                 }
                 ColumnMapEntry::Expression { expr, input_map } => {
-                    self.add_relation_bits_from_expr(expr, input_map, bits)?;
+                    Self::add_relation_bits_from_expr(expr, input_map, bits)?;
                 }
             }
         }
@@ -1168,7 +1167,7 @@ impl<'a> PlanReconstructor<'a> {
                         bits |= Self::relation_bit(*relation_id);
                     }
                     Some(ColumnMapEntry::Expression { expr, input_map }) => {
-                        self.add_relation_bits_from_expr(expr, input_map, &mut bits)?;
+                        Self::add_relation_bits_from_expr(expr, input_map, &mut bits)?;
                     }
                     None => {}
                 },
@@ -1177,7 +1176,7 @@ impl<'a> PlanReconstructor<'a> {
                         bits |= Self::relation_bit(*relation_id);
                     }
                     Some(ColumnMapEntry::Expression { expr, input_map }) => {
-                        self.add_relation_bits_from_expr(expr, input_map, &mut bits)?;
+                        Self::add_relation_bits_from_expr(expr, input_map, &mut bits)?;
                     }
                     None => {}
                 },
