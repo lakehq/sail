@@ -31,7 +31,7 @@ pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<Record
         Ok(RecordBatch::try_new_with_options(
             schema,
             columns,
-            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+            &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
         )?)
     } else {
         Ok(RecordBatch::try_new(schema, columns)?)
@@ -98,7 +98,15 @@ pub fn cast_record_batch_relaxed_tz(
         cols.push(casted);
     }
 
-    Ok(RecordBatch::try_new(target.clone(), cols)?)
+    if cols.is_empty() {
+        Ok(RecordBatch::try_new_with_options(
+            target.clone(),
+            cols,
+            &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+        )?)
+    } else {
+        Ok(RecordBatch::try_new(target.clone(), cols)?)
+    }
 }
 
 fn cast_array_recursively(src: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
