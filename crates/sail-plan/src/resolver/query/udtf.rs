@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{ScalarValue, TableReference};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, ExprSchemable, Extension, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::table_input::TableInput;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_python_udf::cereal::pyspark_udtf::PySparkUdtfPayload;
 use sail_python_udf::get_udf_name;
@@ -71,6 +74,18 @@ impl PlanResolver<'_> {
         state.config_mut().arrow_allow_large_var_types = true;
 
         let arguments_len = arguments.len();
+        let argument_is_tables = arguments
+            .iter()
+            .map(|e| {
+                e.expr.exists(|e| {
+                    Ok(matches!(
+                        e,
+                        Expr::ScalarFunction(ScalarFunction { func, .. })
+                            if func.inner().as_any().is::<TableInput>()
+                    ))
+                })
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
 
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
@@ -142,6 +157,7 @@ impl PlanResolver<'_> {
                     arg_types,
                     &arg_literals,
                     kwargs,
+                    &argument_is_tables,
                 )?
             }
         };

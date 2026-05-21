@@ -57,7 +57,7 @@ impl CsvReadOptions {
             null_value,
             null_regex,
             line_sep,
-            infer_schema,
+            infer_schema: _,
             schema_infer_max_records,
             multi_line,
             compression,
@@ -118,11 +118,7 @@ impl CsvReadOptions {
                 })
             })
             .transpose()?;
-        let schema_infer_max_rec = if infer_schema {
-            Some(schema_infer_max_records)
-        } else {
-            Some(0)
-        };
+        let schema_infer_max_rec = Some(schema_infer_max_records);
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
                 key: "compression".to_string(),
@@ -266,10 +262,9 @@ mod tests {
         assert_eq!(options.null_value, None);
         assert_eq!(options.null_regex, Some("MEOW".to_string()));
         assert_eq!(options.terminator, Some(b'@'));
-        // `inferSchema` defaults to `false` (Spark parity), which collapses
-        // `schema_infer_max_rec` to `Some(0)` regardless of the user-supplied
-        // `schema_infer_max_records` value above.
-        assert_eq!(options.schema_infer_max_rec, Some(0));
+        // `inferSchema=false` still needs DataFusion to infer the CSV field
+        // count; Sail converts the inferred fields to STRING afterwards.
+        assert_eq!(options.schema_infer_max_rec, Some(100));
         assert_eq!(options.newlines_in_values, Some(true));
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
@@ -277,7 +272,7 @@ mod tests {
         let options = CsvReadOptions::resolve(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.schema_infer_max_rec, Some(0));
+        assert_eq!(options.schema_infer_max_rec, Some(1000));
 
         let kv = option_list(&[("inferSchema", "true")]);
         let options = CsvReadOptions::resolve(&state, vec![kv])
@@ -289,7 +284,7 @@ mod tests {
         let options = CsvReadOptions::resolve(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.schema_infer_max_rec, Some(0));
+        assert_eq!(options.schema_infer_max_rec, Some(1000));
 
         let kv = option_list(&[
             ("inferSchema", "false"),
@@ -298,7 +293,7 @@ mod tests {
         let options = CsvReadOptions::resolve(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(options.schema_infer_max_rec, Some(0));
+        assert_eq!(options.schema_infer_max_rec, Some(500));
 
         let kv = option_list(&[("null_value", "MEOW"), ("null_regex", "MEOW")]);
         let result = CsvReadOptions::resolve(&state, vec![kv]).and_then(|o| o.into_table_options());

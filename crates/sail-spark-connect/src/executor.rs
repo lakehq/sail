@@ -11,7 +11,7 @@ use datafusion::arrow::array::{
     StructArray,
 };
 use datafusion::arrow::compute::cast;
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef, Fields, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef, Fields, Schema};
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::future::FutureExt;
@@ -388,10 +388,6 @@ fn normalize_field_for_pandas(field: &FieldRef, name: String) -> FieldRef {
 
 fn normalize_data_type_for_pandas(data_type: &ArrowDataType) -> ArrowDataType {
     match data_type {
-        ArrowDataType::Timestamp(_, timezone) if timezone.is_none() => {
-            ArrowDataType::Timestamp(TimeUnit::Nanosecond, timezone.clone())
-        }
-        ArrowDataType::Duration(_) => ArrowDataType::Duration(TimeUnit::Nanosecond),
         ArrowDataType::Struct(fields) => {
             ArrowDataType::Struct(normalize_fields_for_pandas(fields, true))
         }

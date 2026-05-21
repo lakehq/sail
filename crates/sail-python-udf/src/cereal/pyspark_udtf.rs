@@ -53,6 +53,8 @@ impl PySparkUdtfPayload {
     /// * `argument_literals` - For each argument, `Some(sv)` if it's a constant expression
     ///   with value `sv` (which may be null), and `None` if it's not a constant expression.
     /// * `kwargs` - The keyword argument names for each argument (None for positional).
+    /// * `argument_is_tables` - Whether each argument originated from Spark's `TABLE (...)`
+    ///   UDTF syntax.
     pub fn analyze(
         python_version: &str,
         command: &[u8],
@@ -60,6 +62,7 @@ impl PySparkUdtfPayload {
         argument_types: &[DataType],
         argument_literals: &[Option<ScalarValue>],
         kwargs: &[Option<String>],
+        argument_is_tables: &[bool],
     ) -> PyUdfResult<DataType> {
         check_python_udf_version(python_version)?;
         let _ = eval_type; // eval_type is not needed for the analyze call itself
@@ -98,7 +101,7 @@ impl PySparkUdtfPayload {
                     _ => (false, None),
                 };
                 let kwarg_name: Option<&str> = kwargs.get(i).and_then(|k| k.as_deref());
-                let is_table = false; // TABLE arguments are not yet supported
+                let is_table = argument_is_tables.get(i).copied().unwrap_or(false);
                 let tuple = (arrow_type, is_constant, value_array, kwarg_name, is_table)
                     .into_pyobject(py)
                     .map_err(PyUdfError::PythonError)?;
