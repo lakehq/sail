@@ -20,8 +20,25 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
-    expr_fn::array_repeat(element, cast(count, DataType::Int64))
+fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let (element, count) = input.arguments.two()?;
+    let count = cast(count, DataType::Int64);
+    let output_type =
+        expr_fn::array_repeat(element.clone(), count.clone()).get_type(schema.as_ref())?;
+    array_repeat_with_nullable_element(element, count, output_type)
+}
+
+fn array_repeat_with_nullable_element(
+    element: expr::Expr,
+    count: expr::Expr,
+    output_type: DataType,
+) -> PlanResult<expr::Expr> {
+    let nullable_element = when(lit(true), element).end()?;
+    Ok(cast(
+        expr_fn::array_repeat(nullable_element, count),
+        output_type,
+    ))
 }
 
 fn array_compact(array: expr::Expr) -> expr::Expr {
@@ -165,14 +182,12 @@ fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     .when(
         pos_from_zero.clone().lt(lit(0)),
         expr_fn::array_concat(vec![
-            cast(
-                expr_fn::array_repeat(value.clone(), lit(1)),
+            array_repeat_with_nullable_element(value.clone(), lit(1), output_type.clone())?,
+            array_repeat_with_nullable_element(
+                lit(ScalarValue::Null),
+                -pos_from_zero.clone(),
                 output_type.clone(),
-            ),
-            cast(
-                expr_fn::array_repeat(lit(ScalarValue::Null), -pos_from_zero.clone()),
-                output_type.clone(),
-            ),
+            )?,
             array_input.clone(),
         ]),
     )
@@ -186,10 +201,7 @@ fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             .between(lit(1), array_len.clone() - lit(1)),
         expr_fn::array_concat(vec![
             expr_fn::array_slice(array_input.clone(), lit(1), pos_from_zero.clone(), None),
-            cast(
-                expr_fn::array_repeat(value.clone(), lit(1)),
-                output_type.clone(),
-            ),
+            array_repeat_with_nullable_element(value.clone(), lit(1), output_type.clone())?,
             expr_fn::array_slice(
                 array_input.clone(),
                 pos_from_zero.clone() + lit(1),
@@ -206,11 +218,12 @@ fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         pos_from_zero.clone().gt(array_len.clone()),
         expr_fn::array_concat(vec![
             array_input,
-            cast(
-                expr_fn::array_repeat(lit(ScalarValue::Null), pos_from_zero - array_len),
+            array_repeat_with_nullable_element(
+                lit(ScalarValue::Null),
+                pos_from_zero - array_len,
                 output_type.clone(),
-            ),
-            cast(expr_fn::array_repeat(value, lit(1)), output_type),
+            )?,
+            array_repeat_with_nullable_element(value, lit(1), output_type)?,
         ]),
     )
     .end()?)
@@ -380,7 +393,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_position", F::binary(array_position)),
         ("array_prepend", F::custom(array_prepend)),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
-        ("array_repeat", F::binary(array_repeat)),
+        ("array_repeat", F::custom(array_repeat)),
         (
             "array_size",
             F::unary(|array| cast(expr_fn::array_length(array), DataType::Int32)),
