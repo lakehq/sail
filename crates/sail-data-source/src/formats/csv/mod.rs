@@ -81,6 +81,7 @@ fn rename_default_csv_columns(schema: Schema) -> Schema {
 #[derive(Debug)]
 pub struct CsvSchemaInfer {
     infer_schema: bool,
+    has_header: bool,
 }
 
 #[async_trait::async_trait]
@@ -92,6 +93,13 @@ impl SchemaInfer for CsvSchemaInfer {
         files: &[object_store::ObjectMeta],
         list_options: &datafusion::datasource::listing::ListingOptions,
     ) -> Result<Schema> {
+        // With `inferSchema=false`, Spark uses the first header to define the
+        // column shape instead of unioning distinct header names across files.
+        let files = if !self.infer_schema && self.has_header {
+            files.first().map(std::slice::from_ref).unwrap_or(files)
+        } else {
+            files
+        };
         let mut schema = list_options
             .format
             .infer_schema(ctx, store, files)
@@ -159,6 +167,7 @@ impl ReadFormat for CsvReadFormat {
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
         Arc::new(CsvSchemaInfer {
             infer_schema: self.options.infer_schema,
+            has_header: self.options.header,
         })
     }
 }
