@@ -1,8 +1,8 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{BooleanArray, RecordBatch};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::{Distribution, Partitioning};
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::{
@@ -10,6 +10,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, plan_err, Result, Statistics};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use futures::StreamExt;
 use sail_common_datafusion::streaming::event::encoding::{
     DecodedFlowEventStream, EncodedFlowEventStream,
@@ -86,12 +87,15 @@ impl ExecutionPlan for StreamLimitExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -153,10 +157,13 @@ impl ExecutionPlan for StreamLimitExec {
         Ok(Box::pin(EncodedFlowEventStream::new(stream)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(partition)?
-            .with_fetch(self.fetch, self.skip, 1)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = self.input.partition_statistics(partition)?;
+        let stats = stats
+            .as_ref()
+            .clone()
+            .with_fetch(self.fetch, self.skip, 1)?;
+        Ok(Arc::new(stats))
     }
 
     fn supports_limit_pushdown(&self) -> bool {

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -14,6 +13,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::TryStreamExt;
 use url::Url;
@@ -150,12 +150,19 @@ impl ExecutionPlan for DeltaDiscoveryExec {
         "DeltaDiscoveryExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        if let Some(predicate) = &self.predicate {
+            f(predicate.as_ref())
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

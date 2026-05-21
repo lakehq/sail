@@ -480,10 +480,10 @@ impl PruningStatistics for AddStatsPruningStatistics {
             .and_then(|stats| stats.null_counts.clone())
     }
 
-    fn row_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
+    fn row_counts(&self) -> Option<datafusion::arrow::array::ArrayRef> {
         self.materialized_columns
-            .get(column.name())
-            .and_then(|stats| stats.row_counts.clone())
+            .values()
+            .find_map(|stats| stats.row_counts.clone())
     }
 
     fn contained(

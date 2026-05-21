@@ -99,10 +99,7 @@ fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .arguments
         .into_iter()
         .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
+            expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64))
         })
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -122,10 +119,7 @@ fn product(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .arguments
         .into_iter()
         .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
+            expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64))
         })
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -244,10 +238,7 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .arguments
         .into_iter()
         .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
+            expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64))
         })
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {

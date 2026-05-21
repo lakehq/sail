@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -9,6 +8,7 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{Result, Statistics};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use futures::StreamExt;
 
 /// A physical plan node that filters a stream of retractable data batches.
@@ -66,12 +66,15 @@ impl ExecutionPlan for StreamFilterExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        f(self.predicate.as_ref())
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -121,7 +124,7 @@ impl ExecutionPlan for StreamFilterExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 }

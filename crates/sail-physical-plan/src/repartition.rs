@@ -1,7 +1,7 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
@@ -10,6 +10,7 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{internal_err, plan_err, Result, Statistics};
+use datafusion_common::tree_node::TreeNodeRecursion;
 
 /// A physical plan node for explicit repartitioning in the query.
 /// This is a placeholder node that should be rewritten during physical optimization.
@@ -59,12 +60,15 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -99,11 +103,11 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         )
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_none() {
             self.input.partition_statistics(None)
         } else {
-            Ok(Statistics::new_unknown(&self.schema()))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         }
     }
 

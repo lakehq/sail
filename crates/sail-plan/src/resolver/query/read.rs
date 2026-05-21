@@ -279,10 +279,10 @@ impl PlanResolver<'_> {
     ) -> PlanResult<f64> {
         let schema = Arc::new(DFSchema::empty());
         let resolved = self.resolve_expression(expr, &schema, state).await?;
-        let cast_expr = Expr::Cast(datafusion_expr::expr::Cast {
-            expr: Box::new(resolved),
-            data_type: DataType::Float64,
-        });
+        let cast_expr = Expr::Cast(datafusion_expr::expr::Cast::new(
+            Box::new(resolved),
+            DataType::Float64,
+        ));
         let evaluator = LiteralEvaluator::new();
         let scalar = evaluator
             .evaluate(&cast_expr)
@@ -334,7 +334,7 @@ impl PlanResolver<'_> {
             let udf = catalog_manager.get_function(&canonical_function_name)?;
             if let Some(f) = udf
                 .as_ref()
-                .and_then(|x| x.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>())
+                .and_then(|x| x.inner().downcast_ref::<PySparkUnresolvedUDF>())
             {
                 if f.eval_type().is_table_function() {
                     let udtf = PythonUdtf {

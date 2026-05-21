@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -10,6 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::TryStreamExt;
 
@@ -142,12 +143,15 @@ impl ExecutionPlan for DeltaMetadataStatsExec {
         "DeltaMetadataStatsExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

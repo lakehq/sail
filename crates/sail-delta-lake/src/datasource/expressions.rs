@@ -113,7 +113,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
 pub fn collect_physical_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String> {
     let mut columns = HashSet::<String>::new();
     let _ = expr.apply(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<PhysicalColumn>() {
+        if let Some(column) = expr.downcast_ref::<PhysicalColumn>() {
             columns.insert(column.name().to_string());
         }
         Ok(TreeNodeRecursion::Continue)

@@ -69,11 +69,12 @@ pub fn partitioned_file_from_action(
             ..object_meta
         },
         partition_values,
-        extensions: None,
+        extensions: datafusion_common::extensions::Extensions::new(),
         range: None,
         statistics: None,
         ordering: None,
         metadata_size_hint: None,
+        table_reference: None,
     })
 }
 

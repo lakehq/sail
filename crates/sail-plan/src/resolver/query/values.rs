@@ -56,7 +56,10 @@ impl PlanResolver<'_> {
                         if let Some(true) = sv
                             .try_as_str()
                             .flatten()
-                            .map(|s| s.to_uppercase() == "NAN" && cast.data_type.is_numeric())
+                            .map(|s| {
+                                s.to_uppercase() == "NAN"
+                                    && cast.field.data_type().is_numeric()
+                            })
                         {
                             nan_positions.insert(idx);
                         }

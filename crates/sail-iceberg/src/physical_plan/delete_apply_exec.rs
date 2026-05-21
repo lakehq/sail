@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
@@ -10,7 +9,7 @@ use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, SortField};
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -18,6 +17,7 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use futures::stream::TryStreamExt;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
@@ -136,6 +136,13 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
     }
     fn schema(&self) -> SchemaRef {
         self.input.schema()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

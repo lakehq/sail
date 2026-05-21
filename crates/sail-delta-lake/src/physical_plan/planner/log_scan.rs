@@ -111,8 +111,9 @@ fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> 
                 range: None,
                 statistics: None,
                 ordering: None,
-                extensions: None,
+                extensions: datafusion_common::extensions::Extensions::new(),
                 metadata_size_hint: None,
+                table_reference: None,
             })
         })
         .collect()
@@ -132,8 +133,9 @@ fn to_partitioned_files_with_version(
             range: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: datafusion_common::extensions::Extensions::new(),
             metadata_size_hint: None,
+            table_reference: None,
         })
         .collect())
 }

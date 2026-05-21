@@ -97,7 +97,6 @@ impl PlanResolver<'_> {
                     .get_function(&canonical_function_name)?;
                 let registered_udaf = catalog_function.as_ref().and_then(|udf| {
                     udf.inner()
-                        .as_any()
                         .downcast_ref::<PySparkUnresolvedUDF>()
                         .filter(|f| {
                             matches!(

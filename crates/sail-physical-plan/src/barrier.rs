@@ -1,10 +1,11 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_common::{exec_err, Result};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use futures::{StreamExt, TryStreamExt};
 
 /// A physical plan node that enforces a barrier between preconditions and the actual plan.
@@ -65,12 +66,15 @@ impl ExecutionPlan for BarrierExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

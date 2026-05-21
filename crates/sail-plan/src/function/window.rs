@@ -178,10 +178,7 @@ fn kurtosis(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     let args = arguments
         .into_iter()
         .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
+            expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64))
         })
         .collect();
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
@@ -213,10 +210,7 @@ fn skewness(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     let args = arguments
         .into_iter()
         .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
+            expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64))
         })
         .collect();
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {

@@ -1,15 +1,16 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{internal_datafusion_err, Result, Statistics};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use futures::StreamExt;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -90,12 +91,15 @@ impl ExecutionPlan for RelaxedTzCastExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -142,16 +146,16 @@ impl ExecutionPlan for RelaxedTzCastExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         let statistics = self.input.partition_statistics(partition)?;
         if self.input.schema() == self.schema {
             Ok(statistics)
         } else {
-            Ok(map_statistics_to_schema(
-                &statistics,
+            Ok(Arc::new(map_statistics_to_schema(
+                statistics.as_ref(),
                 &self.input.schema(),
                 &self.schema,
-            ))
+            )))
         }
     }
 }
@@ -334,12 +338,15 @@ mod tests {
             "TestExec"
         }
 
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.properties
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -371,11 +378,11 @@ mod tests {
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
             if partition.is_none() {
-                Ok(self.statistics.clone())
+                Ok(Arc::new(self.statistics.clone()))
             } else {
-                Ok(Statistics::new_unknown(self.schema.as_ref()))
+                Ok(Arc::new(Statistics::new_unknown(self.schema.as_ref())))
             }
         }
     }

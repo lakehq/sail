@@ -347,7 +347,7 @@ impl PruningStatistics for SnapshotPruningStats<'_> {
                 .ok();
         }
         let partition_values = self.pick_stats(column, "__dummy__")?;
-        let row_counts = self.row_counts(column)?;
+        let row_counts = self.row_counts()?;
         let row_counts = row_counts.as_any().downcast_ref::<UInt64Array>()?;
         let mut null_counts = Vec::with_capacity(partition_values.len());
         for i in 0..partition_values.len() {
@@ -365,7 +365,7 @@ impl PruningStatistics for SnapshotPruningStats<'_> {
     /// as an `Option<UInt64Array>`.
     ///
     /// Note: the returned array must contain `num_containers()` rows
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         let row_counts =
             nested_struct_column_exact_or_path(self.stats, STATS_FIELD_NUM_RECORDS)?.clone();
         ::datafusion::arrow::compute::cast(row_counts.as_ref(), &ArrowDataType::UInt64).ok()

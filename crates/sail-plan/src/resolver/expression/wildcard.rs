@@ -153,12 +153,18 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::WildcardOptions> {
-        fn make_ident(value: impl Into<String>) -> expr::Ident {
-            expr::Ident {
+        fn make_ident(value: impl Into<String>) -> datafusion_expr::sql::Ident {
+            datafusion_expr::sql::Ident {
                 value: value.into(),
                 quote_style: None,
                 span: String::new(),
             }
+        }
+
+        fn make_object_name(value: impl Into<String>) -> datafusion_expr::sql::ObjectName {
+            datafusion_expr::sql::ObjectName(vec![
+                datafusion_expr::sql::ObjectNamePart::Identifier(make_ident(value)),
+            ])
         }
 
         let ilike = wildcard_options
@@ -168,9 +174,11 @@ impl PlanResolver<'_> {
             .exclude_columns
             .map(|x| {
                 let exclude = if x.len() > 1 {
-                    expr::ExcludeSelectItem::Multiple(x.into_iter().map(make_ident).collect())
+                    expr::ExcludeSelectItem::Multiple(
+                        x.into_iter().map(make_object_name).collect(),
+                    )
                 } else if let Some(x) = x.into_iter().next() {
-                    expr::ExcludeSelectItem::Single(make_ident(x))
+                    expr::ExcludeSelectItem::Single(make_object_name(x))
                 } else {
                     return Err(PlanError::invalid(
                         "exclude columns must have at least one column",
