@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -9,6 +8,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::DisplayFormatType;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::decoder::{deserialize_stream, Decoder, DecoderDeserializer};
 use datafusion_datasource::file::FileSource;
@@ -121,10 +121,6 @@ impl FileSource for TextSource {
         Ok(opener)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
     }
@@ -168,6 +164,22 @@ impl FileSource for TextSource {
             }
             DisplayFormatType::TreeRender => Ok(()),
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn datafusion::physical_expr::PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(filter) = self.filter() {
+            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
+        }
+        if let Some(projection) = self.projection() {
+            for expr in projection.as_ref() {
+                tnr = tnr.visit_sibling(|| f(expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 

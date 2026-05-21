@@ -247,11 +247,6 @@ impl ExecutionPlan for IcebergWriterExec {
     fn name(&self) -> &'static str {
         "IcebergWriterExec"
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }

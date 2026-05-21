@@ -1,8 +1,8 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -70,10 +70,6 @@ impl FileSource for BinarySource {
         Ok(opener)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
     }
@@ -104,6 +100,22 @@ impl FileSource for BinarySource {
 
     fn file_type(&self) -> &str {
         "binary"
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn datafusion::physical_expr::PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(filter) = self.filter() {
+            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
+        }
+        if let Some(projection) = self.projection() {
+            for expr in projection.as_ref() {
+                tnr = tnr.visit_sibling(|| f(expr.expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 }
 

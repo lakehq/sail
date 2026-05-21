@@ -56,10 +56,6 @@ impl Default for SparkToNumber {
 }
 
 impl ScalarUDFImpl for SparkToNumber {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         if self.safe {
             "try_to_number"

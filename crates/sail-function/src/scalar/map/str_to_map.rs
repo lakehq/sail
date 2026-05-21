@@ -47,10 +47,6 @@ impl StrToMap {
 }
 
 impl ScalarUDFImpl for StrToMap {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "str_to_map"
     }

@@ -404,8 +404,9 @@ impl IcebergTableProvider {
                 range: None,
                 statistics: Some(Arc::new(self.create_file_statistics(&data_file))),
                 ordering: None,
-                extensions: None,
+                extensions: datafusion_common::extensions::Extensions::new(),
                 metadata_size_hint: None,
+                table_reference: None,
             };
 
             partitioned_files.push(partitioned_file);
@@ -629,10 +630,6 @@ impl IcebergTableProvider {
 
 #[async_trait]
 impl TableProvider for IcebergTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> Arc<ArrowSchema> {
         self.arrow_schema.clone()
     }

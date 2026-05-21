@@ -213,11 +213,6 @@ impl ExecutionPlan for IcebergCommitExec {
     fn name(&self) -> &'static str {
         "IcebergCommitExec"
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }

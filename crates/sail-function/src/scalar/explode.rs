@@ -50,10 +50,6 @@ impl Explode {
 }
 
 impl ScalarUDFImpl for Explode {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         match self.kind {
             ExplodeKind::Explode => "explode",

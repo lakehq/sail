@@ -43,10 +43,6 @@ fn raise_from_strings<'a>(
 }
 
 impl ScalarUDFImpl for RaiseError {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "raise_error"
     }

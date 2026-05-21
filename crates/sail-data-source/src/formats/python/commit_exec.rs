@@ -3,14 +3,14 @@
 //! This node consumes per-partition write results produced by
 //! `PythonDataSourceWriteExec`, coalesces them into a single partition, then
 //! invokes `writer.commit(messages)` or `writer.abort(messages)`.
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
 use arrow::array::{Array, BinaryArray, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::Schema;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -86,10 +86,6 @@ impl DisplayAs for PythonDataSourceWriteCommitExec {
 impl ExecutionPlan for PythonDataSourceWriteCommitExec {
     fn name(&self) -> &'static str {
         "PythonDataSourceWriteCommitExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -210,6 +206,13 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             Arc::new(Schema::empty()),
             stream,
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

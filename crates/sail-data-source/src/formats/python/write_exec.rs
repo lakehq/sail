@@ -10,14 +10,14 @@
 //! Each phase (write, commit, abort) deserializes a fresh Python writer from
 //! pickled bytes. Writers must not rely on in-memory state across the
 //! write -> commit/abort boundary.
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
 use arrow::array::{BinaryArray, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
@@ -120,10 +120,6 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
         "PythonDataSourceWriteExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -189,6 +185,13 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
             output_schema,
             stream,
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

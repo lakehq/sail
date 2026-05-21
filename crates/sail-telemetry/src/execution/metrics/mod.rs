@@ -7,6 +7,8 @@ mod projection;
 #[cfg(test)]
 pub(super) mod testing;
 
+use std::any::Any;
+
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec, SortMergeJoinExec,
@@ -71,7 +73,7 @@ impl_chained_metric_emitter!(T1 T2 T3 T4 T5 T6 T7 T8 : T9);
 
 /// Build a metric emitter based on the type of the execution plan.
 pub fn build_metric_emitter(plan: &dyn ExecutionPlan) -> Box<dyn MetricEmitter> {
-    let plan = plan.as_any();
+    let plan = plan as &dyn Any;
     if plan.is::<ProjectionExec>() {
         Box::new((
             projection::ProjectionMetricEmitter,

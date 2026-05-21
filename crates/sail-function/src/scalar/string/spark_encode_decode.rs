@@ -31,10 +31,6 @@ impl SparkEncode {
 }
 
 impl ScalarUDFImpl for SparkEncode {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_encode"
     }
@@ -266,10 +262,6 @@ impl SparkDecode {
 }
 
 impl ScalarUDFImpl for SparkDecode {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_decode"
     }

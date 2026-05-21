@@ -134,11 +134,6 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
     fn name(&self) -> &str {
         "IcebergDeleteApplyExec"
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.input.schema()
     }

@@ -144,10 +144,6 @@ impl SparkUniform {
 }
 
 impl ScalarUDFImpl for SparkUniform {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "uniform"
     }

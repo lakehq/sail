@@ -62,10 +62,6 @@ impl PercentileFunction {
 }
 
 impl AggregateUDFImpl for PercentileFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "percentile"
     }

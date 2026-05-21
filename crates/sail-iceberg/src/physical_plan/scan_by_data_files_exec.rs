@@ -258,11 +258,6 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
     fn name(&self) -> &str {
         "IcebergScanByDataFilesExec"
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.output_schema.clone()
     }

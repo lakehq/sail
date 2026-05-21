@@ -99,11 +99,6 @@ impl ExecutionPlan for IcebergManifestScanExec {
     fn name(&self) -> &str {
         "IcebergManifestScanExec"
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.output_schema.clone()
     }

@@ -108,10 +108,6 @@ impl Default for SparkVariantExplodeUdf {
 }
 
 impl ScalarUDFImpl for SparkVariantExplodeUdf {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_variant_explode"
     }

@@ -158,7 +158,7 @@ impl PruningStatistics for IcebergPruningStats {
         Some(arr)
     }
 
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         if let Some(arr) = self.rows_cache.borrow().as_ref() {
             return Some(arr.clone());
         }

@@ -166,7 +166,7 @@ datafusion = { git = "https://github.com/apache/datafusion.git", rev = "c8dddb8a
     "avro",
     "recursive_protection",
 ] }
-datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "c8dddb8a03f098b92e0295118d12390381d23fa8", features = ["object_store", "avro"] }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "c8dddb8a03f098b92e0295118d12390381d23fa8", features = ["object_store"] }
 datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "c8dddb8a03f098b92e0295118d12390381d23fa8" }
 datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "c8dddb8a03f098b92e0295118d12390381d23fa8", default-features = false }
 datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "c8dddb8a03f098b92e0295118d12390381d23fa8" }
@@ -182,15 +182,15 @@ pyo3 = { version = "0.28.3", features = ["serde"] }
 # Jiter has a dependency on pyo3, which needs to match the version used in Sail.
 # https://github.com/pydantic/jiter/blob/v0.13.0/Cargo.toml
 jiter = { version = "0.13.0" }
-arrow = { version = "58.1.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "58.1.0" }
-arrow-schema = { version = "58.1.0", features = ["serde"] }
-arrow-flight = { version = "58.1.0", features = ["flight-sql-experimental"] }
-arrow-pyarrow = { version = "58.1.0" }
-parquet = { version = "58.1.0" }
-parquet-variant = { version = "58.1.0" }
-parquet-variant-compute = { version = "58.1.0" }
-parquet-variant-json = { version = "58.1.0" }
+arrow = { version = "58.3.0", features = ["chrono-tz"] }
+arrow-buffer = { version = "58.3.0" }
+arrow-schema = { version = "58.3.0", features = ["serde"] }
+arrow-flight = { version = "58.3.0", features = ["flight-sql-experimental"] }
+arrow-pyarrow = { version = "58.3.0" }
+parquet = { version = "58.3.0" }
+parquet-variant = { version = "58.3.0" }
+parquet-variant-compute = { version = "58.3.0" }
+parquet-variant-json = { version = "58.3.0" }
 serde_arrow = { version = "0.14.1", features = ["arrow-58"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.13.2", features = ["aws", "gcp", "azure", "http"] }
