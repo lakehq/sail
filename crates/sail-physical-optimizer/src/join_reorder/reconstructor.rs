@@ -292,6 +292,144 @@ impl<'a> PlanReconstructor<'a> {
         (keep.len() < column_map.len()).then_some(keep)
     }
 
+    /// Validate the selected DP tree before rebuilding physical operators.
+    ///
+    /// The central correctness contract is that every original query-graph predicate edge is
+    /// attached exactly once at the lowest join node whose two children together contain all
+    /// referenced relations. This catches missed complex hyperedges and accidental duplicate
+    /// predicate placement before a malformed physical plan is produced.
+    pub fn validate_reconstruction_plan(&self, dp_plan: &DPPlan) -> Result<()> {
+        let expected_root = JoinSet::from_iter(0..self.query_graph.relation_count())?;
+        if dp_plan.join_set != expected_root {
+            return Err(DataFusionError::Internal(format!(
+                "JoinReorder: reconstruction root {:?} does not cover all relations {:?}",
+                dp_plan.join_set, expected_root
+            )));
+        }
+
+        let mut edge_use_counts = vec![0usize; self.query_graph.edges.len()];
+        let mut visited_join_sets = HashSet::new();
+        self.validate_reconstruction_subplan(
+            dp_plan,
+            &mut edge_use_counts,
+            &mut visited_join_sets,
+        )?;
+
+        for (edge_index, count) in edge_use_counts.into_iter().enumerate() {
+            if count != 1 {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: query graph edge {} was used {} times during reconstruction; expected exactly once",
+                    edge_index, count
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_reconstruction_subplan(
+        &self,
+        dp_plan: &DPPlan,
+        edge_use_counts: &mut [usize],
+        visited_join_sets: &mut HashSet<JoinSet>,
+    ) -> Result<()> {
+        if !visited_join_sets.insert(dp_plan.join_set) {
+            return Err(DataFusionError::Internal(format!(
+                "JoinReorder: DP tree contains duplicate join set {:?}",
+                dp_plan.join_set
+            )));
+        }
+
+        match &dp_plan.plan_type {
+            PlanType::Leaf { relation_id } => {
+                let expected = JoinSet::new_singleton(*relation_id)?;
+                if dp_plan.join_set != expected {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: leaf relation {} has inconsistent join set {:?}",
+                        relation_id, dp_plan.join_set
+                    )));
+                }
+                if self.query_graph.get_relation(*relation_id).is_none() {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: leaf relation {} not found in query graph",
+                        relation_id
+                    )));
+                }
+            }
+            PlanType::Join {
+                left_set,
+                right_set,
+                edge_indices,
+            } => {
+                if !left_set.is_disjoint(right_set) {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: join children overlap: left={:?}, right={:?}",
+                        left_set, right_set
+                    )));
+                }
+                if (*left_set | *right_set) != dp_plan.join_set {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: join children {:?} and {:?} do not form parent {:?}",
+                        left_set, right_set, dp_plan.join_set
+                    )));
+                }
+                if !self
+                    .query_graph
+                    .is_join_pair_legal(*left_set, *right_set, edge_indices)
+                {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: illegal join pair in selected DP plan: left={:?}, right={:?}, edges={:?}",
+                        left_set, right_set, edge_indices
+                    )));
+                }
+
+                for &edge_index in edge_indices {
+                    let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "JoinReorder: selected DP plan references missing edge {}",
+                            edge_index
+                        ))
+                    })?;
+                    if !edge.join_set.is_subset(&dp_plan.join_set)
+                        || edge.join_set.is_subset(left_set)
+                        || edge.join_set.is_subset(right_set)
+                    {
+                        return Err(DataFusionError::Internal(format!(
+                            "JoinReorder: edge {} with relations {:?} is not a valid connector for left={:?}, right={:?}",
+                            edge_index, edge.join_set, left_set, right_set
+                        )));
+                    }
+                    edge_use_counts[edge_index] += 1;
+                }
+
+                let left_dp_plan = self.dp_table.get(left_set).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "JoinReorder: left subplan {:?} missing from DP table",
+                        left_set
+                    ))
+                })?;
+                let right_dp_plan = self.dp_table.get(right_set).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "JoinReorder: right subplan {:?} missing from DP table",
+                        right_set
+                    ))
+                })?;
+                self.validate_reconstruction_subplan(
+                    left_dp_plan,
+                    edge_use_counts,
+                    visited_join_sets,
+                )?;
+                self.validate_reconstruction_subplan(
+                    right_dp_plan,
+                    edge_use_counts,
+                    visited_join_sets,
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Main entry point: recursively reconstruct ExecutionPlan from DPPlan
     /// Returns tuple: (reconstructed plan, column mapping for that plan's output)
     pub fn reconstruct(&mut self, dp_plan: &DPPlan) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
@@ -331,9 +469,23 @@ impl<'a> PlanReconstructor<'a> {
         }
 
         // Store in cache and return
+        Self::validate_column_map_shape(result.0.as_ref(), &result.1)?;
         self.plan_cache.insert(dp_plan.join_set, result.clone());
 
         Ok(result)
+    }
+
+    fn validate_column_map_shape(plan: &dyn ExecutionPlan, column_map: &ColumnMap) -> Result<()> {
+        let schema_len = plan.schema().fields().len();
+        if schema_len != column_map.len() {
+            return Err(DataFusionError::Internal(format!(
+                "JoinReorder: reconstructed column map length {} does not match plan schema length {} for {}",
+                column_map.len(),
+                schema_len,
+                plan.name()
+            )));
+        }
+        Ok(())
     }
 
     /// Reconstruct leaf node (single relation).
@@ -1213,6 +1365,46 @@ mod tests {
         graph
     }
 
+    fn create_test_graph_with_relations(count: usize) -> QueryGraph {
+        let mut graph = QueryGraph::new();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        for relation_id in 0..count {
+            let plan = Arc::new(EmptyExec::new(schema.clone()));
+            let relation = RelationNode::new(
+                plan,
+                relation_id,
+                1000.0,
+                1000.0,
+                Statistics::new_unknown(&schema),
+            );
+            graph.add_relation(relation);
+        }
+
+        graph
+    }
+
+    fn add_test_edge(graph: &mut QueryGraph, left: usize, right: usize) -> Result<usize> {
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("R0.C0", 0)) as Arc<dyn PhysicalExpr>,
+            Operator::Eq,
+            Arc::new(Column::new("R1.C0", 0)) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+        let edge_index = graph.edges.len();
+        graph.add_edge(JoinEdge::new(
+            JoinSet::new_singleton(left)?,
+            JoinSet::new_singleton(right)?,
+            filter,
+            JoinType::Inner,
+            vec![],
+        ))?;
+        Ok(edge_index)
+    }
+
     #[test]
     fn test_reconstructor_creation() {
         let dp_table = HashMap::new();
@@ -1232,6 +1424,44 @@ mod tests {
         let result = reconstructor.reconstruct(&leaf_plan);
 
         assert!(result.is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_reconstruction_plan_rejects_missing_edge() -> Result<()> {
+        let mut graph = create_test_graph_with_relations(3);
+        let edge_01 = add_test_edge(&mut graph, 0, 1)?;
+        let _edge_12 = add_test_edge(&mut graph, 1, 2)?;
+
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 1000.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 1000.0)?);
+        let leaf2 = Arc::new(DPPlan::new_leaf(2, 1000.0)?);
+        let set0 = JoinSet::new_singleton(0)?;
+        let set1 = JoinSet::new_singleton(1)?;
+        let set2 = JoinSet::new_singleton(2)?;
+        let join01 = Arc::new(DPPlan::new_join(set0, set1, vec![edge_01], 100.0, 1000.0));
+        let root = Arc::new(DPPlan::new_join(set0 | set1, set2, vec![], 200.0, 1000.0));
+
+        let mut dp_table = HashMap::new();
+        dp_table.insert(set0, leaf0);
+        dp_table.insert(set1, leaf1);
+        dp_table.insert(set2, leaf2);
+        dp_table.insert(set0 | set1, join01);
+        dp_table.insert(root.join_set, root.clone());
+
+        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let err = match reconstructor.validate_reconstruction_plan(&root) {
+            Ok(()) => {
+                return Err(DataFusionError::Internal(
+                    "missing edge should be rejected".to_string(),
+                ));
+            }
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("expected exactly once"),
+            "unexpected error: {err}"
+        );
         Ok(())
     }
 

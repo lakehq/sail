@@ -164,13 +164,21 @@ impl JoinReorder {
         );
 
         let mut enumerator = PlanEnumerator::new(query_graph, self.options.clone());
-        let best_plan = match enumerator.solve()? {
+        let solve_result = enumerator.solve_with_status()?;
+        let best_plan = match solve_result.plan {
             Some(plan) => {
-                trace!("JoinReorder: DP optimization completed successfully");
+                trace!(
+                    "JoinReorder: DP optimization completed successfully (status={:?}, emits={})",
+                    solve_result.status,
+                    solve_result.emit_count
+                );
                 plan
             }
             None => {
-                trace!("JoinReorder: DP optimization exceeded threshold, falling back to greedy algorithm");
+                warn!(
+                    "JoinReorder: DP optimization requires fallback (status={:?}, emits={}); using greedy algorithm",
+                    solve_result.status, solve_result.emit_count
+                );
                 enumerator.solve_greedy()?
             }
         };
@@ -183,6 +191,7 @@ impl JoinReorder {
 
         let mut reconstructor =
             PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
+        reconstructor.validate_reconstruction_plan(&best_plan)?;
         // Pre-compute required output columns for each join subtree based on the original
         // region-root output columns. This keeps intermediate join outputs narrow before
         // `JoinSelection` runs, helping avoid plan-shape regressions when we see through

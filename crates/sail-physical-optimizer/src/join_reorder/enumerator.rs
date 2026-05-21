@@ -12,6 +12,25 @@ use crate::join_reorder::graph::QueryGraph;
 use crate::join_reorder::join_set::JoinSet;
 use crate::join_reorder::JoinReorderOptions;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinReorderFallbackReason {
+    EmitThresholdExceeded,
+    FullPlanMissing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinReorderStatus {
+    DpCompleted,
+    FallbackRequired(JoinReorderFallbackReason),
+}
+
+#[derive(Debug, Clone)]
+pub struct JoinReorderSolveResult {
+    pub plan: Option<Arc<DPPlan>>,
+    pub status: JoinReorderStatus,
+    pub emit_count: usize,
+}
+
 /// Plan enumerator that implements dynamic programming algorithm to find optimal join order.
 pub struct PlanEnumerator {
     pub query_graph: QueryGraph,
@@ -25,6 +44,9 @@ pub struct PlanEnumerator {
     anchor_relations: JoinSet,
     /// Whether guarded anchor penalties should participate in DP costing.
     enable_fact_anchor_heuristic: bool,
+    /// CSG-CMP pairs emitted by the enumerator; used as an exact-enumeration oracle in tests.
+    #[cfg(test)]
+    emitted_pairs: Vec<(JoinSet, JoinSet, Vec<usize>)>,
 }
 
 impl PlanEnumerator {
@@ -200,12 +222,21 @@ impl PlanEnumerator {
             options,
             anchor_relations,
             enable_fact_anchor_heuristic,
+            #[cfg(test)]
+            emitted_pairs: Vec::new(),
         }
     }
 
     /// Main method that solves for the optimal join order using DPhyp-style enumeration.
     /// Returns Ok(Some(plan)) if successful, Ok(None) if threshold exceeded.
+    #[cfg(test)]
     pub fn solve(&mut self) -> Result<Option<Arc<DPPlan>>> {
+        Ok(self.solve_with_status()?.plan)
+    }
+
+    /// Solve the join order and return structured status describing whether DP completed or
+    /// a greedy fallback is required.
+    pub fn solve_with_status(&mut self) -> Result<JoinReorderSolveResult> {
         let relation_count = self.query_graph.relation_count();
 
         if relation_count == 0 {
@@ -223,9 +254,19 @@ impl PlanEnumerator {
         // Return the plan containing all relations if found; otherwise fallback to greedy.
         let all_relations_set = self.create_all_relations_set()?;
         if let Some(result) = self.dp_table.get(&all_relations_set).cloned() {
-            Ok(Some(result))
+            Ok(JoinReorderSolveResult {
+                plan: Some(result),
+                status: JoinReorderStatus::DpCompleted,
+                emit_count: self.emit_count,
+            })
         } else if !completed {
-            Ok(None)
+            Ok(JoinReorderSolveResult {
+                plan: None,
+                status: JoinReorderStatus::FallbackRequired(
+                    JoinReorderFallbackReason::EmitThresholdExceeded,
+                ),
+                emit_count: self.emit_count,
+            })
         } else {
             warn!(
                 "JoinReorder: DPhyp enumeration completed but did not produce a full plan \
@@ -234,7 +275,13 @@ impl PlanEnumerator {
                 self.query_graph.edges.len(),
                 self.emit_count
             );
-            Ok(None)
+            Ok(JoinReorderSolveResult {
+                plan: None,
+                status: JoinReorderStatus::FallbackRequired(
+                    JoinReorderFallbackReason::FullPlanMissing,
+                ),
+                emit_count: self.emit_count,
+            })
         }
     }
 
@@ -450,13 +497,15 @@ impl PlanEnumerator {
         edge_indices: Vec<usize>,
     ) -> Result<bool> {
         self.emit_count += 1;
-        if self.emit_count >= self.options.emit_threshold {
+        if self.emit_count > self.options.emit_threshold {
             trace!(
                 "JoinReorder: DPhyp emit threshold exceeded at {} emits",
                 self.emit_count
             );
             return Ok(false);
         }
+        #[cfg(test)]
+        self.emitted_pairs.push((left, right, edge_indices.clone()));
         let _ = self.emit_csg_cmp(left, right, &edge_indices)?;
         Ok(true)
     }
@@ -707,7 +756,7 @@ impl PlanEnumerator {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -844,6 +893,82 @@ mod tests {
         Ok(edge_index)
     }
 
+    fn normalize_pair(
+        left: JoinSet,
+        right: JoinSet,
+        mut edge_indices: Vec<usize>,
+    ) -> (u64, u64, Vec<usize>) {
+        edge_indices.sort_unstable();
+        if left.bits() < right.bits() {
+            (left.bits(), right.bits(), edge_indices)
+        } else {
+            (right.bits(), left.bits(), edge_indices)
+        }
+    }
+
+    fn is_connected_subset(graph: &QueryGraph, set: JoinSet) -> bool {
+        if set.cardinality() <= 1 {
+            return true;
+        }
+        let Some(start) = set.iter().next() else {
+            return false;
+        };
+        let mut visited = JoinSet::new_singleton(start).unwrap();
+        loop {
+            let mut changed = false;
+            for edge in &graph.edges {
+                if edge.join_set.is_subset(&set)
+                    && !edge.join_set.is_disjoint(&visited)
+                    && !edge.join_set.is_subset(&visited)
+                {
+                    visited |= edge.join_set;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        visited == set
+    }
+
+    fn brute_force_csg_cmp_pairs(graph: &QueryGraph) -> BTreeSet<(u64, u64, Vec<usize>)> {
+        let relation_count = graph.relation_count();
+        let all_bits = 1u64 << relation_count;
+        let mut pairs = BTreeSet::new();
+
+        for left_bits in 1..all_bits {
+            for right_bits in 1..all_bits {
+                if left_bits & right_bits != 0 || left_bits > right_bits {
+                    continue;
+                }
+                let left = JoinSet::from_bits(left_bits);
+                let right = JoinSet::from_bits(right_bits);
+                if !is_connected_subset(graph, left) || !is_connected_subset(graph, right) {
+                    continue;
+                }
+
+                let edge_indices = graph.get_connecting_edge_indices(left, right);
+                if edge_indices.is_empty() || !graph.is_join_pair_legal(left, right, &edge_indices)
+                {
+                    continue;
+                }
+                pairs.insert(normalize_pair(left, right, edge_indices));
+            }
+        }
+
+        pairs
+    }
+
+    fn emitted_pair_set(
+        emitted_pairs: &[(JoinSet, JoinSet, Vec<usize>)],
+    ) -> BTreeSet<(u64, u64, Vec<usize>)> {
+        emitted_pairs
+            .iter()
+            .map(|(left, right, edge_indices)| normalize_pair(*left, *right, edge_indices.clone()))
+            .collect()
+    }
+
     fn assert_strict_left_deep(plan: &Arc<DPPlan>, dp_table: &HashMap<JoinSet, Arc<DPPlan>>) {
         match &plan.plan_type {
             PlanType::Leaf { .. } => {}
@@ -914,6 +1039,101 @@ mod tests {
         let all_set = enumerator.create_all_relations_set()?;
         assert_eq!(all_set.bits(), 7); // 111 in binary = 7
         assert_eq!(all_set.cardinality(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dphyp_emits_exact_csg_cmp_pairs_for_chain_graph() -> Result<()> {
+        let mut graph = create_test_graph_with_relations(4);
+        add_equi_join_edge(&mut graph, 0, 1)?;
+        add_equi_join_edge(&mut graph, 1, 2)?;
+        add_equi_join_edge(&mut graph, 2, 3)?;
+
+        let expected = brute_force_csg_cmp_pairs(&graph);
+        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let result = enumerator.solve_with_status()?;
+
+        assert_eq!(result.status, JoinReorderStatus::DpCompleted);
+        assert_eq!(emitted_pair_set(&enumerator.emitted_pairs), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dphyp_emits_missed_complex_hyperedge_with_parent_split() -> Result<()> {
+        let mut graph = create_test_graph_with_relations(3);
+        let simple_02 = add_equi_join_edge(&mut graph, 0, 2)?;
+        let simple_01 = add_equi_join_edge(&mut graph, 0, 1)?;
+
+        let join_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("R0.C0", 0)) as Arc<dyn PhysicalExpr>,
+            Operator::Gt,
+            Arc::new(Column::new("R1.C0", 0)) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+        let complex_edge = graph.edges.len();
+        graph.add_edge(JoinEdge::new(
+            JoinSet::from_iter([0, 1])?,
+            JoinSet::new_singleton(2)?,
+            join_filter,
+            JoinType::Inner,
+            vec![],
+        ))?;
+
+        let csg = JoinSet::from_iter([0, 2])?;
+        let cmp = JoinSet::new_singleton(1)?;
+        assert_eq!(
+            graph.get_connecting_edge_indices(csg, cmp),
+            vec![simple_01, complex_edge]
+        );
+
+        let mut enumerator = PlanEnumerator::new(graph, JoinReorderOptions::default());
+        let result = enumerator.solve_with_status()?;
+
+        assert_eq!(result.status, JoinReorderStatus::DpCompleted);
+        assert!(
+            enumerator
+                .emitted_pairs
+                .iter()
+                .any(|(left, right, edge_indices)| {
+                    normalize_pair(*left, *right, edge_indices.clone())
+                        == normalize_pair(csg, cmp, vec![simple_01, complex_edge])
+                }),
+            "complex edge should be attached at the parent split that first contains all dependencies"
+        );
+        assert!(
+            enumerator
+                .emitted_pairs
+                .iter()
+                .any(|(_, _, edge_indices)| edge_indices.contains(&simple_02)),
+            "the setup edge should still participate in DP so {{0, 2}} is a connected CSG"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_solve_with_status_reports_threshold_fallback_after_allowed_emits() -> Result<()> {
+        let mut graph = create_test_graph_with_relations(3);
+        add_equi_join_edge(&mut graph, 0, 1)?;
+        add_equi_join_edge(&mut graph, 1, 2)?;
+
+        let mut enumerator = PlanEnumerator::new(
+            graph,
+            JoinReorderOptions {
+                emit_threshold: 1,
+                ..Default::default()
+            },
+        );
+        let result = enumerator.solve_with_status()?;
+
+        assert_eq!(
+            result.status,
+            JoinReorderStatus::FallbackRequired(JoinReorderFallbackReason::EmitThresholdExceeded)
+        );
+        assert_eq!(
+            enumerator.emitted_pairs.len(),
+            1,
+            "threshold is the maximum number of CSG-CMP pairs emitted before fallback"
+        );
+        assert_eq!(result.emit_count, 2);
         Ok(())
     }
 

@@ -223,15 +223,21 @@ impl QueryGraph {
             return vec![];
         }
 
+        let parent = left | right;
         self.edges
             .iter()
             .enumerate()
             .filter_map(|(idx, edge)| {
-                let forward =
-                    edge.left_endpoint.is_subset(&left) && edge.right_endpoint.is_subset(&right);
-                let reverse =
-                    edge.left_endpoint.is_subset(&right) && edge.right_endpoint.is_subset(&left);
-                (forward || reverse).then_some(idx)
+                // A predicate can be evaluated at the binary join that is the lowest common
+                // ancestor of all relations it references. For complex hyperedges, one endpoint
+                // may be split across the two child subplans (for example `{t1,t2} -- {t3}` at
+                // the split `{t1,t3} | {t2}`). Endpoint-only checks miss those edges; the correct
+                // condition is that all referenced relations are now present and the predicate is
+                // not wholly contained in either child.
+                let is_available = edge.join_set.is_subset(&parent);
+                let spans_children =
+                    !edge.join_set.is_subset(&left) && !edge.join_set.is_subset(&right);
+                (is_available && spans_children).then_some(idx)
             })
             .collect()
     }
@@ -535,6 +541,41 @@ mod tests {
         assert!(
             connecting_edge_indices.is_empty(),
             "expected no connecting edges between {{0}} and {{1}} from a hyperedge {{0,1,2}}"
+        );
+    }
+
+    #[test]
+    fn test_connecting_edges_include_complex_hyperedge_split_across_endpoint() {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::Column;
+
+        let mut graph = QueryGraph::new();
+        for relation_id in 0..3 {
+            graph.add_relation(create_test_relation(relation_id));
+        }
+
+        let filter =
+            Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+        let edge = JoinEdge::new(
+            JoinSet::from_iter([0, 1]).unwrap(),
+            JoinSet::new_singleton(2).unwrap(),
+            filter,
+            JoinType::Inner,
+            vec![],
+        );
+        graph.add_edge(edge).unwrap();
+
+        let csg = JoinSet::from_iter([0, 2]).unwrap();
+        let cmp = JoinSet::new_singleton(1).unwrap();
+        assert_eq!(graph.get_connecting_edge_indices(csg, cmp), vec![0]);
+
+        let incomplete_left = JoinSet::new_singleton(0).unwrap();
+        let incomplete_right = JoinSet::new_singleton(1).unwrap();
+        assert!(
+            graph
+                .get_connecting_edge_indices(incomplete_left, incomplete_right)
+                .is_empty(),
+            "hyperedge must not be emitted before all referenced relations are present"
         );
     }
 
