@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -69,10 +68,6 @@ impl TextFileFormat {
 
 #[async_trait::async_trait]
 impl FileFormat for TextFileFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         DEFAULT_TEXT_EXTENSION[1..].to_string()
     }

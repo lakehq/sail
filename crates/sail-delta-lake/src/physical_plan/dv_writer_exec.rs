@@ -1,6 +1,5 @@
 //! Physical execution node for Merge-on-Read deletion vector writing.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -18,6 +17,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
@@ -364,10 +364,6 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
         "DeletionVectorRowsWriterExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -621,6 +617,13 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             stream,
         )))
     }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
 }
 
 impl DisplayAs for DeletionVectorWriterExec {
@@ -640,10 +643,6 @@ impl DisplayAs for DeletionVectorWriterExec {
 impl ExecutionPlan for DeletionVectorWriterExec {
     fn name(&self) -> &'static str {
         "DeletionVectorWriterExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -877,6 +876,13 @@ impl ExecutionPlan for DeletionVectorWriterExec {
             self.schema(),
             stream,
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

@@ -22,7 +22,7 @@ use std::sync::Arc;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, DFSchema, Result};
-use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::logical_expr::simplify::SimplifyContextBuilder;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator, TableProviderFilterPushDown};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
@@ -38,7 +38,9 @@ pub fn simplify_expr(
     df_schema: &DFSchema,
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let simplify_context = SimplifyContext::default().with_schema(df_schema.clone().into());
+    let simplify_context = SimplifyContextBuilder::default()
+        .with_schema(df_schema.clone().into())
+        .build();
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     let simplified = simplifier.simplify(expr)?;
 
@@ -113,7 +115,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
 pub fn collect_physical_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String> {
     let mut columns = HashSet::<String>::new();
     let _ = expr.apply(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<PhysicalColumn>() {
+        if let Some(column) = expr.downcast_ref::<PhysicalColumn>() {
             columns.insert(column.name().to_string());
         }
         Ok(TreeNodeRecursion::Continue)

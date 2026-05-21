@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -6,8 +5,9 @@ use std::task::{Context, Poll};
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
@@ -72,10 +72,6 @@ impl ExecutionPlan for SchemaPivotExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -99,6 +95,13 @@ impl ExecutionPlan for SchemaPivotExec {
             input,
             ..self.as_ref().clone()
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(

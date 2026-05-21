@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -40,10 +39,6 @@ impl Default for SchemaOfVariantAggFunction {
 }
 
 impl AggregateUDFImpl for SchemaOfVariantAggFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "schema_of_variant_agg"
     }

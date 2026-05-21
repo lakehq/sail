@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -7,12 +6,13 @@ use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::memory::DataSourceExec;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::physical_expr::{Distribution, EquivalenceProperties};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -138,8 +138,9 @@ impl ScanByDataFilesState {
                 range: None,
                 statistics: None,
                 ordering: None,
-                extensions: None,
+                extensions: Default::default(),
                 metadata_size_hint: None,
+                table_reference: None,
             });
         }
 
@@ -259,10 +260,6 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
         "IcebergScanByDataFilesExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.output_schema.clone()
     }
@@ -297,6 +294,13 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(

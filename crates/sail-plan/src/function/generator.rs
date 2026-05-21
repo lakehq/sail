@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, lit, Expr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{lit, Expr, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
@@ -16,7 +14,7 @@ use crate::PlanResult;
 fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
-        function_context,
+        function_context: _,
     } = input;
 
     let (n_expr, mut args) = arguments.at_least_one()?;
@@ -47,44 +45,16 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let num_cols = args.len().div_ceil(n);
     args.resize(num_cols * n, lit(ScalarValue::Null));
 
+    let field_names = (0..num_cols).map(|i| format!("col{i}")).collect::<Vec<_>>();
+
     let arrays = (0..num_cols)
         .map(|i| args.iter().skip(i).step_by(num_cols).cloned().collect())
         .map(|col| ScalarUDF::from(SparkArray::new()).call(col))
         .collect::<Vec<_>>();
 
-    let zipped = ScalarUDF::from(ArraysZip::new(vec![])).call(arrays);
+    let zipped = ScalarUDF::from(ArraysZip::new(field_names)).call(arrays);
 
-    let err_struct = || {
-        Err(PlanError::internal(
-            "stack: arrays_zip call should return array<struct>",
-        ))
-    };
-
-    let DataType::List(field) = zipped.get_type(function_context.schema)? else {
-        return err_struct();
-    };
-
-    let DataType::Struct(fields) = field.data_type() else {
-        return err_struct();
-    };
-
-    let res_type = DataType::List(Arc::new(Field::new(
-        field.name(),
-        DataType::Struct(
-            fields
-                .iter()
-                .map(|field| {
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_name(format!("col{}", field.name()))
-                })
-                .collect(),
-        ),
-        field.is_nullable(),
-    )));
-
-    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![cast(zipped, res_type)]))
+    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![zipped]))
 }
 
 fn variant_explode(input: ScalarFunctionInput) -> PlanResult<Expr> {

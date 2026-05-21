@@ -313,10 +313,10 @@ impl PlanResolver<'_> {
         let right_column = self.resolve_one_column(input.schema(), right_column.as_ref(), state)?;
 
         let projected_plan = LogicalPlanBuilder::from(input.clone())
-            .project(vec![Expr::Cast(expr::Cast {
-                expr: Box::new(col(right_column.clone())),
-                data_type: DataType::Utf8,
-            })
+            .project(vec![Expr::Cast(expr::Cast::new(
+                Box::new(col(right_column.clone())),
+                DataType::Utf8,
+            ))
             .alias_qualified(
                 right_column.relation.clone(),
                 right_column.name.clone(),
@@ -398,10 +398,10 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|column| {
                 if column.name() == cross_tab_alias {
-                    Expr::Cast(expr::Cast {
-                        expr: Box::new(Expr::Column(column.clone())),
-                        data_type: DataType::Utf8,
-                    })
+                    Expr::Cast(expr::Cast::new(
+                        Box::new(Expr::Column(column.clone())),
+                        DataType::Utf8,
+                    ))
                 } else {
                     Expr::Column(column)
                 }

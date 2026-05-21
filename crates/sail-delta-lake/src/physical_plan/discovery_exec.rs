@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -13,6 +12,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::TryStreamExt;
@@ -150,10 +150,6 @@ impl ExecutionPlan for DeltaDiscoveryExec {
         "DeltaDiscoveryExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -208,6 +204,13 @@ impl ExecutionPlan for DeltaDiscoveryExec {
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, s)))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

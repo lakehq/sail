@@ -1,6 +1,6 @@
-use std::any::Any;
 use std::sync::Arc;
 
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::filter::batch_filter;
@@ -66,10 +66,6 @@ impl ExecutionPlan for StreamFilterExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -102,6 +98,13 @@ impl ExecutionPlan for StreamFilterExec {
         Ok(Arc::new(Self::try_new(child, Arc::clone(&self.predicate))?))
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        f(self.predicate.as_ref())
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -121,7 +124,7 @@ impl ExecutionPlan for StreamFilterExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 }

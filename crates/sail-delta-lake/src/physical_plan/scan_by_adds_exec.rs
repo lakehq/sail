@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -28,6 +27,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -729,10 +729,6 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         "DeltaScanByAddsExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -860,11 +856,18 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         Ok(Box::pin(RecordBatchStreamAdapter::new(output_schema, s)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_none() {
-            Ok(self.statistics.clone())
+            Ok(Arc::new(self.statistics.clone()))
         } else {
-            Ok(Statistics::new_unknown(self.schema().as_ref()))
+            Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())))
         }
     }
 }

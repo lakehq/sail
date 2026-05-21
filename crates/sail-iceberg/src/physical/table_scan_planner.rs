@@ -32,7 +32,7 @@ impl ExtensionPlanner for IcebergTablePhysicalPlanner {
         scan: &TableScan,
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(source) = scan.source.as_any().downcast_ref::<IcebergTableSource>() else {
+        let Some(source) = scan.source.downcast_ref::<IcebergTableSource>() else {
             return Ok(None);
         };
         let filters = unnormalize_cols(scan.filters.clone());

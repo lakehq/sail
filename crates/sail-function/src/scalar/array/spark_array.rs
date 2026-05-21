@@ -1,6 +1,6 @@
 /// [Credit]: <https://github.com/apache/datafusion/blob/c21d025df463ce623f9193c4b24d86141fce81ca/datafusion/functions-nested/src/make_array.rs>
 /// Spark defaults to DataType::Int32 while DataFusion defaults to DataType::Int64.
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use datafusion::arrow::array::{
     make_array, new_empty_array, new_null_array, Array, ArrayData, ArrayRef, Capacities,
@@ -43,10 +43,6 @@ impl SparkArray {
 }
 
 impl ScalarUDFImpl for SparkArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_array"
     }
@@ -215,7 +211,7 @@ fn array_array<O: OffsetSizeTrait>(args: &[ArrayRef], data_type: DataType) -> Re
     let mut data = vec![];
     let mut total_len = 0;
     for arg in args {
-        let arg_data = if arg.as_any().is::<NullArray>() {
+        let arg_data = if arg.as_any().downcast_ref::<NullArray>().is_some() {
             ArrayData::new_empty(&data_type)
         } else {
             arg.to_data()
@@ -234,7 +230,10 @@ fn array_array<O: OffsetSizeTrait>(args: &[ArrayRef], data_type: DataType) -> Re
     let num_rows = args[0].len();
     for row_idx in 0..num_rows {
         for (arr_idx, arg) in args.iter().enumerate() {
-            if !arg.as_any().is::<NullArray>() && !arg.is_null(row_idx) && arg.is_valid(row_idx) {
+            if arg.as_any().downcast_ref::<NullArray>().is_none()
+                && !arg.is_null(row_idx)
+                && arg.is_valid(row_idx)
+            {
                 mutable.extend(arr_idx, row_idx, row_idx + 1);
             } else {
                 mutable.extend_nulls(1);

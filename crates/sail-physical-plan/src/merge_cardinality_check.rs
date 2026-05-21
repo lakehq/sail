@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -7,7 +6,9 @@ use std::task::{Context, Poll};
 use datafusion::arrow::array::{Array, BooleanArray, Int64Array, LargeStringArray, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
@@ -75,10 +76,6 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         "MergeCardinalityCheckExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -127,6 +124,13 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         )]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -156,7 +160,7 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         Ok(Box::pin(stream))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 }

@@ -1,11 +1,13 @@
-use std::any::Any;
 use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{internal_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
+};
 
 /// A placeholder execution plan for stage inputs.
 #[derive(Debug, Clone)]
@@ -46,10 +48,6 @@ where
         "StageInputExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -74,5 +72,12 @@ where
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         internal_err!("{} should be resolved before execution", self.name())
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }

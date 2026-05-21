@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -9,7 +8,9 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{internal_datafusion_err, Result, Statistics};
+use datafusion_physical_expr::PhysicalExpr;
 use futures::StreamExt;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -90,10 +91,6 @@ impl ExecutionPlan for RelaxedTzCastExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -142,16 +139,23 @@ impl ExecutionPlan for RelaxedTzCastExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let statistics = self.input.partition_statistics(partition)?;
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let statistics = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         if self.input.schema() == self.schema {
-            Ok(statistics)
+            Ok(Arc::new(statistics))
         } else {
-            Ok(map_statistics_to_schema(
+            Ok(Arc::new(map_statistics_to_schema(
                 &statistics,
                 &self.input.schema(),
                 &self.schema,
-            ))
+            )))
         }
     }
 }
@@ -334,10 +338,6 @@ mod tests {
             "TestExec"
         }
 
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
         fn properties(&self) -> &Arc<PlanProperties> {
             &self.properties
         }
@@ -371,12 +371,19 @@ mod tests {
             Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
         }
 
-        fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
             if partition.is_none() {
-                Ok(self.statistics.clone())
+                Ok(Arc::new(self.statistics.clone()))
             } else {
-                Ok(Statistics::new_unknown(self.schema.as_ref()))
+                Ok(Arc::new(Statistics::new_unknown(self.schema.as_ref())))
             }
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 }

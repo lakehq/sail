@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -131,10 +130,6 @@ impl PySparkGroupAggregateUDF {
 }
 
 impl AggregateUDFImpl for PySparkGroupAggregateUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }

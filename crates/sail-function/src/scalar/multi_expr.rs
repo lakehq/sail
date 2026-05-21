@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -28,10 +26,6 @@ impl MultiExpr {
 }
 
 impl ScalarUDFImpl for MultiExpr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "multi_expr"
     }

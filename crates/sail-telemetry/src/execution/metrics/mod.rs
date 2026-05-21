@@ -71,7 +71,6 @@ impl_chained_metric_emitter!(T1 T2 T3 T4 T5 T6 T7 T8 : T9);
 
 /// Build a metric emitter based on the type of the execution plan.
 pub fn build_metric_emitter(plan: &dyn ExecutionPlan) -> Box<dyn MetricEmitter> {
-    let plan = plan.as_any();
     if plan.is::<ProjectionExec>() {
         Box::new((
             projection::ProjectionMetricEmitter,

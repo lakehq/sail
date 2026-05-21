@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -118,10 +117,6 @@ impl PySparkUDF {
 }
 
 impl ScalarUDFImpl for PySparkUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }

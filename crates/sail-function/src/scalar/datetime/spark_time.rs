@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use chrono::{NaiveTime, Timelike};
@@ -53,10 +52,6 @@ impl SparkTime {
 }
 
 impl ScalarUDFImpl for SparkTime {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_time"
     }

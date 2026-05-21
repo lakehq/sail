@@ -13,7 +13,6 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::{DataFusionError, HashSet, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion::logical_expr::type_coercion::aggregates::NUMERICS;
 use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, TypeSignature, Volatility,
@@ -61,8 +60,21 @@ impl Default for PercentileDisc {
 
 impl PercentileDisc {
     pub fn new() -> Self {
-        let mut variants = Vec::with_capacity(NUMERICS.len());
-        for num in NUMERICS {
+        let numeric_types = [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+        ];
+        let mut variants = Vec::with_capacity(numeric_types.len());
+        for num in &numeric_types {
             variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
         }
         Self {
@@ -89,10 +101,6 @@ impl PercentileDisc {
 }
 
 impl AggregateUDFImpl for PercentileDisc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "percentile_disc"
     }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -6,8 +5,9 @@ use std::task::{Context, Poll};
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
@@ -76,10 +76,6 @@ impl ExecutionPlan for MonotonicIdExec {
         "MonotonicIdExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -114,6 +110,13 @@ impl ExecutionPlan for MonotonicIdExec {
         )?))
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -128,8 +131,8 @@ impl ExecutionPlan for MonotonicIdExec {
         )?))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let mut stats = self.input.partition_statistics(partition)?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let col_idx = self.schema.index_of(&self.column_name)?;
         let unknown_col_stats = ColumnStatistics::new_unknown();
         if col_idx <= stats.column_statistics.len() {
@@ -149,7 +152,7 @@ impl ExecutionPlan for MonotonicIdExec {
             .multiply(&Precision::Exact(std::mem::size_of::<i64>()));
         stats.total_byte_size = stats.total_byte_size.add(&added_bytes);
 
-        Ok(stats)
+        Ok(Arc::new(stats))
     }
 }
 

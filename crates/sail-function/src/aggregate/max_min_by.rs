@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -120,10 +119,6 @@ fn get_min_max_by_result_type(input_types: &[DataType]) -> Result<Vec<DataType>,
 }
 
 impl AggregateUDFImpl for MaxByFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "max_by"
     }
@@ -226,10 +221,6 @@ impl MinByFunction {
 }
 
 impl AggregateUDFImpl for MinByFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "min_by"
     }

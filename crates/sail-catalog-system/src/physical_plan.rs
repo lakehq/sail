@@ -1,7 +1,7 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{exec_err, plan_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
@@ -86,10 +86,6 @@ impl ExecutionPlan for SystemTableExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -106,6 +102,17 @@ impl ExecutionPlan for SystemTableExec {
             return plan_err!("{} should not have children", self.name());
         }
         Ok(self)
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for filter in &self.filters {
+            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
+        }
+        Ok(tnr)
     }
 
     fn execute(

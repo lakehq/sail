@@ -17,7 +17,6 @@
 // limitations under the License.
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -44,8 +43,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::{
     PhysicalSinkMode, RowLevelOperationType, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
@@ -98,8 +98,8 @@ impl<'a> SourceMetricColumn<'a> {
         match column.data_type() {
             DataType::UInt64 => {
                 let values = column
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
+
+                    .as_any().downcast_ref::<UInt64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as UInt64"
@@ -109,8 +109,8 @@ impl<'a> SourceMetricColumn<'a> {
             }
             DataType::Int64 => {
                 let values = column
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
+
+                    .as_any().downcast_ref::<Int64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as Int64"
@@ -386,10 +386,6 @@ impl ExecutionPlan for DeltaWriterExec {
         "DeltaWriterExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -495,6 +491,13 @@ impl ExecutionPlan for DeltaWriterExec {
         }
         let stream = self.input.execute(partition, Arc::clone(&context))?;
         self.execute_stream(stream, partition, context)
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -6,7 +5,9 @@ use std::task::Poll;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::error::ArrowError;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::physical_expr::projection::ProjectionExprs;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::DisplayFormatType;
 use datafusion_common::{DataFusionError, Result};
@@ -121,10 +122,6 @@ impl FileSource for TextSource {
         Ok(opener)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
     }
@@ -155,6 +152,17 @@ impl FileSource for TextSource {
 
     fn file_type(&self) -> &str {
         "text"
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for proj_expr in &self.projection.source {
+            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
+        }
+        Ok(tnr)
     }
 
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {

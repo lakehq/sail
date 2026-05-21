@@ -30,7 +30,7 @@ impl ExtensionPlanner for SystemTablePhysicalPlanner {
         scan: &TableScan,
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(source) = scan.source.as_any().downcast_ref::<SystemTableSource>() else {
+        let Some(source) = scan.source.downcast_ref::<SystemTableSource>() else {
             return Ok(None);
         };
         let table = source.table();

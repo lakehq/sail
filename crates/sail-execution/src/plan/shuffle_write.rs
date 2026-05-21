@@ -1,9 +1,9 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{exec_datafusion_err, plan_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::UnKnownColumn;
@@ -13,7 +13,7 @@ use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     internal_err, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties,
+    PhysicalExpr, PlanProperties,
 };
 use futures::future::try_join_all;
 use futures::StreamExt;
@@ -47,7 +47,7 @@ impl ShuffleWriteExec {
                 // https://github.com/apache/arrow-datafusion/issues/5184
                 Partitioning::Hash(
                     expr.into_iter()
-                        .filter(|e| e.as_any().downcast_ref::<UnKnownColumn>().is_none())
+                        .filter(|e| e.downcast_ref::<UnKnownColumn>().is_none())
                         .collect(),
                     n,
                 )
@@ -91,10 +91,6 @@ impl DisplayAs for ShuffleWriteExec {
 impl ExecutionPlan for ShuffleWriteExec {
     fn name(&self) -> &str {
         "ShuffleWriteExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -166,6 +162,13 @@ impl ExecutionPlan for ShuffleWriteExec {
             self.schema(),
             output,
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

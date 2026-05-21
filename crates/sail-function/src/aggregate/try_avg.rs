@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
 use datafusion::arrow::array::{
@@ -452,10 +451,6 @@ fn exceeds_decimal128_precision(sum: i128, p: u8) -> bool {
 }
 
 impl AggregateUDFImpl for TryAvgFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "try_avg"
     }

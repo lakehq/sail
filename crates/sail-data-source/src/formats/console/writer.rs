@@ -1,11 +1,11 @@
-use std::any::Any;
 use std::io::Write;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::util::pretty::pretty_format_batches;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
@@ -52,10 +52,6 @@ impl ExecutionPlan for ConsoleSinkExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -72,6 +68,13 @@ impl ExecutionPlan for ConsoleSinkExec {
             (Some(child), true) => Ok(Arc::new(ConsoleSinkExec::new(child))),
             _ => plan_err!("{} should have exactly one child", self.name()),
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(

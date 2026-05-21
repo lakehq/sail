@@ -3,14 +3,14 @@
 //! This node consumes per-partition write results produced by
 //! `PythonDataSourceWriteExec`, coalesces them into a single partition, then
 //! invokes `writer.commit(messages)` or `writer.abort(messages)`.
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
 use arrow::array::{Array, BinaryArray, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::Schema;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -88,10 +88,6 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
         "PythonDataSourceWriteCommitExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -120,6 +116,13 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             self.pickled_writer.clone(),
             self.expected_partitions,
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(
@@ -357,7 +360,9 @@ mod tests {
         let exec = Arc::new(PythonDataSourceWriteCommitExec::new(input1, vec![], 2));
 
         let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
-        assert!(new_exec.as_any().is::<PythonDataSourceWriteCommitExec>());
+        assert!(new_exec
+            .downcast_ref::<PythonDataSourceWriteCommitExec>()
+            .is_some());
     }
 
     #[test]

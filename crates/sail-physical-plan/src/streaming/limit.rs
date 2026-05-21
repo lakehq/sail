@@ -1,9 +1,9 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{BooleanArray, RecordBatch};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, Partitioning};
+use datafusion::physical_expr::{Distribution, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -86,10 +86,6 @@ impl ExecutionPlan for StreamLimitExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -120,6 +116,13 @@ impl ExecutionPlan for StreamLimitExec {
         Ok(Arc::new(StreamLimitExec::try_new(
             child, self.skip, self.fetch,
         )?))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(
@@ -153,10 +156,9 @@ impl ExecutionPlan for StreamLimitExec {
         Ok(Box::pin(EncodedFlowEventStream::new(stream)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(partition)?
-            .with_fetch(self.fetch, self.skip, 1)
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
 
     fn supports_limit_pushdown(&self) -> bool {

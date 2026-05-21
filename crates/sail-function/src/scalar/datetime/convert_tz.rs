@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashMap;
 
 use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone};
@@ -41,10 +40,6 @@ impl ConvertTz {
 }
 
 impl ScalarUDFImpl for ConvertTz {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "convert_tz"
     }
