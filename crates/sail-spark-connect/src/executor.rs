@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::compute::cast;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::future::FutureExt;
@@ -318,13 +320,55 @@ pub(crate) async fn read_stream(
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
+    let batch = cast_timestamps_to_nanosecond(batch)?;
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
-        writer.write(batch)?;
+        writer.write(&batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;
     }
     Ok(output)
+}
+
+/// Cast all timestamp columns from microsecond to nanosecond precision.
+/// Spark internally uses microsecond precision, but PySpark's `toPandas()` expects
+/// `datetime64[ns]` in the Arrow batches sent over Spark Connect.
+fn cast_timestamps_to_nanosecond(batch: &RecordBatch) -> SparkResult<RecordBatch> {
+    let schema = batch.schema();
+    let has_timestamp_us = schema.fields().iter().any(|f| {
+        matches!(
+            f.data_type(),
+            DataType::Timestamp(TimeUnit::Microsecond, _)
+        )
+    });
+    if !has_timestamp_us {
+        return Ok(batch.clone());
+    }
+
+    let mut new_fields = Vec::with_capacity(schema.fields().len());
+    let mut new_columns = Vec::with_capacity(batch.num_columns());
+    for (i, field) in schema.fields().iter().enumerate() {
+        match field.data_type() {
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                let target_type = DataType::Timestamp(TimeUnit::Nanosecond, tz.clone());
+                let new_field =
+                    Field::new(field.name(), target_type.clone(), field.is_nullable())
+                        .with_metadata(field.metadata().clone());
+                new_fields.push(Arc::new(new_field));
+                let casted = cast(batch.column(i), &target_type)?;
+                new_columns.push(casted);
+            }
+            _ => {
+                new_fields.push(Arc::clone(field));
+                new_columns.push(Arc::clone(batch.column(i)));
+            }
+        }
+    }
+    let new_schema = Arc::new(Schema::new_with_metadata(
+        new_fields,
+        schema.metadata().clone(),
+    ));
+    Ok(RecordBatch::try_new(new_schema, new_columns)?)
 }

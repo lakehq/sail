@@ -66,6 +66,11 @@ impl PlanResolver<'_> {
                     PlanError::invalid(format!("field not found in input schema: {target_name}"))
                 })?;
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
+            if input_field.is_nullable() && !target_field.is_nullable() {
+                return Err(PlanError::AnalysisError(format!(
+                    "[NULLABLE_COLUMN_OR_FIELD] Column or field `{target_name}` is nullable while it's required to be non-nullable."
+                )));
+            }
             let expr = Expr::Column(Column::from((input_qualifier, input_field)));
             let expr = if input_field.data_type() == target_field.data_type() {
                 expr
