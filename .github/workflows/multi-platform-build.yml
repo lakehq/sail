@@ -103,7 +103,7 @@ jobs:
       - name: Patch package version
         shell: bash
         run: |
-          sed -i 's/^version = "\(.*\)"$/version = "\1+local"/' pyproject.toml
+          python -c 'import re, pathlib; p = pathlib.Path("pyproject.toml"); p.write_text(re.sub(r"""(?m)^version\s*=\s*"([^"]+)""", r"""version = "\1+local""", p.read_text()))'
           if [[ "$(hatch version)" != *"+local" ]]; then
             echo "Error: failed to patch package version"
             exit 1
