@@ -6,6 +6,12 @@ use serde::Deserialize;
 use crate::error::{SparkError, SparkResult};
 use crate::spark::connect::{data_type as sdt, DataType};
 
+const DAY_TIME_INTERVAL_START_FIELD_KEY: &str = "sail.spark.dayTime.interval.startField";
+const DAY_TIME_INTERVAL_END_FIELD_KEY: &str = "sail.spark.dayTime.interval.endField";
+const YEAR_MONTH_INTERVAL_START_FIELD_KEY: &str = "sail.spark.yearMonth.interval.startField";
+const YEAR_MONTH_INTERVAL_END_FIELD_KEY: &str = "sail.spark.yearMonth.interval.endField";
+const SAIL_SPARK_METADATA_PREFIX: &str = "sail.spark.";
+
 /// Raw GeoArrow extension metadata deserialized from JSON.
 #[derive(Debug, Deserialize)]
 struct RawGeoArrowMetadata {
@@ -168,6 +174,8 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     type_variation_reference: 0,
                 })),
             }
+        } else if let Some(data_type) = interval_data_type_from_field_metadata(&field)? {
+            data_type
         } else {
             field.data_type().clone().try_into()?
         };
@@ -176,7 +184,11 @@ impl TryFrom<adt::Field> for sdt::StructField {
         let metadata = &field
             .metadata()
             .iter()
-            .filter(|(k, _)| !k.starts_with("udt.") && !k.starts_with("ARROW:extension:"))
+            .filter(|(k, _)| {
+                !k.starts_with("udt.")
+                    && !k.starts_with("ARROW:extension:")
+                    && !k.starts_with(SAIL_SPARK_METADATA_PREFIX)
+            })
             .map(|(k, v)| {
                 let parsed = serde_json::from_str::<serde_json::Value>(v)
                     .unwrap_or_else(|_| serde_json::Value::String(v.clone()));
@@ -191,6 +203,59 @@ impl TryFrom<adt::Field> for sdt::StructField {
             metadata: Some(metadata),
         })
     }
+}
+
+fn interval_data_type_from_field_metadata(field: &adt::Field) -> SparkResult<Option<DataType>> {
+    match field.data_type() {
+        adt::DataType::Duration(adt::TimeUnit::Microsecond) => {
+            let (start_field, end_field) = parse_interval_fields(
+                field,
+                DAY_TIME_INTERVAL_START_FIELD_KEY,
+                DAY_TIME_INTERVAL_END_FIELD_KEY,
+            )?;
+            Ok(Some(DataType {
+                kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                    start_field,
+                    end_field,
+                    type_variation_reference: 0,
+                })),
+            }))
+        }
+        adt::DataType::Interval(adt::IntervalUnit::YearMonth) => {
+            let (start_field, end_field) = parse_interval_fields(
+                field,
+                YEAR_MONTH_INTERVAL_START_FIELD_KEY,
+                YEAR_MONTH_INTERVAL_END_FIELD_KEY,
+            )?;
+            Ok(Some(DataType {
+                kind: Some(sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
+                    start_field,
+                    end_field,
+                    type_variation_reference: 0,
+                })),
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn parse_interval_fields(
+    field: &adt::Field,
+    start_key: &str,
+    end_key: &str,
+) -> SparkResult<(Option<i32>, Option<i32>)> {
+    let parse = |key: &str| -> SparkResult<Option<i32>> {
+        field
+            .metadata()
+            .get(key)
+            .map(|value| {
+                value.parse::<i32>().map_err(|e| {
+                    SparkError::invalid(format!("invalid interval metadata {key}: {e}"))
+                })
+            })
+            .transpose()
+    };
+    Ok((parse(start_key)?, parse(end_key)?))
 }
 
 /// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala

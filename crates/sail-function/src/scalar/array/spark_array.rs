@@ -79,7 +79,13 @@ impl ScalarUDFImpl for SparkArray {
             .map(|f| f.data_type())
             .cloned()
             .collect::<Vec<_>>();
-        let return_type = self.return_type(&data_types)?;
+        let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
+        let return_type = match self.return_type(&data_types)? {
+            DataType::List(field) => DataType::List(Arc::new(
+                field.as_ref().clone().with_nullable(contains_null),
+            )),
+            data_type => data_type,
+        };
         Ok(Arc::new(Field::new(self.name(), return_type, false)))
     }
 

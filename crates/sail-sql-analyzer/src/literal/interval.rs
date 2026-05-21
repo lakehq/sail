@@ -20,6 +20,73 @@ fn create_regex(regex: Result<Regex, regex::Error>) -> Regex {
     regex.unwrap()
 }
 
+pub fn from_ast_signed_interval_expression(value: Signed<IntervalExpr>) -> SqlResult<spec::Expr> {
+    let negated = value.is_negative();
+    let interval = value.into_inner();
+    match interval {
+        IntervalExpr::Standard { value, qualifier } => {
+            let kind = from_ast_interval_qualifier(qualifier)?;
+            let value = from_ast_standard_interval(value, kind, negated)?;
+            let metadata = interval_metadata(kind);
+            Ok(expr_with_interval_metadata(value.into(), metadata))
+        }
+        interval => {
+            let interval = if negated {
+                Signed::Negative(interval)
+            } else {
+                Signed::Positive(interval)
+            };
+            Ok(spec::Expr::Literal(
+                from_ast_signed_interval(interval)?.into(),
+            ))
+        }
+    }
+}
+
+fn expr_with_interval_metadata(
+    literal: spec::Literal,
+    metadata: Option<Vec<(String, String)>>,
+) -> spec::Expr {
+    let expr = spec::Expr::Literal(literal);
+    if let Some(metadata) = metadata {
+        spec::Expr::Alias {
+            expr: Box::new(expr),
+            name: vec![],
+            metadata: Some(metadata),
+        }
+    } else {
+        expr
+    }
+}
+
+fn interval_metadata(kind: StandardIntervalKind) -> Option<Vec<(String, String)>> {
+    let (prefix, start, end) = match kind {
+        StandardIntervalKind::Year => ("yearMonth", 0, 0),
+        StandardIntervalKind::YearToMonth => ("yearMonth", 0, 1),
+        StandardIntervalKind::Month => ("yearMonth", 1, 1),
+        StandardIntervalKind::Day => ("dayTime", 0, 0),
+        StandardIntervalKind::DayToHour => ("dayTime", 0, 1),
+        StandardIntervalKind::DayToMinute => ("dayTime", 0, 2),
+        StandardIntervalKind::DayToSecond => ("dayTime", 0, 3),
+        StandardIntervalKind::Hour => ("dayTime", 1, 1),
+        StandardIntervalKind::HourToMinute => ("dayTime", 1, 2),
+        StandardIntervalKind::HourToSecond => ("dayTime", 1, 3),
+        StandardIntervalKind::Minute => ("dayTime", 2, 2),
+        StandardIntervalKind::MinuteToSecond => ("dayTime", 2, 3),
+        StandardIntervalKind::Second => ("dayTime", 3, 3),
+    };
+    Some(vec![
+        (
+            format!("sail.spark.{prefix}.interval.startField"),
+            start.to_string(),
+        ),
+        (
+            format!("sail.spark.{prefix}.interval.endField"),
+            end.to_string(),
+        ),
+    ])
+}
+
 lazy_static! {
     static ref INTERVAL_YEAR_REGEX: Regex =
         create_regex(Regex::new(r"^\s*(?P<sign>[+-]?)(?P<year>\d+)\s*$"));
@@ -229,6 +296,7 @@ fn parse_interval_day_time_string(
     Ok(IntervalValue::Microsecond { microseconds: n })
 }
 
+#[derive(Copy, Clone)]
 enum StandardIntervalKind {
     Year,
     YearToMonth,

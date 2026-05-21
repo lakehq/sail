@@ -58,6 +58,7 @@ impl TryFrom<sdt::StructField> for spec::FieldRef {
         let data_type = data_type.required("data type")?;
         let data_type = spec::DataType::try_from(data_type)?;
         let metadata: HashMap<String, String> = metadata
+            .filter(|m| !m.trim().is_empty())
             .map(|m| -> SparkResult<_> { Ok(serde_json::from_str(m.as_str())?) })
             .transpose()?
             .unwrap_or_default();

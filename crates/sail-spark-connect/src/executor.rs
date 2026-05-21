@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::Cursor;
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -6,7 +6,12 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{
+    Array, ArrayRef, LargeListArray, ListArray, MapArray, RecordBatch, RecordBatchOptions,
+    StructArray,
+};
+use datafusion::arrow::compute::cast;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef, Fields, Schema, TimeUnit};
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::future::FutureExt;
@@ -319,12 +324,203 @@ pub(crate) async fn read_stream(
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
+    let batch = normalize_arrow_batch_for_pandas(batch)?;
     {
         let cursor = Cursor::new(&mut output.data);
         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
-        writer.write(batch)?;
+        writer.write(&batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;
     }
     Ok(output)
+}
+
+fn normalize_arrow_batch_for_pandas(batch: &RecordBatch) -> SparkResult<RecordBatch> {
+    let fields = normalize_fields_for_pandas(batch.schema().fields());
+    let schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        batch.schema().metadata().clone(),
+    ));
+    let columns = batch
+        .columns()
+        .iter()
+        .zip(schema.fields())
+        .map(|(column, field)| normalize_array_for_pandas(column, field.data_type()))
+        .collect::<SparkResult<Vec<_>>>()?;
+
+    if columns.is_empty() {
+        Ok(RecordBatch::try_new_with_options(
+            schema,
+            columns,
+            &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+        )?)
+    } else {
+        Ok(RecordBatch::try_new(schema, columns)?)
+    }
+}
+
+fn normalize_fields_for_pandas(fields: &Fields) -> Fields {
+    fields
+        .iter()
+        .zip(deduplicate_names(fields))
+        .map(|(field, name)| normalize_field_for_pandas(field, name))
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn normalize_field_for_pandas(field: &FieldRef, name: String) -> FieldRef {
+    Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_name(name)
+            .with_data_type(normalize_data_type_for_pandas(field.data_type())),
+    )
+}
+
+fn normalize_data_type_for_pandas(data_type: &ArrowDataType) -> ArrowDataType {
+    match data_type {
+        ArrowDataType::Timestamp(_, timezone) => {
+            ArrowDataType::Timestamp(TimeUnit::Nanosecond, timezone.clone())
+        }
+        ArrowDataType::Duration(_) => ArrowDataType::Duration(TimeUnit::Nanosecond),
+        ArrowDataType::Struct(fields) => ArrowDataType::Struct(normalize_fields_for_pandas(fields)),
+        ArrowDataType::List(field) => {
+            ArrowDataType::List(normalize_field_for_pandas(field, field.name().clone()))
+        }
+        ArrowDataType::LargeList(field) => {
+            ArrowDataType::LargeList(normalize_field_for_pandas(field, field.name().clone()))
+        }
+        ArrowDataType::FixedSizeList(field, size) => ArrowDataType::FixedSizeList(
+            normalize_field_for_pandas(field, field.name().clone()),
+            *size,
+        ),
+        ArrowDataType::Map(field, sorted) => ArrowDataType::Map(
+            normalize_field_for_pandas(field, field.name().clone()),
+            *sorted,
+        ),
+        _ => data_type.clone(),
+    }
+}
+
+fn deduplicate_names(fields: &Fields) -> Vec<String> {
+    let mut counts = HashMap::<&str, usize>::new();
+    for field in fields {
+        *counts.entry(field.name().as_str()).or_default() += 1;
+    }
+
+    let mut next_indices = HashMap::<&str, usize>::new();
+    fields
+        .iter()
+        .map(|field| {
+            let name = field.name().as_str();
+            if counts[name] > 1 {
+                let index = next_indices.entry(name).or_default();
+                let deduped = format!("{name}_{index}");
+                *index += 1;
+                deduped
+            } else {
+                name.to_string()
+            }
+        })
+        .collect()
+}
+
+fn normalize_array_for_pandas(
+    column: &ArrayRef,
+    target_type: &ArrowDataType,
+) -> SparkResult<ArrayRef> {
+    if column.data_type() == target_type {
+        return Ok(column.clone());
+    }
+
+    match (column.data_type(), target_type) {
+        (ArrowDataType::Struct(_), ArrowDataType::Struct(fields)) => {
+            normalize_struct_array_for_pandas(column, fields)
+        }
+        (ArrowDataType::List(_), ArrowDataType::List(field)) => {
+            normalize_list_array_for_pandas(column, field)
+        }
+        (ArrowDataType::LargeList(_), ArrowDataType::LargeList(field)) => {
+            normalize_large_list_array_for_pandas(column, field)
+        }
+        (ArrowDataType::Map(_, _), ArrowDataType::Map(field, sorted)) => {
+            normalize_map_array_for_pandas(column, field, *sorted)
+        }
+        _ => Ok(cast(column, target_type)?),
+    }
+}
+
+fn normalize_struct_array_for_pandas(column: &ArrayRef, fields: &Fields) -> SparkResult<ArrayRef> {
+    let struct_array = column
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| SparkError::internal("expected struct array"))?;
+    let columns = struct_array
+        .columns()
+        .iter()
+        .zip(fields)
+        .map(|(child, field)| normalize_array_for_pandas(child, field.data_type()))
+        .collect::<SparkResult<Vec<_>>>()?;
+    Ok(Arc::new(StructArray::try_new(
+        fields.clone(),
+        columns,
+        struct_array.nulls().cloned(),
+    )?))
+}
+
+fn normalize_list_array_for_pandas(column: &ArrayRef, field: &FieldRef) -> SparkResult<ArrayRef> {
+    let list_array = column
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .ok_or_else(|| SparkError::internal("expected list array"))?;
+    let values = normalize_array_for_pandas(list_array.values(), field.data_type())?;
+    Ok(Arc::new(ListArray::try_new(
+        field.clone(),
+        list_array.offsets().clone(),
+        values,
+        list_array.nulls().cloned(),
+    )?))
+}
+
+fn normalize_large_list_array_for_pandas(
+    column: &ArrayRef,
+    field: &FieldRef,
+) -> SparkResult<ArrayRef> {
+    let list_array = column
+        .as_any()
+        .downcast_ref::<LargeListArray>()
+        .ok_or_else(|| SparkError::internal("expected large list array"))?;
+    let values = normalize_array_for_pandas(list_array.values(), field.data_type())?;
+    Ok(Arc::new(LargeListArray::try_new(
+        field.clone(),
+        list_array.offsets().clone(),
+        values,
+        list_array.nulls().cloned(),
+    )?))
+}
+
+fn normalize_map_array_for_pandas(
+    column: &ArrayRef,
+    field: &FieldRef,
+    sorted: bool,
+) -> SparkResult<ArrayRef> {
+    let map_array = column
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .ok_or_else(|| SparkError::internal("expected map array"))?;
+    let entries: ArrayRef = Arc::new(map_array.entries().clone());
+    let entries = normalize_array_for_pandas(&entries, field.data_type())?;
+    let entries = entries
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| SparkError::internal("expected map entries struct array"))?
+        .clone();
+    Ok(Arc::new(MapArray::try_new(
+        field.clone(),
+        map_array.offsets().clone(),
+        entries,
+        map_array.nulls().cloned(),
+        sorted,
+    )?))
 }

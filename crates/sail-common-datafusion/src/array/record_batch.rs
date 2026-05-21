@@ -24,11 +24,7 @@ pub fn cast_record_batch_positionally(
     let columns = fields
         .iter()
         .zip(columns)
-        .map(|(field, column)| {
-            let data_type = field.data_type();
-            let column = cast(column, data_type)?;
-            Ok(column)
-        })
+        .map(|(field, column)| cast_array_positionally_recursively(column, field.data_type()))
         .collect::<Result<Vec<_>>>()?;
     if columns.is_empty() {
         Ok(RecordBatch::try_new_with_options(
@@ -159,6 +155,32 @@ fn cast_array_recursively(src: &ArrayRef, target_type: &DataType) -> Result<Arra
     }
 }
 
+fn cast_array_positionally_recursively(src: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
+    let src_type = src.data_type();
+    if src_type == target_type {
+        return Ok(src.clone());
+    }
+
+    match (src_type, target_type) {
+        (DataType::Struct(_), DataType::Struct(target_fields)) => {
+            cast_struct_array_positionally(src, target_fields)
+        }
+        (DataType::List(_), DataType::List(target_field)) => {
+            cast_list_array_positionally(src, target_field)
+        }
+        (DataType::LargeList(_), DataType::LargeList(target_field)) => {
+            cast_large_list_array_positionally(src, target_field)
+        }
+        (DataType::Map(_, _), DataType::Map(target_field, sorted)) => {
+            cast_map_array_positionally(src, target_field, *sorted)
+        }
+        _ => {
+            let casted = cast(src, target_type)?;
+            Ok(casted)
+        }
+    }
+}
+
 fn cast_struct_array(src: &ArrayRef, target_fields: &Fields) -> Result<ArrayRef> {
     let struct_array = src.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
         DataFusionError::Internal("Failed to downcast array to StructArray".to_string())
@@ -186,12 +208,55 @@ fn cast_struct_array(src: &ArrayRef, target_fields: &Fields) -> Result<ArrayRef>
     Ok(Arc::new(new_struct))
 }
 
+fn cast_struct_array_positionally(src: &ArrayRef, target_fields: &Fields) -> Result<ArrayRef> {
+    let struct_array = src.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
+        DataFusionError::Internal("Failed to downcast array to StructArray".to_string())
+    })?;
+    if struct_array.num_columns() != target_fields.len() {
+        return Err(DataFusionError::Plan(format!(
+            "Struct field count mismatch: expected {} fields but found {} fields",
+            target_fields.len(),
+            struct_array.num_columns()
+        )));
+    }
+
+    let new_children = target_fields
+        .iter()
+        .zip(struct_array.columns())
+        .map(|(target_field, child)| {
+            cast_array_positionally_recursively(child, target_field.data_type())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let new_struct = StructArray::try_new(
+        target_fields.clone(),
+        new_children,
+        struct_array.nulls().cloned(),
+    )?;
+    Ok(Arc::new(new_struct))
+}
+
 fn cast_list_array(src: &ArrayRef, target_field: &FieldRef) -> Result<ArrayRef> {
     let list_array = src.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
         DataFusionError::Internal("Failed to downcast array to ListArray".to_string())
     })?;
 
     let values = cast_array_recursively(list_array.values(), target_field.data_type())?;
+    let new_list = ListArray::try_new(
+        target_field.clone(),
+        list_array.offsets().clone(),
+        values,
+        list_array.nulls().cloned(),
+    )?;
+    Ok(Arc::new(new_list))
+}
+
+fn cast_list_array_positionally(src: &ArrayRef, target_field: &FieldRef) -> Result<ArrayRef> {
+    let list_array = src.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+        DataFusionError::Internal("Failed to downcast array to ListArray".to_string())
+    })?;
+
+    let values =
+        cast_array_positionally_recursively(list_array.values(), target_field.data_type())?;
     let new_list = ListArray::try_new(
         target_field.clone(),
         list_array.offsets().clone(),
@@ -219,12 +284,58 @@ fn cast_large_list_array(src: &ArrayRef, target_field: &FieldRef) -> Result<Arra
     Ok(Arc::new(new_list))
 }
 
+fn cast_large_list_array_positionally(src: &ArrayRef, target_field: &FieldRef) -> Result<ArrayRef> {
+    let list_array = src
+        .as_any()
+        .downcast_ref::<LargeListArray>()
+        .ok_or_else(|| {
+            DataFusionError::Internal("Failed to downcast array to LargeListArray".to_string())
+        })?;
+
+    let values =
+        cast_array_positionally_recursively(list_array.values(), target_field.data_type())?;
+    let new_list = LargeListArray::try_new(
+        target_field.clone(),
+        list_array.offsets().clone(),
+        values,
+        list_array.nulls().cloned(),
+    )?;
+    Ok(Arc::new(new_list))
+}
+
 fn cast_map_array(src: &ArrayRef, target_field: &FieldRef, sorted: bool) -> Result<ArrayRef> {
     let map_array = src.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
         DataFusionError::Internal("Failed to downcast array to MapArray".to_string())
     })?;
     let entries: ArrayRef = Arc::new(map_array.entries().clone());
     let cast_entries = cast_array_recursively(&entries, target_field.data_type())?;
+    let struct_entries = cast_entries
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| {
+            DataFusionError::Internal("Map entries must be struct arrays after casting".to_string())
+        })?
+        .clone();
+    let new_map = MapArray::try_new(
+        target_field.clone(),
+        map_array.offsets().clone(),
+        struct_entries,
+        map_array.nulls().cloned(),
+        sorted,
+    )?;
+    Ok(Arc::new(new_map))
+}
+
+fn cast_map_array_positionally(
+    src: &ArrayRef,
+    target_field: &FieldRef,
+    sorted: bool,
+) -> Result<ArrayRef> {
+    let map_array = src.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+        DataFusionError::Internal("Failed to downcast array to MapArray".to_string())
+    })?;
+    let entries: ArrayRef = Arc::new(map_array.entries().clone());
+    let cast_entries = cast_array_positionally_recursively(&entries, target_field.data_type())?;
     let struct_entries = cast_entries
         .as_any()
         .downcast_ref::<StructArray>()

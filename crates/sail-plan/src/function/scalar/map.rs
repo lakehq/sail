@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit};
+use datafusion_expr::{cast, expr, lit, ExprSchemable, ScalarUDF};
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::map::str_to_map::StrToMap;
 
 use crate::error::{PlanError, PlanResult};
@@ -19,18 +23,56 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         )));
     }
 
-    let (keys, values) = input
+    let schema = input.function_context.schema;
+    let (keys, values): (Vec<_>, Vec<_>) = input
         .arguments
         .chunks(2)
         .map(|key_value| (key_value[0].clone(), key_value[1].clone()))
         .unzip();
+    let value_contains_null = values.iter().try_fold(false, |nullable, value| {
+        Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
+    })?;
 
-    let keys = expr_fn::make_array(keys);
-    let values = expr_fn::make_array(values);
-    F::udf(MapFromArrays::new())(ScalarFunctionInput {
+    let keys = ScalarUDF::from(SparkArray::new()).call(keys);
+    let values = ScalarUDF::from(SparkArray::new()).call(values);
+    let expr = F::udf(MapFromArrays::new())(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
-    })
+    })?;
+    cast_map_value_nullability(expr, schema, value_contains_null)
+}
+
+fn cast_map_value_nullability(
+    expr: expr::Expr,
+    schema: &datafusion_common::DFSchemaRef,
+    value_contains_null: bool,
+) -> PlanResult<expr::Expr> {
+    let data_type = expr.get_type(schema.as_ref())?;
+    let DataType::Map(entries_field, keys_sorted) = data_type else {
+        return Ok(expr);
+    };
+    let DataType::Struct(fields) = entries_field.data_type() else {
+        return Ok(expr);
+    };
+    let fields_vec = fields.iter().collect::<Vec<_>>();
+    let [key_field, value_field] = fields_vec.as_slice() else {
+        return Ok(expr);
+    };
+    let fields = Fields::from(vec![
+        (*key_field).clone(),
+        with_nullable(value_field, value_contains_null),
+    ]);
+    let entries_field = Arc::new(
+        entries_field
+            .as_ref()
+            .clone()
+            .with_data_type(DataType::Struct(fields)),
+    );
+    Ok(cast(expr, DataType::Map(entries_field, keys_sorted)))
+}
+
+fn with_nullable(field: &FieldRef, nullable: bool) -> FieldRef {
+    Arc::new(field.as_ref().clone().with_nullable(nullable))
 }
 
 fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
