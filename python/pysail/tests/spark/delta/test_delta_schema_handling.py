@@ -25,6 +25,8 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
+
 
 def _as_utc(dt: datetime) -> datetime:
     """Return a timezone-aware datetime in UTC for comparison purposes."""
@@ -334,7 +336,7 @@ class TestDeltaSchemaHandling:
             f"""
             CREATE TABLE delta_merge_with_compatible_types_tbl
             USING DELTA
-            LOCATION '{delta_path}'
+            LOCATION '{escape_sql_string_literal(str(delta_path))}'
             TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
             AS SELECT * FROM _tw_merge_compat_initial
             """  # noqa: S608
@@ -385,7 +387,7 @@ class TestDeltaSchemaHandling:
             f"""
             CREATE TABLE delta_merge_float_promotion_tbl
             USING DELTA
-            LOCATION '{delta_path}'
+            LOCATION '{escape_sql_string_literal(str(delta_path))}'
             TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
             AS SELECT * FROM _tw_float_promo_initial
             """  # noqa: S608
@@ -436,7 +438,7 @@ class TestDeltaSchemaHandling:
             f"""
             CREATE TABLE delta_merge_decimal_type_widening_tbl
             USING DELTA
-            LOCATION '{delta_path}'
+            LOCATION '{escape_sql_string_literal(str(delta_path))}'
             TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
             AS SELECT * FROM _tw_decimal_initial
             """  # noqa: S608
@@ -509,7 +511,7 @@ class TestDeltaSchemaHandling:
                 f"""
                 CREATE TABLE {table_name}
                 USING DELTA
-                LOCATION '{delta_path}'
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
                 TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
                 AS SELECT * FROM {view_name}
                 """  # noqa: S608
@@ -547,7 +549,7 @@ class TestDeltaSchemaHandling:
             f"""
             CREATE TABLE delta_merge_map_key_type_widening_tbl
             USING DELTA
-            LOCATION '{delta_path}'
+            LOCATION '{escape_sql_string_literal(str(delta_path))}'
             TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
             AS SELECT * FROM _tw_map_key_initial
             """  # noqa: S608
@@ -593,7 +595,7 @@ class TestDeltaSchemaHandling:
             f"""
             CREATE TABLE delta_merge_array_element_type_widening_tbl
             USING DELTA
-            LOCATION '{delta_path}'
+            LOCATION '{escape_sql_string_literal(str(delta_path))}'
             TBLPROPERTIES ('delta.enableTypeWidening' = 'true')
             AS SELECT * FROM _tw_array_element_initial
             """  # noqa: S608
