@@ -323,17 +323,18 @@ fn make_formatter<'a>(
             // but make_formatter only receives an &dyn Array (no parent field metadata).
             // Plumbing field metadata through the formatter API is a larger refactor.
             // The structural check + VariantArray::try_new is specific enough for now.
+            let metadata = struct_array
+                .fields()
+                .iter()
+                .find(|field| field.name() == "metadata");
+            let value = struct_array.fields().iter().find(|field| field.name() == "value");
             let is_variant = struct_array.fields().len() == 2
-                && struct_array.fields()[0].name() == "metadata"
-                && matches!(
-                    struct_array.fields()[0].data_type(),
-                    DataType::Binary | DataType::BinaryView
-                )
-                && struct_array.fields()[1].name() == "value"
-                && matches!(
-                    struct_array.fields()[1].data_type(),
-                    DataType::Binary | DataType::BinaryView
-                )
+                && metadata.is_some_and(|field| {
+                    matches!(field.data_type(), DataType::Binary | DataType::BinaryView)
+                })
+                && value.is_some_and(|field| {
+                    matches!(field.data_type(), DataType::Binary | DataType::BinaryView)
+                })
                 && VariantArray::try_new(struct_array).is_ok();
 
             if is_variant {

@@ -1,5 +1,6 @@
 import pytest
 from pyspark.sql import Row
+from pyspark.sql import functions as spark_functions
 from pyspark.sql import types as spark_types
 
 pytestmark = pytest.mark.skipif(
@@ -18,3 +19,25 @@ def test_variant_val_round_trip(spark):
     assert isinstance(df.schema["f1"].dataType, spark_types.VariantType)
     assert bytes(actual.value) == bytes(value.value)
     assert bytes(actual.metadata) == bytes(value.metadata)
+
+
+def test_variant_udf_output_casts_to_json(spark):
+    @spark_functions.udf(spark_types.VariantType())
+    def make_variant(i):
+        return spark_types.VariantVal(bytes([2, 1, 0, 0, 2, 5, 97 + i]), bytes([1, 1, 0, 1, 97]))
+
+    actual = spark.range(0, 3).select(make_variant("id").cast("string").alias("v")).collect()
+
+    assert actual == [Row(v='{"a":"a"}'), Row(v='{"a":"b"}'), Row(v='{"a":"c"}')]
+
+
+def test_variant_pandas_udf_output_casts_to_int(spark):
+    pandas = pytest.importorskip("pandas")
+
+    @spark_functions.pandas_udf(spark_types.VariantType())
+    def make_variant(values: pandas.Series) -> pandas.Series:
+        return values.apply(lambda i: spark_types.VariantVal(bytes([12, i]), bytes([1, 0, 0])))
+
+    actual = spark.range(0, 3).select(make_variant("id").cast("int").alias("v")).collect()
+
+    assert actual == [Row(v=0), Row(v=1), Row(v=2)]

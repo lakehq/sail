@@ -24,8 +24,10 @@ fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
     let (element, count) = input.arguments.two()?;
     let count = cast(count, DataType::Int64);
-    let output_type =
-        expr_fn::array_repeat(element.clone(), count.clone()).get_type(schema.as_ref())?;
+    let output_type = with_list_value_nullability(
+        &expr_fn::array_repeat(element.clone(), count.clone()).get_type(schema.as_ref())?,
+        true,
+    );
     array_repeat_with_nullable_element(element, count, output_type)
 }
 
