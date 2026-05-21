@@ -36,6 +36,33 @@ fn srid_to_crs(srid: i32) -> PlanResult<Option<String>> {
     }
 }
 
+/// Extract UDT metadata (jvm_class, python_class, serialized_python_class) from a spec data type.
+/// Returns an empty map for non-UDT types.
+pub(super) fn extract_udt_metadata(data_type: &spec::DataType) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    if let spec::DataType::UserDefined {
+        jvm_class,
+        python_class,
+        serialized_python_class,
+        ..
+    } = data_type
+    {
+        if let Some(jvm_class) = jvm_class {
+            metadata.insert("udt.jvm_class".to_string(), jvm_class.to_string());
+        }
+        if let Some(python_class) = python_class {
+            metadata.insert("udt.python_class".to_string(), python_class.to_string());
+        }
+        if let Some(serialized_python_class) = serialized_python_class {
+            metadata.insert(
+                "udt.serialized_python_class".to_string(),
+                serialized_python_class.to_string(),
+            );
+        }
+    }
+    metadata
+}
+
 /// Validate SRID for Geometry type against Spark 4.1's CartesianSpatialReferenceSystemMapper.
 /// Valid SRIDs: 0 (unspecified), 3857 (Web Mercator), 4326 (WGS84), -1 (mixed).
 fn validate_geometry_srid(srid: i32) -> PlanResult<()> {
@@ -282,9 +309,7 @@ impl PlanResolver<'_> {
                 ]);
                 Ok(adt::DataType::Struct(fields))
             }
-            DataType::UserDefined { .. } => Err(PlanError::unsupported(
-                "user defined data type should only exist in a field",
-            )),
+            DataType::UserDefined { sql_type, .. } => self.resolve_data_type(sql_type, state),
         }
     }
 
@@ -304,24 +329,8 @@ impl PlanResolver<'_> {
             .map(|(k, v)| (format!("metadata.{k}"), v.to_string()))
             .collect();
         let data_type = match data_type {
-            spec::DataType::UserDefined {
-                jvm_class,
-                python_class,
-                serialized_python_class,
-                sql_type,
-            } => {
-                if let Some(jvm_class) = jvm_class {
-                    metadata.insert("udt.jvm_class".to_string(), jvm_class.to_string());
-                }
-                if let Some(python_class) = python_class {
-                    metadata.insert("udt.python_class".to_string(), python_class.to_string());
-                }
-                if let Some(serialized_python_class) = serialized_python_class {
-                    metadata.insert(
-                        "udt.serialized_python_class".to_string(),
-                        serialized_python_class.to_string(),
-                    );
-                }
+            spec::DataType::UserDefined { sql_type, .. } => {
+                metadata.extend(extract_udt_metadata(data_type));
                 sql_type
             }
             spec::DataType::Geometry { srid } => {

@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::plan_err;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::data_type::extract_udt_metadata;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -11,6 +14,8 @@ pub(super) struct PythonUdf {
     pub eval_type: spec::PySparkUdfType,
     pub command: Vec<u8>,
     pub output_type: DataType,
+    /// UDT metadata to attach to the output field (e.g., udt.python_class).
+    pub output_metadata: HashMap<String, String>,
 }
 
 pub(super) struct PythonUdtf {
@@ -47,12 +52,14 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
+        let output_metadata = extract_udt_metadata(&output_type);
         let output_type = self.resolve_data_type(&output_type, state)?;
         Ok(PythonUdf {
             python_version,
             eval_type,
             command,
             output_type,
+            output_metadata,
         })
     }
 
