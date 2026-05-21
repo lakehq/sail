@@ -154,8 +154,8 @@
               "nullable": true,
               "metadata": [
                 [
-                  "comment",
-                  "test"
+                  "SPARK::metadata::json",
+                  "{\"comment\":\"test\"}"
                 ]
               ]
             }
