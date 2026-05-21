@@ -5,6 +5,7 @@ use sail_sql_parser::ast::data_type::{
 };
 use sail_sql_parser::ast::literal::IntegerLiteral;
 use sail_sql_parser::ast::operator::{LeftParenthesis, RightParenthesis};
+use serde_json::json;
 
 use crate::error::{SqlError, SqlResult};
 use crate::value::from_ast_string;
@@ -254,7 +255,10 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                             let data_type = from_ast_data_type(data_type)?;
                             let mut metadata = vec![];
                             if let Some((_, comment)) = comment {
-                                metadata.push(("comment".to_string(), from_ast_string(comment)?));
+                                metadata.push((
+                                    spec::SPARK_METADATA_JSON_KEY.to_string(),
+                                    json!({"comment": from_ast_string(comment)?}).to_string(),
+                                ));
                             };
                             Ok(spec::Field {
                                 name,

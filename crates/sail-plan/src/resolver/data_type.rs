@@ -299,21 +299,7 @@ impl PlanResolver<'_> {
             nullable,
             metadata,
         } = field;
-        let mut arrow_metadata: HashMap<String, String> = HashMap::new();
-        if !metadata.is_empty() {
-            let spark_metadata = metadata
-                .iter()
-                .map(|(k, v)| {
-                    let parsed = serde_json::from_str::<serde_json::Value>(v)
-                        .unwrap_or_else(|_| serde_json::Value::String(v.clone()));
-                    (k.clone(), parsed)
-                })
-                .collect::<serde_json::Map<String, serde_json::Value>>();
-            arrow_metadata.insert(
-                spec::SPARK_METADATA_JSON_KEY.to_string(),
-                serde_json::Value::Object(spark_metadata).to_string(),
-            );
-        }
+        let mut arrow_metadata: HashMap<String, String> = metadata.iter().cloned().collect();
         let data_type = match data_type {
             spec::DataType::UserDefined {
                 jvm_class,
@@ -321,18 +307,17 @@ impl PlanResolver<'_> {
                 serialized_python_class,
                 sql_type,
             } => {
-                if let Some(jvm_class) = jvm_class {
-                    arrow_metadata.insert("udt.jvm_class".to_string(), jvm_class.to_string());
-                }
-                if let Some(python_class) = python_class {
-                    arrow_metadata.insert("udt.python_class".to_string(), python_class.to_string());
-                }
-                if let Some(serialized_python_class) = serialized_python_class {
-                    arrow_metadata.insert(
-                        "udt.serialized_python_class".to_string(),
-                        serialized_python_class.to_string(),
-                    );
-                }
+                let udt = spec::UserDefinedTypeMetadata {
+                    jvm_class: jvm_class.clone(),
+                    python_class: python_class.clone(),
+                    serialized_python_class: serialized_python_class.clone(),
+                };
+                arrow_metadata.insert(
+                    spec::SAIL_SPARK_UDT_METADATA_KEY.to_string(),
+                    serde_json::to_string(&udt).map_err(|e| {
+                        PlanError::internal(format!("failed to serialize UDT metadata: {e}"))
+                    })?,
+                );
                 sql_type
             }
             spec::DataType::Geometry { srid } => {

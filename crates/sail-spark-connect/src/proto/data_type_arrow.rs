@@ -118,21 +118,26 @@ impl TryFrom<adt::Field> for sdt::StructField {
     type Error = SparkError;
 
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
-        let is_udt = field.metadata().keys().any(|k| k.starts_with("udt."));
+        let udt_metadata: Option<sail_common::spec::UserDefinedTypeMetadata> = field
+            .metadata()
+            .get(sail_common::spec::SAIL_SPARK_UDT_METADATA_KEY)
+            .map(|v| serde_json::from_str(v))
+            .transpose()
+            .map_err(SparkError::from)?;
+        let is_udt = udt_metadata.is_some();
         let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
         let is_variant =
             field.extension_type_name() == Some(sail_common::spec::VARIANT_EXTENSION_NAME);
 
         let data_type = if is_udt {
+            let udt_metadata =
+                udt_metadata.ok_or_else(|| SparkError::invalid("missing udt metadata"))?;
             DataType {
                 kind: Some(sdt::Kind::Udt(Box::new(sdt::Udt {
                     r#type: "udt".to_string(),
-                    jvm_class: field.metadata().get("udt.jvm_class").cloned(),
-                    python_class: field.metadata().get("udt.python_class").cloned(),
-                    serialized_python_class: field
-                        .metadata()
-                        .get("udt.serialized_python_class")
-                        .cloned(),
+                    jvm_class: udt_metadata.jvm_class,
+                    python_class: udt_metadata.python_class,
+                    serialized_python_class: udt_metadata.serialized_python_class,
                     sql_type: Some(Box::new(field.data_type().clone().try_into()?)),
                 }))),
             }
@@ -169,33 +174,17 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else {
             field.data_type().clone().try_into()?
         };
-        // Spark stores column metadata as a JSON object under a single key in Arrow field metadata.
-        // Keep a legacy fallback for older Sail-produced schemas that stored keys directly.
-        // Also filter out internal metadata (UDT + Arrow extension type keys).
-        let metadata: std::collections::BTreeMap<String, serde_json::Value> = if let Some(encoded) =
-            field
-                .metadata()
-                .get(sail_common::spec::SPARK_METADATA_JSON_KEY)
-        {
-            let v: serde_json::Value = serde_json::from_str(encoded).map_err(SparkError::from)?;
-            let obj = v
-                .as_object()
-                .ok_or_else(|| SparkError::invalid("spark field metadata"))?;
-            obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-        } else {
-            field
-                .metadata()
-                .iter()
-                .filter(|(k, _)| !k.starts_with("udt.") && !k.starts_with("ARROW:extension:"))
-                .filter(|(k, _)| k.as_str() != sail_common::spec::SPARK_METADATA_JSON_KEY)
-                .map(|(k, v)| {
-                    let parsed = serde_json::from_str::<serde_json::Value>(v)
-                        .unwrap_or_else(|_| serde_json::Value::String(v.clone()));
-                    Ok((k.strip_prefix("metadata.").unwrap_or(k).to_string(), parsed))
-                })
-                .collect::<SparkResult<std::collections::BTreeMap<_, serde_json::Value>>>()?
-        };
-        let metadata = serde_json::to_string(&metadata)?;
+        let metadata = field
+            .metadata()
+            .get(sail_common::spec::SPARK_METADATA_JSON_KEY)
+            .cloned()
+            .unwrap_or_else(|| "{}".to_string());
+        if metadata != "{}" {
+            let v: serde_json::Value = serde_json::from_str(&metadata).map_err(SparkError::from)?;
+            if !v.is_object() {
+                return Err(SparkError::invalid("spark field metadata"));
+            }
+        }
         Ok(sdt::StructField {
             name: field.name().clone(),
             data_type: Some(data_type),
@@ -349,51 +338,6 @@ mod tests {
 
     use super::*;
     use crate::error::SparkResult;
-
-    #[test]
-    fn test_spark_metadata_json_key_to_proto() -> SparkResult<()> {
-        let metadata: HashMap<String, String> = [
-            (
-                sail_common::spec::SPARK_METADATA_JSON_KEY.to_string(),
-                r#"{"a":1,"b":"x"}"#.to_string(),
-            ),
-            // Legacy keys should be ignored when the Spark JSON key is present.
-            ("metadata.c".to_string(), "true".to_string()),
-            // Internal keys should never leak into Spark column metadata.
-            (
-                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                "some.extension".to_string(),
-            ),
-        ]
-        .into_iter()
-        .collect();
-
-        let field = adt::Field::new("col", adt::DataType::Int32, true).with_metadata(metadata);
-        let proto_field: sdt::StructField = field.try_into()?;
-
-        let json = proto_field.metadata.unwrap_or_default();
-        let parsed: serde_json::Value = serde_json::from_str(&json)?;
-        assert_eq!(parsed, serde_json::json!({"a": 1, "b": "x"}));
-        Ok(())
-    }
-
-    #[test]
-    fn test_legacy_field_metadata_to_proto() -> SparkResult<()> {
-        let metadata: HashMap<String, String> = [
-            ("metadata.a".to_string(), "1".to_string()),
-            ("b".to_string(), r#""x""#.to_string()),
-        ]
-        .into_iter()
-        .collect();
-
-        let field = adt::Field::new("col", adt::DataType::Int32, true).with_metadata(metadata);
-        let proto_field: sdt::StructField = field.try_into()?;
-
-        let json = proto_field.metadata.unwrap_or_default();
-        let parsed: serde_json::Value = serde_json::from_str(&json)?;
-        assert_eq!(parsed, serde_json::json!({"a": 1, "b": "x"}));
-        Ok(())
-    }
 
     #[test]
     fn test_geoarrow_metadata_parsing() -> SparkResult<()> {

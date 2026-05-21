@@ -7714,6 +7714,7 @@ dependencies = [
  "regex",
  "sail-common",
  "sail-sql-parser",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 

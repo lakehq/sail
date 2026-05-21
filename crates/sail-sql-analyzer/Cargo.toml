@@ -16,3 +16,4 @@ lazy_static = { workspace = true }
 chrono = { workspace = true }
 chumsky = { workspace = true }
 either = { workspace = true }
+serde_json = { workspace = true }
