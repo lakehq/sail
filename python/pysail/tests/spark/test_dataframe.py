@@ -153,15 +153,29 @@ def test_dataframe_checkpoint_lazy_is_not_supported(spark):
         df.localCheckpoint(eager=False)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail MVP limitation")
-def test_dataframe_local_checkpoint_non_default_storage_level_is_not_supported(spark):
+def test_dataframe_local_checkpoint_with_memory_storage_level(spark):
+    df = spark.createDataFrame(
+        schema="id INT, value STRING",
+        data=[(1, "a"), (2, "b")],
+    )
+
+    checkpointed = df.localCheckpoint(storageLevel=StorageLevel.MEMORY_ONLY)
+
+    assert_frame_equal(
+        checkpointed.sort("id").toPandas(),
+        pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
+    )
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail cache storage tier limitation")
+def test_dataframe_local_checkpoint_disk_only_storage_level_is_not_supported(spark):
     df = spark.createDataFrame(
         schema="id INT",
         data=[(1,)],
     )
 
-    with pytest.raises(Exception, match="StorageLevel"):
-        df.localCheckpoint(storageLevel=StorageLevel.MEMORY_ONLY)
+    with pytest.raises(Exception, match="without memory"):
+        df.localCheckpoint(storageLevel=StorageLevel.DISK_ONLY)
 
 
 def test_dataframe_with_column_alias(spark):

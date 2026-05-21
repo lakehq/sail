@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use datafusion_common::{internal_datafusion_err, Result};
-use datafusion_expr::LogicalPlan;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::datasource::{provider_as_source, MemTable};
+use datafusion_common::{internal_datafusion_err, Result, TableReference};
+use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+use sail_common::spec;
 
 use crate::extension::SessionExtension;
 
@@ -13,17 +17,64 @@ pub enum CachedRelationCleanup {
 
 #[derive(Debug, Clone)]
 pub struct CachedRelation {
-    plan: Arc<LogicalPlan>,
+    data: CachedRelationData,
     cleanup: Option<CachedRelationCleanup>,
+}
+
+#[derive(Debug, Clone)]
+enum CachedRelationData {
+    LogicalPlan(Arc<LogicalPlan>),
+    Memory {
+        schema: SchemaRef,
+        partitions: Arc<Vec<Vec<RecordBatch>>>,
+        storage_level: Option<spec::StorageLevel>,
+    },
 }
 
 impl CachedRelation {
     pub fn new(plan: Arc<LogicalPlan>, cleanup: Option<CachedRelationCleanup>) -> Self {
-        Self { plan, cleanup }
+        Self {
+            data: CachedRelationData::LogicalPlan(plan),
+            cleanup,
+        }
     }
 
-    pub fn plan(&self) -> &Arc<LogicalPlan> {
-        &self.plan
+    pub fn new_memory(
+        schema: SchemaRef,
+        partitions: Vec<Vec<RecordBatch>>,
+        storage_level: Option<spec::StorageLevel>,
+    ) -> Self {
+        Self {
+            data: CachedRelationData::Memory {
+                schema,
+                partitions: Arc::new(partitions),
+                storage_level,
+            },
+            cleanup: None,
+        }
+    }
+
+    pub fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+        match &self.data {
+            CachedRelationData::LogicalPlan(plan) => Ok(plan.as_ref().clone()),
+            CachedRelationData::Memory {
+                schema,
+                partitions,
+                storage_level,
+            } => {
+                let _ = storage_level;
+                // TODO: Use Sail's full cache storage tiers once memory/disk/off-heap cache exists.
+                // Sail's physical-plan codec serializes MemorySourceConfig batches, so this cache
+                // representation can still be executed by local-cluster workers.
+                let table = MemTable::try_new(Arc::clone(schema), partitions.as_ref().clone())?;
+                LogicalPlanBuilder::scan(
+                    TableReference::bare(format!("__sail_cached_relation_{relation_id}")),
+                    provider_as_source(Arc::new(table)),
+                    None,
+                )?
+                .build()
+            }
+        }
     }
 
     pub fn into_cleanup(self) -> Option<CachedRelationCleanup> {

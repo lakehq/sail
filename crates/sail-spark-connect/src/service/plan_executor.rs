@@ -540,43 +540,37 @@ pub(crate) async fn handle_execute_checkpoint_command(
             "DataFrame checkpoint with eager=false is not supported",
         ));
     }
-    if local {
-        validate_local_checkpoint_storage_level(storage_level)?;
+    let storage_level = if local {
+        Some(resolve_local_checkpoint_storage_level(storage_level)?)
     } else if storage_level.is_some() {
         return Err(SparkError::invalid(
             "StorageLevel is only valid for localCheckpoint",
         ));
-    }
+    } else {
+        None
+    };
 
     let relation = relation.required("checkpoint relation")?;
     let plan: spec::Plan = relation.try_into()?;
     let relation_id = Uuid::new_v4().to_string();
-    let path = checkpoint_path(&spark, local, &relation_id)?;
     let (physical_plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
-    let schema = physical_plan.schema();
-    // TODO: Use Sail's file-write physical path through JobRunner for cluster-native checkpointing.
-    if let Err(error) = ctx.write_parquet(physical_plan, &path, None).await {
-        return Err(cleanup_checkpoint_after_error(&path, error.into()).await);
-    }
-    let register_result: SparkResult<()> = async {
-        let read_options = ParquetReadOptions::new().schema(schema.as_ref());
-        let df = ctx.read_parquet(&path, read_options).await?;
-        let (_, read_plan) = df.into_parts();
-        let cleanup = if local {
-            Some(CachedRelationCleanup::LocalPath(path.clone()))
-        } else {
-            // TODO: Add Spark-like reliable checkpoint cleanup/reference tracking.
-            None
-        };
-        ctx.extension::<CachedRelationRegistry>()?.insert(
-            relation_id.clone(),
-            CachedRelation::new(Arc::new(read_plan), cleanup),
-        )?;
-        Ok(())
-    }
-    .await;
-    if let Err(error) = register_result {
-        return Err(cleanup_checkpoint_after_error(&path, error).await);
+    let (relation, cleanup_on_insert_error) = if local {
+        (
+            materialize_local_checkpoint(ctx, physical_plan, storage_level).await?,
+            None,
+        )
+    } else {
+        materialize_reliable_checkpoint(ctx, &spark, &relation_id, physical_plan).await?
+    };
+    if let Err(error) = ctx
+        .extension::<CachedRelationRegistry>()?
+        .insert(relation_id.clone(), relation)
+    {
+        let error = SparkError::from(error);
+        if let Some(path) = cleanup_on_insert_error {
+            return Err(cleanup_checkpoint_after_error(&path, error).await);
+        }
+        return Err(error);
     }
     let result = CheckpointCommandResult {
         relation: Some(CachedRemoteRelation { relation_id }),
@@ -592,6 +586,50 @@ pub(crate) async fn handle_execute_checkpoint_command(
         metadata.operation_id,
         Box::pin(stream::iter(output)),
     ))
+}
+
+async fn materialize_local_checkpoint(
+    ctx: &SessionContext,
+    physical_plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+    storage_level: Option<spec::StorageLevel>,
+) -> SparkResult<CachedRelation> {
+    let schema = physical_plan.schema();
+    let service = ctx.extension::<JobService>()?;
+    let stream = service.runner().execute(ctx, physical_plan).await?;
+    let batches = read_stream(stream).await?;
+    Ok(CachedRelation::new_memory(
+        schema,
+        vec![batches],
+        storage_level,
+    ))
+}
+
+async fn materialize_reliable_checkpoint(
+    ctx: &SessionContext,
+    spark: &SparkSession,
+    relation_id: &str,
+    physical_plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+) -> SparkResult<(CachedRelation, Option<String>)> {
+    let path = checkpoint_path(spark, relation_id)?;
+    let schema = physical_plan.schema();
+    // TODO: Use Sail's file-write physical path through JobRunner for cluster-native checkpointing.
+    if let Err(error) = ctx.write_parquet(physical_plan, &path, None).await {
+        return Err(cleanup_checkpoint_after_error(&path, error.into()).await);
+    }
+    let register_result: SparkResult<CachedRelation> = async {
+        let read_options = ParquetReadOptions::new().schema(schema.as_ref());
+        let df = ctx.read_parquet(&path, read_options).await?;
+        let (_, read_plan) = df.into_parts();
+        Ok(CachedRelation::new(Arc::new(read_plan), None))
+    }
+    .await;
+    match register_result {
+        Ok(relation) => {
+            // TODO: Add Spark-like reliable checkpoint cleanup/reference tracking.
+            Ok((relation, Some(path)))
+        }
+        Err(error) => Err(cleanup_checkpoint_after_error(&path, error).await),
+    }
 }
 
 pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
@@ -621,46 +659,50 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
     ))
 }
 
-fn validate_local_checkpoint_storage_level(
+fn resolve_local_checkpoint_storage_level(
     storage_level: Option<crate::spark::connect::StorageLevel>,
-) -> SparkResult<()> {
-    let Some(storage_level) = storage_level else {
-        return Ok(());
-    };
-    let storage_level: spec::StorageLevel = storage_level.try_into()?;
-    let is_default = storage_level.use_disk
-        && storage_level.use_memory
-        && !storage_level.use_off_heap
-        && !storage_level.deserialized
-        && storage_level.replication == 1;
-    if !is_default {
-        // TODO: Map Spark StorageLevel once Sail cache/persist has real storage semantics.
+) -> SparkResult<spec::StorageLevel> {
+    let storage_level: spec::StorageLevel = storage_level
+        .map(TryInto::try_into)
+        .transpose()?
+        .map(Ok)
+        .unwrap_or_else(|| "MEMORY_AND_DISK".parse().map_err(SparkError::from))?;
+
+    if !storage_level.use_memory {
         return Err(SparkError::unsupported(
-            "non-default StorageLevel for localCheckpoint is not supported",
+            "localCheckpoint StorageLevel without memory is not supported",
         ));
     }
-    Ok(())
+    if storage_level.use_off_heap {
+        return Err(SparkError::unsupported(
+            "localCheckpoint off-heap StorageLevel is not supported",
+        ));
+    }
+    if storage_level.replication != 1 {
+        return Err(SparkError::unsupported(
+            "localCheckpoint replicated StorageLevel is not supported",
+        ));
+    }
+
+    // TODO: Enforce disk spill and serialized/deserialized storage tiers once Sail has a
+    // DataFrame/block cache subsystem. For now we only support memory-backed local checkpoint.
+    Ok(storage_level)
 }
 
-fn checkpoint_path(spark: &SparkSession, local: bool, relation_id: &str) -> SparkResult<String> {
-    let root = if local {
-        // TODO: Use Sail runtime temporary-file directories and quota for local checkpoint storage.
-        std::env::temp_dir().to_string_lossy().into_owned()
-    } else {
-        // TODO: Wire Spark-compatible startup config / setCheckpointDir semantics.
-        spark
-            .get_config_option(vec![SPARK_CHECKPOINT_DIR.to_string()])?
-            .into_iter()
-            .next()
-            .and_then(|kv| kv.value)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                SparkError::invalid(format!(
-                    "checkpoint directory is not set; set {SPARK_CHECKPOINT_DIR}"
-                ))
-            })?
-    };
+fn checkpoint_path(spark: &SparkSession, relation_id: &str) -> SparkResult<String> {
+    // TODO: Wire Spark-compatible startup config / setCheckpointDir semantics.
+    let root = spark
+        .get_config_option(vec![SPARK_CHECKPOINT_DIR.to_string()])?
+        .into_iter()
+        .next()
+        .and_then(|kv| kv.value)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            SparkError::invalid(format!(
+                "checkpoint directory is not set; set {SPARK_CHECKPOINT_DIR}"
+            ))
+        })?;
     validate_checkpoint_directory(&root)?;
     validate_checkpoint_path_segment("session ID", spark.session_id())?;
     validate_checkpoint_path_segment("relation ID", relation_id)?;

@@ -233,9 +233,9 @@ impl PlanResolver<'_> {
             QueryNode::CachedRemoteRelation { relation_id } => {
                 let registry = self.ctx.extension::<CachedRelationRegistry>()?;
                 let relation = registry.get(&relation_id)?.ok_or_else(|| {
-                    PlanError::invalid(format!("cached remote relation not found: {relation_id}"))
+                    PlanError::invalid(format!("No DataFrame with id {relation_id} is found"))
                 })?;
-                let plan = relation.plan().as_ref().clone();
+                let plan = relation.to_logical_plan(&relation_id)?;
                 let names = state.register_fields(plan.schema().inner().fields());
                 // TODO: Preserve Spark attribute metadata/expr IDs for full checkpoint parity.
                 rename_logical_plan(plan, &names)?

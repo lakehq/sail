@@ -255,7 +255,7 @@
     "module": "pyspark.sql.DataFrame",
     "function": "localCheckpoint",
     "status": "partially supported",
-    "note": "Supports eager=True with default storage level. eager=False and non-default storage levels are not supported yet.",
+    "note": "Supports eager=True with memory-backed cache materialization. StorageLevel values without memory, off-heap storage, replication, eager=False, and full storage tier semantics are not supported yet.",
     "ref": "https://github.com/lakehq/sail/issues/482"
   },
   {
