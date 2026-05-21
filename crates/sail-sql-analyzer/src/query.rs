@@ -114,10 +114,18 @@ pub fn from_ast_named_expression(expr: NamedExpr) -> SqlResult<spec::Expr> {
             name,
             metadata: None,
         })
-    } else if needs_auto_generated_alias_metadata(&expr) {
-        Ok(with_auto_generated_alias_metadata(expr))
     } else {
         Ok(expr)
+    }
+}
+
+fn from_ast_projection_named_expression(expr: NamedExpr) -> SqlResult<spec::Expr> {
+    let has_alias = expr.alias.is_some();
+    let expr = from_ast_named_expression(expr)?;
+    if has_alias || !needs_auto_generated_alias_metadata(&expr) {
+        Ok(expr)
+    } else {
+        Ok(with_auto_generated_alias_metadata(expr))
     }
 }
 
@@ -303,7 +311,7 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
 
     let projection = projection
         .into_items()
-        .map(from_ast_named_expression)
+        .map(from_ast_projection_named_expression)
         .collect::<SqlResult<_>>()?;
 
     let group_by = group_by

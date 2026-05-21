@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::Cursor;
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -24,7 +24,7 @@ use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use crate::error::{SparkError, SparkResult};
-use crate::schema::to_spark_schema;
+use crate::schema::{deduplicate_field_names, normalize_schema_for_pandas, to_spark_schema};
 use crate::spark::connect::execute_plan_response::{ArrowBatch, SqlCommandResult};
 use crate::spark::connect::{
     CheckpointCommandResult, DataType, StreamingQueryCommandResult,
@@ -192,7 +192,7 @@ impl Executor {
         for out in context.replay_outputs()? {
             tx.send(out).await?;
         }
-        let schema = to_spark_schema(context.stream.schema())?;
+        let schema = to_spark_schema(normalize_schema_for_pandas(context.stream.schema()))?;
         let out = ExecutorOutput::new(ExecutorBatch::Schema(Box::new(schema)));
         context.save_output(&out)?;
         tx.send(out).await?;
@@ -336,7 +336,7 @@ pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
 }
 
 fn normalize_arrow_batch_for_pandas(batch: &RecordBatch) -> SparkResult<RecordBatch> {
-    let fields = normalize_fields_for_pandas(batch.schema().fields());
+    let fields = normalize_fields_for_pandas(batch.schema().fields(), false);
     let schema = Arc::new(Schema::new_with_metadata(
         fields,
         batch.schema().metadata().clone(),
@@ -359,10 +359,18 @@ fn normalize_arrow_batch_for_pandas(batch: &RecordBatch) -> SparkResult<RecordBa
     }
 }
 
-fn normalize_fields_for_pandas(fields: &Fields) -> Fields {
+fn normalize_fields_for_pandas(fields: &Fields, deduplicate: bool) -> Fields {
+    let names = if deduplicate {
+        deduplicate_field_names(fields)
+    } else {
+        fields
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>()
+    };
     fields
         .iter()
-        .zip(deduplicate_names(fields))
+        .zip(names)
         .map(|(field, name)| normalize_field_for_pandas(field, name))
         .collect::<Vec<_>>()
         .into()
@@ -380,11 +388,13 @@ fn normalize_field_for_pandas(field: &FieldRef, name: String) -> FieldRef {
 
 fn normalize_data_type_for_pandas(data_type: &ArrowDataType) -> ArrowDataType {
     match data_type {
-        ArrowDataType::Timestamp(_, timezone) => {
+        ArrowDataType::Timestamp(_, timezone) if timezone.is_none() => {
             ArrowDataType::Timestamp(TimeUnit::Nanosecond, timezone.clone())
         }
         ArrowDataType::Duration(_) => ArrowDataType::Duration(TimeUnit::Nanosecond),
-        ArrowDataType::Struct(fields) => ArrowDataType::Struct(normalize_fields_for_pandas(fields)),
+        ArrowDataType::Struct(fields) => {
+            ArrowDataType::Struct(normalize_fields_for_pandas(fields, true))
+        }
         ArrowDataType::List(field) => {
             ArrowDataType::List(normalize_field_for_pandas(field, field.name().clone()))
         }
@@ -401,29 +411,6 @@ fn normalize_data_type_for_pandas(data_type: &ArrowDataType) -> ArrowDataType {
         ),
         _ => data_type.clone(),
     }
-}
-
-fn deduplicate_names(fields: &Fields) -> Vec<String> {
-    let mut counts = HashMap::<&str, usize>::new();
-    for field in fields {
-        *counts.entry(field.name().as_str()).or_default() += 1;
-    }
-
-    let mut next_indices = HashMap::<&str, usize>::new();
-    fields
-        .iter()
-        .map(|field| {
-            let name = field.name().as_str();
-            if counts[name] > 1 {
-                let index = next_indices.entry(name).or_default();
-                let deduped = format!("{name}_{index}");
-                *index += 1;
-                deduped
-            } else {
-                name.to_string()
-            }
-        })
-        .collect()
 }
 
 fn normalize_array_for_pandas(
