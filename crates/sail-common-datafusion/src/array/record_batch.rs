@@ -17,14 +17,32 @@ use datafusion_common::{DataFusionError, Result};
 
 pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<RecordBatch> {
     let fields = schema.fields();
+    if fields.is_empty() {
+        return Ok(RecordBatch::try_new_with_options(
+            schema,
+            vec![],
+            &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+        )?);
+    }
     let columns = batch.columns();
+    if columns.len() != fields.len() {
+        return Err(DataFusionError::Execution(format!(
+            "number of columns ({}) does not match number of fields in schema ({})",
+            columns.len(),
+            fields.len(),
+        )));
+    }
     let columns = fields
         .iter()
         .zip(columns)
         .map(|(field, column)| {
-            let data_type = field.data_type();
-            let column = cast(column, data_type)?;
-            Ok(column)
+            let target_type = field.data_type();
+            if column.data_type() == target_type {
+                Ok(column.clone())
+            } else {
+                let column = cast(column, target_type)?;
+                Ok(column)
+            }
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(RecordBatch::try_new(schema, columns)?)
