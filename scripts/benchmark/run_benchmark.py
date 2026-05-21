@@ -17,6 +17,8 @@ Subcommands
     them and persist a manifest plus one text file per query statement/mode.
 * ``plan-compare`` - compare plan manifests by label or path, with optional
     unified diff files for changed query plans.
+* ``compare-results`` - execute benchmark queries twice with Sail join reorder
+    disabled/enabled and compare the result schema plus row multiset.
 * ``list`` - list available queries for a suite.
 * ``results`` - list benchmark result files and their labels.
 * ``plan-results`` - list captured plan manifests and their labels.
@@ -39,6 +41,8 @@ import contextlib
 import difflib
 import hashlib
 import json
+import math
+import os
 import re
 import shutil
 import statistics
@@ -46,9 +50,11 @@ import subprocess
 import sys
 import sysconfig
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -63,10 +69,12 @@ DATA_ROOT = REPO_ROOT / "opt" / "benchmark-data"
 RESULTS_ROOT = REPO_ROOT / "opt" / "benchmark-results"
 PLOTS_ROOT = RESULTS_ROOT / "plots"
 PLANS_ROOT = RESULTS_ROOT / "plans"
+CORRECTNESS_ROOT = RESULTS_ROOT / "correctness"
 DATASET_LAYOUT_VERSION = 2
 DEFAULT_TARGET_ROW_GROUP_SIZE_MB = 128
 DEFAULT_COMPRESSION = "zstd"
 DEFAULT_EXPLAIN_MODE = "formatted"
+DEFAULT_MAX_COMPARE_ROWS = 100_000
 SAMPLE_ROWS = 1_000_000
 SF_TOLERANCE = 1e-12
 MIN_COMPARISON_DATASETS = 2
@@ -541,31 +549,55 @@ def _resolve_data_dir(path: str) -> Path:
 
 
 @contextlib.contextmanager
-def sail_session(remote: str | None) -> Iterator[SparkSession]:
+def temporary_env(overrides: dict[str, str]) -> Iterator[None]:
+    originals = {key: os.environ.get(key) for key in overrides}
+    try:
+        for key, value in overrides.items():
+            os.environ[key] = value
+        yield
+    finally:
+        for key, original in originals.items():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+
+
+@contextlib.contextmanager
+def sail_session(remote: str | None, *, join_reorder: bool | None = None) -> Iterator[SparkSession]:
     """Yield a Spark session backed by Sail (in-process unless ``remote`` is set)."""
     from pyspark.sql import SparkSession
 
+    if remote and join_reorder is not None:
+        msg = "join reorder mode can only be set when starting an in-process Sail server"
+        raise ValueError(msg)
+
     server = None
-    if remote:
-        url = remote
-    else:
-        from pysail.spark import SparkConnectServer
+    overrides = {}
+    if join_reorder is not None:
+        overrides["SAIL_OPTIMIZER__ENABLE_JOIN_REORDER"] = "true" if join_reorder else "false"
 
-        server = SparkConnectServer("127.0.0.1", 0)
-        server.start(background=True)
-        _, port = server.listening_address
-        url = f"sc://localhost:{port}"
+    with temporary_env(overrides):
+        if remote:
+            url = remote
+        else:
+            from pysail.spark import SparkConnectServer
 
-    spark = SparkSession.builder.remote(url).appName("sail-benchmark").getOrCreate()
-    spark.conf.set("spark.sql.session.timeZone", "UTC")
-    try:
-        yield spark
-    finally:
-        with contextlib.suppress(Exception):
-            spark.stop()
-        if server is not None:
+            server = SparkConnectServer("127.0.0.1", 0)
+            server.start(background=True)
+            _, port = server.listening_address
+            url = f"sc://localhost:{port}"
+
+        spark = SparkSession.builder.remote(url).appName("sail-benchmark").getOrCreate()
+        spark.conf.set("spark.sql.session.timeZone", "UTC")
+        try:
+            yield spark
+        finally:
             with contextlib.suppress(Exception):
-                server.stop()
+                spark.stop()
+            if server is not None:
+                with contextlib.suppress(Exception):
+                    server.stop()
 
 
 def load_tables(spark: SparkSession, data_dir: Path) -> list[str]:
@@ -641,6 +673,294 @@ def run_query(spark: SparkSession, suite: str, query: str) -> tuple[float, int]:
         rows = df.count()
     elapsed = time.perf_counter() - start
     return elapsed, rows
+
+
+# ---------------------------------------------------------------------------
+# Result correctness comparison
+# ---------------------------------------------------------------------------
+
+
+def _canonical_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _canonical_value(value):
+    if value is None or isinstance(value, bool | int | str):
+        return value
+    if isinstance(value, Decimal):
+        return {"decimal": str(value)}
+    if isinstance(value, float):
+        if math.isnan(value):
+            return {"float": "NaN"}
+        if math.isinf(value):
+            return {"float": "Infinity" if value > 0 else "-Infinity"}
+        return value
+    if isinstance(value, datetime):
+        return {"datetime": value.isoformat()}
+    if isinstance(value, date):
+        return {"date": value.isoformat()}
+    if isinstance(value, bytes | bytearray):
+        return {"bytes": bytes(value).hex()}
+    if hasattr(value, "asDict"):
+        return {
+            "row": {
+                str(key): _canonical_value(item)
+                for key, item in sorted(value.asDict(recursive=False).items(), key=lambda item: item[0])
+            }
+        }
+    if isinstance(value, dict):
+        items = [(_canonical_value(key), _canonical_value(item)) for key, item in value.items()]
+        items.sort(key=lambda item: (_canonical_json(item[0]), _canonical_json(item[1])))
+        return {"map": items}
+    if isinstance(value, list | tuple):
+        return [_canonical_value(item) for item in value]
+    return {"repr": repr(value)}
+
+
+def _canonical_row(row) -> str:
+    return _canonical_json([_canonical_value(value) for value in row])
+
+
+def _collect_result_output(df, max_rows: int) -> dict:
+    rows = df.limit(max_rows + 1).collect()
+    if len(rows) > max_rows:
+        msg = f"result exceeded --max-compare-rows={max_rows}; increase the limit or run fewer queries"
+        raise RuntimeError(msg)
+    row_counter = Counter(_canonical_row(row) for row in rows)
+    return {
+        "schema": df.schema.jsonValue(),
+        "schema_simple": df.schema.simpleString(),
+        "row_count": len(rows),
+        "rows": dict(sorted(row_counter.items())),
+    }
+
+
+def collect_query_results(
+    spark: SparkSession,
+    suite: str,
+    query: str,
+    *,
+    max_rows: int,
+    fail_fast: bool,
+) -> dict:
+    statements = read_query_statements(suite, query)
+    result_indexes = [
+        index
+        for index, sql in enumerate(statements, start=1)
+        if not _is_setup_statement(sql) and not _is_cleanup_statement(sql)
+    ]
+    result_ordinals = {index: ordinal for ordinal, index in enumerate(result_indexes, start=1)}
+
+    result: dict = {"statements": []}
+    cleanup: list[str] = []
+    try:
+        for index, sql in enumerate(statements, start=1):
+            if _is_cleanup_statement(sql):
+                cleanup.append(sql)
+                continue
+            if _is_setup_statement(sql):
+                statement_result = {
+                    "key": f"{query}_setup{index}",
+                    "statement_index": index,
+                    "kind": "setup",
+                    "preview": _statement_preview(sql),
+                }
+                try:
+                    _run_statement(spark, sql)
+                    print(f"[compare-results] {query} setup statement {index}: ok")
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    statement_result["error"] = error
+                    print(f"[compare-results] {query} setup statement {index} FAILED: {error}")
+                    if fail_fast:
+                        raise
+                result["statements"].append(statement_result)
+                continue
+
+            ordinal = result_ordinals[index]
+            key = query if len(result_indexes) == 1 else f"{query}_s{ordinal}"
+            statement_result = {
+                "key": key,
+                "statement_index": index,
+                "kind": "query",
+                "preview": _statement_preview(sql),
+            }
+            try:
+                output = _collect_result_output(spark.sql(sql), max_rows)
+                statement_result.update(output)
+                print(f"[compare-results] {key}: collected {output['row_count']} row(s)")
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                statement_result["error"] = error
+                print(f"[compare-results] {key} FAILED: {error}")
+                if fail_fast:
+                    raise
+            result["statements"].append(statement_result)
+    finally:
+        for sql in cleanup:
+            with contextlib.suppress(Exception):
+                _run_statement(spark, sql)
+
+    return result
+
+
+def _result_entries(query_result: dict) -> dict[str, dict]:
+    entries = {}
+    for statement in query_result.get("statements") or []:
+        if statement.get("kind") != "query":
+            continue
+        key = statement.get("key")
+        if isinstance(key, str):
+            entries[key] = statement
+    return entries
+
+
+def _counter_delta_samples(left: dict[str, int], right: dict[str, int], limit: int = 3) -> list[dict[str, str | int]]:
+    samples = []
+    for row in sorted(set(left) | set(right)):
+        delta = left.get(row, 0) - right.get(row, 0)
+        if delta > 0:
+            samples.append({"row": row, "count": delta})
+            if len(samples) >= limit:
+                break
+    return samples
+
+
+def _compare_result_entry(disabled: dict | None, enabled: dict | None) -> tuple[str, dict]:
+    if disabled is None or enabled is None:
+        return "missing", {"disabled_present": disabled is not None, "enabled_present": enabled is not None}
+
+    disabled_error = disabled.get("error")
+    enabled_error = enabled.get("error")
+    if disabled_error or enabled_error:
+        return "error", {"disabled_error": disabled_error, "enabled_error": enabled_error}
+
+    if disabled.get("schema") != enabled.get("schema"):
+        return "schema-diff", {
+            "disabled_schema": disabled.get("schema_simple"),
+            "enabled_schema": enabled.get("schema_simple"),
+        }
+
+    disabled_rows = disabled.get("rows") or {}
+    enabled_rows = enabled.get("rows") or {}
+    if disabled_rows != enabled_rows:
+        return "row-diff", {
+            "disabled_row_count": disabled.get("row_count"),
+            "enabled_row_count": enabled.get("row_count"),
+            "disabled_only_samples": _counter_delta_samples(disabled_rows, enabled_rows),
+            "enabled_only_samples": _counter_delta_samples(enabled_rows, disabled_rows),
+        }
+
+    return "same", {"row_count": disabled.get("row_count")}
+
+
+def cmd_compare_results(args: argparse.Namespace) -> int:
+    suite = args.suite
+    sf = args.sf
+    if args.max_compare_rows <= 0:
+        print("--max-compare-rows must be positive", file=sys.stderr)
+        return 2
+
+    try:
+        queries = parse_query_arg(args.queries, suite)
+        if args.data_dir:
+            data_dir = _resolve_data_dir(args.data_dir)
+            print(f"[compare-results] using data at {data_dir}")
+        else:
+            data_dir = generate_dataset(
+                suite,
+                sf,
+                force=args.regenerate_data,
+                target_row_group_size_mb=args.target_row_group_size_mb,
+                compression=args.compression,
+                duckdb_threads=args.duckdb_threads,
+                tpchgen_workers=args.tpchgen_workers,
+            )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    label = args.label or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    payload = {
+        "label": label,
+        "suite": suite,
+        "sf": sf,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data_dir": str(data_dir),
+        "data_layout_version": DATASET_LAYOUT_VERSION,
+        "data_generator": "external" if args.data_dir else ("tpchgen-rs" if suite == "tpch" else "duckdb"),
+        "target_row_group_size_mb": args.target_row_group_size_mb,
+        "compression": _normalize_compression(args.compression),
+        "max_compare_rows": args.max_compare_rows,
+        "modes": {},
+        "comparisons": {},
+    }
+
+    for mode, enabled in (("disabled", False), ("enabled", True)):
+        print(
+            f"[compare-results] collecting {mode} results (SAIL_OPTIMIZER__ENABLE_JOIN_REORDER={str(enabled).lower()})"
+        )
+        mode_payload = {
+            "join_reorder_enabled": enabled,
+            "queries": {},
+        }
+        try:
+            with sail_session(None, join_reorder=enabled) as spark:
+                tables = load_tables(spark, data_dir)
+                print(f"[compare-results] {mode}: loaded {len(tables)} tables: {', '.join(tables)}")
+                for query in queries:
+                    mode_payload["queries"][query] = collect_query_results(
+                        spark,
+                        suite,
+                        query,
+                        max_rows=args.max_compare_rows,
+                        fail_fast=args.fail_fast,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[compare-results] {mode} collection failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        payload["modes"][mode] = mode_payload
+
+    summary: dict[str, int] = {}
+    for query in queries:
+        disabled_entries = _result_entries(payload["modes"]["disabled"]["queries"].get(query) or {})
+        enabled_entries = _result_entries(payload["modes"]["enabled"]["queries"].get(query) or {})
+        keys = sorted(set(disabled_entries) | set(enabled_entries), key=_query_sort_key)
+        query_comparisons = {}
+        if keys:
+            print(f"\n[compare-results] {query}")
+        for key in keys:
+            status, details = _compare_result_entry(disabled_entries.get(key), enabled_entries.get(key))
+            summary[status] = summary.get(status, 0) + 1
+            query_comparisons[key] = {
+                "status": status,
+                **details,
+            }
+            disabled_count = (disabled_entries.get(key) or {}).get("row_count")
+            enabled_count = (enabled_entries.get(key) or {}).get("row_count")
+            print(f"  {key:12} {status:12} disabled_rows={disabled_count} enabled_rows={enabled_count}")
+            if args.fail_fast and status != "same":
+                payload["comparisons"][query] = query_comparisons
+                break
+        payload["comparisons"][query] = query_comparisons
+        if args.fail_fast and any(item["status"] != "same" for item in query_comparisons.values()):
+            break
+
+    if args.output:
+        out_path = Path(args.output)
+    else:
+        CORRECTNESS_ROOT.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        safe_label = _safe_name(label)
+        out_path = CORRECTNESS_ROOT / f"{suite}_sf{_format_sf(sf)}_{safe_label}_{stamp}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2))
+
+    total = sum(summary.values())
+    same = summary.get("same", 0)
+    differing = total - same
+    print(f"\n[compare-results] same={same}/{total}; differing_or_error={differing}; wrote {out_path}")
+    return 1 if differing else 0
 
 
 # ---------------------------------------------------------------------------
@@ -1573,6 +1893,62 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--output", type=str, default=None, help="result JSON path (auto-generated if omitted)")
     p_run.add_argument("--regenerate-data", action="store_true", help="force re-running DuckDB data generation")
     p_run.set_defaults(func=cmd_run)
+
+    p_compare_results = sub.add_parser(
+        "compare-results",
+        help="compare benchmark query results with Sail join reorder disabled and enabled",
+    )
+    p_compare_results.add_argument("--suite", choices=["tpch", "tpcds"], required=True)
+    p_compare_results.add_argument("--sf", type=float, default=1.0, help="scale factor (default: 1.0)")
+    p_compare_results.add_argument(
+        "--queries",
+        type=str,
+        default="all",
+        help="comma-separated list / ranges, e.g. 'q1,q3,q5-q8' or 'all' (default: all)",
+    )
+    p_compare_results.add_argument("--label", type=str, default=None, help="label embedded in the comparison file")
+    p_compare_results.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="existing benchmark data directory to load instead of generating/resolving by suite and scale factor",
+    )
+    p_compare_results.add_argument(
+        "--target-row-group-size-mb",
+        type=int,
+        default=DEFAULT_TARGET_ROW_GROUP_SIZE_MB,
+        help=f"target parquet row-group size in MiB for generated data (default: {DEFAULT_TARGET_ROW_GROUP_SIZE_MB})",
+    )
+    p_compare_results.add_argument(
+        "--compression",
+        type=str,
+        default=DEFAULT_COMPRESSION,
+        help=f"parquet compression for generated data (default: {DEFAULT_COMPRESSION}; TPC-H maps zstd to ZSTD(1))",
+    )
+    p_compare_results.add_argument(
+        "--duckdb-threads",
+        type=int,
+        default=None,
+        help="DuckDB thread count used during TPC-DS data generation (default: DuckDB decides)",
+    )
+    p_compare_results.add_argument(
+        "--tpchgen-workers",
+        type=int,
+        default=None,
+        help="parallel tpchgen-cli workers for TPC-H data generation (default: Python executor default)",
+    )
+    p_compare_results.add_argument(
+        "--max-compare-rows",
+        type=int,
+        default=DEFAULT_MAX_COMPARE_ROWS,
+        help=f"maximum rows to collect per result statement for multiset comparison (default: {DEFAULT_MAX_COMPARE_ROWS})",
+    )
+    p_compare_results.add_argument(
+        "--output", type=str, default=None, help="comparison JSON path (auto-generated if omitted)"
+    )
+    p_compare_results.add_argument("--regenerate-data", action="store_true", help="force re-running data generation")
+    p_compare_results.add_argument("--fail-fast", action="store_true", help="stop at the first execution error or diff")
+    p_compare_results.set_defaults(func=cmd_compare_results)
 
     p_plan = sub.add_parser("plan", help="capture EXPLAIN plans for a benchmark suite")
     p_plan.add_argument("--suite", choices=["tpch", "tpcds"], required=True)
