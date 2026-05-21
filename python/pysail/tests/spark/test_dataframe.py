@@ -1,8 +1,11 @@
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark import StorageLevel
 from pyspark.sql import Row
 from pyspark.sql.functions import col, lit
+
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 def test_dataframe_drop(spark):
@@ -70,6 +73,95 @@ def test_dataframe_drop(spark):
             {"a.b.c": "int32"}
         ),
     )
+
+
+def test_dataframe_local_checkpoint(spark):
+    df = spark.createDataFrame(
+        schema="id INT, value STRING",
+        data=[(1, "a"), (2, "b")],
+    )
+
+    checkpointed = df.where(col("id") >= 1).localCheckpoint()
+
+    assert_frame_equal(
+        checkpointed.sort("id").toPandas(),
+        pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
+    )
+    target_id = 2
+    assert_frame_equal(
+        checkpointed.where(col("id") == target_id).select("value").toPandas(),
+        pd.DataFrame({"value": ["b"]}),
+    )
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="JVM Spark Connect requires checkpoint dir at session startup")
+def test_dataframe_checkpoint(spark, tmp_path):
+    df = spark.createDataFrame(
+        schema="id INT, value STRING",
+        data=[(1, "a"), (2, "b")],
+    )
+    spark.conf.set("spark.checkpoint.dir", str(tmp_path / "checkpoints"))
+    try:
+        checkpointed = df.where(col("id") >= 1).checkpoint()
+
+        assert_frame_equal(
+            checkpointed.sort("id").toPandas(),
+            pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
+        )
+        assert_frame_equal(
+            checkpointed.where(col("id") == 1).select("value").toPandas(),
+            pd.DataFrame({"value": ["a"]}),
+        )
+    finally:
+        spark.conf.unset("spark.checkpoint.dir")
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific missing checkpoint dir coverage")
+def test_dataframe_checkpoint_requires_directory(spark_session_factory):
+    spark = spark_session_factory()
+    df = spark.createDataFrame(
+        schema="id INT",
+        data=[(1,)],
+    )
+
+    with pytest.raises(Exception, match=r"spark\.checkpoint\.dir"):
+        df.checkpoint()
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint path validation")
+def test_dataframe_checkpoint_rejects_parent_path_components(spark, tmp_path):
+    df = spark.createDataFrame(
+        schema="id INT",
+        data=[(1,)],
+    )
+    spark.conf.set("spark.checkpoint.dir", str(tmp_path / ".." / "checkpoints"))
+    try:
+        with pytest.raises(Exception, match="parent path"):
+            df.checkpoint()
+    finally:
+        spark.conf.unset("spark.checkpoint.dir")
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail MVP limitation")
+def test_dataframe_checkpoint_lazy_is_not_supported(spark):
+    df = spark.createDataFrame(
+        schema="id INT",
+        data=[(1,)],
+    )
+
+    with pytest.raises(Exception, match="eager=false"):
+        df.localCheckpoint(eager=False)
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail MVP limitation")
+def test_dataframe_local_checkpoint_non_default_storage_level_is_not_supported(spark):
+    df = spark.createDataFrame(
+        schema="id INT",
+        data=[(1,)],
+    )
+
+    with pytest.raises(Exception, match="StorageLevel"):
+        df.localCheckpoint(storageLevel=StorageLevel.MEMORY_ONLY)
 
 
 def test_dataframe_with_column_alias(spark):
