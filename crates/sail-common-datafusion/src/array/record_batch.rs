@@ -15,7 +15,10 @@ use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion_common::{DataFusionError, Result};
 
-pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<RecordBatch> {
+pub fn cast_record_batch_positionally(
+    batch: RecordBatch,
+    schema: SchemaRef,
+) -> Result<RecordBatch> {
     let fields = schema.fields();
     let columns = batch.columns();
     let columns = fields
@@ -27,27 +30,15 @@ pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<Record
             Ok(column)
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(RecordBatch::try_new(schema, columns)?)
-}
-
-/// Helper function to handle timezone adjustment for timestamp arrays.
-fn adjust_timestamp_timezone<T>(array: &ArrayRef, target_tz: Option<Arc<str>>) -> Result<ArrayRef>
-where
-    T: ArrowTimestampType,
-{
-    let timestamp_array = array
-        .as_any()
-        .downcast_ref::<PrimitiveArray<T>>()
-        .ok_or_else(|| {
-            datafusion_common::DataFusionError::Plan(format!(
-                "Failed to downcast to timestamp array type: {:?}",
-                array.data_type()
-            ))
-        })?;
-
-    Ok(Arc::new(
-        timestamp_array.clone().with_timezone_opt(target_tz),
-    ))
+    if columns.is_empty() {
+        Ok(RecordBatch::try_new_with_options(
+            schema,
+            columns,
+            &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+        )?)
+    } else {
+        Ok(RecordBatch::try_new(schema, columns)?)
+    }
 }
 
 /// Cast a RecordBatch to a target schema with relaxed timezone handling.
@@ -90,7 +81,35 @@ pub fn cast_record_batch_relaxed_tz(
         cols.push(casted);
     }
 
-    Ok(RecordBatch::try_new(target.clone(), cols)?)
+    if cols.is_empty() {
+        Ok(RecordBatch::try_new_with_options(
+            target.clone(),
+            cols,
+            &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+        )?)
+    } else {
+        Ok(RecordBatch::try_new(target.clone(), cols)?)
+    }
+}
+
+/// Helper function to handle timezone adjustment for timestamp arrays.
+fn adjust_timestamp_timezone<T>(array: &ArrayRef, target_tz: Option<Arc<str>>) -> Result<ArrayRef>
+where
+    T: ArrowTimestampType,
+{
+    let timestamp_array = array
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .ok_or_else(|| {
+            datafusion_common::DataFusionError::Plan(format!(
+                "Failed to downcast to timestamp array type: {:?}",
+                array.data_type()
+            ))
+        })?;
+
+    Ok(Arc::new(
+        timestamp_array.clone().with_timezone_opt(target_tz),
+    ))
 }
 
 fn cast_array_recursively(src: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
