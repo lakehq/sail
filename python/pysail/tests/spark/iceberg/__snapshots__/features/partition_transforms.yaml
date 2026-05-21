@@ -29,15 +29,15 @@ data:
   - fields:
     - id: 1
       name: id
-      required: false
+      required: true
       type: int
     - id: 2
       name: user_id
-      required: false
+      required: true
       type: long
     - id: 3
       name: action
-      required: false
+      required: true
       type: string
     schema-id: 0
     type: struct
@@ -90,19 +90,19 @@ data:
   - fields:
     - id: 1
       name: id
-      required: false
+      required: true
       type: int
     - id: 2
       name: event_date
-      required: false
+      required: true
       type: date
     - id: 3
       name: category
-      required: false
+      required: true
       type: string
     - id: 4
       name: value
-      required: false
+      required: true
       type: double
     schema-id: 0
     type: struct
@@ -166,15 +166,15 @@ data:
   - fields:
     - id: 1
       name: id
-      required: false
+      required: true
       type: int
     - id: 2
       name: event_date
-      required: false
+      required: true
       type: date
     - id: 3
       name: metric
-      required: false
+      required: true
       type: int
     schema-id: 0
     type: struct
@@ -223,15 +223,15 @@ data:
   - fields:
     - id: 1
       name: id
-      required: false
+      required: true
       type: int
     - id: 2
       name: event_time
-      required: false
+      required: true
       type: timestamptz
     - id: 3
       name: event_name
-      required: false
+      required: true
       type: string
     schema-id: 0
     type: struct
@@ -280,15 +280,15 @@ data:
   - fields:
     - id: 1
       name: id
-      required: false
+      required: true
       type: int
     - id: 2
       name: created_at
-      required: false
+      required: true
       type: date
     - id: 3
       name: status
-      required: false
+      required: true
       type: string
     schema-id: 0
     type: struct
@@ -341,15 +341,15 @@ data:
   - fields:
     - id: 1
       name: id
-      required: false
+      required: true
       type: int
     - id: 2
       name: code
-      required: false
+      required: true
       type: string
     - id: 3
       name: value
-      required: false
+      required: true
       type: double
     schema-id: 0
     type: struct
@@ -409,15 +409,15 @@ data:
   - fields:
     - id: 1
       name: id
-      required: false
+      required: true
       type: int
     - id: 2
       name: event_date
-      required: false
+      required: true
       type: date
     - id: 3
       name: event_type
-      required: false
+      required: true
       type: string
     schema-id: 0
     type: struct

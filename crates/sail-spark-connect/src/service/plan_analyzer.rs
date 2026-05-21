@@ -11,7 +11,7 @@ use crate::config::get_pyspark_version;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
 use crate::proto::data_type_json::parse_spark_json_data_type;
-use crate::schema::{normalize_schema_for_pandas, to_ddl_string, to_spark_schema, to_tree_string};
+use crate::schema::{to_ddl_string, to_spark_schema, to_tree_string};
 use crate::session::SparkSession;
 use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
@@ -44,7 +44,7 @@ async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc:
     } else {
         plan.schema().inner().clone()
     };
-    to_spark_schema(normalize_schema_for_pandas(schema))
+    to_spark_schema(schema)
 }
 
 pub(crate) async fn handle_analyze_schema(

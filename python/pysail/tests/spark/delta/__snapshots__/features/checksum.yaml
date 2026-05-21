@@ -17,11 +17,11 @@ data:
       fields:
       - metadata: {}
         name: id
-        nullable: true
+        nullable: false
         type: integer
       - metadata: {}
         name: value
-        nullable: true
+        nullable: false
         type: string
       type: struct
   numFiles: 2
@@ -30,7 +30,7 @@ data:
   protocol:
     minReaderVersion: 1
     minWriterVersion: 2
-  tableSizeBytes: 1459
+  tableSizeBytes: 1399
 ---
 name: "test_delta_log_contains_checksum_files_and_latest_checksum_matches_snapshot"
 data:
@@ -50,11 +50,11 @@ data:
       fields:
       - metadata: {}
         name: id
-        nullable: true
+        nullable: false
         type: integer
       - metadata: {}
         name: value
-        nullable: true
+        nullable: false
         type: string
       type: struct
   numFiles: 2
@@ -65,4 +65,4 @@ data:
     minWriterVersion: 7
     writerFeatures:
     - inCommitTimestamp
-  tableSizeBytes: 1459
+  tableSizeBytes: 1399
