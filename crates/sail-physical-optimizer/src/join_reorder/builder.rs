@@ -1910,4 +1910,77 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_visit_sort_merge_join_is_treated_as_boundary_leaf() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+        use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
+
+        // Two base relations joined by a SortMergeJoinExec. JoinReorder must treat
+        // SortMergeJoinExec as an opaque boundary leaf (no descent), regardless of how its
+        // join type is set. Wrap it under a HashJoinExec so we get one reorderable join
+        // node plus the SMJ sub-tree as a single relation node.
+        let smj_left_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let smj_right_schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let smj_left = Arc::new(EmptyExec::new(smj_left_schema.clone()));
+        let smj_right = Arc::new(EmptyExec::new(smj_right_schema.clone()));
+
+        let smj_on = vec![(
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        let sort_options = vec![datafusion::arrow::compute::SortOptions::default()];
+        let smj = Arc::new(SortMergeJoinExec::try_new(
+            smj_left,
+            smj_right,
+            smj_on,
+            None,
+            JoinType::Inner,
+            sort_options,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        // Outer HashJoinExec joining the SMJ output to a third base relation.
+        let outer_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let outer_right = Arc::new(EmptyExec::new(outer_schema.clone()));
+
+        let outer_on = vec![(
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        let outer = Arc::new(HashJoinExec::try_new(
+            smj,
+            outer_right,
+            outer_on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let mut builder = GraphBuilder::default();
+        let result = builder.build(outer)?;
+        let (graph, _) = result.ok_or_else(|| {
+            DataFusionError::Internal(
+                "expected reorderable region rooted at outer hash join".to_string(),
+            )
+        })?;
+
+        // Two relations: the SMJ sub-tree as one leaf, and the third table as another.
+        assert_eq!(
+            graph.relation_count(),
+            2,
+            "SortMergeJoinExec sub-tree must collapse into a single boundary leaf"
+        );
+        assert_eq!(graph.edges.len(), 1);
+
+        // Silence unused-import warning from LexOrdering/PhysicalSortExpr in newer datafusion
+        let _ = std::marker::PhantomData::<(LexOrdering, PhysicalSortExpr)>;
+        Ok(())
+    }
 }

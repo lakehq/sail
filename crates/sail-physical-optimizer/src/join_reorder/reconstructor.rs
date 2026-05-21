@@ -850,15 +850,21 @@ impl<'a> PlanReconstructor<'a> {
         use datafusion::common::tree_node::{Transformed, TreeNode};
         use datafusion::physical_expr::expressions::Column;
 
-        // Find side and base index for a column, supporting stable names and schema field names
-        let find_side_and_index = |col: &Column| -> Result<Option<(JoinSide, usize)>> {
+        // Find side and base index for a column, supporting stable names and schema field names.
+        //
+        // This is a hard contract: by the time we reach `build_join_filter`, every column the
+        // predicate references must resolve to either the left or right side of this join. The
+        // earlier `analyze_predicate_dependencies` + `required.is_subset(current_join_set)` check
+        // already guarantees this; returning a silent `None` here would let a malformed
+        // `JoinFilter` referencing a non-existent column slip into the physical plan, so we fail
+        // fast with an internal error instead.
+        let find_side_and_index = |col: &Column| -> Result<(JoinSide, usize)> {
             if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name()) {
-                // Look up in left_map by stable, else right_map
                 if let Some(pos) = left_map.iter().position(|e| matches!(e, ColumnMapEntry::Stable{ relation_id, column_index } if *relation_id==rel && *column_index==cidx)) {
-                    return Ok(Some((JoinSide::Left, pos)));
+                    return Ok((JoinSide::Left, pos));
                 }
                 if let Some(pos) = right_map.iter().position(|e| matches!(e, ColumnMapEntry::Stable{ relation_id, column_index } if *relation_id==rel && *column_index==cidx)) {
-                    return Ok(Some((JoinSide::Right, pos)));
+                    return Ok((JoinSide::Right, pos));
                 }
             }
             // Fallback by matching current plan schema names.
@@ -899,9 +905,12 @@ impl<'a> PlanReconstructor<'a> {
                     "Ambiguous column reference '{}' found in both left and right join inputs during reconstruction",
                     col.name()
                 ))),
-                (Some(idx), None) => Ok(Some((JoinSide::Left, idx))),
-                (None, Some(idx)) => Ok(Some((JoinSide::Right, idx))),
-                (None, None) => Ok(None),
+                (Some(idx), None) => Ok((JoinSide::Left, idx)),
+                (None, Some(idx)) => Ok((JoinSide::Right, idx)),
+                (None, None) => Err(DataFusionError::Internal(format!(
+                    "JoinReorder: column '{}' referenced by join filter does not resolve to either left or right join input during reconstruction",
+                    col.name()
+                ))),
             }
         };
 
@@ -910,28 +919,31 @@ impl<'a> PlanReconstructor<'a> {
         let mut seen: Vec<(JoinSide, usize)> = Vec::new();
         let cols_in_expr = collect_columns(&combined_filter);
         for c in &cols_in_expr {
-            if let Some((side, idx)) = find_side_and_index(c)? {
-                if !seen.iter().any(|(s, i)| *s == side && *i == idx) {
-                    seen.push((side, idx));
-                    compact_indices.push(ColumnIndex { side, index: idx });
-                }
+            let (side, idx) = find_side_and_index(c)?;
+            if !seen.iter().any(|(s, i)| *s == side && *i == idx) {
+                seen.push((side, idx));
+                compact_indices.push(ColumnIndex { side, index: idx });
             }
         }
 
-        let index_of = |side: JoinSide, base_idx: usize| -> Option<usize> {
+        let index_of = |side: JoinSide, base_idx: usize| -> Result<usize> {
             compact_indices
                 .iter()
                 .position(|ci| ci.side == side && ci.index == base_idx)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "JoinReorder: compact index lookup failed for side={:?} base_idx={} during join-filter rewriting",
+                        side, base_idx
+                    ))
+                })
         };
 
         let retargeted = combined_filter.transform(|expr| {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                if let Some((side, base_idx)) = find_side_and_index(col)? {
-                    if let Some(new_pos) = index_of(side, base_idx) {
-                        let new_col = Column::new(col.name(), new_pos);
-                        return Ok(Transformed::yes(Arc::new(new_col)));
-                    }
-                }
+                let (side, base_idx) = find_side_and_index(col)?;
+                let new_pos = index_of(side, base_idx)?;
+                let new_col = Column::new(col.name(), new_pos);
+                return Ok(Transformed::yes(Arc::new(new_col)));
             }
             Ok(Transformed::no(expr))
         })?;
