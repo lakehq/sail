@@ -31,6 +31,32 @@ def test_variant_udf_output_casts_to_json(spark):
     assert actual == [Row(v='{"a":"a"}'), Row(v='{"a":"b"}'), Row(v='{"a":"c"}')]
 
 
+def test_complex_variant_udf_output_casts_to_json(spark):
+    def make_variant(i):
+        return spark_types.VariantVal(bytes([2, 1, 0, 0, 2, 5, 97 + i]), bytes([1, 1, 0, 1, 97]))
+
+    @spark_functions.udf(spark_types.StructType([spark_types.StructField("v", spark_types.VariantType())]))
+    def make_struct(i):
+        return {"v": make_variant(i)}
+
+    actual = spark.range(0, 3).select(make_struct("id").cast("string").alias("v")).collect()
+    assert actual == [Row(v='{{"a":"a"}}'), Row(v='{{"a":"b"}}'), Row(v='{{"a":"c"}}')]
+
+    @spark_functions.udf(spark_types.ArrayType(spark_types.VariantType()))
+    def make_array(i):
+        return [make_variant(i)]
+
+    actual = spark.range(0, 3).select(make_array("id").cast("string").alias("v")).collect()
+    assert actual == [Row(v='[{"a":"a"}]'), Row(v='[{"a":"b"}]'), Row(v='[{"a":"c"}]')]
+
+    @spark_functions.udf(spark_types.MapType(spark_types.StringType(), spark_types.VariantType()))
+    def make_map(i):
+        return {"v": make_variant(i)}
+
+    actual = spark.range(0, 3).select(make_map("id").cast("string").alias("v")).collect()
+    assert actual == [Row(v='{v -> {"a":"a"}}'), Row(v='{v -> {"a":"b"}}'), Row(v='{v -> {"a":"c"}}')]
+
+
 def test_variant_pandas_udf_output_casts_to_int(spark):
     pandas = pytest.importorskip("pandas")
 

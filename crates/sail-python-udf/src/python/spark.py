@@ -462,13 +462,23 @@ class StructConverter(Converter):
                     columns[i].append(None)
             else:
                 mask.append(False)
-                for i, v in enumerate(self._spark_data_type.toInternal(x)):
+                for i, v in enumerate(self._field_values(x)):
                     columns[i].append(v)
         return pa.StructArray.from_arrays(
             [c.from_pyspark(col) for col, c in zip(columns, self._field_converters, strict=True)],
             fields=self._fields,
             mask=pa.array(mask, type=pa.bool_()),
         )
+
+    def _field_values(self, data: Any) -> Sequence[Any]:
+        if isinstance(data, dict):
+            return [data.get(field.name) for field in self._fields]
+        if isinstance(data, tuple | list):
+            return data
+        if hasattr(data, "__dict__"):
+            values = data.__dict__
+            return [values.get(field.name) for field in self._fields]
+        return self._spark_data_type.toInternal(data)
 
 
 if pyspark.__version__.startswith(("3.", "4.0.")):

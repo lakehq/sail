@@ -121,6 +121,22 @@ def test_udtf_row_output_invalid_scalar_raises_pickle_exception():
 
 @pytest.mark.skipif(
     tuple(int(x) for x in pyspark.__version__.split(".")[:2]) < (4, 1),
+    reason="Arrow UDTF tests require PySpark 4.1+",
+)
+def test_arrow_udtf_type_conversion_error_class_is_preserved():
+    from pyspark.errors.exceptions.connect import PythonException
+
+    @udtf(returnType="x: boolean", useArrow=True)
+    class ArrowOutputUDTF:
+        def eval(self):
+            yield (1,)
+
+    with pytest.raises(PythonException, match="UDTF_ARROW_TYPE_CONVERSION_ERROR"):
+        ArrowOutputUDTF().collect()
+
+
+@pytest.mark.skipif(
+    tuple(int(x) for x in pyspark.__version__.split(".")[:2]) < (4, 1),
     reason="UDTF analyze tests require PySpark 4.1+",
 )
 def test_udtf_analyze_preserves_array_type():
