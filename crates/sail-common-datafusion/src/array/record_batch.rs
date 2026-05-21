@@ -27,7 +27,15 @@ pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<Record
             Ok(column)
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(RecordBatch::try_new(schema, columns)?)
+    if columns.is_empty() {
+        Ok(RecordBatch::try_new_with_options(
+            schema,
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+        )?)
+    } else {
+        Ok(RecordBatch::try_new(schema, columns)?)
+    }
 }
 
 /// Helper function to handle timezone adjustment for timestamp arrays.
