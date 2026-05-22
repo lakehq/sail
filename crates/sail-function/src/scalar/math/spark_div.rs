@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
@@ -33,10 +32,6 @@ impl SparkIntervalDiv {
 }
 
 impl ScalarUDFImpl for SparkIntervalDiv {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_interval_div"
     }

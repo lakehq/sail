@@ -109,9 +109,10 @@ fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> 
                 object_meta: m,
                 partition_values: vec![ScalarValue::Int64(Some(ver))],
                 range: None,
+                table_reference: None,
                 statistics: None,
                 ordering: None,
-                extensions: None,
+                extensions: Default::default(),
                 metadata_size_hint: None,
             })
         })
@@ -130,9 +131,10 @@ fn to_partitioned_files_with_version(
             object_meta: m,
             partition_values: vec![ScalarValue::Int64(Some(version))],
             range: None,
+            table_reference: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: Default::default(),
             metadata_size_hint: None,
         })
         .collect())

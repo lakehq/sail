@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -58,10 +57,6 @@ impl DisplayAs for StreamCollectorExec {
 impl ExecutionPlan for StreamCollectorExec {
     fn name(&self) -> &str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -126,5 +121,16 @@ impl ExecutionPlan for StreamCollectorExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
     }
 }

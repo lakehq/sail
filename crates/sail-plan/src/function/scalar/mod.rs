@@ -10,7 +10,7 @@ mod datetime;
 mod geo;
 mod hash;
 mod json;
-mod lambda;
+pub mod lambda;
 mod map;
 mod math;
 mod misc;

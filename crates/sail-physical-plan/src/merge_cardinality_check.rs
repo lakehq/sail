@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -73,10 +72,6 @@ impl DisplayAs for MergeCardinalityCheckExec {
 impl ExecutionPlan for MergeCardinalityCheckExec {
     fn name(&self) -> &'static str {
         "MergeCardinalityCheckExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -156,8 +151,19 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         Ok(Box::pin(stream))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
     }
 }
 

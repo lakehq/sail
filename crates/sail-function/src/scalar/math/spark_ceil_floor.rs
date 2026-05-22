@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray};
@@ -194,14 +193,18 @@ fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
         DataType::Int8 | DataType::Int16 | DataType::Int32 => {
             return Ok(ExprSimplifyResult::Simplified(Expr::Cast(expr::Cast {
                 expr: Box::new(arg),
-                data_type: DataType::Int64,
+                field: Arc::new(datafusion::arrow::datatypes::Field::new(
+                    "",
+                    DataType::Int64,
+                    false,
+                )),
             })));
         }
         _ => {}
     }
     // Idempotence: floor(floor(x)) = floor(x), ceil(ceil(x)) = ceil(x).
     if let Expr::ScalarFunction(ref func) = arg {
-        if func.func.inner().as_any().is::<T>() && func.args.len() == 1 {
+        if func.func.inner().is::<T>() && func.args.len() == 1 {
             return Ok(ExprSimplifyResult::Simplified(arg));
         }
     }
@@ -228,9 +231,6 @@ impl SparkCeil {
 }
 
 impl ScalarUDFImpl for SparkCeil {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "spark_ceil"
     }
@@ -301,9 +301,6 @@ impl SparkFloor {
 }
 
 impl ScalarUDFImpl for SparkFloor {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "spark_floor"
     }

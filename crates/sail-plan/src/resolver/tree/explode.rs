@@ -62,7 +62,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             _ => return Ok(Transformed::no(node)),
         };
         let inner = func.inner();
-        let explode = match inner.as_any().downcast_ref::<Explode>() {
+        let explode = match inner.downcast_ref::<Explode>() {
             Some(explode) => explode,
             None => {
                 return Ok(Transformed::no(func.call(args)));

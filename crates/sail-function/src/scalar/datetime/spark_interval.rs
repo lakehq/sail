@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -44,10 +43,6 @@ macro_rules! define_interval_udf {
         }
 
         impl ScalarUDFImpl for $udf {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-
             fn name(&self) -> &str {
                 $name
             }

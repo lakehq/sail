@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -86,10 +85,6 @@ impl ExecutionPlan for SystemTableExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -134,5 +129,21 @@ impl ExecutionPlan for SystemTableExec {
             self.schema(),
             stream,
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        use datafusion::common::tree_node::TreeNodeRecursion;
+        let mut tnr = TreeNodeRecursion::Continue;
+        for filter in &self.filters {
+            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
+        }
+        Ok(tnr)
     }
 }

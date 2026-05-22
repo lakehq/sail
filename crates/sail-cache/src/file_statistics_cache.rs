@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use datafusion::common::{Result as DataFusionResult, TableReference};
 use datafusion::execution::cache::cache_manager::{
     CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
 };
-use datafusion::execution::cache::CacheAccessor;
+use datafusion::execution::cache::{CacheAccessor, TableScopedPath};
 use log::debug;
 use moka::sync::Cache;
-use object_store::path::Path;
 
 pub struct MokaFileStatisticsCache {
-    statistics: Cache<Path, CachedFileMetadata>,
+    statistics: Cache<TableScopedPath, CachedFileMetadata>,
+    max_entries: Option<u64>,
 }
 
 impl MokaFileStatisticsCache {
@@ -34,25 +35,26 @@ impl MokaFileStatisticsCache {
 
         Self {
             statistics: builder.build(),
+            max_entries,
         }
     }
 }
 
-impl CacheAccessor<Path, CachedFileMetadata> for MokaFileStatisticsCache {
-    fn get(&self, k: &Path) -> Option<CachedFileMetadata> {
+impl CacheAccessor<TableScopedPath, CachedFileMetadata> for MokaFileStatisticsCache {
+    fn get(&self, k: &TableScopedPath) -> Option<CachedFileMetadata> {
         self.statistics.get(k)
     }
 
-    fn put(&self, key: &Path, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
+    fn put(&self, key: &TableScopedPath, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
         self.statistics.insert(key.clone(), value);
         None
     }
 
-    fn remove(&self, k: &Path) -> Option<CachedFileMetadata> {
+    fn remove(&self, k: &TableScopedPath) -> Option<CachedFileMetadata> {
         self.statistics.remove(k)
     }
 
-    fn contains_key(&self, k: &Path) -> bool {
+    fn contains_key(&self, k: &TableScopedPath) -> bool {
         self.statistics.contains_key(k)
     }
 
@@ -70,23 +72,45 @@ impl CacheAccessor<Path, CachedFileMetadata> for MokaFileStatisticsCache {
 }
 
 impl FileStatisticsCache for MokaFileStatisticsCache {
-    fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry> {
+    fn cache_limit(&self) -> usize {
+        self.max_entries
+            .map(|limit| limit as usize)
+            .unwrap_or(usize::MAX)
+    }
+
+    fn update_cache_limit(&self, _limit: usize) {
+        // TODO: support dynamic update of cache limit
+    }
+
+    fn list_entries(&self) -> HashMap<TableScopedPath, FileStatisticsCacheEntry> {
         self.statistics
             .iter()
-            .map(|(path, cached)| {
+            .map(|(key, cached)| {
                 (
-                    path.as_ref().clone(),
+                    (*key).clone(),
                     FileStatisticsCacheEntry {
                         object_meta: cached.meta.clone(),
                         num_rows: cached.statistics.num_rows,
                         num_columns: cached.statistics.column_statistics.len(),
                         table_size_bytes: cached.statistics.total_byte_size,
-                        statistics_size_bytes: 0, // TODO: set to the real size in the future
+                        statistics_size_bytes: 0,
                         has_ordering: cached.ordering.is_some(),
                     },
                 )
             })
             .collect()
+    }
+
+    fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> DataFusionResult<()> {
+        let keys_to_drop: Vec<TableScopedPath> = self
+            .statistics
+            .iter()
+            .filter_map(|(k, _v)| (k.table == *table_ref).then_some((*k).clone()))
+            .collect();
+        for key in keys_to_drop {
+            self.statistics.invalidate(&key);
+        }
+        Ok(())
     }
 }
 
@@ -103,6 +127,13 @@ mod tests {
 
     use super::*;
 
+    fn make_key(path: &str) -> TableScopedPath {
+        TableScopedPath {
+            table: None,
+            path: Path::from(path),
+        }
+    }
+
     #[test]
     fn test_file_statistics_cache() {
         let meta = ObjectMeta {
@@ -115,7 +146,8 @@ mod tests {
             version: None,
         };
         let cache = MokaFileStatisticsCache::new(None, None);
-        assert!(cache.get(&meta.location).is_none());
+        let key = make_key("test");
+        assert!(cache.get(&key).is_none());
 
         let stats = Arc::new(Statistics::new_unknown(&Schema::new(vec![Field::new(
             "test_column",
@@ -123,8 +155,8 @@ mod tests {
             false,
         )])));
         let cached = CachedFileMetadata::new(meta.clone(), Arc::clone(&stats), None);
-        cache.put(&meta.location, cached);
-        let cached = cache.get(&meta.location);
+        cache.put(&key, cached);
+        let cached = cache.get(&key);
         assert!(cached.is_some());
         assert!(cached.unwrap().is_valid_for(&meta));
 
@@ -132,13 +164,12 @@ mod tests {
         let mut meta2 = meta.clone();
         meta2.size = 2048;
         assert!(!cache
-            .get(&meta2.location)
+            .get(&key)
             .map(|c| c.is_valid_for(&meta2))
             .unwrap_or(false));
 
         // different file
-        let mut meta2 = meta;
-        meta2.location = Path::from("test2");
-        assert!(cache.get(&meta2.location).is_none());
+        let key2 = make_key("test2");
+        assert!(cache.get(&key2).is_none());
     }
 }

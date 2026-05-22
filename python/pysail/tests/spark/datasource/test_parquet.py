@@ -86,56 +86,62 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
     def size(p):
         return get_data_directory_size(p, extension=".parquet")
 
-    # The bloom filter size is determined by a formula of FPP and NDV,
-    # and then rounded up to the nearest power of two.
-    # When the data is small, the bloom filter dominates the file size if enabled,
-    # and one bloom filter is created for each column.
-    # The file size in the assertions below are rough estimates.
+    # Parquet 58.3+ folds bloom filters after writing (fold_to_target_fpp), compacting
+    # them to the minimum size needed for the actual data inserted. With sparse data
+    # (SELECT 1 = 1 row), the folded bloom filter is tiny (~32 bytes minimum).
+    # We verify presence by comparing sizes: bloom-on file > bloom-off file.
 
-    path = str(tmpdir / "default")
-    spark.sql("SELECT 1").write.parquet(path)
-    # The Parquet file without bloom filter is small (less than 1 kB).
-    assert size(path) < 1024  # noqa: PLR2004
+    path_default = str(tmpdir / "default")
+    spark.sql("SELECT 1").write.parquet(path_default)
 
-    path = str(tmpdir / "bloom_filter_off_explicit")
+    path_off_explicit = str(tmpdir / "bloom_filter_off_explicit")
     (
         spark.sql("SELECT 1")
         .write.option("bloom_filter_on_write", "false")
         .option("bloom_filter_fpp", "0.05")
         .option("bloom_filter_ndv", "10000")
-        .parquet(path)
+        .parquet(path_off_explicit)
     )
-    assert size(path) < 1024  # noqa: PLR2004
 
-    path = str(tmpdir / "bloom_filter_off_implicit")
+    path_off_implicit = str(tmpdir / "bloom_filter_off_implicit")
     (
         spark.sql("SELECT 1")
         # The default configuration does not enable bloom filters on write.
         .write.option("bloom_filter_fpp", "0.05")
         .option("bloom_filter_ndv", "10000")
-        .parquet(path)
+        .parquet(path_off_implicit)
     )
-    assert size(path) < 1024  # noqa: PLR2004
 
-    path = str(tmpdir / "bloom_filter_on")
+    path_on = str(tmpdir / "bloom_filter_on")
     (
         spark.sql("SELECT 1")
         .write.option("bloom_filter_on_write", "true")
         .option("bloom_filter_fpp", "0.05")
         .option("bloom_filter_ndv", "10000")
-        .parquet(path)
+        .parquet(path_on)
     )
-    assert 16384 < size(path) < 16384 + 1024  # noqa: PLR2004
 
-    path = str(tmpdir / "bloom_filter_on_with_multiple_columns")
+    path_on_multi = str(tmpdir / "bloom_filter_on_with_multiple_columns")
     (
         spark.sql("SELECT 1, 2")
         .write.option("bloom_filter_on_write", "true")
         .option("bloom_filter_fpp", "0.05")
         .option("bloom_filter_ndv", "10000")
-        .parquet(path)
+        .parquet(path_on_multi)
     )
-    assert 32768 < size(path) < 32768 + 1024  # noqa: PLR2004
+
+    # No bloom filter: all three variants produce the same small file.
+    assert size(path_default) < 1024  # noqa: PLR2004
+    assert size(path_off_explicit) < 1024  # noqa: PLR2004
+    assert size(path_off_implicit) < 1024  # noqa: PLR2004
+
+    # Bloom filter on: same query, only difference is the bloom filter bytes.
+    assert size(path_on) > size(path_off_explicit)
+
+    # Two columns produce two bloom filters: same query with 2 cols, bloom on vs off.
+    path_off_multi = str(tmpdir / "bloom_filter_off_multiple_columns")
+    spark.sql("SELECT 1, 2").write.parquet(path_off_multi)
+    assert size(path_on_multi) > size(path_off_multi)
 
 
 def test_parquet_write_with_path_option(spark, tmpdir):

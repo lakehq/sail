@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -98,10 +97,6 @@ impl DisplayAs for IcebergManifestScanExec {
 impl ExecutionPlan for IcebergManifestScanExec {
     fn name(&self) -> &str {
         "IcebergManifestScanExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {
@@ -238,6 +233,17 @@ impl ExecutionPlan for IcebergManifestScanExec {
             self.output_schema.clone(),
             stream,
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
     }
 }
 

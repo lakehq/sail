@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -19,10 +18,6 @@ struct RangeTableProvider {
 
 #[tonic::async_trait]
 impl TableProvider for RangeTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.node.schema().inner().clone()
     }

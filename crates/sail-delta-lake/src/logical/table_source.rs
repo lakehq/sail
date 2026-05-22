@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -78,10 +77,6 @@ impl DeltaTableSource {
 }
 
 impl TableSource for DeltaTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::ops::BitAnd;
 use std::sync::Arc;
 
@@ -8,13 +7,15 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{cast, concat};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{arrow_err, exec_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
+use crate::error::generic_internal_err;
 use crate::scalar::struct_function::to_struct_array;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -54,10 +55,6 @@ impl ArraysZip {
 }
 
 impl ScalarUDFImpl for ArraysZip {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "arrays_zip"
     }
@@ -66,39 +63,23 @@ impl ScalarUDFImpl for ArraysZip {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let params = arg_types
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Err(generic_internal_err(
+            "arrays_zip",
+            "`return_type` should not be called, use `return_field_from_args` instead",
+        ))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        let arg_types: Vec<DataType> = args
+            .arg_fields
             .iter()
-            .map(get_list_params)
-            .collect::<Result<Vec<_>>>()?;
-
-        let field_names = self.get_field_names(params.len());
-        let struct_field = struct_result_field(
-            &params
-                .iter()
-                .map(|row| row.inner_field.clone())
-                .collect::<Vec<_>>(),
-            &field_names,
-        );
-
-        let is_large = params.iter().any(|row| row.is_large);
-
-        let fixed_size_opt = params
-            .iter()
-            .map(|row| row.fixed_size_opt)
-            .try_fold(None, |prev, item| match (prev, item) {
-                (None, x) => Ok(x),
-                (Some(p), Some(x)) if p == x => Ok(Some(p)),
-                _ => Err(()),
-            })
-            .ok()
-            .flatten();
-
-        Ok(match (is_large, fixed_size_opt) {
-            (true, _) => DataType::LargeList(struct_field),
-            (false, Some(fixed_size)) => DataType::FixedSizeList(struct_field, fixed_size),
-            _ => DataType::List(struct_field),
-        })
+            .map(|f| f.data_type().clone())
+            .collect();
+        let data_type =
+            arrays_zip_return_data_type(&self.get_field_names(arg_types.len()), &arg_types)?;
+        Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -170,6 +151,40 @@ impl ListParams {
             fixed_size_opt,
         }
     }
+}
+
+fn arrays_zip_return_data_type(field_names: &[String], arg_types: &[DataType]) -> Result<DataType> {
+    let params = arg_types
+        .iter()
+        .map(get_list_params)
+        .collect::<Result<Vec<_>>>()?;
+
+    let struct_field = struct_result_field(
+        &params
+            .iter()
+            .map(|row| row.inner_field.clone())
+            .collect::<Vec<_>>(),
+        field_names,
+    );
+
+    let is_large = params.iter().any(|row| row.is_large);
+
+    let fixed_size_opt = params
+        .iter()
+        .map(|row| row.fixed_size_opt)
+        .try_fold(None, |prev, item| match (prev, item) {
+            (None, x) => Ok(x),
+            (Some(p), Some(x)) if p == x => Ok(Some(p)),
+            _ => Err(()),
+        })
+        .ok()
+        .flatten();
+
+    Ok(match (is_large, fixed_size_opt) {
+        (true, _) => DataType::LargeList(struct_field),
+        (false, Some(fixed_size)) => DataType::FixedSizeList(struct_field, fixed_size),
+        _ => DataType::List(struct_field),
+    })
 }
 
 fn get_list_params(data_type: &DataType) -> Result<ListParams> {

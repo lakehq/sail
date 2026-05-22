@@ -15,6 +15,7 @@ use std::sync::Arc;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
@@ -131,9 +132,18 @@ pub async fn build_delete_plan(
         operation,
     )?;
 
+    // The scan branch (filter_exec → DeltaScanByAddsExec) and the remove branch
+    // (DeltaRemoveActionsExec) both need to consume find_files_exec. Since they share
+    // the same Arc, executing them together in a UnionExec would cause both branches to
+    // compete for the same RepartitionExec channels — one branch would see all the files
+    // and the other would see none. reset_plan_states creates an independent copy of the
+    // plan tree for the remove branch so both branches execute from their own channels.
+    let remove_source = reset_plan_states(Arc::clone(&find_files_exec))
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
     assemble_commit_plan(
         filter_exec,
-        Some(find_files_exec),
+        Some(remove_source),
         Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
         writer_options,

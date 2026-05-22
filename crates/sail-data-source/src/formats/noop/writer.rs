@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
@@ -6,7 +5,8 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PhysicalExpr, PlanProperties};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{plan_err, Result};
 use futures::{StreamExt, TryStreamExt};
 
@@ -45,10 +45,6 @@ impl ExecutionPlan for NoopSinkExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -65,6 +61,13 @@ impl ExecutionPlan for NoopSinkExec {
             (Some(child), true) => Ok(Arc::new(NoopSinkExec::new(child))),
             _ => plan_err!("{} should have exactly one child", self.name()),
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(

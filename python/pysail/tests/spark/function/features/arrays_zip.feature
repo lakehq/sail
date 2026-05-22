@@ -21,6 +21,30 @@ Feature: arrays_zip comprehensive tests
         | result                        |
         | [{1, a, true}, {2, b, false}] |
 
+    Scenario: arrays_zip three arrays different lengths pads NULL
+      When query
+        """
+        SELECT arrays_zip(array(1,2,3), array(2,4,6), array(3,6)) AS result
+        """
+      Then query result
+        | result                              |
+        | [{1, 2, 3}, {2, 4, 6}, {3, 6, NULL}] |
+
+    Scenario: arrays_zip schema has containsNull false and nullable true fields
+      When query
+        """
+        SELECT arrays_zip(array(1,2,3), array(2,4,6), array(3,6)) AS zipped
+        """
+      Then query schema
+        """
+        root
+         |-- zipped: array (nullable = false)
+         |    |-- element: struct (containsNull = false)
+         |    |    |-- 0: integer (nullable = true)
+         |    |    |-- 1: integer (nullable = true)
+         |    |    |-- 2: integer (nullable = true)
+        """
+
     Scenario: arrays_zip single array
       When query
         """
@@ -146,6 +170,15 @@ Feature: arrays_zip comprehensive tests
       Then query result
         | result                      |
         | [{1, a}, {NULL, b}, {3, c}] |
+
+    Scenario: arrays_zip NULL elements in both arrays at different positions
+      When query
+        """
+        SELECT arrays_zip(array(1, 2, CAST(NULL AS BIGINT)), array('a', CAST(NULL AS STRING), 'c')) AS result
+        """
+      Then query result
+        | result                        |
+        | [{1, a}, {2, NULL}, {NULL, c}] |
 
     Scenario: arrays_zip all NULL elements
       When query

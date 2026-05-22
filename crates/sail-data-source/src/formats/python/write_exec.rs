@@ -10,7 +10,6 @@
 //! Each phase (write, commit, abort) deserializes a fresh Python writer from
 //! pickled bytes. Writers must not rely on in-memory state across the
 //! write -> commit/abort boundary.
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -120,10 +119,6 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
         "PythonDataSourceWriteExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -194,6 +189,17 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
             stream,
         )))
     }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &dyn datafusion::physical_plan::PhysicalExpr,
+        ) -> datafusion::common::Result<
+            datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> datafusion::common::Result<datafusion::common::tree_node::TreeNodeRecursion> {
+        Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+    }
 }
 
 #[cfg(test)]
@@ -262,7 +268,7 @@ mod tests {
 
         let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
 
-        assert!(new_exec.as_any().is::<PythonDataSourceWriteExec>());
+        assert_eq!(new_exec.name(), "PythonDataSourceWriteExec");
     }
 
     #[test]

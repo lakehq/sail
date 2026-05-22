@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
@@ -30,10 +28,6 @@ impl SparkTryParseUrl {
 }
 
 impl ScalarUDFImpl for SparkTryParseUrl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_try_parse_url"
     }

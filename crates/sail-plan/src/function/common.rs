@@ -192,6 +192,48 @@ impl ScalarFunctionBuilder {
     }
 }
 
+/// Lambda function input components for higher-order functions like filter, transform, etc.
+///
+/// Contains the resolved array expression and the already-resolved lambda expression,
+/// along with metadata needed to create the UDF. The resolver handles all the complex
+/// lambda variable resolution and external column detection before calling the handler.
+pub struct LambdaFunctionInput<'a> {
+    pub array_expr: expr::Expr,
+    pub resolved_lambda: expr::Expr,
+    pub element_type: DataType,
+    pub element_column_name: String,
+    pub element_var_name: String,
+    pub index_column_name: Option<String>,
+    pub index_var_name: Option<String>,
+    pub outer_columns: Vec<(String, DataType)>,
+    pub outer_column_exprs: Vec<expr::Expr>,
+    pub function_context: FunctionContextInput<'a>,
+}
+
+/// Builds a DataFusion expression from a lambda function call.
+///
+/// Lambda functions receive already-resolved expressions from the resolver.
+/// The handler is responsible for creating the appropriate UDF from these
+/// resolved components.
+pub(crate) type LambdaFunction =
+    Arc<dyn for<'a> Fn(LambdaFunctionInput<'a>) -> PlanResult<expr::Expr> + Send + Sync>;
+
+pub(crate) struct LambdaFunctionBuilder;
+
+impl LambdaFunctionBuilder {
+    pub fn custom<F>(f: F) -> LambdaFunction
+    where
+        F: for<'a> Fn(LambdaFunctionInput<'a>) -> PlanResult<expr::Expr> + Send + Sync + 'static,
+    {
+        Arc::new(f)
+    }
+
+    pub fn unknown(name: &str) -> LambdaFunction {
+        let name = name.to_string();
+        Arc::new(move |_| Err(PlanError::todo(format!("lambda function: {name}"))))
+    }
+}
+
 /// Aggregate function input components, excluding the function name.
 ///
 /// Populated by the resolver from `spec::UnresolvedFunction` after resolving spec expressions

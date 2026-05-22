@@ -39,7 +39,7 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
         if let Some(f) = catalog_manager.get_function(&canonical_function_name)? {
-            if f.inner().as_any().is::<PySparkUnresolvedUDF>() {
+            if f.inner().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
         }
@@ -50,7 +50,7 @@ impl PlanResolver<'_> {
         let schema = input.schema().clone();
 
         if let Some(f) = catalog_manager.get_function(&canonical_function_name)? {
-            if let Some(f) = f.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+            if let Some(f) = f.inner().downcast_ref::<PySparkUnresolvedUDF>() {
                 if !f.eval_type().is_table_function() {
                     return Err(PlanError::invalid(format!(
                         "not a table function for UDTF lateral view: {function_name}"

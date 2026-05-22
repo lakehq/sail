@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -33,10 +32,6 @@ impl SparkBin {
 }
 
 impl ScalarUDFImpl for SparkBin {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_bin"
     }

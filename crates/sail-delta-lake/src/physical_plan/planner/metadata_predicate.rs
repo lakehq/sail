@@ -349,10 +349,10 @@ impl MetadataPredicateRewriter {
     fn extract_template(expr: &Expr) -> Option<ExprTemplate> {
         match expr {
             Expr::Column(column) => Some(ExprTemplate::Raw(column.clone())),
-            Expr::Cast(Cast { expr, data_type }) => match expr.as_ref() {
+            Expr::Cast(Cast { expr, field }) => match expr.as_ref() {
                 Expr::Column(column) => Some(ExprTemplate::Cast {
                     column: column.clone(),
-                    data_type: data_type.clone(),
+                    data_type: field.data_type().clone(),
                 }),
                 _ => None,
             },

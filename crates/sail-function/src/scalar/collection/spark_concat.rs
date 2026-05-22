@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -39,10 +38,6 @@ impl SparkConcat {
 }
 
 impl ScalarUDFImpl for SparkConcat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_concat"
     }

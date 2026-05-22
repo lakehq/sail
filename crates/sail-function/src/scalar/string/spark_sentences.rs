@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListArray, ListBuilder, StringBuilder};
@@ -40,10 +39,6 @@ impl SparkSentences {
 }
 
 impl ScalarUDFImpl for SparkSentences {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         Self::NAME
     }

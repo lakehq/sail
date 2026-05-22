@@ -186,9 +186,11 @@ impl TreeNodeRewriter for StreamingRewriter {
 }
 
 fn is_streaming_table_provider(provider: &dyn TableProvider) -> bool {
-    if provider.as_any().is::<StreamSourceTableProvider>() {
+    if (provider as &dyn std::any::Any).is::<StreamSourceTableProvider>() {
         true
-    } else if let Some(rename) = provider.as_any().downcast_ref::<RenameTableProvider>() {
+    } else if let Some(rename) =
+        (provider as &dyn std::any::Any).downcast_ref::<RenameTableProvider>()
+    {
         is_streaming_table_provider(rename.inner().as_ref())
     } else {
         false
@@ -201,15 +203,16 @@ struct NamedStreamSource {
 }
 
 fn get_stream_source_opt(provider: &dyn TableProvider) -> Option<NamedStreamSource> {
-    if let Some(stream) = provider
-        .as_any()
-        .downcast_ref::<StreamSourceTableProvider>()
+    if let Some(stream) =
+        (provider as &dyn std::any::Any).downcast_ref::<StreamSourceTableProvider>()
     {
         Some(NamedStreamSource {
             source: stream.source().clone(),
             names: None,
         })
-    } else if let Some(rename) = provider.as_any().downcast_ref::<RenameTableProvider>() {
+    } else if let Some(rename) =
+        (provider as &dyn std::any::Any).downcast_ref::<RenameTableProvider>()
+    {
         if let Some(stream) = get_stream_source_opt(rename.inner().as_ref()) {
             Some(NamedStreamSource {
                 source: stream.source,

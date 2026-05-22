@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -107,10 +106,6 @@ impl SparkTimestamp {
 }
 
 impl ScalarUDFImpl for SparkTimestamp {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_timestamp"
     }

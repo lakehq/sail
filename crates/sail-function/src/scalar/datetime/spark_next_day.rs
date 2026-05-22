@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use chrono::{Datelike, Duration, Weekday};
@@ -38,10 +37,6 @@ impl SparkNextDay {
 }
 
 impl ScalarUDFImpl for SparkNextDay {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_next_day"
     }
