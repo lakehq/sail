@@ -93,7 +93,10 @@ def spark_config_override(key, value, spark, variables):
 def statement(template, docstring, spark, variables):
     """Executes a SQL statement that is expected to succeed."""
     s = Template(docstring).render(**variables) if template else docstring
-    spark.sql(s)
+    # Spark Connect can defer executing commands until an action is triggered.
+    # Use `_to_table()` (Arrow) instead of `collect()` to avoid Spark's Arrow→Row
+    # conversion limits (for example, unsigned integer types).
+    spark.sql(s)._to_table()  # noqa: SLF001
 
 
 @given(parsers.re(r"statement(?P<template>( template)?) with error (?P<error>.*)"))
@@ -101,7 +104,7 @@ def statement_with_error(template, error, docstring, spark, variables):
     """Executes a SQL statement that is expected to fail with an error."""
     s = Template(docstring).render(**variables) if template else docstring
     with pytest.raises(Exception, match=error):
-        spark.sql(s)
+        spark.sql(s)._to_table()  # noqa: SLF001
 
 
 @given(parsers.re("final statement(?P<template>( template)?)"))
@@ -109,7 +112,7 @@ def final_statement(template, docstring, spark, variables):
     """Executes a SQL statement at the end of a scenario."""
     s = Template(docstring).render(**variables) if template else docstring
     yield
-    spark.sql(s)
+    spark.sql(s)._to_table()  # noqa: SLF001
 
 
 @given(parsers.parse("sleep for {seconds:d} seconds"))

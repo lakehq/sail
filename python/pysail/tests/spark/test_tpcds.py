@@ -16,7 +16,10 @@ from pysail.testing.spark.utils.sql import (
 @pytest.fixture(scope="module")
 def duck():
     conn = duckdb.connect()
-    conn.sql("CALL dsdgen(sf = 0.01)")
+    try:
+        conn.sql("CALL dsdgen(sf = 0.01)")
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"DuckDB tpcds extension unavailable: {e}")
     return conn
 
 

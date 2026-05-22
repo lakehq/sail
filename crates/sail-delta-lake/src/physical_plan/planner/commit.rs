@@ -78,6 +78,16 @@ pub fn assemble_commit_plan(
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> = if let Some(remove_src) = remove_source {
+        // Physical plans are generally tree-shaped; if the remove source is also
+        // referenced elsewhere (e.g. DELETE uses the same discovery plan for both
+        // scanning and removal), we must clone/reset plan state to avoid a DAG.
+        let remove_src = reset_plan_states(remove_src)?;
+        // `DeltaRemoveActionsExec` executes only a single input partition, so ensure
+        // the remove source is coalesced to one partition first; otherwise some
+        // touched files may be silently missed when the upstream plan is partitioned
+        // (for example RoundRobin repartitioning in DELETE discovery).
+        let remove_src: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(remove_src));
         let remover: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::try_new(
             remove_src,
             remove_partition_value_columns,
