@@ -192,17 +192,16 @@ impl DeltaCommitExec {
         if !is_managed {
             return Ok(None);
         }
-        let table_id = unity_table_id_value(
+        // Managed Delta tables from non-Unity catalogs do not participate in
+        // Unity coordinated commits, so the UC table id is the opt-in marker.
+        let table_id = match unity_table_id_value(
             properties
                 .iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
-        .ok_or_else(|| {
-            DataFusionError::Plan(
-                "managed Unity Catalog Delta table is missing a table id".to_string(),
-            )
-        })?
-        .to_string();
+        ) {
+            Some(table_id) => table_id.to_string(),
+            None => return Ok(None),
+        };
 
         Ok(Some(DeltaCatalogManagedTable {
             table_id,
