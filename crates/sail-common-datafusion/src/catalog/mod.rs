@@ -1,4 +1,6 @@
+pub mod delta;
 pub mod display;
+pub mod managed;
 mod status;
 
 use datafusion_common::Column;

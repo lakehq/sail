@@ -111,7 +111,7 @@ async fn setup_catalog(
             .to_string();
         let network = network.clone();
         start_container_with_retry(move || {
-            GenericImage::new("unitycatalog/unitycatalog", "v0.3.0")
+            GenericImage::new("unitycatalog/unitycatalog", "v0.4.0")
                 .with_wait_for(WaitFor::message_on_stdout(
                     "###################################################################",
                 ))

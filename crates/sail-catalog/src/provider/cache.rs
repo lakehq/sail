@@ -9,8 +9,9 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace,
 };
 
 #[derive(Clone)]
@@ -316,6 +317,20 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             c.invalidate(database).await;
         }
         Ok(())
+    }
+
+    async fn commit_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<TableStatus> {
+        let status = self.inner.commit_table(database, table, options).await?;
+        if let Some(c) = self.table_cache.as_ref() {
+            let c: &Cache<Namespace, Vec<TableStatus>> = c;
+            c.invalidate(database).await;
+        }
+        Ok(status)
     }
 
     async fn create_view(

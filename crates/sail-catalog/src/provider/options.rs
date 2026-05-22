@@ -55,6 +55,18 @@ pub struct DropTableOptions {
     pub purge: bool,
 }
 
+/// Options for committing table-format metadata through a catalog.
+///
+/// `requirements` and `updates` use JSON so the catalog facade can remain independent of any
+/// particular lakehouse format crate. Format-specific catalog providers deserialize or forward the
+/// payload according to their protocol.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CommitTableOptions {
+    pub format: String,
+    pub requirements: Vec<serde_json::Value>,
+    pub updates: Vec<serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CreateViewOptions {
     pub columns: Vec<CreateViewColumnOptions>,

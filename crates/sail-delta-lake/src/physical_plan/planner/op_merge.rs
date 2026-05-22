@@ -270,6 +270,7 @@ pub async fn build_merge_plan_mor(
         PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.catalog_table().cloned(),
     )))
 }
 

@@ -12,6 +12,7 @@ use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
     find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
     RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::gen::{DeltaReadOptions, DeltaWriteOptions};
@@ -125,6 +126,7 @@ impl TableFormat for DeltaTableFormat {
             .collect::<Vec<_>>();
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
+        let catalog_table = catalog_table_from_options(&options)?;
         let (options, table_properties) = split_delta_write_options_and_table_properties(options);
         let delta_options = DeltaWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -248,7 +250,8 @@ impl TableFormat for DeltaTableFormat {
             table_exists,
         )
         .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
-        .with_table_snapshot(table_snapshot);
+        .with_table_snapshot(table_snapshot)
+        .with_catalog_table(catalog_table);
         let planner_ctx = PlannerContext::new(ctx, table_config);
         let planner = DeltaPhysicalPlanner::new(planner_ctx);
         let sink_exec = planner.create_plan(input, unified_mode, sort_order).await?;
@@ -274,6 +277,11 @@ impl TableFormat for DeltaTableFormat {
         } else {
             info.merge_strategy
         };
+        let catalog_table = catalog_table_from_options(&info.target.options)?.or_else(|| {
+            (!info.target.table_name.is_empty()).then(|| info.target.table_name.clone())
+        });
+        let (target_options, _) =
+            split_delta_write_options_and_table_properties(info.target.options.clone());
 
         match (effective_strategy, info.command) {
             // ── Merge-on-Read DELETE ──────────────────────────────────────────
@@ -282,7 +290,7 @@ impl TableFormat for DeltaTableFormat {
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
                 })?;
-                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options)?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
                 let delete_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -290,14 +298,15 @@ impl TableFormat for DeltaTableFormat {
                     Vec::new(),
                     None,
                     true,
-                );
+                )
+                .with_catalog_table(catalog_table.clone());
                 let delete_ctx = PlannerContext::new(ctx, delete_config);
                 plan_delete_mor(&delete_ctx, condition).await
             }
             // ── Merge-on-Read MERGE ──────────────────────────────────────────
             (MergeStrategy::MergeOnRead, RowLevelCommand::Merge) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options.clone())?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
                 let merge_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -305,7 +314,8 @@ impl TableFormat for DeltaTableFormat {
                     info.target.partition_by.clone(),
                     None,
                     true,
-                );
+                )
+                .with_catalog_table(catalog_table.clone());
                 let merge_ctx = PlannerContext::new(ctx, merge_config);
                 plan_merge_mor(&merge_ctx, info).await
             }
@@ -320,7 +330,7 @@ impl TableFormat for DeltaTableFormat {
                 let condition = info.condition.ok_or_else(|| {
                     DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
                 })?;
-                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options)?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
                 let delete_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -328,14 +338,15 @@ impl TableFormat for DeltaTableFormat {
                     Vec::new(),
                     None,
                     true,
-                );
+                )
+                .with_catalog_table(catalog_table.clone());
                 let delete_ctx = PlannerContext::new(ctx, delete_config);
                 plan_delete(&delete_ctx, condition).await
             }
             // ── Copy-on-Write MERGE ──────────────────────────────────────────
             (MergeStrategy::Eager, RowLevelCommand::Merge) => {
                 let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
-                let delta_options = DeltaWriteOptions::resolve(ctx, info.target.options.clone())?;
+                let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
                 let merge_config = DeltaPlannerConfig::new(
                     table_url,
                     delta_options,
@@ -343,7 +354,8 @@ impl TableFormat for DeltaTableFormat {
                     info.target.partition_by.clone(),
                     None,
                     true,
-                );
+                )
+                .with_catalog_table(catalog_table.clone());
                 let merge_ctx = PlannerContext::new(ctx, merge_config);
                 plan_merge(&merge_ctx, info).await
             }
@@ -391,6 +403,7 @@ impl TableFormat for DeltaTableFormat {
             .snapshot()
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
+        ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE SET/UNSET TBLPROPERTIES")?;
 
         // Split `SET` and `UNSET` changes.
         let (set_changes, unset_changes): (Vec<_>, Vec<_>) =
@@ -505,6 +518,7 @@ impl TableFormat for DeltaTableFormat {
             .snapshot()
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
+        ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE ALTER COLUMN TYPE")?;
         let current_metadata = snapshot.metadata();
         let current_kernel = StructType::try_from(snapshot.schema())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -582,6 +596,19 @@ fn operation_column_json(
         "nullable": field.is_nullable(),
         "metadata": metadata,
     }))
+}
+
+fn ensure_not_catalog_managed_delta(
+    snapshot: &crate::table::DeltaSnapshot,
+    operation: &str,
+) -> Result<()> {
+    let protocol = snapshot.protocol();
+    if protocol.has_reader_feature(&TableFeature::CatalogManaged)
+        || protocol.has_writer_feature(&TableFeature::CatalogManaged)
+    {
+        return not_impl_err!("{operation} is not yet supported for catalog-managed Delta tables");
+    }
+    Ok(())
 }
 
 fn resolve_operation_column_field(
@@ -871,22 +898,26 @@ fn split_delta_write_options_and_table_properties(
     let mut table_properties = HashMap::new();
     let clean_options = options
         .into_iter()
-        .map(|layer| match layer {
+        .filter_map(|layer| match layer {
             OptionLayer::OptionList { items } => {
                 let mut clean_items = Vec::with_capacity(items.len());
                 for (key, value) in items {
-                    if let Some(property_key) = route_table_property_key(&key) {
+                    if key == CATALOG_TABLE_OPTION {
+                        continue;
+                    } else if let Some(property_key) = route_table_property_key(&key) {
                         table_properties.insert(property_key, value);
                     } else {
                         clean_items.push((key, value));
                     }
                 }
-                OptionLayer::OptionList { items: clean_items }
+                (!clean_items.is_empty()).then_some(OptionLayer::OptionList { items: clean_items })
             }
             OptionLayer::TablePropertyList { items } => {
                 let mut clean_items = Vec::with_capacity(items.len());
                 for (key, value) in items {
-                    if let Some(property_key) = route_table_property_key(&key) {
+                    if key == CATALOG_TABLE_OPTION {
+                        continue;
+                    } else if let Some(property_key) = route_table_property_key(&key) {
                         table_properties.insert(property_key, value);
                     } else if key.starts_with("option.") {
                         // Write option from the OPTIONS clause; keep in clean items
@@ -898,12 +929,29 @@ fn split_delta_write_options_and_table_properties(
                         table_properties.insert(key, value);
                     }
                 }
-                OptionLayer::TablePropertyList { items: clean_items }
+                (!clean_items.is_empty())
+                    .then_some(OptionLayer::TablePropertyList { items: clean_items })
             }
-            other => other,
+            other => Some(other),
         })
         .collect();
     (clean_options, table_properties)
+}
+
+fn catalog_table_from_options(options: &[OptionLayer]) -> Result<Option<Vec<String>>> {
+    for layer in options.iter().rev() {
+        let OptionLayer::OptionList { items } = layer else {
+            continue;
+        };
+        if let Some((_, value)) = items.iter().find(|(key, _)| key == CATALOG_TABLE_OPTION) {
+            return serde_json::from_str::<Vec<String>>(value)
+                .map(Some)
+                .map_err(|e| {
+                    DataFusionError::Plan(format!("invalid catalog table reference: {e}"))
+                });
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -1008,5 +1056,36 @@ mod tests {
             }
             _ => unreachable!("expected OptionList"),
         }
+    }
+
+    #[test]
+    fn test_catalog_table_option_is_private() -> Result<()> {
+        let catalog_table = r#"["catalog","schema","table"]"#.to_string();
+        let options = vec![OptionLayer::OptionList {
+            items: vec![
+                (CATALOG_TABLE_OPTION.to_string(), catalog_table),
+                ("path".to_string(), "/tmp/table".to_string()),
+            ],
+        }];
+
+        assert_eq!(
+            catalog_table_from_options(&options)?,
+            Some(vec![
+                "catalog".to_string(),
+                "schema".to_string(),
+                "table".to_string()
+            ])
+        );
+        let (clean_options, table_properties) =
+            split_delta_write_options_and_table_properties(options);
+        assert!(table_properties.is_empty());
+        assert_eq!(clean_options.len(), 1);
+        match &clean_options[0] {
+            OptionLayer::OptionList { items } => {
+                assert_eq!(items, &[("path".to_string(), "/tmp/table".to_string())]);
+            }
+            _ => unreachable!("expected OptionList"),
+        }
+        Ok(())
     }
 }

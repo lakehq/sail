@@ -296,6 +296,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::TypeWideningPreview);
     reader_features.insert(TableFeature::TypeWidening);
     reader_features.insert(TableFeature::VariantType);
+    reader_features.insert(TableFeature::CatalogManaged);
     let mut writer_features = HashSet::new();
     // Keep this list aligned with end-to-end behavior, not just protocol parsing.
     // For writer versions 2..=6, claiming support here also means accepting older tables whose
@@ -316,6 +317,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::TypeWideningPreview);
     writer_features.insert(TableFeature::TypeWidening);
     writer_features.insert(TableFeature::VariantType);
+    writer_features.insert(TableFeature::CatalogManaged);
 
     ProtocolChecker::new(reader_features, writer_features)
 });

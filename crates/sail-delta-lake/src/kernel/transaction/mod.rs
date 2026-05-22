@@ -39,8 +39,8 @@ use crate::kernel::checkpoints::{
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::{DeltaOperation, DeltaSnapshotConfig};
 use crate::spec::{
-    checksum_path, temp_commit_path, Action, CommitAction, DeltaError, DeltaResult, Metadata,
-    TableFeature, Transaction, VersionChecksum,
+    checksum_path, staged_commit_path, temp_commit_path, Action, CommitAction, DeltaError,
+    DeltaResult, Metadata, TableFeature, Transaction, VersionChecksum,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
@@ -1173,6 +1173,18 @@ impl PreCommit {
             })
         })
     }
+
+    /// Prepare the commit and write it as a Delta catalog-managed staged commit file.
+    pub fn into_staged_commit_future(
+        self,
+    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
+        Box::pin(async move {
+            self.into_prepared_commit_future()
+                .await?
+                .into_staged_commit_future()
+                .await
+        })
+    }
 }
 
 /// Represents a inflight commit
@@ -1262,6 +1274,7 @@ impl std::future::IntoFuture for PreparedCommit {
                                     .into());
                                 }
                             }
+
                             let metadata_compatible =
                                 creation_metadata.as_ref().is_none_or(|txn| {
                                     txn.parse_schema()
@@ -1414,6 +1427,129 @@ impl std::future::IntoFuture for PreparedCommit {
             }
 
             Err(TransactionError::MaxCommitAttempts(effective_max_retries as i32).into())
+        })
+    }
+}
+
+impl PreparedCommit {
+    pub fn into_staged_commit_future(
+        self,
+    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
+        let this = self;
+
+        Box::pin(async move {
+            let local_actions: Vec<_> = this.data.actions.to_vec();
+            let snapshot_version = this.table_data.as_ref().map(|s| s.version()).unwrap_or(-1);
+            let latest_version = match this.log_store.get_latest_version(snapshot_version).await {
+                Ok(v) => Some(v),
+                Err(DeltaError::MissingVersion) => None,
+                Err(err) => return Err(err),
+            };
+
+            let mut read_snapshot: Option<Arc<DeltaSnapshot>> = this.table_data.clone();
+            if let Some(latest_version) = latest_version {
+                if read_snapshot.is_none() {
+                    let snapshot = DeltaSnapshot::try_new(
+                        this.log_store.as_ref(),
+                        Default::default(),
+                        Some(latest_version),
+                        None,
+                    )
+                    .await?;
+                    read_snapshot = Some(Arc::new(snapshot));
+                }
+
+                if let Some(snapshot) = &read_snapshot {
+                    if latest_version > snapshot.version() {
+                        warn!(
+                            "Preparing catalog-managed commit from snapshot {} but the Delta log has advanced to {latest_version}",
+                            snapshot.version()
+                        );
+                        for v in (snapshot.version() + 1)..=latest_version {
+                            let summary =
+                                WinningCommitSummary::try_new(this.log_store.as_ref(), v - 1, v)
+                                    .await?;
+                            let transaction_info = TransactionInfo::try_new(
+                                snapshot,
+                                &local_actions,
+                                this.data.operation.read_whole_table(),
+                            )?;
+                            let conflict_checker = ConflictChecker::new(
+                                transaction_info,
+                                summary,
+                                Some(&this.data.operation),
+                            );
+                            if let Err(err) = conflict_checker.check_conflicts() {
+                                return Err(TransactionError::CommitConflict(err).into());
+                            }
+                        }
+                        if let Some(snapshot) = &mut read_snapshot {
+                            Arc::make_mut(snapshot)
+                                .update(this.log_store.as_ref(), Some(latest_version as u64))
+                                .await?;
+                        }
+                    }
+                }
+            }
+
+            let version = latest_version.map(|v| v + 1).unwrap_or(0);
+            let previous_commit_timestamp =
+                previous_effective_commit_timestamp(&this.log_store, read_snapshot.as_ref())
+                    .await?;
+            let mut finalized_actions = finalize_attempt_actions(
+                &local_actions,
+                read_snapshot.as_ref(),
+                version,
+                previous_commit_timestamp,
+                Utc::now().timestamp_millis(),
+            )?;
+            validate_effective_commit_target(read_snapshot.as_ref(), &finalized_actions)?;
+
+            let txn_id = Uuid::new_v4().to_string();
+            let in_commit_timestamp = {
+                let commit_info = finalized_commit_info(&mut finalized_actions);
+                commit_info
+                    .info
+                    .entry("txnId".to_string())
+                    .or_insert_with(|| Value::String(txn_id));
+                commit_info.in_commit_timestamp.ok_or_else(|| {
+                    DeltaError::generic(
+                        "catalog-managed Delta commits require inCommitTimestamp to be enabled",
+                    )
+                })?
+            };
+
+            let staged_id = Uuid::new_v4();
+            let staged_path = staged_commit_path(version, &staged_id);
+            let staged_file_name = staged_path
+                .as_ref()
+                .rsplit('/')
+                .next()
+                .unwrap_or(staged_path.as_ref())
+                .to_string();
+            let log_bytes = actions_to_log_bytes(&finalized_actions)?;
+            let object_store = this.log_store.object_store(Some(this.operation_id));
+            object_store
+                .put_opts(
+                    &staged_path,
+                    log_bytes.into(),
+                    PutOptions {
+                        mode: PutMode::Create,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            let meta = object_store.head(&staged_path).await?;
+
+            Ok(CatalogManagedStagedCommit {
+                version,
+                file_name: staged_file_name,
+                file_size: i64::try_from(meta.size).unwrap_or(i64::MAX),
+                file_modification_timestamp: meta.last_modified.timestamp_millis(),
+                in_commit_timestamp,
+                staged_path,
+                metrics: CommitMetrics { num_retries: 0 },
+            })
         })
     }
 }
@@ -1869,6 +2005,18 @@ pub struct FinalizedCommit {
 
     /// Metrics associated with the commit operation
     pub metrics: Metrics,
+}
+
+/// A Delta catalog-managed commit that has been written under `_delta_log/_staged_commits`
+/// but still needs to be ratified by the catalog.
+pub struct CatalogManagedStagedCommit {
+    pub version: i64,
+    pub file_name: String,
+    pub file_size: i64,
+    pub file_modification_timestamp: i64,
+    pub in_commit_timestamp: i64,
+    pub staged_path: object_store::path::Path,
+    pub metrics: CommitMetrics,
 }
 impl FinalizedCommit {
     /// The new table state after a commit
