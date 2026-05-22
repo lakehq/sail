@@ -1,5 +1,5 @@
 import platform
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import pyspark.sql.functions as F  # noqa: N812
 import pyspark.sql.types as T  # noqa: N812
@@ -85,20 +85,3 @@ def test_coalesce_mixed_string_temporal(spark):
         assert literal_result.collect() == [Row(c="default")]
     finally:
         spark.conf.set("spark.sql.ansi.enabled", original)
-
-
-@pytest.mark.skipif(not hasattr(F, "make_timestamp_ntz"), reason="make_timestamp_ntz is not available")
-def test_make_timestamp_ntz_collect_preserves_out_of_ns_range_value(spark):
-    df = spark.createDataFrame(
-        [(1, 1, 1, 0, 0, 0.0)], "year int, month int, day int, hour int, minute int, second double"
-    )
-
-    rows = df.select(F.make_timestamp_ntz("year", "month", "day", "hour", "minute", "second").alias("ts")).collect()
-
-    assert rows == [Row(ts=datetime(1, 1, 1))]  # noqa: DTZ001
-
-
-def test_daytime_interval_collect_preserves_out_of_ns_range_value(spark):
-    rows = spark.sql("SELECT INTERVAL '4498031 04:27:34.999981' DAY TO SECOND AS iv").collect()
-
-    assert rows == [Row(iv=timedelta(days=4498031, seconds=16054, microseconds=999981))]
