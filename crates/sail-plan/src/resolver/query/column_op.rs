@@ -212,9 +212,8 @@ impl PlanResolver<'_> {
                     }
                     _ => return Err(PlanError::invalid("alias expression expected for column")),
                 };
-                let name_str: String = name.into();
                 let expr = self.resolve_expression(expr, schema, state).await?;
-                results.insert(name_str, (expr, false, metadata));
+                results.insert(name.into(), (expr, false, metadata));
             }
             Ok(results) as PlanResult<_>
         }
@@ -227,16 +226,12 @@ impl PlanResolver<'_> {
                 match aliases.get_mut(name) {
                     Some((e, exists, metadata)) => {
                         *exists = true;
-                        let named_meta: Vec<(String, String)> = metadata
-                            .as_ref()
-                            .filter(|m| !m.is_empty())
-                            .cloned()
-                            .unwrap_or_default();
-                        if !named_meta.is_empty() {
-                            Ok(NamedExpr::new(vec![name.to_string()], e.clone())
-                                .with_metadata(named_meta))
-                        } else {
-                            Ok(NamedExpr::new(vec![name.to_string()], e.clone()))
+                        match metadata {
+                            Some(m) if !m.is_empty() => {
+                                Ok(NamedExpr::new(vec![name.to_string()], e.clone())
+                                    .with_metadata(m.clone()))
+                            }
+                            _ => Ok(NamedExpr::new(vec![name.to_string()], e.clone())),
                         }
                     }
                     None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
@@ -245,17 +240,15 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         for (name, (e, exists, metadata)) in &aliases {
             if !exists {
-                let named_meta: Vec<(String, String)> = metadata
-                    .as_ref()
-                    .filter(|m| !m.is_empty())
-                    .cloned()
-                    .unwrap_or_default();
-                if !named_meta.is_empty() {
-                    expr.push(
-                        NamedExpr::new(vec![name.clone()], e.clone()).with_metadata(named_meta),
-                    );
-                } else {
-                    expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
+                match metadata {
+                    Some(m) if !m.is_empty() => {
+                        expr.push(
+                            NamedExpr::new(vec![name.clone()], e.clone()).with_metadata(m.clone()),
+                        );
+                    }
+                    _ => {
+                        expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
+                    }
                 }
             }
         }
