@@ -299,7 +299,7 @@ impl PlanResolver<'_> {
             nullable,
             metadata,
         } = field;
-        let mut arrow_metadata: HashMap<String, String> = metadata.iter().cloned().collect();
+        let mut metadata: HashMap<String, String> = metadata.iter().cloned().collect();
         let data_type = match data_type {
             spec::DataType::UserDefined {
                 jvm_class,
@@ -307,12 +307,12 @@ impl PlanResolver<'_> {
                 serialized_python_class,
                 sql_type,
             } => {
-                let udt = spec::UserDefinedTypeMetadata {
+                let udt = spec::SparkUdtMetadata {
                     jvm_class: jvm_class.clone(),
                     python_class: python_class.clone(),
                     serialized_python_class: serialized_python_class.clone(),
                 };
-                arrow_metadata.insert(
+                metadata.insert(
                     spec::SAIL_SPARK_UDT_METADATA_KEY.to_string(),
                     serde_json::to_string(&udt).map_err(|e| {
                         PlanError::internal(format!("failed to serialize UDT metadata: {e}"))
@@ -326,7 +326,7 @@ impl PlanResolver<'_> {
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
                 // Edges default to planar in GeoArrow, so we omit them for Geometry.
-                arrow_metadata.insert(
+                metadata.insert(
                     spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
@@ -334,7 +334,7 @@ impl PlanResolver<'_> {
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                arrow_metadata.insert(
+                metadata.insert(
                     spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                     ext.to_string(),
                 );
@@ -345,7 +345,7 @@ impl PlanResolver<'_> {
                 // Add geoarrow extension type metadata for WKB-encoded geographies.
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
-                arrow_metadata.insert(
+                metadata.insert(
                     spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     "geoarrow.wkb".to_string(),
                 );
@@ -353,14 +353,14 @@ impl PlanResolver<'_> {
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                arrow_metadata.insert(
+                metadata.insert(
                     spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                     ext.to_string(),
                 );
                 data_type
             }
             spec::DataType::Variant => {
-                arrow_metadata.insert(
+                metadata.insert(
                     spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                     spec::VARIANT_EXTENSION_NAME.to_string(),
                 );
@@ -370,7 +370,7 @@ impl PlanResolver<'_> {
         };
         Ok(
             adt::Field::new(name, self.resolve_data_type(data_type, state)?, *nullable)
-                .with_metadata(arrow_metadata),
+                .with_metadata(metadata),
         )
     }
 

@@ -32,8 +32,7 @@ pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
 pub const SAIL_SPARK_UDT_METADATA_KEY: &str = "SAIL::spark::udt";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UserDefinedTypeMetadata {
+pub struct SparkUdtMetadata {
     pub jvm_class: Option<String>,
     pub python_class: Option<String>,
     pub serialized_python_class: Option<String>,

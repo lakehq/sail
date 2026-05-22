@@ -1,4 +1,5 @@
 use datafusion::arrow::datatypes as adt;
+use sail_common::spec;
 use serde::Deserialize;
 
 use crate::error::{SparkError, SparkResult};
@@ -118,20 +119,16 @@ impl TryFrom<adt::Field> for sdt::StructField {
     type Error = SparkError;
 
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
-        let udt_metadata: Option<sail_common::spec::UserDefinedTypeMetadata> = field
+        let udt_metadata: Option<spec::SparkUdtMetadata> = field
             .metadata()
-            .get(sail_common::spec::SAIL_SPARK_UDT_METADATA_KEY)
+            .get(spec::SAIL_SPARK_UDT_METADATA_KEY)
             .map(|v| serde_json::from_str(v))
             .transpose()
             .map_err(SparkError::from)?;
-        let is_udt = udt_metadata.is_some();
         let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
-        let is_variant =
-            field.extension_type_name() == Some(sail_common::spec::VARIANT_EXTENSION_NAME);
+        let is_variant = field.extension_type_name() == Some(spec::VARIANT_EXTENSION_NAME);
 
-        let data_type = if is_udt {
-            let udt_metadata =
-                udt_metadata.ok_or_else(|| SparkError::invalid("missing udt metadata"))?;
+        let data_type = if let Some(udt_metadata) = udt_metadata {
             DataType {
                 kind: Some(sdt::Kind::Udt(Box::new(sdt::Udt {
                     r#type: "udt".to_string(),
@@ -174,22 +171,11 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else {
             field.data_type().clone().try_into()?
         };
-        let metadata = field
-            .metadata()
-            .get(sail_common::spec::SPARK_METADATA_JSON_KEY)
-            .cloned()
-            .unwrap_or_else(|| "{}".to_string());
-        if metadata != "{}" {
-            let v: serde_json::Value = serde_json::from_str(&metadata).map_err(SparkError::from)?;
-            if !v.is_object() {
-                return Err(SparkError::invalid("spark field metadata"));
-            }
-        }
         Ok(sdt::StructField {
             name: field.name().clone(),
             data_type: Some(data_type),
             nullable: field.is_nullable(),
-            metadata: Some(metadata),
+            metadata: field.metadata().get(spec::SPARK_METADATA_JSON_KEY).cloned(),
         })
     }
 }
@@ -427,11 +413,11 @@ mod tests {
         // Geometry omits "edges" (defaults to planar in GeoArrow)
         let metadata: HashMap<String, String> = [
             (
-                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84"}"#.to_string(),
             ),
         ]
@@ -460,11 +446,11 @@ mod tests {
         // Create an Arrow field with geoarrow.wkb metadata for Geography (spherical)
         let metadata: HashMap<String, String> = [
             (
-                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84","edges":"spherical"}"#.to_string(),
             ),
         ]
@@ -493,11 +479,11 @@ mod tests {
         // Test mixed SRID (-1): CRS and edges are omitted from metadata
         let metadata: HashMap<String, String> = [
             (
-                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{}"#.to_string(),
             ),
         ]

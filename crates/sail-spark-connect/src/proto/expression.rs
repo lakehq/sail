@@ -104,19 +104,8 @@ impl TryFrom<Expression> for spec::Expr {
                     metadata,
                 } = *alias;
                 let expr = expr.required("alias expression")?;
-                let metadata: Option<Vec<(String, String)>> = metadata
-                    .map(|x| {
-                        let v: serde_json::Value =
-                            serde_json::from_str(&x).map_err(SparkError::from)?;
-                        if !v.is_object() {
-                            return Err(SparkError::invalid("alias metadata"));
-                        }
-                        Ok(vec![(
-                            spec::SPARK_METADATA_JSON_KEY.to_string(),
-                            serde_json::to_string(&v)?,
-                        )])
-                    })
-                    .transpose()?;
+                let metadata =
+                    metadata.map(|x| vec![(spec::SPARK_METADATA_JSON_KEY.to_string(), x)]);
                 let name: Vec<spec::Identifier> = name.into_iter().map(|x| x.into()).collect();
                 Ok(spec::Expr::Alias {
                     expr: Box::new((*expr).try_into()?),
