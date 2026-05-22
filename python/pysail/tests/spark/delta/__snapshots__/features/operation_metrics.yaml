@@ -53,18 +53,18 @@ data:
   operation: DELETE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 0
+    numAddedBytes: 734
     numAddedChangeFiles: 0
-    numAddedFiles: 0
-    numCopiedRows: 0
-    numDeletedRows: 5
+    numAddedFiles: 1
+    numCopiedRows: 3
+    numDeletedRows: 2
     numDeletionVectorsAdded: 0
     numDeletionVectorsRemoved: 0
     numDeletionVectorsUpdated: 0
-    numFiles: 0
-    numOutputBytes: 0
-    numOutputFiles: 0
-    numOutputRows: 0
+    numFiles: 1
+    numOutputBytes: 734
+    numOutputFiles: 1
+    numOutputRows: 3
     numRemovedBytes: 751
     numRemovedFiles: 1
     numTouchedRows: 5
