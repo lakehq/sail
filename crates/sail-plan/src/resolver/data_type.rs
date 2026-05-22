@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes as adt;
 use sail_common::spec;
 use sail_common::spec::{
+    SAIL_INTERVAL_END_FIELD_METADATA_KEY, SAIL_INTERVAL_START_FIELD_METADATA_KEY,
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
 use serde_json::json;
@@ -370,6 +371,18 @@ impl PlanResolver<'_> {
                 );
                 data_type
             }
+            spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            } => {
+                metadata.extend(self.resolve_interval_qualifier_metadata(
+                    interval_unit,
+                    start_field,
+                    end_field,
+                )?);
+                data_type
+            }
             x => x,
         };
         Ok(
@@ -396,7 +409,10 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<adt::Schema> {
         let fields = self.resolve_fields(&schema.fields, state)?;
-        Ok(adt::Schema::new(fields))
+        Ok(adt::Schema::new_with_metadata(
+            fields,
+            schema.metadata.into_iter().collect(),
+        ))
     }
 
     pub fn resolve_time_unit(time_unit: &spec::TimeUnit) -> PlanResult<adt::TimeUnit> {
@@ -431,5 +447,55 @@ impl PlanResolver<'_> {
             }
             spec::TimestampType::WithoutTimeZone => Ok(None),
         }
+    }
+
+    pub fn resolve_interval_field_value(
+        &self,
+        interval_unit: &spec::IntervalUnit,
+        field: &spec::IntervalFieldType,
+    ) -> PlanResult<i32> {
+        match (interval_unit, field) {
+            (spec::IntervalUnit::YearMonth, spec::IntervalFieldType::Year) => Ok(0),
+            (spec::IntervalUnit::YearMonth, spec::IntervalFieldType::Month) => Ok(1),
+            (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Day) => Ok(0),
+            (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Hour) => Ok(1),
+            (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Minute) => Ok(2),
+            (spec::IntervalUnit::DayTime, spec::IntervalFieldType::Second) => Ok(3),
+            _ => Err(PlanError::invalid(format!(
+                "invalid interval field {field:?} for interval unit {interval_unit:?}"
+            ))),
+        }
+    }
+
+    /// Build the Arrow extension metadata that encodes a Spark interval qualifier.
+    /// Returns an empty Vec when neither start nor end field is present.
+    pub(super) fn resolve_interval_qualifier_metadata(
+        &self,
+        interval_unit: &spec::IntervalUnit,
+        start_field: &Option<spec::IntervalFieldType>,
+        end_field: &Option<spec::IntervalFieldType>,
+    ) -> PlanResult<Vec<(String, String)>> {
+        if start_field.is_none() && end_field.is_none() {
+            return Ok(vec![]);
+        }
+        let mut ext = json!({});
+        if let Some(start_field) = start_field {
+            ext[SAIL_INTERVAL_START_FIELD_METADATA_KEY] =
+                json!(self.resolve_interval_field_value(interval_unit, start_field)?);
+        }
+        if let Some(end_field) = end_field {
+            ext[SAIL_INTERVAL_END_FIELD_METADATA_KEY] =
+                json!(self.resolve_interval_field_value(interval_unit, end_field)?);
+        }
+        Ok(vec![
+            (
+                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                spec::SAIL_INTERVAL_EXTENSION_NAME.to_string(),
+            ),
+            (
+                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                ext.to_string(),
+            ),
+        ])
     }
 }

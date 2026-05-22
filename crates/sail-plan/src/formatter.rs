@@ -471,6 +471,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 result.push_str(" END");
                 Ok(result)
             }
+            "if" => Ok(format!("(IF({}))", arguments.join(", "))),
+            "coalesce" => Ok(format!("coalesce({})", arguments.join(", "))),
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();

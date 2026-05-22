@@ -3,7 +3,8 @@ use std::any::Any;
 use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{
-    DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
+    DataType, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
+    IntervalYearMonthType, TimeUnit,
 };
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -11,8 +12,8 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 use crate::scalar::math::utils::try_op::{
     binary_op_scalar_or_array, try_binary_op_to_float64, try_div_interval_monthdaynano_i32,
-    try_div_interval_monthdaynano_i64, try_op_interval_monthdaynano_i32,
-    try_op_interval_yearmonth_i32,
+    try_div_interval_monthdaynano_i64, try_op_duration_microsecond_i32,
+    try_op_duration_microsecond_i64, try_op_interval_yearmonth_i32, try_op_interval_yearmonth_i64,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -49,20 +50,18 @@ impl ScalarUDFImpl for SparkTryDiv {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types {
-            [DataType::Int32, DataType::Int32]
-            | [DataType::Int64, DataType::Int64]
-            | [DataType::Int32, DataType::Int64]
-            | [DataType::Int64, DataType::Int32] => Ok(DataType::Float64),
-            [DataType::Interval(YearMonth), DataType::Int32] => Ok(DataType::Interval(YearMonth)),
-            [DataType::Interval(MonthDayNano), DataType::Int32] => {
-                Ok(DataType::Interval(MonthDayNano))
+            [lhs, rhs] if lhs.is_integer() && rhs.is_integer() => Ok(DataType::Float64),
+            [DataType::Interval(unit), rhs]
+                if matches!(unit, YearMonth | MonthDayNano) && rhs.is_integer() =>
+            {
+                Ok(DataType::Interval(*unit))
             }
-            [DataType::Interval(MonthDayNano), DataType::Int64] => {
-                Ok(DataType::Interval(MonthDayNano))
+            [DataType::Duration(TimeUnit::Microsecond), rhs] if rhs.is_integer() => {
+                Ok(DataType::Duration(TimeUnit::Microsecond))
             }
             _ => Err(unsupported_data_types_exec_err(
                 "try_divide",
-                "Int32, Int64 o Interval(YearMonth|MonthDayNano)",
+                "Int, Interval(YearMonth), Interval(MonthDayNano), or Duration(Microsecond)",
                 arg_types,
             )),
         }
@@ -113,7 +112,6 @@ impl ScalarUDFImpl for SparkTryDiv {
                         Some(a as f64 / b as f64)
                     }
                 });
-
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Interval(YearMonth), DataType::Int32) => {
@@ -122,11 +120,10 @@ impl ScalarUDFImpl for SparkTryDiv {
                 let result = try_op_interval_yearmonth_i32(l, r, i32::checked_div);
                 binary_op_scalar_or_array(left, right, result)
             }
-            (DataType::Int32, DataType::Interval(MonthDayNano)) => {
-                let l = left_arr.as_primitive::<Int32Type>();
-                let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let result = try_op_interval_monthdaynano_i32(r, l, |a, b| a.checked_div(b as i64));
-
+            (DataType::Interval(YearMonth), DataType::Int64) => {
+                let l = left_arr.as_primitive::<IntervalYearMonthType>();
+                let r = right_arr.as_primitive::<Int64Type>();
+                let result = try_op_interval_yearmonth_i64(l, r, i64::checked_div);
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Interval(MonthDayNano), DataType::Int32) => {
@@ -141,72 +138,76 @@ impl ScalarUDFImpl for SparkTryDiv {
                 let out = try_div_interval_monthdaynano_i64(l, r)?;
                 binary_op_scalar_or_array(left, right, out)
             }
+            (DataType::Duration(TimeUnit::Microsecond), DataType::Int32) => {
+                let l = left_arr.as_primitive::<DurationMicrosecondType>();
+                let r = right_arr.as_primitive::<Int32Type>();
+                let result = try_op_duration_microsecond_i32(l, r, i64::checked_div);
+                binary_op_scalar_or_array(left, right, result)
+            }
+            (DataType::Duration(TimeUnit::Microsecond), DataType::Int64) => {
+                let l = left_arr.as_primitive::<DurationMicrosecondType>();
+                let r = right_arr.as_primitive::<Int64Type>();
+                let result = try_op_duration_microsecond_i64(l, r, i64::checked_div);
+                binary_op_scalar_or_array(left, right, result)
+            }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "try_divide",
-                "Int32, Int64 o Interval(YearMonth) / Int32",
+                "Int, Interval(YearMonth), Interval(MonthDayNano), or Duration(Microsecond)",
                 &[l.clone(), r.clone()],
             )),
         }
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        if types.len() != 2 {
+        let [left, right] = types else {
             return Err(invalid_arg_count_exec_err(
                 "try_divide",
                 (2, 2),
                 types.len(),
             ));
-        }
+        };
 
-        let left = &types[0];
-        let right = &types[1];
-
-        if *left == DataType::Null {
-            return Ok(vec![right.clone(), right.clone()]);
-        } else if *right == DataType::Null {
-            return Ok(vec![left.clone(), left.clone()]);
-        }
-
-        if matches!(
-            (left, right),
-            (DataType::Interval(YearMonth), DataType::Int32)
-                | (DataType::Int32, DataType::Interval(YearMonth))
-        ) {
-            return Ok(vec![DataType::Interval(YearMonth), DataType::Int32]);
-        }
-
-        if matches!(
-            (left, right),
-            (DataType::Interval(MonthDayNano), DataType::Int32)
-                | (DataType::Int32, DataType::Interval(MonthDayNano))
-        ) {
-            return Ok(vec![DataType::Interval(MonthDayNano), DataType::Int32]);
-        }
-        if matches!(
-            (left, right),
-            (DataType::Interval(MonthDayNano), DataType::Int64)
-                | (DataType::Int64, DataType::Interval(MonthDayNano))
-        ) {
-            return Ok(vec![DataType::Interval(MonthDayNano), DataType::Int64]);
-        }
-        if matches!(
-            (left, right),
-            (DataType::Int32, DataType::Int32)
-                | (DataType::Int64, DataType::Int64)
-                | (DataType::Int32, DataType::Int64)
-                | (DataType::Int64, DataType::Int32)
-        ) {
-            if *left == DataType::Int64 || *right == DataType::Int64 {
-                return Ok(vec![DataType::Int64, DataType::Int64]);
+        let widen = |a: &DataType, b: &DataType| -> DataType {
+            let is_wide =
+                |t: &DataType| matches!(t, DataType::Int64 | DataType::UInt32 | DataType::UInt64);
+            if is_wide(a) || is_wide(b) {
+                DataType::Int64
             } else {
-                return Ok(vec![DataType::Int32, DataType::Int32]);
+                DataType::Int32
             }
-        }
+        };
 
-        Err(unsupported_data_types_exec_err(
-            "try_divide",
-            "Int32, Int64 o Interval(YearMonth) / Int32",
-            types,
-        ))
+        match (left, right) {
+            (DataType::Null, other) | (other, DataType::Null) => {
+                Ok(vec![other.clone(), other.clone()])
+            }
+            (DataType::Interval(unit), rhs)
+                if matches!(unit, YearMonth | MonthDayNano) && rhs.is_integer() =>
+            {
+                Ok(vec![DataType::Interval(*unit), widen(rhs, rhs)])
+            }
+            (lhs, DataType::Interval(unit))
+                if matches!(unit, YearMonth | MonthDayNano) && lhs.is_integer() =>
+            {
+                Ok(vec![DataType::Interval(*unit), widen(lhs, lhs)])
+            }
+            (DataType::Duration(TimeUnit::Microsecond), rhs) if rhs.is_integer() => Ok(vec![
+                DataType::Duration(TimeUnit::Microsecond),
+                widen(rhs, rhs),
+            ]),
+            (lhs, DataType::Duration(TimeUnit::Microsecond)) if lhs.is_integer() => Ok(vec![
+                DataType::Duration(TimeUnit::Microsecond),
+                widen(lhs, lhs),
+            ]),
+            (lhs, rhs) if lhs.is_integer() && rhs.is_integer() => {
+                let t = widen(lhs, rhs);
+                Ok(vec![t.clone(), t])
+            }
+            _ => Err(unsupported_data_types_exec_err(
+                "try_divide",
+                "Int, Interval(YearMonth), Interval(MonthDayNano), or Duration(Microsecond)",
+                types,
+            )),
+        }
     }
 }

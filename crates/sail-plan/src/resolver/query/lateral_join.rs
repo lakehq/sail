@@ -212,7 +212,12 @@ fn build_output_name_map(exprs: &[Expr]) -> HashMap<String, Expr> {
     exprs
         .iter()
         .filter_map(|e| match e {
-            Expr::Alias(Alias { expr, name, .. }) => Some((name.clone(), *expr.clone())),
+            Expr::Alias(Alias {
+                expr,
+                relation: _,
+                name,
+                metadata: _, // CHECK HERE
+            }) => Some((name.clone(), *expr.clone())),
             Expr::Column(col) => Some((col.name.clone(), e.clone())),
             _ => None,
         })

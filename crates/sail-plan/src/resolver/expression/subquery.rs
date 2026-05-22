@@ -20,7 +20,11 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expression(expr, schema, state).await?;
+        let NamedExpr {
+            expr,
+            name: _,
+            metadata: _, // CHECK HERE
+        } = self.resolve_named_expression(expr, schema, state).await?;
         let subquery = {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             let plan = self.resolve_query_plan(subquery, scope.state()).await?;

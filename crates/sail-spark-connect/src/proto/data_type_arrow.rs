@@ -1,10 +1,19 @@
 use std::collections::HashMap;
 
 use datafusion::arrow::datatypes as adt;
+use sail_common::spec::{EXTENSION_TYPE_METADATA_KEY, SAIL_INTERVAL_EXTENSION_NAME};
 use serde::Deserialize;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::connect::{data_type as sdt, DataType};
+
+/// Interval qualifier extension metadata (`ARROW:extension:metadata` for
+/// fields tagged with `SAIL_INTERVAL_EXTENSION_NAME`).
+#[derive(Debug, Deserialize)]
+struct IntervalQualifierMetadata {
+    start_field: Option<i32>,
+    end_field: Option<i32>,
+}
 
 /// Raw GeoArrow extension metadata deserialized from JSON.
 #[derive(Debug, Deserialize)]
@@ -124,6 +133,11 @@ impl TryFrom<adt::Field> for sdt::StructField {
         let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
         let is_variant =
             field.extension_type_name() == Some(sail_common::spec::VARIANT_EXTENSION_NAME);
+        let is_interval = field.extension_type_name() == Some(SAIL_INTERVAL_EXTENSION_NAME)
+            && matches!(
+                field.data_type(),
+                adt::DataType::Interval(_) | adt::DataType::Duration(adt::TimeUnit::Microsecond)
+            );
 
         let data_type = if is_udt {
             DataType {
@@ -167,6 +181,38 @@ impl TryFrom<adt::Field> for sdt::StructField {
                 kind: Some(sdt::Kind::Variant(sdt::Variant {
                     type_variation_reference: 0,
                 })),
+            }
+        } else if is_interval {
+            let qualifier_json = field
+                .metadata()
+                .get(EXTENSION_TYPE_METADATA_KEY)
+                .map(String::as_str)
+                .unwrap_or_default();
+            match (
+                serde_json::from_str::<IntervalQualifierMetadata>(qualifier_json),
+                field.data_type(),
+            ) {
+                (Ok(qualifier), adt::DataType::Interval(adt::IntervalUnit::YearMonth)) => {
+                    DataType {
+                        kind: Some(sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
+                            start_field: qualifier.start_field,
+                            end_field: qualifier.end_field,
+                            type_variation_reference: 0,
+                        })),
+                    }
+                }
+                (
+                    Ok(qualifier),
+                    adt::DataType::Duration(adt::TimeUnit::Microsecond)
+                    | adt::DataType::Interval(adt::IntervalUnit::DayTime),
+                ) => DataType {
+                    kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                        start_field: qualifier.start_field,
+                        end_field: qualifier.end_field,
+                        type_variation_reference: 0,
+                    })),
+                },
+                _ => field.data_type().clone().try_into()?,
             }
         } else {
             field.data_type().clone().try_into()?
