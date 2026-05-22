@@ -24,6 +24,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let spec::TableDefinition {
+            external,
             columns,
             comment,
             constraints,
@@ -38,9 +39,9 @@ impl PlanResolver<'_> {
             replace,
             options,
             properties,
-            is_external,
         } = definition;
 
+        let is_external = external || spec::has_path_or_location(location.as_deref(), &options);
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
         }
@@ -93,6 +94,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         use super::super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
         let spec::TableDefinition {
+            external,
             columns,
             comment,
             constraints,
@@ -107,8 +109,9 @@ impl PlanResolver<'_> {
             replace,
             options,
             properties,
-            is_external,
         } = definition;
+
+        let is_external = external || spec::has_path_or_location(location.as_deref(), &options);
         if row_format.is_some() {
             return Err(PlanError::todo(
                 "ROW FORMAT in CREATE TABLE AS SELECT statement",

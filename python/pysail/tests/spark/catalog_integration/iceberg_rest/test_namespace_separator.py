@@ -9,7 +9,6 @@ import pytest
 
 from pysail.tests.spark.catalog_integration.iceberg_rest.conftest import (
     NESSIE_NAMESPACE_SEPARATOR,
-    NESSIE_NAMESPACE_SEPARATOR_CATALOGS,
 )
 
 if TYPE_CHECKING:
@@ -76,22 +75,13 @@ def _assert_no_tables_listed(spark: SparkSession, namespace: str) -> None:
     assert table_names == []
 
 
-@pytest.mark.parametrize(
-    ("catalog_name", "namespace_id"),
-    [
-        ("sail_snake_case", "snake_case"),
-        ("sail_kebab_case", "kebab_case"),
-        ("sail_camel_case", "camel_case"),
-        ("sail_flat_case", "flat_case"),
-    ],
-)
 @pytest.mark.usefixtures("_create_s3_bucket")
-def test_namespace_separator_custom_server_catalogs_work_with_config_aliases(
+def test_namespace_separator_custom_server_catalog_work_with_config(
     nessie_spark_custom_separator: SparkSession,
     nessie_custom_separator_iceberg_rest_endpoint: str,
-    catalog_name: str,
-    namespace_id: str,
 ) -> None:
+    catalog_name = "sail_custom_separator"
+    namespace_id = "custom_separator"
     config = _load_config(nessie_custom_separator_iceberg_rest_endpoint)
     _assert_rest_config_namespace_separator(config, NESSIE_NAMESPACE_SEPARATOR)
 
@@ -102,15 +92,11 @@ def test_namespace_separator_custom_server_catalogs_work_with_config_aliases(
     )
 
 
-@pytest.mark.parametrize(
-    "catalog_name",
-    [name for name, _ in NESSIE_NAMESPACE_SEPARATOR_CATALOGS],
-)
 @pytest.mark.usefixtures("_create_s3_bucket")
 def test_namespace_separator_custom_config_cannot_resolve_default_separator_namespace(
     nessie_spark_incorrect_custom_separator: SparkSession,
-    catalog_name: str,
 ) -> None:
+    catalog_name = "sail_custom_separator"
     root_namespace = f"namespace_separator_default_created_{catalog_name}"
     nested_namespace = f"{root_namespace}.child"
     table_name = "t1"

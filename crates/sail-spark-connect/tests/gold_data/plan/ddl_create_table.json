@@ -10,6 +10,7 @@
                 "mydb",
                 "page_view"
               ],
+              "external": false,
               "columns": [],
               "comment": "This is the staging page view table",
               "constraints": [],
@@ -37,7 +38,6 @@
                   "v2"
                 ]
               ],
-              "isExternal": true,
               "query": {
                 "project": {
                   "input": {
@@ -88,6 +88,7 @@
                 "mydb",
                 "page_view"
               ],
+              "external": false,
               "columns": [],
               "comment": "This is the staging page view table",
               "constraints": [],
@@ -115,7 +116,6 @@
                   "v2"
                 ]
               ],
-              "isExternal": true,
               "query": {
                 "project": {
                   "input": {
@@ -165,6 +165,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -404,8 +405,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -421,6 +421,7 @@
               "table": [
                 "table_name"
               ],
+              "external": false,
               "columns": [],
               "comment": null,
               "constraints": [],
@@ -451,8 +452,7 @@
                   "true"
                 ]
               ],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -469,6 +469,7 @@
                 "1m",
                 "2g"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -491,8 +492,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -509,6 +509,7 @@
                 "1m",
                 "2g"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -535,8 +536,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -552,6 +552,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -590,8 +591,7 @@
               "ifNotExists": true,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -607,6 +607,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -665,8 +666,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -682,6 +682,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -750,8 +751,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -767,6 +767,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -808,8 +809,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -825,6 +825,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -871,8 +872,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -889,6 +889,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -938,8 +939,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -956,6 +956,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1006,8 +1007,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1023,6 +1023,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1063,8 +1064,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1080,6 +1080,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1130,8 +1131,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1147,6 +1147,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1197,8 +1198,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1214,6 +1214,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1263,8 +1264,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1280,6 +1280,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1330,8 +1331,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1347,6 +1347,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1383,8 +1384,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1407,6 +1407,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1447,8 +1448,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1472,6 +1472,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1530,8 +1531,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1548,6 +1548,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1629,8 +1630,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1647,6 +1647,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1694,8 +1695,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1712,6 +1712,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "id",
@@ -1755,8 +1756,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1779,6 +1779,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [],
               "comment": null,
               "constraints": [],
@@ -1806,8 +1807,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1823,6 +1823,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -1861,8 +1862,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1878,6 +1878,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -1927,8 +1928,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -1965,6 +1965,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -1999,8 +2000,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -2030,6 +2030,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2068,8 +2069,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -2093,6 +2093,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2131,8 +2132,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -2148,6 +2148,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2186,8 +2187,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -2274,6 +2274,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2327,8 +2328,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -2345,6 +2345,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2392,8 +2393,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -2409,6 +2409,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2466,8 +2467,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -2483,6 +2483,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2521,8 +2522,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": false
+              "properties": []
             },
             "planId": null
           }
@@ -2538,6 +2538,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2576,8 +2577,7 @@
               "ifNotExists": false,
               "replace": false,
               "options": [],
-              "properties": [],
-              "isExternal": true
+              "properties": []
             },
             "planId": null
           }
@@ -2593,6 +2593,7 @@
               "table": [
                 "my_tab"
               ],
+              "external": false,
               "columns": [
                 {
                   "name": "a",
@@ -2636,8 +2637,7 @@
                   "test",
                   "test"
                 ]
-              ],
-              "isExternal": false
+              ]
             },
             "planId": null
           }
