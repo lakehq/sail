@@ -20,22 +20,7 @@ use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
 use futures::StreamExt;
 
 use super::executor::{InProcessExecutor, PythonExecutor};
-use super::write_exec::{
-    PythonDataSourceWriteExec, COL_COMMIT_MESSAGE, COL_ERROR, COL_PARTITION_ID,
-};
-
-/// Walk the plan tree to find the output partition count of `PythonDataSourceWriteExec`.
-fn find_write_exec_partition_count(plan: &dyn ExecutionPlan) -> Option<usize> {
-    if plan.as_any().is::<PythonDataSourceWriteExec>() {
-        return Some(plan.properties().partitioning.partition_count());
-    }
-    for child in plan.children() {
-        if let Some(count) = find_write_exec_partition_count(child.as_ref()) {
-            return Some(count);
-        }
-    }
-    None
-}
+use super::write_exec::{COL_COMMIT_MESSAGE, COL_ERROR, COL_PARTITION_ID};
 
 /// Execution plan for commit/abort in Python datasource write flow.
 #[derive(Debug)]
@@ -130,16 +115,10 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
         if children.len() != 1 {
             return internal_err!("PythonDataSourceWriteCommitExec should have exactly one child");
         }
-        let child = children[0].clone();
-        let Some(expected_partitions) = find_write_exec_partition_count(child.as_ref()) else {
-            return internal_err!(
-                "PythonDataSourceWriteCommitExec: PythonDataSourceWriteExec not found in child plan tree"
-            );
-        };
         Ok(Arc::new(Self::new(
-            child,
+            children[0].clone(),
             self.pickled_writer.clone(),
-            expected_partitions,
+            self.expected_partitions,
         )))
     }
 
@@ -364,43 +343,21 @@ mod tests {
     #[test]
     #[expect(clippy::unwrap_used)]
     fn test_with_new_children() {
-        let data_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-        let inputs: Vec<Arc<dyn ExecutionPlan>> = (0..4)
-            .map(|_| {
-                Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                    data_schema.clone(),
-                )) as Arc<dyn ExecutionPlan>
-            })
-            .collect();
-        let write_exec = Arc::new(PythonDataSourceWriteExec::new(
-            datafusion::physical_plan::union::UnionExec::try_new(inputs).unwrap(),
-            vec![],
-            true,
-        ));
-        let coalesce: Arc<dyn ExecutionPlan> = Arc::new(
-            datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec::new(write_exec),
-        );
-
-        let commit_schema = Arc::new(Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new(COL_PARTITION_ID, DataType::UInt64, false),
             Field::new(COL_COMMIT_MESSAGE, DataType::Binary, true),
             Field::new(COL_ERROR, DataType::Utf8, true),
         ]));
-        let exec = Arc::new(PythonDataSourceWriteCommitExec::new(
-            Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                commit_schema,
-            )),
-            vec![],
-            2,
+        let input1 = Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+            schema.clone(),
         ));
+        let input2 = Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+            schema.clone(),
+        ));
+        let exec = Arc::new(PythonDataSourceWriteCommitExec::new(input1, vec![], 2));
 
-        let new_exec = exec.clone().with_new_children(vec![coalesce]).unwrap();
+        let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
         assert!(new_exec.as_any().is::<PythonDataSourceWriteCommitExec>());
-        let new_commit = new_exec
-            .as_any()
-            .downcast_ref::<PythonDataSourceWriteCommitExec>()
-            .unwrap();
-        assert_eq!(new_commit.expected_partitions(), 4,);
     }
 
     #[test]
