@@ -23,8 +23,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "checkpoint",
-    "status": "partially supported",
-    "note": "Supports eager=True with spark.checkpoint.dir configured. eager=False is not supported yet.",
+    "status": "supported",
+    "note": "Supports eager=True and eager=False with spark.checkpoint.dir configured.",
     "ref": "https://github.com/lakehq/sail/issues/476"
   },
   {
@@ -254,8 +254,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "localCheckpoint",
-    "status": "partially supported",
-    "note": "Supports eager=True with memory-backed cache materialization. StorageLevel values without memory, off-heap storage, replication, eager=False, and full storage tier semantics are not supported yet.",
+    "status": "supported",
+    "note": "Supports eager=True and eager=False with cache-backed StorageLevel handling.",
     "ref": "https://github.com/lakehq/sail/issues/482"
   },
   {

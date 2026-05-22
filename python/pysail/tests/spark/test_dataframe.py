@@ -142,15 +142,36 @@ def test_dataframe_checkpoint_rejects_parent_path_components(spark, tmp_path):
         spark.conf.unset("spark.checkpoint.dir")
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail MVP limitation")
-def test_dataframe_checkpoint_lazy_is_not_supported(spark):
+def test_dataframe_local_checkpoint_lazy(spark):
     df = spark.createDataFrame(
-        schema="id INT",
-        data=[(1,)],
+        schema="id INT, value STRING",
+        data=[(1, "a"), (2, "b")],
     )
 
-    with pytest.raises(Exception, match="eager=false"):
-        df.localCheckpoint(eager=False)
+    checkpointed = df.where(col("id") >= 1).localCheckpoint(eager=False)
+
+    assert_frame_equal(
+        checkpointed.sort("id").toPandas(),
+        pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
+    )
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="JVM Spark Connect requires checkpoint dir at session startup")
+def test_dataframe_checkpoint_lazy(spark, tmp_path):
+    df = spark.createDataFrame(
+        schema="id INT, value STRING",
+        data=[(1, "a"), (2, "b")],
+    )
+    spark.conf.set("spark.checkpoint.dir", str(tmp_path / "checkpoints"))
+    try:
+        checkpointed = df.where(col("id") >= 1).checkpoint(eager=False)
+
+        assert_frame_equal(
+            checkpointed.sort("id").toPandas(),
+            pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
+        )
+    finally:
+        spark.conf.unset("spark.checkpoint.dir")
 
 
 def test_dataframe_local_checkpoint_with_memory_storage_level(spark):
@@ -167,15 +188,18 @@ def test_dataframe_local_checkpoint_with_memory_storage_level(spark):
     )
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail cache storage tier limitation")
-def test_dataframe_local_checkpoint_disk_only_storage_level_is_not_supported(spark):
+def test_dataframe_local_checkpoint_disk_only_storage_level(spark):
     df = spark.createDataFrame(
-        schema="id INT",
-        data=[(1,)],
+        schema="id INT, value STRING",
+        data=[(1, "a"), (2, "b")],
     )
 
-    with pytest.raises(Exception, match="without memory"):
-        df.localCheckpoint(storageLevel=StorageLevel.DISK_ONLY)
+    checkpointed = df.localCheckpoint(storageLevel=StorageLevel.DISK_ONLY)
+
+    assert_frame_equal(
+        checkpointed.sort("id").toPandas(),
+        pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
+    )
 
 
 def test_dataframe_with_column_alias(spark):

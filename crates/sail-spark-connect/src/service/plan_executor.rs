@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
-use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion::prelude::SessionContext;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use fastrace::Span;
@@ -12,11 +12,12 @@ use futures::stream;
 use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::cached_relation::{
-    CachedRelation, CachedRelationCleanup, CachedRelationRegistry,
+    cleanup_checkpoint_path as cleanup_cached_checkpoint_path, CachedRelation,
+    CachedRelationCleanup, CachedRelationRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
-use sail_plan::resolve_and_execute_plan;
+use sail_plan::{resolve_and_execute_plan, resolve_logical_plan};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -534,12 +535,6 @@ pub(crate) async fn handle_execute_checkpoint_command(
         eager,
         storage_level,
     } = checkpoint;
-    if !eager {
-        // TODO: Implement Spark-compatible lazy checkpoint materialization on first action.
-        return Err(SparkError::unsupported(
-            "DataFrame checkpoint with eager=false is not supported",
-        ));
-    }
     let storage_level = if local {
         Some(resolve_local_checkpoint_storage_level(storage_level)?)
     } else if storage_level.is_some() {
@@ -553,14 +548,46 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let relation = relation.required("checkpoint relation")?;
     let plan: spec::Plan = relation.try_into()?;
     let relation_id = Uuid::new_v4().to_string();
-    let (physical_plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
-    let (relation, cleanup_on_insert_error) = if local {
+    let (relation, cleanup_on_insert_error) = if eager {
+        let (physical_plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+        if local {
+            (
+                CachedRelation::new_local_checkpoint(
+                    ctx,
+                    physical_plan,
+                    storage_level.required("local checkpoint storage level")?,
+                )
+                .await?,
+                None,
+            )
+        } else {
+            let path = checkpoint_path(&spark, &relation_id)?;
+            (
+                CachedRelation::new_reliable_checkpoint(ctx, physical_plan, &path).await?,
+                Some(path),
+            )
+        }
+    } else if local {
+        let named_plan = resolve_logical_plan(ctx, spark.plan_config()?, plan).await?;
         (
-            materialize_local_checkpoint(ctx, physical_plan, storage_level).await?,
+            CachedRelation::new_pending_local_checkpoint(
+                Arc::new(named_plan.plan),
+                named_plan.fields,
+                storage_level.required("local checkpoint storage level")?,
+            ),
             None,
         )
     } else {
-        materialize_reliable_checkpoint(ctx, &spark, &relation_id, physical_plan).await?
+        let path = checkpoint_path(&spark, &relation_id)?;
+        let named_plan = resolve_logical_plan(ctx, spark.plan_config()?, plan).await?;
+        (
+            CachedRelation::new_pending_reliable_checkpoint(
+                Arc::new(named_plan.plan),
+                named_plan.fields,
+                path,
+            ),
+            None,
+        )
     };
     if let Err(error) = ctx
         .extension::<CachedRelationRegistry>()?
@@ -568,7 +595,7 @@ pub(crate) async fn handle_execute_checkpoint_command(
     {
         let error = SparkError::from(error);
         if let Some(path) = cleanup_on_insert_error {
-            return Err(cleanup_checkpoint_after_error(&path, error).await);
+            return Err(cleanup_checkpoint_after_error(ctx, &path, error).await);
         }
         return Err(error);
     }
@@ -588,50 +615,6 @@ pub(crate) async fn handle_execute_checkpoint_command(
     ))
 }
 
-async fn materialize_local_checkpoint(
-    ctx: &SessionContext,
-    physical_plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
-    storage_level: Option<spec::StorageLevel>,
-) -> SparkResult<CachedRelation> {
-    let schema = physical_plan.schema();
-    let service = ctx.extension::<JobService>()?;
-    let stream = service.runner().execute(ctx, physical_plan).await?;
-    let batches = read_stream(stream).await?;
-    Ok(CachedRelation::new_memory(
-        schema,
-        vec![batches],
-        storage_level,
-    ))
-}
-
-async fn materialize_reliable_checkpoint(
-    ctx: &SessionContext,
-    spark: &SparkSession,
-    relation_id: &str,
-    physical_plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
-) -> SparkResult<(CachedRelation, Option<String>)> {
-    let path = checkpoint_path(spark, relation_id)?;
-    let schema = physical_plan.schema();
-    // TODO: Use Sail's file-write physical path through JobRunner for cluster-native checkpointing.
-    if let Err(error) = ctx.write_parquet(physical_plan, &path, None).await {
-        return Err(cleanup_checkpoint_after_error(&path, error.into()).await);
-    }
-    let register_result: SparkResult<CachedRelation> = async {
-        let read_options = ParquetReadOptions::new().schema(schema.as_ref());
-        let df = ctx.read_parquet(&path, read_options).await?;
-        let (_, read_plan) = df.into_parts();
-        Ok(CachedRelation::new(Arc::new(read_plan), None))
-    }
-    .await;
-    match register_result {
-        Ok(relation) => {
-            // TODO: Add Spark-like reliable checkpoint cleanup/reference tracking.
-            Ok((relation, Some(path)))
-        }
-        Err(error) => Err(cleanup_checkpoint_after_error(&path, error).await),
-    }
-}
-
 pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
     ctx: &SessionContext,
     command: RemoveCachedRemoteRelationCommand,
@@ -645,7 +628,7 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
         .extension::<CachedRelationRegistry>()?
         .remove(&relation.relation_id)?
     {
-        cleanup_cached_relation(relation).await?;
+        cleanup_cached_relation(ctx, relation).await?;
     }
     let output = if metadata.reattachable {
         vec![ExecutorOutput::complete()]
@@ -662,35 +645,29 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
 fn resolve_local_checkpoint_storage_level(
     storage_level: Option<crate::spark::connect::StorageLevel>,
 ) -> SparkResult<spec::StorageLevel> {
-    let storage_level: spec::StorageLevel = storage_level
+    let mut storage_level: spec::StorageLevel = storage_level
         .map(TryInto::try_into)
         .transpose()?
         .map(Ok)
         .unwrap_or_else(|| "MEMORY_AND_DISK".parse().map_err(SparkError::from))?;
 
-    if !storage_level.use_memory {
-        return Err(SparkError::unsupported(
-            "localCheckpoint StorageLevel without memory is not supported",
+    if !storage_level.use_disk && !storage_level.use_memory && !storage_level.use_off_heap {
+        storage_level = "MEMORY_AND_DISK".parse().map_err(SparkError::from)?;
+    } else {
+        // Spark localCheckpoint transforms every user-provided StorageLevel to one that
+        // uses disk, so cached partitions remain recoverable after memory eviction.
+        storage_level.use_disk = true;
+        storage_level.use_off_heap = false;
+    }
+    if storage_level.replication == 0 {
+        return Err(SparkError::invalid(
+            "localCheckpoint StorageLevel replication must be at least 1",
         ));
     }
-    if storage_level.use_off_heap {
-        return Err(SparkError::unsupported(
-            "localCheckpoint off-heap StorageLevel is not supported",
-        ));
-    }
-    if storage_level.replication != 1 {
-        return Err(SparkError::unsupported(
-            "localCheckpoint replicated StorageLevel is not supported",
-        ));
-    }
-
-    // TODO: Enforce disk spill and serialized/deserialized storage tiers once Sail has a
-    // DataFrame/block cache subsystem. For now we only support memory-backed local checkpoint.
     Ok(storage_level)
 }
 
 fn checkpoint_path(spark: &SparkSession, relation_id: &str) -> SparkResult<String> {
-    // TODO: Wire Spark-compatible startup config / setCheckpointDir semantics.
     let root = spark
         .get_config_option(vec![SPARK_CHECKPOINT_DIR.to_string()])?
         .into_iter()
@@ -736,8 +713,12 @@ fn validate_checkpoint_path_segment(name: &str, value: &str) -> SparkResult<()> 
     }
 }
 
-async fn cleanup_checkpoint_after_error(path: &str, error: SparkError) -> SparkError {
-    match cleanup_checkpoint_path(path).await {
+async fn cleanup_checkpoint_after_error(
+    ctx: &SessionContext,
+    path: &str,
+    error: SparkError,
+) -> SparkError {
+    match cleanup_checkpoint_path(ctx, path).await {
         Ok(()) => error,
         Err(cleanup_error) => SparkError::internal(format!(
             "checkpoint failed: {error}; additionally failed to clean checkpoint path {path}: {cleanup_error}"
@@ -745,17 +726,17 @@ async fn cleanup_checkpoint_after_error(path: &str, error: SparkError) -> SparkE
     }
 }
 
-async fn cleanup_checkpoint_path(path: &str) -> SparkResult<()> {
-    match tokio::fs::remove_dir_all(path).await {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+async fn cleanup_checkpoint_path(ctx: &SessionContext, path: &str) -> SparkResult<()> {
+    cleanup_cached_checkpoint_path(ctx, path).await?;
+    Ok(())
 }
 
-async fn cleanup_cached_relation(relation: CachedRelation) -> SparkResult<()> {
+async fn cleanup_cached_relation(
+    ctx: &SessionContext,
+    relation: CachedRelation,
+) -> SparkResult<()> {
     match relation.into_cleanup() {
-        Some(CachedRelationCleanup::LocalPath(path)) => cleanup_checkpoint_path(&path).await,
+        Some(CachedRelationCleanup::LocalPath(path)) => cleanup_checkpoint_path(ctx, &path).await,
         None => Ok(()),
     }
 }

@@ -64,3 +64,13 @@ pub async fn resolve_and_execute_plan(
     ));
     Ok((plan, info))
 }
+
+pub async fn resolve_logical_plan(
+    ctx: &SessionContext,
+    config: Arc<PlanConfig>,
+    plan: spec::Plan,
+) -> PlanResult<NamedPlan> {
+    PlanResolver::new(ctx, config)
+        .resolve_named_plan(plan)
+        .await
+}
