@@ -4,7 +4,7 @@ use sail_common_datafusion::catalog::DatabaseStatus;
 
 use crate::error::CatalogResult;
 use crate::manager::CatalogManager;
-use crate::provider::{CreateDatabaseOptions, DropDatabaseOptions, Namespace};
+use crate::provider::{CatalogProvider, CreateDatabaseOptions, DropDatabaseOptions, Namespace};
 use crate::utils::{match_pattern, quote_names_if_needed};
 
 impl CatalogManager {
@@ -87,6 +87,14 @@ impl CatalogManager {
         //  https://github.com/apache/spark/blob/3d18fe1927f140b7f2429c7b88e5156a6e9155d7/core/src/main/scala/org/apache/spark/util/Utils.scala#L2429-L2443
         let (provider, database) = self.resolve_database(database)?;
         provider.create_database(&database, options).await
+    }
+
+    pub fn database_provider<T: AsRef<str>>(
+        &self,
+        database: &[T],
+    ) -> CatalogResult<Arc<dyn CatalogProvider>> {
+        let (provider, _) = self.resolve_database(database)?;
+        Ok(provider)
     }
 
     pub async fn drop_database<T: AsRef<str>>(

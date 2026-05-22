@@ -22,6 +22,16 @@ pub trait CatalogProvider: Send + Sync {
     /// in different sessions.
     fn get_name(&self) -> &str;
 
+    /// Whether Spark session-catalog semantics should synthesize a default
+    /// database location when `CREATE DATABASE` omits `LOCATION`.
+    ///
+    /// This models planner behavior rather than a raw backend API requirement:
+    /// some catalogs accept an unset location but Spark still manufactures one
+    /// before delegating the operation.
+    fn uses_spark_default_database_location(&self) -> bool {
+        false
+    }
+
     /// Creates a new database in the catalog.
     async fn create_database(
         &self,

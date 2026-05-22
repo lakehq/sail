@@ -766,6 +766,10 @@ impl CatalogProvider for HmsCatalogProvider {
         &self.name
     }
 
+    fn uses_spark_default_database_location(&self) -> bool {
+        true
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -905,6 +909,18 @@ impl CatalogProvider for HmsCatalogProvider {
                     Ok(MaybeException::Exception(
                         ThriftHiveMetastoreDropDatabaseException::O1(_),
                     )) => Err(CatalogError::NotFound(CatalogObject::Database, db_name)),
+                    // HMS 3.x throws MetaException (O3) with NullPointerException when
+                    // cascade-dropping a database that contains tables with null locations.
+                    // Treat as success when if_exists is set to avoid spurious failures.
+                    Ok(MaybeException::Exception(
+                        ThriftHiveMetastoreDropDatabaseException::O3(ref e),
+                    )) if options.if_exists => {
+                        log::warn!(
+                            "HMS cascade-drop of '{db_name}' returned MetaException \
+                             (treated as success because IF EXISTS is set): {e:?}"
+                        );
+                        Ok(())
+                    }
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to drop HMS database '{db_name}': {err:?}"
                     ))),

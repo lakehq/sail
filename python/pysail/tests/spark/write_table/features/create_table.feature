@@ -73,7 +73,7 @@ Feature: CREATE TABLE default location
       """
 
   @sail-only
-  Scenario: CREATE TABLE encodes special characters in table name using U+ hex format
+  Scenario: CREATE TABLE preserves special characters in table name like Spark
     Given variable db_location for temporary directory create_table_special_char_db
     Given final statement
       """
@@ -103,7 +103,7 @@ Feature: CREATE TABLE default location
       | 2  |
     Then file tree in db_location matches
       """
-      📂 myu+0040table
+      📂 my@table
         📄 part-<id>.<codec>.parquet
       """
 
@@ -137,6 +137,7 @@ Feature: CREATE TABLE default location
       | 1  | Alice |
     Then file tree in warehouse matches
       """
-      📂 fallback_t-<uuid>
-        📄 part-<id>.<codec>.parquet
+      📂 create_table_fallback_db.db
+        📂 fallback_t
+          📄 part-<id>.<codec>.parquet
       """

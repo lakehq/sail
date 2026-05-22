@@ -29,6 +29,7 @@ impl MemoryCatalogProvider {
         name: String,
         initial_database: Namespace,
         initial_database_comment: Option<String>,
+        initial_database_location: Option<String>,
     ) -> Self {
         let databases = DashMap::new();
         databases.insert(
@@ -38,7 +39,7 @@ impl MemoryCatalogProvider {
                     catalog: name.clone(),
                     database: initial_database.into(),
                     comment: initial_database_comment,
-                    location: None,
+                    location: initial_database_location,
                     properties: vec![],
                 },
                 tables: HashMap::new(),
@@ -53,6 +54,10 @@ impl MemoryCatalogProvider {
 impl CatalogProvider for MemoryCatalogProvider {
     fn get_name(&self) -> &str {
         &self.name
+    }
+
+    fn uses_spark_default_database_location(&self) -> bool {
+        true
     }
 
     async fn create_database(

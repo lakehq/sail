@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use sail_plan::config::{DefaultTimestampType, PlanConfig};
+use sail_plan::config::{qualify_warehouse_directory, DefaultTimestampType, PlanConfig};
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
@@ -248,7 +248,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config.get(SPARK_SQL_WAREHOUSE_DIR)? {
-            output.default_warehouse_directory = value.to_string();
+            output.default_warehouse_directory = qualify_warehouse_directory(value);
         }
 
         if let Some(value) = config.get(SPARK_SQL_TIMESTAMP_TYPE)? {
@@ -360,5 +360,51 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used, clippy::expect_used)]
+
+    use pyo3::Python;
+    use sail_plan::config::qualify_warehouse_directory;
+
+    use super::*;
+
+    fn plan_config_with_warehouse_dir(value: &str) -> PlanConfig {
+        Python::initialize();
+        let mut config = SparkRuntimeConfig::new();
+        config
+            .set(SPARK_SQL_WAREHOUSE_DIR.to_string(), value.to_string())
+            .unwrap();
+        PlanConfig::try_from(&config).unwrap()
+    }
+
+    #[test]
+    fn test_plan_config_qualifies_relative_runtime_warehouse_directory() {
+        let plan = plan_config_with_warehouse_dir("spark-warehouse");
+        assert_eq!(
+            plan.default_warehouse_directory,
+            qualify_warehouse_directory("spark-warehouse")
+        );
+    }
+
+    #[test]
+    fn test_plan_config_preserves_absolute_runtime_warehouse_directory() {
+        let plan = plan_config_with_warehouse_dir("/tmp/warehouse");
+        assert_eq!(plan.default_warehouse_directory, "/tmp/warehouse");
+    }
+
+    #[test]
+    fn test_plan_config_preserves_file_uri_runtime_warehouse_directory() {
+        let plan = plan_config_with_warehouse_dir("file:/tmp/warehouse");
+        assert_eq!(plan.default_warehouse_directory, "file:/tmp/warehouse");
+    }
+
+    #[test]
+    fn test_plan_config_preserves_file_url_runtime_warehouse_directory() {
+        let plan = plan_config_with_warehouse_dir("file:///tmp/warehouse");
+        assert_eq!(plan.default_warehouse_directory, "file:///tmp/warehouse");
     }
 }

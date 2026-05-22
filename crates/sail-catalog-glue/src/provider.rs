@@ -331,6 +331,10 @@ impl CatalogProvider for GlueCatalogProvider {
         &self.name
     }
 
+    fn uses_spark_default_database_location(&self) -> bool {
+        true
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

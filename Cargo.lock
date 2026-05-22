@@ -7016,6 +7016,7 @@ dependencies = [
  "futures",
  "hive_metastore",
  "libloading 0.8.9",
+ "log",
  "pilota",
  "sail-catalog",
  "sail-common",
@@ -7150,6 +7151,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "url",
 ]
 
 [[package]]

@@ -2,6 +2,9 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
+pub use sail_common::path::{
+    qualify_database_location, qualify_table_location, qualify_warehouse_directory,
+};
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::PlanResult;
@@ -25,6 +28,11 @@ pub struct PlanConfig {
     /// The default table file format.
     pub default_table_file_format: String,
     /// The default location for managed databases and tables.
+    ///
+    /// This is always an absolute path or a fully qualified URL.
+    /// Relative values from `spark.sql.warehouse.dir` are resolved against
+    /// the current working directory at session initialization time,
+    /// matching Spark's `SharedState` behavior.
     pub default_warehouse_directory: String,
     pub session_user_id: String,
     pub ansi_mode: bool,
@@ -49,7 +57,7 @@ impl Default for PlanConfig {
             arrow_use_large_var_types: false,
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             default_table_file_format: "PARQUET".to_string(),
-            default_warehouse_directory: "spark-warehouse".to_string(),
+            default_warehouse_directory: qualify_warehouse_directory("spark-warehouse"),
             session_user_id: "".to_string(),
             ansi_mode: false,
             cross_join_enabled: true,

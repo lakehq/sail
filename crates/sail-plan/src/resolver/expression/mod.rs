@@ -436,6 +436,7 @@ mod tests {
                     "sail".to_string(),
                     vec![Arc::from("default")].try_into()?,
                     None,
+                    None,
                 )) as Arc<dyn CatalogProvider>,
             )]),
             default_catalog: "sail".to_string(),

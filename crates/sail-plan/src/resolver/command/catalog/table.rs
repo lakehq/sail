@@ -51,7 +51,20 @@ impl PlanResolver<'_> {
         let mut columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
         let location = if let Some(location) = location {
-            location
+            use crate::config::qualify_table_location;
+            let [qualifier @ .., _] = table.parts() else {
+                return Err(PlanError::invalid("missing table name"));
+            };
+            let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+            let db_location = catalog_manager
+                .get_database_by_qualifier(qualifier)
+                .await?
+                .location;
+            qualify_table_location(
+                &location,
+                db_location.as_deref(),
+                &self.config.default_warehouse_directory,
+            )
         } else {
             self.resolve_default_table_location(&table).await?
         };
@@ -156,8 +169,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|item| match item {
                 spec::PartitionColumn::Definition(_) => Err(PlanError::invalid(
-                    "column definitions are not allowed in PARTITIONED BY \
-                     for CREATE TABLE AS SELECT statement",
+                    "column definitions are not allowed in PARTITIONED BY for CREATE TABLE AS SELECT statement",
                 )),
                 spec::PartitionColumn::Expression(expr) => Ok(expr),
             })
@@ -169,9 +181,25 @@ impl PlanResolver<'_> {
         let input = rename_logical_plan(input, &column_names)?;
         let format = self.resolve_catalog_table_format(file_format)?;
         let mut write_options = options;
-        if let Some(location) = location {
-            write_options.push(("path".to_string(), location));
-        }
+        let location = if let Some(location) = location {
+            use crate::config::qualify_table_location;
+            let [qualifier @ .., _] = table.parts() else {
+                return Err(PlanError::invalid("missing table name"));
+            };
+            let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+            let db_location = catalog_manager
+                .get_database_by_qualifier(qualifier)
+                .await?
+                .location;
+            qualify_table_location(
+                &location,
+                db_location.as_deref(),
+                &self.config.default_warehouse_directory,
+            )
+        } else {
+            self.resolve_default_table_location(&table).await?
+        };
+        write_options.push(("path".to_string(), location));
 
         // Set write mode based on create-or-replace / if-not-exists semantics.
         let write_mode = if replace {
@@ -203,55 +231,21 @@ impl PlanResolver<'_> {
         &self,
         table: &spec::ObjectName,
     ) -> PlanResult<String> {
+        use crate::config::qualify_table_location;
         let [qualifier @ .., last] = table.parts() else {
             return Err(PlanError::invalid("missing table name"));
         };
         let name: String = last.clone().into();
-        // For characters in the table name that are not alphanumeric, `-`, or `_`,
-        // replace with a fixed-width hex encoding of the Unicode code point:
-        // `u+XXXX` for U+0000..U+FFFF and `U+XXXXXXXX` for U+10000..U+10FFFF.
-        let name: String = name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c.to_string()
-                } else {
-                    let v = c as u32;
-                    if v <= 0xFFFF {
-                        format!("u+{v:04X}")
-                    } else {
-                        format!("U+{v:08X}")
-                    }
-                }
-            })
-            .collect();
-        // We use our own logic to map tables to locations. This avoids conflicts
-        // and avoids issues with special characters in table names.
-        // Note that this is different from how Spark handles table locations
-        // for the default catalog.
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let location = catalog_manager
             .get_database_by_qualifier(qualifier)
             .await?
             .location;
-        let (base, suffix) = match &location {
-            Some(loc) => (
-                loc.trim_end_matches(object_store::path::DELIMITER),
-                String::new(),
-            ),
-            None => (
-                self.config
-                    .default_warehouse_directory
-                    .trim_end_matches(object_store::path::DELIMITER),
-                format!("-{}", uuid::Uuid::new_v4()),
-            ),
-        };
-        Ok(format!(
-            "{}{}{}{}",
-            base,
-            object_store::path::DELIMITER,
-            name,
-            suffix,
+
+        Ok(qualify_table_location(
+            &name,
+            location.as_deref(),
+            &self.config.default_warehouse_directory,
         ))
     }
 
@@ -275,8 +269,7 @@ impl PlanResolver<'_> {
                     {
                         if existing.data_type != resolved.data_type {
                             return Err(PlanError::invalid(format!(
-                                "partition column '{}' has incompatible type: \
-                                 column definition has {:?} but PARTITIONED BY clause has {:?}",
+                                "partition column '{}' has incompatible type: column definition has {:?} but PARTITIONED BY clause has {:?}",
                                 resolved.name, existing.data_type, resolved.data_type
                             )));
                         }
