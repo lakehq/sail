@@ -69,14 +69,15 @@ pub async fn build_delete_plan(
     // zero rows while the writer branch worked normally (DF54 regression).
     //
     // --- Writer branch's find_files pipeline ---
-    let meta_scan_w: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
-        ctx,
-        snapshot_state,
-        log_replay_options.clone(),
-    )
-    .await?;
     let meta_scan_w: Arc<dyn ExecutionPlan> =
-        build_metadata_filter(ctx.session(), meta_scan_w, snapshot_state, condition_expr.clone())?;
+        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options.clone())
+            .await?;
+    let meta_scan_w: Arc<dyn ExecutionPlan> = build_metadata_filter(
+        ctx.session(),
+        meta_scan_w,
+        snapshot_state,
+        condition_expr.clone(),
+    )?;
     let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan_w,
         ctx.table_url().clone(),
