@@ -1,13 +1,13 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::{exec_datafusion_err, plan_err, Result};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::UnKnownColumn;
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -47,7 +47,7 @@ impl ShuffleWriteExec {
                 // https://github.com/apache/arrow-datafusion/issues/5184
                 Partitioning::Hash(
                     expr.into_iter()
-                        .filter(|e| e.as_any().downcast_ref::<UnKnownColumn>().is_none())
+                        .filter(|e| e.downcast_ref::<UnKnownColumn>().is_none())
                         .collect(),
                     n,
                 )
@@ -93,16 +93,25 @@ impl ExecutionPlan for ShuffleWriteExec {
         "ShuffleWriteExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.plan]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Partitioning::Hash(exprs, _) = &self.shuffle_partitioning {
+            for expr in exprs {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
 
     fn with_new_children(

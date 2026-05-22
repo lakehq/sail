@@ -188,7 +188,7 @@ fn merge_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
     let mut supports = false;
     plan.apply(|node| {
         if let LogicalPlan::TableScan(scan) = node {
-            if let Some(delta_source) = scan.source.as_any().downcast_ref::<DeltaTableSource>() {
+            if let Some(delta_source) = scan.source.downcast_ref::<DeltaTableSource>() {
                 supports = delta_source.snapshot().verify_deletion_vectors().is_ok();
                 return Ok(TreeNodeRecursion::Stop);
             }
@@ -211,7 +211,7 @@ fn try_enable_merge_metadata_columns(
     )>,
 > {
     // Try Delta Lake source
-    if let Some(delta_source) = source.as_any().downcast_ref::<DeltaTableSource>() {
+    if let Some(delta_source) = source.downcast_ref::<DeltaTableSource>() {
         let mut new_source = Arc::clone(source);
         let mut changed = false;
 
@@ -221,7 +221,7 @@ fn try_enable_merge_metadata_columns(
         }
         if let (Some(row_index_col), Some(delta_source)) = (
             row_index_col,
-            new_source.as_any().downcast_ref::<DeltaTableSource>(),
+            new_source.downcast_ref::<DeltaTableSource>(),
         ) {
             if delta_source.row_index_column_name().is_none() {
                 new_source = delta_source.with_row_index_column(row_index_col)?;
