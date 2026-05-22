@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{exec_datafusion_err, plan_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::UnKnownColumn;
@@ -13,7 +12,7 @@ use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     internal_err, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    PhysicalExpr, PlanProperties,
+    PlanProperties,
 };
 use futures::future::try_join_all;
 use futures::StreamExt;
@@ -162,13 +161,6 @@ impl ExecutionPlan for ShuffleWriteExec {
             self.schema(),
             output,
         )))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 }
 

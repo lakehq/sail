@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
@@ -71,13 +70,6 @@ impl ExecutionPlan for StreamSourceAdapterExec {
             return plan_err!("{} expects exactly one child", self.name());
         };
         Ok(Arc::new(StreamSourceAdapterExec::new(child)))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(

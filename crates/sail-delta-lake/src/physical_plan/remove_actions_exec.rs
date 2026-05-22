@@ -23,9 +23,8 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{internal_err, Result};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 
 use crate::kernel::transaction::OperationMetrics;
@@ -218,13 +217,6 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
             self.schema(),
             stream,
         )))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 }
 

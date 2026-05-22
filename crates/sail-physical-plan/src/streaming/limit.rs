@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{BooleanArray, RecordBatch};
-use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{Distribution, Partitioning};
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -116,13 +115,6 @@ impl ExecutionPlan for StreamLimitExec {
         Ok(Arc::new(StreamLimitExec::try_new(
             child, self.skip, self.fetch,
         )?))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(

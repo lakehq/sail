@@ -26,8 +26,8 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#4@0 as name, #5@1 as value]
-      ProjectionExec: expr=[#1@1 as #4, #3@0 as #5]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #0@0)], projection=[#3@1, #1@3]
+      ProjectionExec: expr=[#1@0 as #4, #3@1 as #5]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #0@0)], projection=[#1@3, #3@1]
           CoalescePartitionsExec
             ProjectionExec: expr=[id@0 as #2, value@1 as #3]
               FilterExec: id@0 > 0

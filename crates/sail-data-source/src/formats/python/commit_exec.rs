@@ -8,9 +8,8 @@ use std::sync::Arc;
 
 use arrow::array::{Array, BinaryArray, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::Schema;
-use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -116,13 +115,6 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
             self.pickled_writer.clone(),
             self.expected_partitions,
         )))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(
