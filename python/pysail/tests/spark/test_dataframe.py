@@ -1,3 +1,5 @@
+import shutil
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
@@ -6,6 +8,38 @@ from pyspark.sql import Row
 from pyspark.sql.functions import col, lit
 
 from pysail.testing.spark.utils.common import is_jvm_spark
+
+_CHECKPOINT_SOURCE_MAX_ID = 2
+_CHECKPOINT_SOURCE_ROW_COUNT = 2
+
+
+def _read_checkpoint_source(spark, path):
+    spark.createDataFrame(
+        schema="id INT, value STRING",
+        data=[(1, "a"), (2, "b"), (3, "c")],
+    ).write.mode("overwrite").parquet(str(path))
+    return spark.read.parquet(str(path)).where(col("id") <= _CHECKPOINT_SOURCE_MAX_ID)
+
+
+def _assert_checkpoint_source_result(df):
+    assert_frame_equal(
+        df.sort("id").toPandas(),
+        pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
+    )
+    assert_frame_equal(
+        df.where(col("id") == _CHECKPOINT_SOURCE_MAX_ID).select("value").toPandas(),
+        pd.DataFrame({"value": ["b"]}),
+    )
+
+
+def _checkpoint_parquet_files(path):
+    if not path.exists():
+        return []
+    return list(path.rglob("*.parquet"))
+
+
+def _uuid_values(df):
+    return [row.value for row in df.sort("id").collect()]
 
 
 def test_dataframe_drop(spark):
@@ -75,43 +109,38 @@ def test_dataframe_drop(spark):
     )
 
 
-def test_dataframe_local_checkpoint(spark):
-    df = spark.createDataFrame(
-        schema="id INT, value STRING",
-        data=[(1, "a"), (2, "b")],
-    )
+def test_dataframe_local_checkpoint_survives_source_removal(spark, tmp_path):
+    source_path = tmp_path / "source"
+    df = _read_checkpoint_source(spark, source_path)
 
-    checkpointed = df.where(col("id") >= 1).localCheckpoint()
+    checkpointed = df.localCheckpoint()
+    shutil.rmtree(source_path)
 
-    assert_frame_equal(
-        checkpointed.sort("id").toPandas(),
-        pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
-    )
-    target_id = 2
-    assert_frame_equal(
-        checkpointed.where(col("id") == target_id).select("value").toPandas(),
-        pd.DataFrame({"value": ["b"]}),
-    )
+    _assert_checkpoint_source_result(checkpointed)
+
+
+@pytest.mark.parametrize("eager", [True, False], ids=["eager", "lazy"])
+def test_dataframe_local_checkpoint_freezes_nondeterministic_values(spark, eager):
+    df = spark.sql("SELECT id, uuid() AS value FROM range(3)")
+    assert _uuid_values(df) != _uuid_values(df)
+
+    checkpointed = df.localCheckpoint(eager=eager)
+
+    assert _uuid_values(checkpointed) == _uuid_values(checkpointed)
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="JVM Spark Connect requires checkpoint dir at session startup")
 def test_dataframe_checkpoint(spark, tmp_path):
-    df = spark.createDataFrame(
-        schema="id INT, value STRING",
-        data=[(1, "a"), (2, "b")],
-    )
-    spark.conf.set("spark.checkpoint.dir", str(tmp_path / "checkpoints"))
+    source_path = tmp_path / "source"
+    checkpoint_path = tmp_path / "checkpoints"
+    df = _read_checkpoint_source(spark, source_path)
+    spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
     try:
-        checkpointed = df.where(col("id") >= 1).checkpoint()
+        checkpointed = df.checkpoint()
+        assert _checkpoint_parquet_files(checkpoint_path)
+        shutil.rmtree(source_path)
 
-        assert_frame_equal(
-            checkpointed.sort("id").toPandas(),
-            pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
-        )
-        assert_frame_equal(
-            checkpointed.where(col("id") == 1).select("value").toPandas(),
-            pd.DataFrame({"value": ["a"]}),
-        )
+        _assert_checkpoint_source_result(checkpointed)
     finally:
         spark.conf.unset("spark.checkpoint.dir")
 
@@ -142,64 +171,48 @@ def test_dataframe_checkpoint_rejects_parent_path_components(spark, tmp_path):
         spark.conf.unset("spark.checkpoint.dir")
 
 
-def test_dataframe_local_checkpoint_lazy(spark):
-    df = spark.createDataFrame(
-        schema="id INT, value STRING",
-        data=[(1, "a"), (2, "b")],
-    )
+def test_dataframe_local_checkpoint_lazy_survives_source_removal_after_first_action(spark, tmp_path):
+    source_path = tmp_path / "source"
+    df = _read_checkpoint_source(spark, source_path)
 
-    checkpointed = df.where(col("id") >= 1).localCheckpoint(eager=False)
+    checkpointed = df.localCheckpoint(eager=False)
+    assert checkpointed.count() == _CHECKPOINT_SOURCE_ROW_COUNT
+    shutil.rmtree(source_path)
 
-    assert_frame_equal(
-        checkpointed.sort("id").toPandas(),
-        pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
-    )
+    _assert_checkpoint_source_result(checkpointed)
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="JVM Spark Connect requires checkpoint dir at session startup")
 def test_dataframe_checkpoint_lazy(spark, tmp_path):
-    df = spark.createDataFrame(
-        schema="id INT, value STRING",
-        data=[(1, "a"), (2, "b")],
-    )
-    spark.conf.set("spark.checkpoint.dir", str(tmp_path / "checkpoints"))
+    source_path = tmp_path / "source"
+    checkpoint_path = tmp_path / "checkpoints"
+    df = _read_checkpoint_source(spark, source_path)
+    spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
     try:
-        checkpointed = df.where(col("id") >= 1).checkpoint(eager=False)
+        checkpointed = df.checkpoint(eager=False)
+        assert not _checkpoint_parquet_files(checkpoint_path)
+        assert checkpointed.count() == _CHECKPOINT_SOURCE_ROW_COUNT
+        assert _checkpoint_parquet_files(checkpoint_path)
+        shutil.rmtree(source_path)
 
-        assert_frame_equal(
-            checkpointed.sort("id").toPandas(),
-            pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
-        )
+        _assert_checkpoint_source_result(checkpointed)
     finally:
         spark.conf.unset("spark.checkpoint.dir")
 
 
-def test_dataframe_local_checkpoint_with_memory_storage_level(spark):
-    df = spark.createDataFrame(
-        schema="id INT, value STRING",
-        data=[(1, "a"), (2, "b")],
-    )
+@pytest.mark.parametrize(
+    ("storage_level", "source_name"),
+    [(StorageLevel.MEMORY_ONLY, "memory-only"), (StorageLevel.DISK_ONLY, "disk-only")],
+    ids=["memory-only", "disk-only"],
+)
+def test_dataframe_local_checkpoint_storage_level_survives_source_removal(spark, tmp_path, storage_level, source_name):
+    source_path = tmp_path / f"source-{source_name}"
+    df = _read_checkpoint_source(spark, source_path)
 
-    checkpointed = df.localCheckpoint(storageLevel=StorageLevel.MEMORY_ONLY)
+    checkpointed = df.localCheckpoint(storageLevel=storage_level)
+    shutil.rmtree(source_path)
 
-    assert_frame_equal(
-        checkpointed.sort("id").toPandas(),
-        pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
-    )
-
-
-def test_dataframe_local_checkpoint_disk_only_storage_level(spark):
-    df = spark.createDataFrame(
-        schema="id INT, value STRING",
-        data=[(1, "a"), (2, "b")],
-    )
-
-    checkpointed = df.localCheckpoint(storageLevel=StorageLevel.DISK_ONLY)
-
-    assert_frame_equal(
-        checkpointed.sort("id").toPandas(),
-        pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int32"}),
-    )
+    _assert_checkpoint_source_result(checkpointed)
 
 
 def test_dataframe_with_column_alias(spark):
