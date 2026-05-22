@@ -29,6 +29,7 @@ datafusion-functions-nested = { workspace = true }
 
 # Arrow dependencies
 arrow-schema = { workspace = true }
+parquet-variant-compute = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }

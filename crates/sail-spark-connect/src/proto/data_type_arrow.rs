@@ -1,28 +1,18 @@
+use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::datatypes as adt;
+use parquet_variant_compute::VariantType;
 use sail_common::spec;
-use serde::Deserialize;
+use sail_common::spec::{GeoArrowEdges, GeoArrowWkbType, RawGeoArrowMetadata};
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::connect::{data_type as sdt, DataType};
-
-/// Raw GeoArrow extension metadata deserialized from JSON.
-#[derive(Debug, Deserialize)]
-struct RawGeoArrowMetadata {
-    edges: Option<String>,
-    /// CRS can be a string ("OGC:CRS84", "EPSG:3857") or a PROJJSON object.
-    crs: Option<serde_json::Value>,
-}
-
-/// Valid edge interpolation values per the GeoArrow spec.
-/// Omitted edges indicate planar/linear interpolation (Geometry).
-const VALID_EDGES: &[&str] = &["spherical", "vincenty", "thomas", "andoyer", "karney"];
 
 /// GeoArrow extension metadata extracted from Arrow field metadata.
 #[derive(Debug, Clone)]
 struct GeoArrowMetadata {
     /// Edge interpolation algorithm. `None` means planar/linear (Geometry).
     /// Any value present indicates Geography (non-planar edges).
-    edges: Option<String>,
+    edges: Option<GeoArrowEdges>,
     /// Spatial Reference System Identifier (SRID). -1 for mixed SRID.
     srid: i32,
 }
@@ -46,67 +36,26 @@ fn crs_to_srid(crs: &str) -> SparkResult<i32> {
     }
 }
 
-/// Parse a CRS JSON value to SRID integer.
-///
-/// The value can be:
-/// - A string like "OGC:CRS84", "EPSG:3857", etc. (handled by `crs_to_srid`)
-/// - A PROJJSON object with an "id" member containing "authority" and "code"
-///   (used by GeoPandas, DuckDB, SedonaDB)
-fn crs_value_to_srid(value: &serde_json::Value) -> SparkResult<i32> {
-    match value {
-        serde_json::Value::String(s) => crs_to_srid(s),
-        serde_json::Value::Object(obj) => {
-            // Extract authority:code from PROJJSON "id" member
-            let id = obj.get("id").ok_or_else(|| {
-                SparkError::invalid("PROJJSON CRS missing 'id' member for authority:code")
-            })?;
-            let authority = id
-                .get("authority")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| SparkError::invalid("PROJJSON 'id' missing 'authority'"))?;
-            let code = id
-                .get("code")
-                .map(|v| {
-                    if let Some(s) = v.as_str() {
-                        s.to_string()
-                    } else if let Some(n) = v.as_number() {
-                        n.to_string()
-                    } else {
-                        String::new()
-                    }
-                })
-                .ok_or_else(|| SparkError::invalid("PROJJSON 'id' missing 'code'"))?;
-            let auth_code = format!("{authority}:{code}");
-            crs_to_srid(&auth_code)
-        }
-        _ => Err(SparkError::invalid(format!(
-            "unsupported CRS value type: expected string or object, got {value}"
-        ))),
-    }
-}
-
 impl GeoArrowMetadata {
     /// Parse GeoArrow metadata from JSON string.
+    #[cfg(test)]
     fn from_json(metadata: &str) -> SparkResult<Self> {
         let raw: RawGeoArrowMetadata = serde_json::from_str(metadata)
             .map_err(|e| SparkError::invalid(format!("invalid geoarrow metadata JSON: {e}")))?;
+        Self::from_raw(raw)
+    }
 
-        let edges = match raw.edges {
-            Some(e) if VALID_EDGES.contains(&e.as_str()) => Some(e),
-            Some(e) => {
-                return Err(SparkError::invalid(format!(
-                    "unsupported edges value: {e}. Valid values: {VALID_EDGES:?}"
-                )))
-            }
-            None => None,
-        };
+    fn from_raw(raw: RawGeoArrowMetadata) -> SparkResult<Self> {
         let srid = match raw.crs {
-            Some(crs_value) => crs_value_to_srid(&crs_value)?,
+            Some(crs) => crs_to_srid(&crs.authority_code())?,
             // Absent CRS means mixed/unknown SRID
             None => -1,
         };
 
-        Ok(Self { edges, srid })
+        Ok(Self {
+            edges: raw.edges,
+            srid,
+        })
     }
 
     /// Returns true if this represents a Geography type (any non-planar edge interpolation).
@@ -125,8 +74,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
             .map(|v| serde_json::from_str(v))
             .transpose()
             .map_err(SparkError::from)?;
-        let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
-        let is_variant = field.extension_type_name() == Some(spec::VARIANT_EXTENSION_NAME);
+        let extension_type_name = field.extension_type_name();
 
         let data_type = if let Some(udt_metadata) = udt_metadata {
             DataType {
@@ -138,14 +86,11 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     sql_type: Some(Box::new(field.data_type().clone().try_into()?)),
                 }))),
             }
-        } else if is_geoarrow {
+        } else if extension_type_name == Some(GeoArrowWkbType::NAME) {
             // Parse geoarrow extension metadata to determine Geometry vs Geography
-            let ext_metadata = field
-                .metadata()
-                .get(sail_common::spec::EXTENSION_TYPE_METADATA_KEY)
-                .cloned()
-                .unwrap_or_default();
-            let geo_meta = GeoArrowMetadata::from_json(&ext_metadata)?;
+            // Performance: check name first before calling `try_extension_type`.
+            let ext = field.try_extension_type::<GeoArrowWkbType>()?;
+            let geo_meta = GeoArrowMetadata::from_raw(ext.0)?;
 
             if geo_meta.is_geography() {
                 DataType {
@@ -162,7 +107,9 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     })),
                 }
             }
-        } else if is_variant {
+        } else if extension_type_name == Some(VariantType::NAME) {
+            // Performance: check name first before calling `try_extension_type`.
+            field.try_extension_type::<VariantType>()?;
             DataType {
                 kind: Some(sdt::Kind::Variant(sdt::Variant {
                     type_variation_reference: 0,
@@ -337,7 +284,7 @@ mod tests {
         // Test Geography (spherical edges) with Spark 4.1 CRS format
         let metadata = r#"{"crs":"OGC:CRS84","edges":"spherical"}"#;
         let parsed = GeoArrowMetadata::from_json(metadata)?;
-        assert_eq!(parsed.edges, Some("spherical".to_string()));
+        assert_eq!(parsed.edges, Some(GeoArrowEdges::Spherical));
         assert_eq!(parsed.srid, 4326);
         assert!(parsed.is_geography());
 
@@ -413,11 +360,11 @@ mod tests {
         // Geometry omits "edges" (defaults to planar in GeoArrow)
         let metadata: HashMap<String, String> = [
             (
-                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                "geoarrow.wkb".to_string(),
+                arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+                GeoArrowWkbType::NAME.to_string(),
             ),
             (
-                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84"}"#.to_string(),
             ),
         ]
@@ -446,11 +393,11 @@ mod tests {
         // Create an Arrow field with geoarrow.wkb metadata for Geography (spherical)
         let metadata: HashMap<String, String> = [
             (
-                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                "geoarrow.wkb".to_string(),
+                arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+                GeoArrowWkbType::NAME.to_string(),
             ),
             (
-                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84","edges":"spherical"}"#.to_string(),
             ),
         ]
@@ -479,11 +426,11 @@ mod tests {
         // Test mixed SRID (-1): CRS and edges are omitted from metadata
         let metadata: HashMap<String, String> = [
             (
-                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                "geoarrow.wkb".to_string(),
+                arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+                GeoArrowWkbType::NAME.to_string(),
             ),
             (
-                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{}"#.to_string(),
             ),
         ]
