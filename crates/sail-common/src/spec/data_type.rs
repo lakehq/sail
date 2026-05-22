@@ -33,8 +33,11 @@ pub const SAIL_SPARK_UDT_METADATA_KEY: &str = "SAIL::spark::udt";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkUdtMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jvm_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub python_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serialized_python_class: Option<String>,
 }
 
