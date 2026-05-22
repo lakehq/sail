@@ -35,7 +35,9 @@ use datafusion::arrow::datatypes::{
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_expr::{
+    LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
+};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;

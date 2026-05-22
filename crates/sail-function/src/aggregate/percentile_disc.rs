@@ -13,10 +13,9 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::{DataFusionError, HashSet, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion::logical_expr::type_coercion::aggregates::NUMERICS;
 use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{
-    Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
 };
 
 use crate::aggregate::percentile_disc_groups::{
@@ -61,12 +60,8 @@ impl Default for PercentileDisc {
 
 impl PercentileDisc {
     pub fn new() -> Self {
-        let mut variants = Vec::with_capacity(NUMERICS.len());
-        for num in NUMERICS {
-            variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
-        }
         Self {
-            signature: Signature::one_of(variants, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 
@@ -88,6 +83,26 @@ impl PercentileDisc {
     }
 }
 
+fn is_numeric_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Null
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+    )
+}
+
 impl AggregateUDFImpl for PercentileDisc {
     fn name(&self) -> &str {
         "percentile_disc"
@@ -99,6 +114,28 @@ impl AggregateUDFImpl for PercentileDisc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return Err(DataFusionError::Plan(format!(
+                "percentile_disc expects 2 arguments, got {}",
+                arg_types.len()
+            )));
+        }
+        if !is_numeric_type(&arg_types[0]) {
+            return Err(DataFusionError::Plan(format!(
+                "percentile_disc expects a numeric value argument, got {}",
+                arg_types[0]
+            )));
+        }
+        if !is_numeric_type(&arg_types[1]) {
+            return Err(DataFusionError::Plan(format!(
+                "percentile_disc expects a numeric percentile argument, got {}",
+                arg_types[1]
+            )));
+        }
+        Ok(vec![arg_types[0].clone(), DataType::Float64])
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {

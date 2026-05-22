@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 
 use aes::cipher::block_padding::Pkcs7;

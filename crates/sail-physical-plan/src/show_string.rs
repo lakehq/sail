@@ -6,14 +6,13 @@ use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;

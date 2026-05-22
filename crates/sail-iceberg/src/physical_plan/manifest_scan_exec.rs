@@ -11,8 +11,8 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{DataFusionError, Result};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{DataFusionError, Result};
 use futures::stream::{self, TryStreamExt};
 use url::Url;
 

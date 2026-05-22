@@ -104,7 +104,9 @@ impl FileSource for BinarySource {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn datafusion::physical_expr::PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(
+            &dyn datafusion::physical_expr::PhysicalExpr,
+        ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         let mut tnr = TreeNodeRecursion::Continue;
         if let Some(filter) = self.filter() {

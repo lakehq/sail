@@ -174,9 +174,7 @@ impl PlanResolver<'_> {
             .exclude_columns
             .map(|x| {
                 let exclude = if x.len() > 1 {
-                    expr::ExcludeSelectItem::Multiple(
-                        x.into_iter().map(make_object_name).collect(),
-                    )
+                    expr::ExcludeSelectItem::Multiple(x.into_iter().map(make_object_name).collect())
                 } else if let Some(x) = x.into_iter().next() {
                     expr::ExcludeSelectItem::Single(make_object_name(x))
                 } else {

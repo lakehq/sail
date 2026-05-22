@@ -2,15 +2,14 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{BooleanArray, RecordBatch};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::{Distribution, Partitioning};
+use datafusion::physical_expr::{Distribution, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, plan_err, Result, Statistics};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{internal_err, plan_err, Result, Statistics};
 use futures::StreamExt;
 use sail_common_datafusion::streaming::event::encoding::{
     DecodedFlowEventStream, EncodedFlowEventStream,

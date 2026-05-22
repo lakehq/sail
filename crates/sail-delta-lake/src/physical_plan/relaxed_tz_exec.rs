@@ -3,14 +3,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::{Distribution, EquivalenceProperties};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_datafusion_err, Result, Statistics};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{internal_datafusion_err, Result, Statistics};
 use futures::StreamExt;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::utils::items::ItemTaker;

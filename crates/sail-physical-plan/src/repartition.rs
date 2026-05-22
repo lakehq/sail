@@ -1,16 +1,15 @@
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::Partitioning;
+use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_err, plan_err, Result, Statistics};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{internal_err, plan_err, Result, Statistics};
 
 /// A physical plan node for explicit repartitioning in the query.
 /// This is a placeholder node that should be rewritten during physical optimization.

@@ -2,7 +2,6 @@
 //
 // [Credit]: https://github.com/datafusion-contrib/datafusion-functions-json/blob/78c5abbf7222510ff221517f5d2e3c344969da98/src/json_object_keys.rs
 
-use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::{ArrayRef, ListBuilder, StringBuilder};

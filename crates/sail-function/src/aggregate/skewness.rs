@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 
 use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array};

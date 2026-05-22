@@ -2,15 +2,14 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use datafusion::common::heap_size::{DFHeapSize, DFHeapSizeCtx};
+use datafusion::common::{Result, TableReference};
 use datafusion::execution::cache::cache_manager::{
     CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
 };
-use datafusion::execution::cache::CacheAccessor;
-use datafusion::execution::cache::TableScopedPath;
+use datafusion::execution::cache::{CacheAccessor, TableScopedPath};
 use log::debug;
 use moka::sync::Cache;
-use datafusion::common::heap_size::{DFHeapSize, DFHeapSizeCtx};
-use datafusion::common::{Result, TableReference};
 
 pub struct MokaFileStatisticsCache {
     cache_limit: AtomicUsize,
@@ -57,11 +56,7 @@ impl CacheAccessor<TableScopedPath, CachedFileMetadata> for MokaFileStatisticsCa
         self.statistics.get(k)
     }
 
-    fn put(
-        &self,
-        key: &TableScopedPath,
-        value: CachedFileMetadata,
-    ) -> Option<CachedFileMetadata> {
+    fn put(&self, key: &TableScopedPath, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
         self.statistics.insert(key.clone(), value);
         None
     }

@@ -219,10 +219,9 @@ fn try_enable_merge_metadata_columns(
             new_source = delta_source.with_file_column(file_col)?;
             changed = true;
         }
-        if let (Some(row_index_col), Some(delta_source)) = (
-            row_index_col,
-            new_source.downcast_ref::<DeltaTableSource>(),
-        ) {
+        if let (Some(row_index_col), Some(delta_source)) =
+            (row_index_col, new_source.downcast_ref::<DeltaTableSource>())
+        {
             if delta_source.row_index_column_name().is_none() {
                 new_source = delta_source.with_row_index_column(row_index_col)?;
                 changed = true;

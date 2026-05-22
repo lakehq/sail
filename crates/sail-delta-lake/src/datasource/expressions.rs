@@ -38,7 +38,9 @@ pub fn simplify_expr(
     df_schema: &DFSchema,
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let simplify_context = SimplifyContext::default().with_schema(df_schema.clone().into());
+    let simplify_context = SimplifyContext::builder()
+        .with_schema(df_schema.clone().into())
+        .build();
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     let simplified = simplifier.simplify(expr)?;
 

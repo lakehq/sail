@@ -7,8 +7,8 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{Result, Statistics};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{Result, Statistics};
 use futures::StreamExt;
 
 /// A physical plan node that filters a stream of retractable data batches.

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -143,9 +142,7 @@ fn get_scalar_value_from_args(
     index: usize,
 ) -> Result<Option<ScalarValue>> {
     if let Some(expr) = input_exprs.get(index) {
-        if let Some(literal) =
-            (expr.as_ref() as &dyn std::any::Any).downcast_ref::<Literal>()
-        {
+        if let Some(literal) = (expr.as_ref() as &dyn std::any::Any).downcast_ref::<Literal>() {
             return Ok(Some(literal.value().clone()));
         }
     }

@@ -360,7 +360,7 @@ mod tests {
         let exec = Arc::new(PythonDataSourceWriteCommitExec::new(input1, vec![], 2));
 
         let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
-        assert!(new_exec.as_any().is::<PythonDataSourceWriteCommitExec>());
+        assert!(new_exec.as_ref().is::<PythonDataSourceWriteCommitExec>());
     }
 
     #[test]

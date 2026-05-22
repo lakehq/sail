@@ -261,7 +261,7 @@ mod tests {
 
         let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
 
-        assert!(new_exec.as_any().is::<PythonDataSourceWriteExec>());
+        assert!(new_exec.as_ref().is::<PythonDataSourceWriteExec>());
     }
 
     #[test]

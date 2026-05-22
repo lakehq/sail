@@ -16,8 +16,8 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use datafusion_common::{DataFusionError, Result};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};

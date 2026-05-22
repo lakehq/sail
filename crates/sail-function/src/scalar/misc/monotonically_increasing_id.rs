@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{exec_err, Result};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};

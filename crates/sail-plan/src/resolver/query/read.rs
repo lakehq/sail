@@ -416,7 +416,10 @@ impl PlanResolver<'_> {
                             "unknown table function: {function_name}"
                         )));
                     };
-                let table_provider = table_function.create_table_provider(&arguments)?;
+                let session_state = self.ctx.state();
+                let table_provider = table_function.create_table_provider_with_args(
+                    datafusion::catalog::TableFunctionArgs::new(&arguments, &session_state),
+                )?;
                 self.resolve_table_provider_with_rename(
                     table_provider,
                     function_name,

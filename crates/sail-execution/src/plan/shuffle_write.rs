@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::{exec_datafusion_err, plan_err, Result};
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::{exec_datafusion_err, plan_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::UnKnownColumn;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};

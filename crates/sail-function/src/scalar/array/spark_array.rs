@@ -1,6 +1,6 @@
 /// [Credit]: <https://github.com/apache/datafusion/blob/c21d025df463ce623f9193c4b24d86141fce81ca/datafusion/functions-nested/src/make_array.rs>
 /// Spark defaults to DataType::Int32 while DataFusion defaults to DataType::Int64.
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use datafusion::arrow::array::{
     make_array, new_empty_array, new_null_array, Array, ArrayData, ArrayRef, Capacities,

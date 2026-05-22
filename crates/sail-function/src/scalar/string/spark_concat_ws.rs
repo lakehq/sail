@@ -4,7 +4,6 @@
 //! If any argument is an array, its elements are joined with the separator.
 //! Null values (both scalar and array elements) are skipped.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{

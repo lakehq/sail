@@ -46,7 +46,8 @@ use datafusion_proto::physical_plan::to_proto::{
     serialize_physical_sort_exprs,
 };
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
+    AsExecutionPlan, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalPlanDecodeContext,
 };
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
@@ -1580,8 +1581,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_encode_delta_commit_context(delta_commit_exec.commit_context())?,
                 ),
             })
-        } else if let Some(delta_scan_by_adds_exec) = node.downcast_ref::<DeltaScanByAddsExec>()
-        {
+        } else if let Some(delta_scan_by_adds_exec) = node.downcast_ref::<DeltaScanByAddsExec>() {
             let input = self.try_encode_plan(delta_scan_by_adds_exec.input().clone())?;
             let table_schema = self.try_encode_schema(delta_scan_by_adds_exec.table_schema())?;
             let output_schema = self.try_encode_schema(delta_scan_by_adds_exec.output_schema())?;
@@ -1620,9 +1620,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 version: delta_scan_by_adds_exec.version(),
                 statistics,
             })
-        } else if let Some(delta_discovery_exec) =
-            node.downcast_ref::<DeltaDiscoveryExec>()
-        {
+        } else if let Some(delta_discovery_exec) = node.downcast_ref::<DeltaDiscoveryExec>() {
             let input = Some(self.try_encode_plan(delta_discovery_exec.input())?);
             let predicate = if let Some(pred) = delta_discovery_exec.predicate() {
                 let predicate_node = serialize_physical_expr(&pred.clone(), self)?;
@@ -1644,13 +1642,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_partition_columns: delta_discovery_exec.input_partition_columns().to_vec(),
                 input_partition_scan: delta_discovery_exec.input_partition_scan(),
             })
-        } else if let Some(delta_metadata_stats_exec) = node.downcast_ref::<DeltaMetadataStatsExec>()
+        } else if let Some(delta_metadata_stats_exec) =
+            node.downcast_ref::<DeltaMetadataStatsExec>()
         {
             NodeKind::DeltaMetadataStats(gen::DeltaMetadataStatsExecNode {
                 input: self.try_encode_plan(delta_metadata_stats_exec.input().clone())?,
                 stats_schema: self.try_encode_schema(delta_metadata_stats_exec.stats_schema())?,
             })
-        } else if let Some(delta_remove_actions_exec) = node.downcast_ref::<DeltaRemoveActionsExec>()
+        } else if let Some(delta_remove_actions_exec) =
+            node.downcast_ref::<DeltaRemoveActionsExec>()
         {
             let input = self.try_encode_plan(delta_remove_actions_exec.children()[0].clone())?;
             let partition_value_columns_json = delta_remove_actions_exec
@@ -1662,8 +1662,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 partition_value_columns_json,
             })
-        } else if let Some(delta_log_replay_exec) = node.downcast_ref::<DeltaLogReplayExec>()
-        {
+        } else if let Some(delta_log_replay_exec) = node.downcast_ref::<DeltaLogReplayExec>() {
             let children = delta_log_replay_exec.children();
             let (input, checkpoint_input, commits_input) = match children.as_slice() {
                 [input] => (self.try_encode_plan((*input).clone())?, None, None),
@@ -1798,14 +1797,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let predicate =
                 self.try_encode_message(serialize_physical_expr(stream_filter.predicate(), self)?)?;
             NodeKind::StreamFilter(gen::StreamFilterExecNode { input, predicate })
-        } else if let Some(stream_source_adapter) =
-            node.downcast_ref::<StreamSourceAdapterExec>()
-        {
+        } else if let Some(stream_source_adapter) = node.downcast_ref::<StreamSourceAdapterExec>() {
             let input = self.try_encode_plan(stream_source_adapter.input().clone())?;
             NodeKind::StreamSourceAdapter(gen::StreamSourceAdapterExecNode { input })
-        } else if let Some(cardinality_check) =
-            node.downcast_ref::<MergeCardinalityCheckExec>()
-        {
+        } else if let Some(cardinality_check) = node.downcast_ref::<MergeCardinalityCheckExec>() {
             let input = self.try_encode_plan(cardinality_check.input().clone())?;
             NodeKind::MergeCardinalityCheck(gen::MergeCardinalityCheckExecNode {
                 input,
@@ -1821,9 +1816,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: monotonic_id.column_name().to_string(),
                 schema,
             })
-        } else if let Some(spark_partition_id) =
-            node.downcast_ref::<SparkPartitionIdExec>()
-        {
+        } else if let Some(spark_partition_id) = node.downcast_ref::<SparkPartitionIdExec>() {
             let input = self.try_encode_plan(spark_partition_id.input().clone())?;
             let schema = self.try_encode_schema(spark_partition_id.schema().as_ref())?;
             NodeKind::SparkPartitionId(gen::SparkPartitionIdExecNode {
@@ -1835,9 +1828,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
             let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema })
-        } else if let Some(dv_writer_exec) =
-            node.downcast_ref::<DeletionVectorWriterExec>()
-        {
+        } else if let Some(dv_writer_exec) = node.downcast_ref::<DeletionVectorWriterExec>() {
             let input = self.try_encode_plan(dv_writer_exec.input().clone())?;
             let condition_node = serialize_physical_expr(dv_writer_exec.condition(), self)?;
             let condition = self.try_encode_message(condition_node)?;
@@ -1884,8 +1875,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .transpose()
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
-        } else if let Some(iceberg_writer_exec) = node.downcast_ref::<IcebergWriterExec>()
-        {
+        } else if let Some(iceberg_writer_exec) = node.downcast_ref::<IcebergWriterExec>() {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(iceberg_writer_exec.sink_mode())?;
             let options = serde_json::to_string(iceberg_writer_exec.options())
@@ -1902,15 +1892,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists: iceberg_writer_exec.table_exists(),
                 options,
             })
-        } else if let Some(iceberg_commit_exec) = node.downcast_ref::<IcebergCommitExec>()
-        {
+        } else if let Some(iceberg_commit_exec) = node.downcast_ref::<IcebergCommitExec>() {
             let input = self.try_encode_plan(iceberg_commit_exec.input().clone())?;
             NodeKind::IcebergCommit(gen::IcebergCommitExecNode {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
             })
-        } else if let Some(manifest_scan) = node.downcast_ref::<IcebergManifestScanExec>()
-        {
+        } else if let Some(manifest_scan) = node.downcast_ref::<IcebergManifestScanExec>() {
             let snapshot_json = serde_json::to_string(manifest_scan.snapshot())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg snapshot: {e}"))?;
             NodeKind::IcebergManifestScan(gen::IcebergManifestScanExecNode {
@@ -1925,9 +1913,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 snapshot_id: discovery.snapshot_id(),
                 input_partition_scan: discovery.input_partition_scan(),
             })
-        } else if let Some(scan_by_files) =
-            node.downcast_ref::<IcebergScanByDataFilesExec>()
-        {
+        } else if let Some(scan_by_files) = node.downcast_ref::<IcebergScanByDataFilesExec>() {
             let input = self.try_encode_plan(scan_by_files.input().clone())?;
             let output_schema = self.try_encode_schema(scan_by_files.output_schema().as_ref())?;
             NodeKind::IcebergScanByDataFiles(gen::IcebergScanByDataFilesExecNode {
@@ -1968,9 +1954,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 partitions,
             })
-        } else if let Some(python_write_exec) =
-            node.downcast_ref::<PythonDataSourceWriteExec>()
-        {
+        } else if let Some(python_write_exec) = node.downcast_ref::<PythonDataSourceWriteExec>() {
             let schema = self.try_encode_schema(python_write_exec.input().schema().as_ref())?;
             let input = self.try_encode_plan(python_write_exec.input().clone())?;
             NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
@@ -1979,8 +1963,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 is_arrow: python_write_exec.is_arrow(),
                 input,
             })
-        } else if let Some(python_commit_exec) = node
-            .downcast_ref::<PythonDataSourceWriteCommitExec>()
+        } else if let Some(python_commit_exec) =
+            node.downcast_ref::<PythonDataSourceWriteCommitExec>()
         {
             let input = self.try_encode_plan(python_commit_exec.input().clone())?;
             NodeKind::PythonDataSourceWriteCommit(gen::PythonDataSourceWriteCommitExecNode {
@@ -1988,9 +1972,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 expected_partitions: python_commit_exec.expected_partitions() as u64,
                 input,
             })
-        } else if let Some(catalog_command_exec) =
-            node.downcast_ref::<CatalogCommandExec>()
-        {
+        } else if let Some(catalog_command_exec) = node.downcast_ref::<CatalogCommandExec>() {
             let schema = self.try_encode_schema(catalog_command_exec.schema().as_ref())?;
             let command = serde_json::to_string(catalog_command_exec.command())
                 .map_err(|e| plan_datafusion_err!("failed to encode CatalogCommand: {e}"))?;
@@ -2557,10 +2539,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
-        } else if let Some(func) = node
-            .inner()
-            .downcast_ref::<SparkMakeTimestampNtz>()
-        {
+        } else if let Some(func) = node.inner().downcast_ref::<SparkMakeTimestampNtz>() {
             let is_try = func.is_try();
             UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try })
         } else if let Some(func) = node.inner().downcast_ref::<ConvertTz>() {
@@ -2706,10 +2685,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<SparkTrySum>()
         {
             UdafKind::Standard(gen::StandardUdaf {})
-        } else if let Some(func) = node
-            .inner()
-            .downcast_ref::<PySparkGroupAggregateUDF>()
-        {
+        } else if let Some(func) = node.inner().downcast_ref::<PySparkGroupAggregateUDF>() {
             let input_types = func
                 .input_types()
                 .iter()
@@ -2747,10 +2723,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 is_pandas: func.is_pandas(),
                 config: Some(config),
             })
-        } else if let Some(func) = node
-            .inner()
-            .downcast_ref::<PySparkBatchCollectorUDF>()
-        {
+        } else if let Some(func) = node.inner().downcast_ref::<PySparkBatchCollectorUDF>() {
             let input_types = func
                 .input_types()
                 .iter()

@@ -2,8 +2,8 @@ use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::common::{internal_err, Result};
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::{internal_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};

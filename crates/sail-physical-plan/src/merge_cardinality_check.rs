@@ -11,8 +11,8 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use futures::Stream;
 
 #[derive(Debug)]

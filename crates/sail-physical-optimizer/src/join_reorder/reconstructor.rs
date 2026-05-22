@@ -1298,7 +1298,9 @@ mod tests {
         let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
         let (plan, _map) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
-        let hj = plan.downcast_ref::<HashJoinExec>().expect("expected HashJoinExec");
+        let hj = plan
+            .downcast_ref::<HashJoinExec>()
+            .expect("expected HashJoinExec");
 
         assert_eq!(hj.left.schema().fields()[0].name(), "b");
         assert_eq!(hj.right.schema().fields()[0].name(), "a");
@@ -1373,7 +1375,9 @@ mod tests {
         let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
         let (plan, _map) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
-        let hj = plan.downcast_ref::<HashJoinExec>().expect("expected HashJoinExec");
+        let hj = plan
+            .downcast_ref::<HashJoinExec>()
+            .expect("expected HashJoinExec");
 
         assert_eq!(hj.left.schema().fields()[0].name(), "a");
         assert_eq!(hj.right.schema().fields()[0].name(), "b");
@@ -1449,7 +1453,9 @@ mod tests {
         let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
         let (plan, _) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
-        let hj = plan.downcast_ref::<HashJoinExec>().expect("expected HashJoinExec");
+        let hj = plan
+            .downcast_ref::<HashJoinExec>()
+            .expect("expected HashJoinExec");
 
         assert_eq!(hj.null_equality(), NullEquality::NullEqualsNull);
         Ok(())

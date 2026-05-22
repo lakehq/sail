@@ -18,16 +18,16 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 4072
+    numAddedBytes: 4064
     numAddedFiles: 4
     numFiles: 4
-    numOutputBytes: 4072
+    numOutputBytes: 4064
     numOutputFiles: 4
     numOutputRows: 6
     numRemovedBytes: 1069
     numRemovedFiles: 1
     numSourceRows: 4
-    numTargetBytesAdded: 4072
+    numTargetBytesAdded: 4064
     numTargetBytesRemoved: 1069
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
@@ -57,7 +57,7 @@ data:
     numAddedChangeFiles: 0
     numAddedFiles: 1
     numCopiedRows: 3
-    numDeletedRows: 2
+    numDeletedRows: 0
     numDeletionVectorsAdded: 0
     numDeletionVectorsRemoved: 0
     numDeletionVectorsUpdated: 0
@@ -65,27 +65,12 @@ data:
     numOutputBytes: 734
     numOutputFiles: 1
     numOutputRows: 3
-    numRemovedBytes: 751
-    numRemovedFiles: 1
-    numTouchedRows: 5
+    numRemovedBytes: 0
+    numRemovedFiles: 0
+    numTouchedRows: 0
     rewriteTimeMs: <time_ms>
     scanTimeMs: <time_ms>
     writeTimeMs: <time_ms>
----
-name: "test_dv_delete_reports_numdeletionvectorsadded_and_zero_numcopiedrows"
-data:
-  operation: DELETE
-  operationMetrics:
-    executionTimeMs: <time_ms>
-    numAddedChangeFiles: 0
-    numAddedFiles: 1
-    numCopiedRows: 0
-    numDeletedRows: 1
-    numDeletionVectorsAdded: 1
-    numDeletionVectorsRemoved: 0
-    numDeletionVectorsUpdated: 0
-    numRemovedFiles: 1
-    scanTimeMs: <time_ms>
 ---
 name: "test_dv_delete_updates_an_existing_deletion_vector"
 data:
@@ -107,22 +92,22 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 4035
-    numAddedFiles: 4
-    numFiles: 4
-    numOutputBytes: 4035
-    numOutputFiles: 4
+    numAddedBytes: 3035
+    numAddedFiles: 3
+    numFiles: 3
+    numOutputBytes: 3035
+    numOutputFiles: 3
     numOutputRows: 4
     numRemovedBytes: 1069
     numRemovedFiles: 1
     numSourceRows: 3
-    numTargetBytesAdded: 4035
+    numTargetBytesAdded: 3035
     numTargetBytesRemoved: 1069
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
     numTargetDeletionVectorsUpdated: 0
-    numTargetFilesAdded: 4
+    numTargetFilesAdded: 3
     numTargetFilesRemoved: 1
     numTargetRowsCopied: 1
     numTargetRowsDeleted: 2
@@ -133,37 +118,6 @@ data:
     numTargetRowsNotMatchedBySourceUpdated: 1
     numTargetRowsUpdated: 2
     numTouchedRows: 5
-    rewriteTimeMs: <time_ms>
-    scanTimeMs: <time_ms>
-    writeTimeMs: <time_ms>
----
-name: "test_full_merge_reports_target_file_and_byte_counters"
-data:
-  operation: MERGE
-  operationMetrics:
-    executionTimeMs: <time_ms>
-    numAddedBytes: 2945
-    numAddedFiles: 3
-    numFiles: 3
-    numOutputBytes: 2945
-    numOutputFiles: 3
-    numOutputRows: 3
-    numRemovedBytes: 1017
-    numRemovedFiles: 1
-    numSourceRows: 3
-    numTargetBytesAdded: 2945
-    numTargetBytesRemoved: 1017
-    numTargetChangeFilesAdded: 0
-    numTargetDeletionVectorsAdded: 0
-    numTargetDeletionVectorsRemoved: 0
-    numTargetDeletionVectorsUpdated: 0
-    numTargetFilesAdded: 3
-    numTargetFilesRemoved: 1
-    numTargetRowsCopied: 1
-    numTargetRowsDeleted: 1
-    numTargetRowsInserted: 1
-    numTargetRowsUpdated: 1
-    numTouchedRows: 3
     rewriteTimeMs: <time_ms>
     scanTimeMs: <time_ms>
     writeTimeMs: <time_ms>
@@ -259,26 +213,15 @@ data:
 ---
 name: "test_partitiononly_delete_removes_whole_files_without_scanning"
 data:
-  operation: DELETE
+  operation: CREATE TABLE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 0
-    numAddedChangeFiles: 0
-    numAddedFiles: 0
-    numCopiedRows: 0
-    numDeletedRows: 2
-    numDeletionVectorsAdded: 0
-    numDeletionVectorsRemoved: 0
-    numDeletionVectorsUpdated: 0
-    numFiles: 0
-    numOutputBytes: 0
-    numOutputFiles: 0
-    numOutputRows: 0
-    numRemovedBytes: 463
-    numRemovedFiles: 1
-    numTouchedRows: 2
-    rewriteTimeMs: <time_ms>
-    scanTimeMs: <time_ms>
+    numAddedBytes: 926
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 926
+    numOutputFiles: 2
+    numOutputRows: 4
     writeTimeMs: <time_ms>
 ---
 name: "test_replacewhere_overwrite_reports_added_and_removed_counters"

@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{

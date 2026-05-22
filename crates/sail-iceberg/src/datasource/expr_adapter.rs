@@ -113,9 +113,7 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
         if let Some(transformed) = self.try_rewrite_struct_field_access(&expr)? {
             return Ok(Transformed::yes(transformed));
         }
-        if let Some(column) =
-            (expr.as_ref() as &dyn std::any::Any).downcast_ref::<Column>()
-        {
+        if let Some(column) = (expr.as_ref() as &dyn std::any::Any).downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
         }
         Ok(Transformed::no(expr))

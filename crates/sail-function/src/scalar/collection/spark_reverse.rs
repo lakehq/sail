@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::unicode::reverse::ReverseFunc;
 use datafusion_common::{exec_err, Result};

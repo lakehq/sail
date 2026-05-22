@@ -4,13 +4,12 @@ use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{exec_err, internal_err, plan_err, Result};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{exec_err, internal_err, plan_err, Result};
 use sail_logical_plan::range::Range;
 
 const RANGE_BATCH_SIZE: usize = 1024;

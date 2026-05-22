@@ -6,15 +6,14 @@ use datafusion::arrow::array::{ArrayRef, Int32Array};
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
 };
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, ColumnStatistics, Result, Statistics};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::{exec_err, internal_err, ColumnStatistics, Result, Statistics};
 use futures::Stream;
 
 #[derive(Debug, Clone)]
@@ -133,11 +132,7 @@ impl ExecutionPlan for SparkPartitionIdExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let mut stats = self
-            .input
-            .partition_statistics(partition)?
-            .as_ref()
-            .clone();
+        let mut stats = self.input.partition_statistics(partition)?.as_ref().clone();
         let col_idx = self.schema.index_of(&self.column_name)?;
         let unknown_col_stats = ColumnStatistics::new_unknown();
         if col_idx <= stats.column_statistics.len() {

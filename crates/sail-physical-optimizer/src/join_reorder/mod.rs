@@ -903,7 +903,9 @@ mod tests {
             &["result".to_string()],
         )?;
         #[expect(clippy::expect_used)]
-        let proj = plan.downcast_ref::<ProjectionExec>().expect("expected ProjectionExec");
+        let proj = plan
+            .downcast_ref::<ProjectionExec>()
+            .expect("expected ProjectionExec");
         assert_eq!(proj.schema().fields().len(), 1);
         assert_eq!(proj.schema().field(0).name(), "result");
 

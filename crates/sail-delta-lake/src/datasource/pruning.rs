@@ -556,11 +556,9 @@ mod tests {
         referenced_columns.insert("dec_col".to_string());
 
         let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
-        let array = stats
-            .row_counts(&Column::from_name("dec_col"))
-            .ok_or_else(|| {
-                DataFusionError::Internal("row count stats should be available".to_string())
-            })?;
+        let array = stats.row_counts().ok_or_else(|| {
+            DataFusionError::Internal("row count stats should be available".to_string())
+        })?;
 
         assert_eq!(array.data_type(), &DataType::UInt64);
         let values = array

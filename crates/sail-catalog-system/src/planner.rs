@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::any::Any;
+use std::sync::Arc;
 
 use datafusion::common::{DFSchema, Result};
 use datafusion::execution::SessionState;
@@ -31,7 +31,8 @@ impl ExtensionPlanner for SystemTablePhysicalPlanner {
         scan: &TableScan,
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(source) = (scan.source.as_ref() as &dyn Any).downcast_ref::<SystemTableSource>() else {
+        let Some(source) = (scan.source.as_ref() as &dyn Any).downcast_ref::<SystemTableSource>()
+        else {
             return Ok(None);
         };
         let table = source.table();
