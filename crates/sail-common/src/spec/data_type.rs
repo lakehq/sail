@@ -19,6 +19,28 @@ pub use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 /// Arrow extension type name for Variant.
 pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
 
+/// Spark column metadata key for Arrow field metadata.
+///
+/// Spark stores the entire column metadata dictionary as a JSON-encoded object
+/// under this single key to avoid collisions with other Arrow field metadata
+/// (e.g. extension type keys).
+pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
+
+/// Sail metadata key for Spark UDT information stored in Arrow field metadata.
+///
+/// This is internal to Sail and should not be exposed as Spark column metadata.
+pub const SAIL_SPARK_UDT_METADATA_KEY: &str = "SAIL::spark::udt";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkUdtMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jvm_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serialized_python_class: Option<String>,
+}
+
 /// Field name for list type.
 pub const SAIL_LIST_FIELD_NAME: &str = "item";
 /// Field name for map type's entries.

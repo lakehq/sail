@@ -299,10 +299,7 @@ impl PlanResolver<'_> {
             nullable,
             metadata,
         } = field;
-        let mut metadata: HashMap<_, _> = metadata
-            .iter()
-            .map(|(k, v)| (format!("metadata.{k}"), v.to_string()))
-            .collect();
+        let mut metadata: HashMap<String, String> = metadata.iter().cloned().collect();
         let data_type = match data_type {
             spec::DataType::UserDefined {
                 jvm_class,
@@ -310,18 +307,17 @@ impl PlanResolver<'_> {
                 serialized_python_class,
                 sql_type,
             } => {
-                if let Some(jvm_class) = jvm_class {
-                    metadata.insert("udt.jvm_class".to_string(), jvm_class.to_string());
-                }
-                if let Some(python_class) = python_class {
-                    metadata.insert("udt.python_class".to_string(), python_class.to_string());
-                }
-                if let Some(serialized_python_class) = serialized_python_class {
-                    metadata.insert(
-                        "udt.serialized_python_class".to_string(),
-                        serialized_python_class.to_string(),
-                    );
-                }
+                let udt = spec::SparkUdtMetadata {
+                    jvm_class: jvm_class.clone(),
+                    python_class: python_class.clone(),
+                    serialized_python_class: serialized_python_class.clone(),
+                };
+                metadata.insert(
+                    spec::SAIL_SPARK_UDT_METADATA_KEY.to_string(),
+                    serde_json::to_string(&udt).map_err(|e| {
+                        PlanError::internal(format!("failed to serialize UDT metadata: {e}"))
+                    })?,
+                );
                 sql_type
             }
             spec::DataType::Geometry { srid } => {

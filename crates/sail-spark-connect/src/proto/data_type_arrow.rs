@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use datafusion::arrow::datatypes as adt;
+use sail_common::spec;
 use serde::Deserialize;
 
 use crate::error::{SparkError, SparkResult};
@@ -120,21 +119,22 @@ impl TryFrom<adt::Field> for sdt::StructField {
     type Error = SparkError;
 
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
-        let is_udt = field.metadata().keys().any(|k| k.starts_with("udt."));
+        let udt_metadata: Option<spec::SparkUdtMetadata> = field
+            .metadata()
+            .get(spec::SAIL_SPARK_UDT_METADATA_KEY)
+            .map(|v| serde_json::from_str(v))
+            .transpose()
+            .map_err(SparkError::from)?;
         let is_geoarrow = field.extension_type_name() == Some("geoarrow.wkb");
-        let is_variant =
-            field.extension_type_name() == Some(sail_common::spec::VARIANT_EXTENSION_NAME);
+        let is_variant = field.extension_type_name() == Some(spec::VARIANT_EXTENSION_NAME);
 
-        let data_type = if is_udt {
+        let data_type = if let Some(udt_metadata) = udt_metadata {
             DataType {
                 kind: Some(sdt::Kind::Udt(Box::new(sdt::Udt {
                     r#type: "udt".to_string(),
-                    jvm_class: field.metadata().get("udt.jvm_class").cloned(),
-                    python_class: field.metadata().get("udt.python_class").cloned(),
-                    serialized_python_class: field
-                        .metadata()
-                        .get("udt.serialized_python_class")
-                        .cloned(),
+                    jvm_class: udt_metadata.jvm_class,
+                    python_class: udt_metadata.python_class,
+                    serialized_python_class: udt_metadata.serialized_python_class,
                     sql_type: Some(Box::new(field.data_type().clone().try_into()?)),
                 }))),
             }
@@ -171,24 +171,11 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else {
             field.data_type().clone().try_into()?
         };
-        // FIXME: The metadata. prefix is managed by Sail and the convention should be respected everywhere.
-        // Also filter out Arrow extension metadata (geoarrow, etc.) which is internal to Sail
-        let metadata = &field
-            .metadata()
-            .iter()
-            .filter(|(k, _)| !k.starts_with("udt.") && !k.starts_with("ARROW:extension:"))
-            .map(|(k, v)| {
-                let parsed = serde_json::from_str::<serde_json::Value>(v)
-                    .unwrap_or_else(|_| serde_json::Value::String(v.clone()));
-                Ok((k.strip_prefix("metadata.").unwrap_or(k), parsed))
-            })
-            .collect::<SparkResult<HashMap<_, serde_json::Value>>>()?;
-        let metadata = serde_json::to_string(metadata)?;
         Ok(sdt::StructField {
             name: field.name().clone(),
             data_type: Some(data_type),
             nullable: field.is_nullable(),
-            metadata: Some(metadata),
+            metadata: field.metadata().get(spec::SPARK_METADATA_JSON_KEY).cloned(),
         })
     }
 }
@@ -333,6 +320,8 @@ impl TryFrom<adt::DataType> for DataType {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::error::SparkResult;
 
@@ -424,11 +413,11 @@ mod tests {
         // Geometry omits "edges" (defaults to planar in GeoArrow)
         let metadata: HashMap<String, String> = [
             (
-                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84"}"#.to_string(),
             ),
         ]
@@ -457,11 +446,11 @@ mod tests {
         // Create an Arrow field with geoarrow.wkb metadata for Geography (spherical)
         let metadata: HashMap<String, String> = [
             (
-                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{"crs":"OGC:CRS84","edges":"spherical"}"#.to_string(),
             ),
         ]
@@ -490,11 +479,11 @@ mod tests {
         // Test mixed SRID (-1): CRS and edges are omitted from metadata
         let metadata: HashMap<String, String> = [
             (
-                sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                spec::EXTENSION_TYPE_NAME_KEY.to_string(),
                 "geoarrow.wkb".to_string(),
             ),
             (
-                sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+                spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
                 r#"{}"#.to_string(),
             ),
         ]
