@@ -7228,6 +7228,7 @@ dependencies = [
  "object_store",
  "once_cell",
  "parquet",
+ "parquet-variant-compute",
  "percent-encoding",
  "regex",
  "roaring",
@@ -7377,6 +7378,7 @@ name = "sail-iceberg"
 version = "0.6.3"
 dependencies = [
  "apache-avro",
+ "arrow-schema",
  "async-stream",
  "async-trait",
  "bytes",
@@ -7391,6 +7393,7 @@ dependencies = [
  "once_cell",
  "ordered-float 5.3.0",
  "parquet",
+ "parquet-variant-compute",
  "rust_decimal",
  "sail-common",
  "sail-common-datafusion",
@@ -7492,6 +7495,7 @@ name = "sail-plan"
 version = "0.6.3"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "async-recursion",
  "async-trait",
  "chrono",
@@ -7509,6 +7513,7 @@ dependencies = [
  "lazy_static",
  "log",
  "object_store",
+ "parquet-variant-compute",
  "rand 0.10.1",
  "regex",
  "ryu",
@@ -7648,6 +7653,7 @@ dependencies = [
 name = "sail-spark-connect"
 version = "0.6.3"
 dependencies = [
+ "arrow-schema",
  "async-stream",
  "datafusion",
  "fastrace",
@@ -7655,6 +7661,7 @@ dependencies = [
  "lazy_static",
  "log",
  "monostate",
+ "parquet-variant-compute",
  "pbjson",
  "pbjson-build",
  "pbjson-types",
