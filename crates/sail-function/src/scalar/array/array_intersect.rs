@@ -1,6 +1,5 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/4a41173ba3df9b5d47638599c819a1e6e46ad92b/datafusion/functions-nested/src/set_ops.rs
-// Adapted from DataFusion's set operation implementation with Spark-compatible
-// empty array handling for array intersections.
+// Adapted from DataFusion's set operation implementation with Spark-compatible empty array handling for array intersections.
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -12,12 +11,13 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{concat, take};
-use datafusion::arrow::datatypes::DataType::{LargeList, List, Null};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::utils::{take_function_args, ListCoercion};
-use datafusion_common::{assert_eq_or_internal_err, internal_err, Result};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{
+    assert_eq_or_internal_err, exec_err, internal_err, DataFusionError, Result,
+};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -37,11 +37,7 @@ impl Default for ArrayIntersect {
 impl ArrayIntersect {
     pub fn new() -> Self {
         Self {
-            signature: Signature::arrays(
-                2,
-                Some(ListCoercion::FixedSizedListToList),
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("list_intersect")],
         }
     }
@@ -56,15 +52,49 @@ impl ScalarUDFImpl for ArrayIntersect {
         "array_intersect"
     }
 
+    fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let [array1, array2] = take_function_args(self.name(), arg_types)?;
+
         match (array1, array2) {
-            (Null, Null) => Ok(DataType::new_list(Null, true)),
-            (Null, dt) | (dt, Null) => Ok(dt.clone()),
+            (DataType::Null, DataType::Null) => Ok(DataType::new_list(DataType::Null, true)),
+            (DataType::Null, dt) | (dt, DataType::Null) => Ok(dt.clone()),
+
+            (DataType::List(field1), DataType::List(field2)) => {
+                let field = if field1.data_type().is_null() {
+                    field2
+                } else {
+                    field1
+                };
+                Ok(DataType::List(field.clone()))
+            }
+
+            (DataType::LargeList(field1), DataType::LargeList(field2)) => {
+                let field = if field1.data_type().is_null() {
+                    field2
+                } else {
+                    field1
+                };
+                Ok(DataType::LargeList(field.clone()))
+            }
+
+            (DataType::List(field1), DataType::LargeList(field2))
+            | (DataType::LargeList(field1), DataType::List(field2)) => {
+                let field = if field1.data_type().is_null() {
+                    field2
+                } else {
+                    field1
+                };
+                Ok(DataType::LargeList(field.clone()))
+            }
+
             (dt, _) => Ok(dt.clone()),
         }
     }
@@ -73,8 +103,100 @@ impl ScalarUDFImpl for ArrayIntersect {
         make_scalar_function(array_intersect_inner)(&args.args)
     }
 
-    fn aliases(&self) -> &[String] {
-        &self.aliases
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return exec_err!(
+                "Spark `array_intersect` requires exactly 2 arguments, but got {}",
+                arg_types.len()
+            );
+        }
+
+        let arg_types = arg_types
+            .iter()
+            .map(|arg_type| match arg_type {
+                DataType::Null => Ok(DataType::Null),
+                DataType::List(field)
+                | DataType::ListView(field)
+                | DataType::FixedSizeList(field, _) => Ok(DataType::List(field.clone())),
+                DataType::LargeList(field) | DataType::LargeListView(field) => {
+                    Ok(DataType::LargeList(field.clone()))
+                }
+                other => {
+                    exec_err!(
+                        "Spark `array_intersect` requires list or null types, but got '{other:?}'"
+                    )
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        match arg_types.as_slice() {
+            [DataType::List(field), DataType::LargeList(_)] => Ok(vec![
+                DataType::LargeList(field.clone()),
+                arg_types[1].clone(),
+            ]),
+            [DataType::LargeList(_), DataType::List(field)] => Ok(vec![
+                arg_types[0].clone(),
+                DataType::LargeList(field.clone()),
+            ]),
+            _ => Ok(arg_types),
+        }
+    }
+}
+
+fn empty_intersection<OffsetSize: OffsetSizeTrait>(
+    l: &GenericListArray<OffsetSize>,
+    r: &GenericListArray<OffsetSize>,
+    field: Arc<Field>,
+) -> Result<ArrayRef> {
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+        Arc::clone(&field),
+        OffsetBuffer::new(vec![OffsetSize::usize_as(0); l.len() + 1].into()),
+        new_empty_array(field.data_type()),
+        NullBuffer::union(l.nulls(), r.nulls()),
+    )?))
+}
+
+fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [array1, array2] = take_function_args("array_intersect", args)?;
+    general_set_op(array1, array2)
+}
+
+fn general_set_op(array1: &ArrayRef, array2: &ArrayRef) -> Result<ArrayRef> {
+    let len = array1.len();
+    match (array1.data_type(), array2.data_type()) {
+        (DataType::Null, DataType::Null) => Ok(new_null_array(
+            &DataType::new_list(DataType::Null, true),
+            len,
+        )),
+        (DataType::Null, dt @ DataType::List(_))
+        | (DataType::Null, dt @ DataType::LargeList(_))
+        | (dt @ DataType::List(_), DataType::Null)
+        | (dt @ DataType::LargeList(_), DataType::Null) => Ok(new_null_array(dt, len)),
+        (DataType::List(field1), DataType::List(field2)) => {
+            let field = if field1.data_type().is_null() {
+                Arc::clone(field2)
+            } else {
+                Arc::clone(field1)
+            };
+            let array1 = as_list_array(array1)?;
+            let array2 = as_list_array(array2)?;
+            generic_set_lists::<i32>(array1, array2, field)
+        }
+        (DataType::LargeList(field1), DataType::LargeList(field2)) => {
+            let field = if field1.data_type().is_null() {
+                Arc::clone(field2)
+            } else {
+                Arc::clone(field1)
+            };
+            let array1 = as_large_list_array(array1)?;
+            let array2 = as_large_list_array(array2)?;
+            generic_set_lists::<i64>(array1, array2, field)
+        }
+        (data_type1, data_type2) => {
+            internal_err!(
+                "array_intersect does not support types '{data_type1:?}' and '{data_type2:?}'"
+            )
+        }
     }
 }
 
@@ -114,8 +236,8 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
-    rows_l: &datafusion::arrow::row::Rows,
-    rows_r: &datafusion::arrow::row::Rows,
+    rows_l: &arrow::row::Rows,
+    rows_r: &arrow::row::Rows,
     field: Arc<Field>,
     combined_values: &ArrayRef,
     r_offset: usize,
@@ -126,16 +248,22 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
     let r_first = r.offsets()[0].as_usize();
 
     let mut result_offsets = Vec::with_capacity(l.len() + 1);
-    let mut current_offset = OffsetSize::usize_as(0);
-    result_offsets.push(current_offset);
+    result_offsets.push(OffsetSize::usize_as(0));
     let initial_capacity = rows_l.num_rows().min(rows_r.num_rows());
     let mut indices: Vec<usize> = Vec::with_capacity(initial_capacity);
 
+    // Reuse hash sets across iterations
     let mut seen = HashSet::new();
     let mut lookup_set = HashSet::new();
     for i in 0..l.len() {
+        let last_offset = *result_offsets.last().ok_or_else(|| {
+            DataFusionError::Internal(
+                "result_offsets should always have at least one element".to_string(),
+            )
+        })?;
+
         if l.is_null(i) || r.is_null(i) {
-            result_offsets.push(current_offset);
+            result_offsets.push(last_offset);
             continue;
         }
 
@@ -144,35 +272,39 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
         let r_start = r_offsets[i].as_usize() - r_first;
         let r_end = r_offsets[i + 1].as_usize() - r_first;
 
+        seen.clear();
+
         let l_len = l_end - l_start;
         let r_len = r_end - r_start;
 
-        // Build the lookup set from the shorter side to reduce hash set size,
-        // then preserve the selected probe side's offset into the combined values.
+        // Select shorter side for lookup, longer side for probing.
+        // Track the probe side's offset into the combined values array.
         let (lookup_rows, lookup_range, probe_rows, probe_range, probe_offset) = if l_len < r_len {
             (rows_l, l_start..l_end, rows_r, r_start..r_end, r_offset)
         } else {
             (rows_r, r_start..r_end, rows_l, l_start..l_end, 0)
         };
-
-        seen.clear();
         lookup_set.clear();
         lookup_set.reserve(lookup_range.len());
 
+        // Build lookup table
         for idx in lookup_range {
             lookup_set.insert(lookup_rows.row(idx));
         }
 
+        // Probe and emit distinct intersected rows
         for idx in probe_range {
             let row = probe_rows.row(idx);
             if lookup_set.contains(&row) && seen.insert(row) {
                 indices.push(idx + probe_offset);
             }
         }
-        current_offset += OffsetSize::usize_as(seen.len());
-        result_offsets.push(current_offset);
+
+        result_offsets.push(last_offset + OffsetSize::usize_as(seen.len()));
     }
 
+    // Gather distinct values by index from the combined values array.
+    // Use UInt64Array for LargeList to support values arrays exceeding u32::MAX.
     let final_values = if indices.is_empty() {
         new_empty_array(&l.value_type())
     } else if OffsetSize::IS_LARGE {
@@ -190,50 +322,6 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
         NullBuffer::union(l.nulls(), r.nulls()),
     )?;
     Ok(Arc::new(arr))
-}
-
-fn empty_intersection<OffsetSize: OffsetSizeTrait>(
-    l: &GenericListArray<OffsetSize>,
-    r: &GenericListArray<OffsetSize>,
-    field: Arc<Field>,
-) -> Result<ArrayRef> {
-    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        Arc::clone(&field),
-        OffsetBuffer::new(vec![OffsetSize::usize_as(0); l.len() + 1].into()),
-        new_empty_array(field.data_type()),
-        NullBuffer::union(l.nulls(), r.nulls()),
-    )?))
-}
-
-fn general_set_op(array1: &ArrayRef, array2: &ArrayRef) -> Result<ArrayRef> {
-    let len = array1.len();
-    match (array1.data_type(), array2.data_type()) {
-        (Null, Null) => Ok(new_null_array(&DataType::new_list(Null, true), len)),
-        (Null, dt @ List(_))
-        | (Null, dt @ LargeList(_))
-        | (dt @ List(_), Null)
-        | (dt @ LargeList(_), Null) => Ok(new_null_array(dt, len)),
-        (List(field), List(_)) => {
-            let array1 = as_list_array(array1)?;
-            let array2 = as_list_array(array2)?;
-            generic_set_lists::<i32>(array1, array2, Arc::clone(field))
-        }
-        (LargeList(field), LargeList(_)) => {
-            let array1 = as_large_list_array(array1)?;
-            let array2 = as_large_list_array(array2)?;
-            generic_set_lists::<i64>(array1, array2, Arc::clone(field))
-        }
-        (data_type1, data_type2) => {
-            internal_err!(
-                "array_intersect does not support types '{data_type1:?}' and '{data_type2:?}'"
-            )
-        }
-    }
-}
-
-fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [array1, array2] = take_function_args("array_intersect", args)?;
-    general_set_op(array1, array2)
 }
 
 #[cfg(test)]
