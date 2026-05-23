@@ -233,6 +233,8 @@ def patch_pyspark_connect_test_class():
 class TestMarker:
     keywords: list[str]
     reason: str
+    spark_versions: tuple[str, ...] | None = None
+    nodeid: str | None = None
 
 
 SKIPPED_SPARK_TESTS = [
@@ -377,13 +379,49 @@ SKIPPED_SPARK_TESTS = [
         keywords=["pyspark.sql.catalog.Catalog.listCatalogs"],
         reason="Sail exposes an additional 'system' catalog that Spark does not have; ported to PySail test suite",
     ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.hll_sketch_agg"],
+        reason="Spark 4.1.1 HLL doctest failure",
+        spark_versions=("4.1.",),
+        nodeid="pyspark/sql/functions.py::pyspark.sql.functions.hll_sketch_agg",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.hll_sketch_estimate"],
+        reason="Spark 4.1.1 HLL doctest failure",
+        spark_versions=("4.1.",),
+        nodeid="pyspark/sql/functions.py::pyspark.sql.functions.hll_sketch_estimate",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.hll_union"],
+        reason="Spark 4.1.1 HLL doctest failure",
+        spark_versions=("4.1.",),
+        nodeid="pyspark/sql/functions.py::pyspark.sql.functions.hll_union",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.hll_union_agg"],
+        reason="Spark 4.1.1 HLL doctest failure",
+        spark_versions=("4.1.",),
+        nodeid="pyspark/sql/functions.py::pyspark.sql.functions.hll_union_agg",
+    ),
 ]
 
 
+def is_matching_test_marker(item: pytest.Item, test: TestMarker) -> bool:
+    return all(k in item.keywords for k in test.keywords) or (
+        test.nodeid is not None and item.nodeid.endswith(test.nodeid)
+    )
+
+
 def add_pyspark_test_markers(items: list[pytest.Item]):
+    import pyspark
+
     for item in items:
         for test in SKIPPED_SPARK_TESTS:
-            if all(k in item.keywords for k in test.keywords):
+            if test.spark_versions is not None and not any(
+                pyspark.__version__.startswith(version) for version in test.spark_versions
+            ):
+                continue
+            if is_matching_test_marker(item, test):
                 item.add_marker(pytest.mark.skip(reason=test.reason))
 
 

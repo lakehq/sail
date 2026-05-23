@@ -25,6 +25,8 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::hll_sketch_agg::HllSketchAggFunction;
+use sail_function::aggregate::hll_union_agg::HllUnionAggFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -110,6 +112,80 @@ fn avg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             window_frame,
             filter: None,
             null_treatment,
+            distinct,
+        },
+    })))
+}
+
+fn hll_sketch_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context: _,
+    } = input;
+    let mut args = arguments;
+    if args.is_empty() || args.len() > 2 {
+        return Err(PlanError::invalid(format!(
+            "hll_sketch_agg expects 1 or 2 arguments, got {}",
+            args.len()
+        )));
+    }
+    if args.len() == 1 {
+        args.push(lit(ScalarValue::Int32(Some(
+            sail_function::aggregate::hll_utils::DEFAULT_LG_CONFIG_K as i32,
+        ))));
+    }
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
+            HllSketchAggFunction::new(),
+        ))),
+        params: WindowFunctionParams {
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+            filter: None,
+            null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
+        },
+    })))
+}
+
+fn hll_union_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context: _,
+    } = input;
+    let mut args = arguments;
+    if args.is_empty() || args.len() > 2 {
+        return Err(PlanError::invalid(format!(
+            "hll_union_agg expects 1 or 2 arguments, got {}",
+            args.len()
+        )));
+    }
+    if args.len() == 1 {
+        args.push(lit(ScalarValue::Boolean(Some(false))));
+    }
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
+            HllUnionAggFunction::new(),
+        ))),
+        params: WindowFunctionParams {
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+            filter: None,
+            null_treatment: get_null_treatment(ignore_nulls),
             distinct,
         },
     })))
@@ -547,8 +623,8 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             "histogram_numeric",
             F::aggregate(|| Arc::new(AggregateUDF::from(HistogramNumericFunction::new()))),
         ),
-        ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
-        ("hll_union_agg", F::unknown("hll_union_agg")),
+        ("hll_sketch_agg", F::custom(hll_sketch_agg)),
+        ("hll_union_agg", F::custom(hll_union_agg)),
         ("kurtosis", F::custom(kurtosis)),
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),

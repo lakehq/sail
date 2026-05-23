@@ -102,6 +102,8 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::hll_sketch_agg::HllSketchAggFunction;
+use sail_function::aggregate::hll_union_agg::HllUnionAggFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -167,6 +169,7 @@ use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
+use sail_function::scalar::misc::hll::{HllSketchEstimate, HllUnion};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
@@ -2262,6 +2265,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_aes_decrypt" | "try_aes_decrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryAESDecrypt::new())))
             }
+            "hll_sketch_estimate" => Ok(Arc::new(ScalarUDF::from(HllSketchEstimate::new()))),
+            "hll_union" => Ok(Arc::new(ScalarUDF::from(HllUnion::new()))),
             "spark_to_binary" | "to_binary" => Ok(Arc::new(ScalarUDF::from(SparkToBinary::new()))),
             "spark_try_to_binary" | "try_to_binary" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
@@ -2381,6 +2386,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<RewriteLikePatternFunc>()
             || node_inner.is::<SparkAESDecrypt>()
             || node_inner.is::<SparkAESEncrypt>()
+            || node_inner.is::<HllSketchEstimate>()
+            || node_inner.is::<HllUnion>()
             || node_inner.is::<SparkArray>()
             || node_inner.is::<SparkBase64>()
             || node_inner.is::<SparkBin>()
@@ -2598,6 +2605,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
                     HistogramNumericFunction::new(),
                 ))),
+                "hll_sketch_agg" => Ok(Arc::new(AggregateUDF::from(HllSketchAggFunction::new()))),
+                "hll_union_agg" => Ok(Arc::new(AggregateUDF::from(HllUnionAggFunction::new()))),
                 "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
@@ -2701,6 +2710,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<BitmapConstructAggFunction>()
             || node.inner().as_any().is::<BitmapOrAggFunction>()
             || node.inner().as_any().is::<HistogramNumericFunction>()
+            || node.inner().as_any().is::<HllSketchAggFunction>()
+            || node.inner().as_any().is::<HllUnionAggFunction>()
             || node.inner().as_any().is::<KurtosisFunction>()
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()

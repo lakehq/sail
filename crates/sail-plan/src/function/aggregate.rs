@@ -19,6 +19,8 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::hll_sketch_agg::HllSketchAggFunction;
+use sail_function::aggregate::hll_union_agg::HllUnionAggFunction;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -539,6 +541,54 @@ fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn hll_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let mut args = input.arguments;
+    if args.is_empty() || args.len() > 2 {
+        return Err(PlanError::invalid(format!(
+            "hll_sketch_agg expects 1 or 2 arguments, got {}",
+            args.len()
+        )));
+    }
+    if args.len() == 1 {
+        args.push(lit(ScalarValue::Int32(Some(
+            sail_function::aggregate::hll_utils::DEFAULT_LG_CONFIG_K as i32,
+        ))));
+    }
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HllSketchAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn hll_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let mut args = input.arguments;
+    if args.is_empty() || args.len() > 2 {
+        return Err(PlanError::invalid(format!(
+            "hll_union_agg expects 1 or 2 arguments, got {}",
+            args.len()
+        )));
+    }
+    if args.len() == 1 {
+        args.push(lit(ScalarValue::Boolean(Some(false))));
+    }
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HllUnionAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 /// Creates a list of built-in aggregate functions.
 /// This is used to create a hashmap that the resolver uses to look up
 /// aggregate functions by name.
@@ -586,8 +636,8 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("grouping", F::default(grouping::grouping_udaf)),
         ("grouping_id", F::unknown("grouping_id")),
         ("histogram_numeric", F::custom(histogram_numeric)),
-        ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
-        ("hll_union_agg", F::unknown("hll_union_agg")),
+        ("hll_sketch_agg", F::custom(hll_sketch_agg)),
+        ("hll_union_agg", F::custom(hll_union_agg)),
         ("kurtosis", F::custom(kurtosis)),
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),
