@@ -100,6 +100,7 @@ message ExtendedScalarUdf {
     SparkAbsUdf spark_abs = 20;
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
+    SparkStructRenameUdf spark_struct_rename = 23;
   }
 }
 
@@ -200,6 +201,12 @@ message SparkAbsUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message SparkStructRenameUdf {
+  // The target data type (struct or container-of-struct), encoded as Arrow
+  // ArrowType protobuf bytes.
+  bytes target_type = 1;
 }
 
 message SparkTimeUdf {

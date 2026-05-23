@@ -175,6 +175,7 @@ use sail_function::scalar::misc::spark_aes::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
@@ -2150,6 +2151,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::ConvertTz(gen::ConvertTzUdf { classic }) => {
                 return Ok(Arc::new(ScalarUDF::from(ConvertTz::new(classic))));
             }
+            UdfKind::SparkStructRename(gen::SparkStructRenameUdf { target_type }) => {
+                let target_type = self.try_decode_data_type(&target_type)?;
+                return Ok(Arc::new(ScalarUDF::from(SparkStructRename::new(
+                    target_type,
+                ))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -2539,6 +2546,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<ConvertTz>() {
             let classic = func.classic();
             UdfKind::ConvertTz(gen::ConvertTzUdf { classic })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
+            let target_type = self.try_encode_data_type(func.target_type())?;
+            UdfKind::SparkStructRename(gen::SparkStructRenameUdf { target_type })
         } else {
             return Ok(());
         };
