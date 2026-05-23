@@ -1305,8 +1305,10 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::DateTime;
-    use datafusion::arrow::array::StructArray;
-    use datafusion::arrow::datatypes::DataType as ArrowDataType;
+    use datafusion::arrow::array::{Array, ArrayRef, Int64Array, StructArray};
+    use datafusion::arrow::datatypes::{
+        DataType as ArrowDataType, Field, FieldRef, Fields, Schema as ArrowSchema,
+    };
     use datafusion::arrow::record_batch::RecordBatch;
     use object_store::memory::InMemory;
     use object_store::path::Path;
@@ -1363,6 +1365,86 @@ mod tests {
             e_tag: None,
             version: None,
         })
+    }
+
+    fn widen_deletion_vector_for_test(
+        batch: RecordBatch,
+        action_name: &str,
+    ) -> DeltaResult<RecordBatch> {
+        let schema = batch.schema();
+        let (action_idx, action_field) = schema
+            .column_with_name(action_name)
+            .ok_or_else(|| DeltaTableError::schema(format!("{action_name} column missing")))?;
+        let action = batch
+            .column(action_idx)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DeltaTableError::schema(format!("{action_name} must be a struct")))?;
+        let dv_idx = action
+            .fields()
+            .iter()
+            .position(|field| field.name() == "deletionVector")
+            .ok_or_else(|| {
+                DeltaTableError::schema(format!("{action_name}.deletionVector field missing"))
+            })?;
+        let deletion_vector = action
+            .column(dv_idx)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DeltaTableError::schema("deletionVector must be a struct"))?;
+
+        let mut dv_fields: Vec<FieldRef> = deletion_vector
+            .fields()
+            .iter()
+            .map(|field| {
+                Arc::new(Field::new(
+                    field.name().clone(),
+                    field.data_type().clone(),
+                    true,
+                )) as FieldRef
+            })
+            .collect();
+        let mut dv_columns = deletion_vector.columns().to_vec();
+        dv_fields.push(Arc::new(Field::new(
+            "maxRowIndex",
+            ArrowDataType::Int64,
+            true,
+        )));
+        dv_columns.push(
+            Arc::new(Int64Array::from(vec![Some(999_i64); deletion_vector.len()])) as ArrayRef,
+        );
+        let widened_dv = StructArray::try_new(
+            Fields::from(dv_fields),
+            dv_columns,
+            deletion_vector.nulls().cloned(),
+        )?;
+
+        let mut action_fields: Vec<FieldRef> = action.fields().iter().cloned().collect();
+        action_fields[dv_idx] = Arc::new(Field::new(
+            "deletionVector",
+            widened_dv.data_type().clone(),
+            true,
+        ));
+        let mut action_columns = action.columns().to_vec();
+        action_columns[dv_idx] = Arc::new(widened_dv);
+        let widened_action = StructArray::try_new(
+            Fields::from(action_fields),
+            action_columns,
+            action.nulls().cloned(),
+        )?;
+
+        let mut out_fields: Vec<FieldRef> = schema.fields().iter().cloned().collect();
+        out_fields[action_idx] = Arc::new(Field::new(
+            action_name,
+            widened_action.data_type().clone(),
+            action_field.is_nullable(),
+        ));
+        let mut out_columns = batch.columns().to_vec();
+        out_columns[action_idx] = Arc::new(widened_action);
+        Ok(RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(out_fields)),
+            out_columns,
+        )?)
     }
 
     async fn put_commit(
@@ -1552,6 +1634,74 @@ mod tests {
             Some("{\"numRecords\":1}")
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_decode_ignores_spark_extra_deletion_vector_fields() -> DeltaResult<()> {
+        let deletion_vector = DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "encoded-dv".to_string(),
+            offset: Some(12),
+            size_in_bytes: 34,
+            cardinality: 56,
+        };
+        let rows = vec![
+            CheckpointActionRow {
+                add: Some(Add {
+                    path: "part-001.parquet".to_string(),
+                    partition_values: HashMap::new(),
+                    size: 10,
+                    modification_time: 20,
+                    data_change: true,
+                    stats: None,
+                    tags: None,
+                    deletion_vector: Some(deletion_vector.clone()),
+                    base_row_id: None,
+                    default_row_commit_version: None,
+                    clustering_provider: None,
+                    commit_version: None,
+                    commit_timestamp: None,
+                }),
+                ..Default::default()
+            },
+            CheckpointActionRow {
+                remove: Some(Remove {
+                    path: "part-001.parquet".to_string(),
+                    data_change: true,
+                    deletion_timestamp: Some(30),
+                    extended_file_metadata: Some(true),
+                    partition_values: Some(HashMap::new()),
+                    size: Some(10),
+                    stats: None,
+                    tags: None,
+                    deletion_vector: Some(deletion_vector.clone()),
+                    base_row_id: None,
+                    default_row_commit_version: None,
+                }),
+                ..Default::default()
+            },
+        ];
+
+        let batch = encode_rows_for_test(&rows)?;
+        let batch = widen_deletion_vector_for_test(batch, "add")?;
+        let batch = widen_deletion_vector_for_test(batch, "remove")?;
+        let decoded = decode_checkpoint_rows(&batch)?;
+
+        assert_eq!(
+            decoded
+                .first()
+                .and_then(|row| row.add.as_ref())
+                .and_then(|add| add.deletion_vector.as_ref()),
+            Some(&deletion_vector)
+        );
+        assert_eq!(
+            decoded
+                .get(1)
+                .and_then(|row| row.remove.as_ref())
+                .and_then(|remove| remove.deletion_vector.as_ref()),
+            Some(&deletion_vector)
+        );
         Ok(())
     }
 
