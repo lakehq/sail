@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::geoarrow::projjson;
 
-/// Raw GeoArrow extension metadata deserialized from JSON.
+/// GeoArrow extension metadata deserialized from JSON.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeoArrowMetadata {

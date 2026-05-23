@@ -43,15 +43,15 @@ fn crs_to_srid(crs: &str) -> SparkResult<i32> {
 impl TryFrom<GeoArrowMetadata> for SparkGeoMetadata {
     type Error = SparkError;
 
-    fn try_from(raw: GeoArrowMetadata) -> SparkResult<Self> {
-        let srid = match raw.crs {
+    fn try_from(metadata: GeoArrowMetadata) -> SparkResult<Self> {
+        let srid = match metadata.crs {
             Some(crs) => crs_to_srid(&crs.authority_code())?,
             // Absent CRS means mixed/unknown SRID.
             None => -1,
         };
-        // `None` edge (planar/linear edges) indicates Geometry.
         // `Some` edge (non-planar edges) indicates Geography.
-        let kind = match raw.edges {
+        // `None` edge (planar/linear edges) indicates Geometry.
+        let kind = match metadata.edges {
             Some(_) => SparkGeoKind::Geography,
             None => SparkGeoKind::Geometry,
         };
