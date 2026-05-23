@@ -1,3 +1,4 @@
+@array_intersect
 Feature: array_intersect() returns common array elements without duplicates
 
   Rule: Source-of-truth examples
