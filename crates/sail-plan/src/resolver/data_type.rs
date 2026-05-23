@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::extension::{
+    ExtensionType, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY,
+};
 use datafusion::arrow::datatypes as adt;
+use parquet_variant_compute::VariantType;
+use sail_common::geoarrow::extension::GeoArrowWkbType;
 use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
@@ -327,17 +332,14 @@ impl PlanResolver<'_> {
                 // and are automatically filtered from Spark client responses.
                 // Edges default to planar in GeoArrow, so we omit them for Geometry.
                 metadata.insert(
-                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                    "geoarrow.wkb".to_string(),
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    GeoArrowWkbType::NAME.to_string(),
                 );
                 let mut ext = json!({});
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert(
-                    spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
-                    ext.to_string(),
-                );
+                metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext.to_string());
                 data_type
             }
             spec::DataType::Geography { srid, algorithm: _ } => {
@@ -346,23 +348,20 @@ impl PlanResolver<'_> {
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
                 metadata.insert(
-                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                    "geoarrow.wkb".to_string(),
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    GeoArrowWkbType::NAME.to_string(),
                 );
                 let mut ext = json!({"edges": "spherical"});
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert(
-                    spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
-                    ext.to_string(),
-                );
+                metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext.to_string());
                 data_type
             }
             spec::DataType::Variant => {
                 metadata.insert(
-                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                    spec::VARIANT_EXTENSION_NAME.to_string(),
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    VariantType::NAME.to_string(),
                 );
                 data_type
             }
