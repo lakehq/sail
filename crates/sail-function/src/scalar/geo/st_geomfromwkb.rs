@@ -8,7 +8,7 @@ use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use sail_common::spec::GeoArrowWkbType;
+use sail_common::geoarrow::extension::GeoArrowWkbType;
 
 use super::wkb_reader::validate_geometry;
 

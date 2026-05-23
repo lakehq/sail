@@ -6,10 +6,10 @@ use arrow_schema::extension::{
 };
 use datafusion::arrow::datatypes as adt;
 use parquet_variant_compute::VariantType;
+use sail_common::geoarrow::extension::GeoArrowWkbType;
 use sail_common::spec;
 use sail_common::spec::{
-    GeoArrowWkbType, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
-    SAIL_MAP_VALUE_FIELD_NAME,
+    SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
 use serde_json::json;
 

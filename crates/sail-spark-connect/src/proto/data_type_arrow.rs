@@ -1,20 +1,24 @@
 use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::datatypes as adt;
 use parquet_variant_compute::VariantType;
+use sail_common::geoarrow::extension::{GeoArrowMetadata, GeoArrowWkbType};
 use sail_common::spec;
-use sail_common::spec::{GeoArrowEdges, GeoArrowWkbType, RawGeoArrowMetadata};
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::connect::{data_type as sdt, DataType};
 
-/// GeoArrow extension metadata extracted from Arrow field metadata.
+/// Spark geometry and geography type metadata.
 #[derive(Debug, Clone)]
-struct GeoArrowMetadata {
-    /// Edge interpolation algorithm. `None` means planar/linear (Geometry).
-    /// Any value present indicates Geography (non-planar edges).
-    edges: Option<GeoArrowEdges>,
+struct SparkGeoMetadata {
+    kind: SparkGeoKind,
     /// Spatial Reference System Identifier (SRID). -1 for mixed SRID.
     srid: i32,
+}
+
+#[derive(Debug, Clone)]
+enum SparkGeoKind {
+    Geometry,
+    Geography,
 }
 
 /// Parse a CRS authority:code string to SRID integer.
@@ -36,31 +40,33 @@ fn crs_to_srid(crs: &str) -> SparkResult<i32> {
     }
 }
 
-impl GeoArrowMetadata {
-    /// Parse GeoArrow metadata from JSON string.
-    #[cfg(test)]
-    fn from_json(metadata: &str) -> SparkResult<Self> {
-        let raw: RawGeoArrowMetadata = serde_json::from_str(metadata)
-            .map_err(|e| SparkError::invalid(format!("invalid geoarrow metadata JSON: {e}")))?;
-        Self::from_raw(raw)
-    }
+impl TryFrom<GeoArrowMetadata> for SparkGeoMetadata {
+    type Error = SparkError;
 
-    fn from_raw(raw: RawGeoArrowMetadata) -> SparkResult<Self> {
+    fn try_from(raw: GeoArrowMetadata) -> SparkResult<Self> {
         let srid = match raw.crs {
             Some(crs) => crs_to_srid(&crs.authority_code())?,
-            // Absent CRS means mixed/unknown SRID
+            // Absent CRS means mixed/unknown SRID.
             None => -1,
         };
+        // `None` edge (planar/linear edges) indicates Geometry.
+        // `Some` edge (non-planar edges) indicates Geography.
+        let kind = match raw.edges {
+            Some(_) => SparkGeoKind::Geography,
+            None => SparkGeoKind::Geometry,
+        };
 
-        Ok(Self {
-            edges: raw.edges,
-            srid,
-        })
+        Ok(Self { kind, srid })
     }
+}
 
-    /// Returns true if this represents a Geography type (any non-planar edge interpolation).
-    fn is_geography(&self) -> bool {
-        self.edges.is_some()
+impl SparkGeoMetadata {
+    /// Parse Spark geo metadata from JSON string.
+    #[cfg(test)]
+    fn from_json(metadata: &str) -> SparkResult<Self> {
+        let metadata: GeoArrowMetadata = serde_json::from_str(metadata)
+            .map_err(|e| SparkError::invalid(format!("invalid geoarrow metadata JSON: {e}")))?;
+        metadata.try_into()
     }
 }
 
@@ -68,15 +74,11 @@ impl TryFrom<adt::Field> for sdt::StructField {
     type Error = SparkError;
 
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
-        let udt_metadata: Option<spec::SparkUdtMetadata> = field
-            .metadata()
-            .get(spec::SAIL_SPARK_UDT_METADATA_KEY)
-            .map(|v| serde_json::from_str(v))
-            .transpose()
-            .map_err(SparkError::from)?;
+        let udt_metadata = field.metadata().get(spec::SAIL_SPARK_UDT_METADATA_KEY);
         let extension_type_name = field.extension_type_name();
 
         let data_type = if let Some(udt_metadata) = udt_metadata {
+            let udt_metadata: spec::SparkUdtMetadata = serde_json::from_str(udt_metadata)?;
             DataType {
                 kind: Some(sdt::Kind::Udt(Box::new(sdt::Udt {
                     r#type: "udt".to_string(),
@@ -87,28 +89,24 @@ impl TryFrom<adt::Field> for sdt::StructField {
                 }))),
             }
         } else if extension_type_name == Some(GeoArrowWkbType::NAME) {
-            // Parse geoarrow extension metadata to determine Geometry vs Geography
-            // Performance: check name first before calling `try_extension_type`.
             let ext = field.try_extension_type::<GeoArrowWkbType>()?;
-            let geo_meta = GeoArrowMetadata::from_raw(ext.0)?;
+            let meta: SparkGeoMetadata = ext.metadata.try_into()?;
 
-            if geo_meta.is_geography() {
-                DataType {
+            match meta.kind {
+                SparkGeoKind::Geography => DataType {
                     kind: Some(sdt::Kind::Geography(sdt::Geography {
-                        srid: geo_meta.srid,
+                        srid: meta.srid,
                         type_variation_reference: 0,
                     })),
-                }
-            } else {
-                DataType {
+                },
+                SparkGeoKind::Geometry => DataType {
                     kind: Some(sdt::Kind::Geometry(sdt::Geometry {
-                        srid: geo_meta.srid,
+                        srid: meta.srid,
                         type_variation_reference: 0,
                     })),
-                }
+                },
             }
         } else if extension_type_name == Some(VariantType::NAME) {
-            // Performance: check name first before calling `try_extension_type`.
             field.try_extension_type::<VariantType>()?;
             DataType {
                 kind: Some(sdt::Kind::Variant(sdt::Variant {
@@ -276,77 +274,74 @@ mod tests {
     fn test_geoarrow_metadata_parsing() -> SparkResult<()> {
         // Test Geometry (no edges) with Spark 4.1 CRS format
         let metadata = r#"{"crs":"OGC:CRS84"}"#;
-        let parsed = GeoArrowMetadata::from_json(metadata)?;
-        assert_eq!(parsed.edges, None);
+        let parsed = SparkGeoMetadata::from_json(metadata)?;
+        assert!(matches!(parsed.kind, SparkGeoKind::Geometry));
         assert_eq!(parsed.srid, 4326);
-        assert!(!parsed.is_geography());
 
         // Test Geography (spherical edges) with Spark 4.1 CRS format
         let metadata = r#"{"crs":"OGC:CRS84","edges":"spherical"}"#;
-        let parsed = GeoArrowMetadata::from_json(metadata)?;
-        assert_eq!(parsed.edges, Some(GeoArrowEdges::Spherical));
+        let parsed = SparkGeoMetadata::from_json(metadata)?;
+        assert!(matches!(parsed.kind, SparkGeoKind::Geography));
         assert_eq!(parsed.srid, 4326);
-        assert!(parsed.is_geography());
 
         // Test other valid GeoArrow edge types are accepted as Geography
         for edge_type in &["vincenty", "thomas", "andoyer", "karney"] {
             let metadata = format!(r#"{{"crs":"OGC:CRS84","edges":"{edge_type}"}}"#);
-            let parsed = GeoArrowMetadata::from_json(&metadata)?;
-            assert!(parsed.is_geography());
+            let parsed = SparkGeoMetadata::from_json(&metadata)?;
+            assert!(matches!(parsed.kind, SparkGeoKind::Geography));
         }
 
         // Test Web Mercator projection (Geometry, no edges)
         let metadata = r#"{"crs":"EPSG:3857"}"#;
-        let parsed = GeoArrowMetadata::from_json(metadata)?;
+        let parsed = SparkGeoMetadata::from_json(metadata)?;
         assert_eq!(parsed.srid, 3857);
-        assert!(!parsed.is_geography());
+        assert!(matches!(parsed.kind, SparkGeoKind::Geometry));
 
         // Test absent CRS means mixed/unknown SRID
         let metadata = r#"{"edges":"spherical"}"#;
-        let parsed = GeoArrowMetadata::from_json(metadata)?;
+        let parsed = SparkGeoMetadata::from_json(metadata)?;
         assert_eq!(parsed.srid, -1);
 
         // Test empty metadata (no CRS, no edges) = Geometry with mixed SRID
         let metadata = r#"{}"#;
-        let parsed = GeoArrowMetadata::from_json(metadata)?;
-        assert_eq!(parsed.edges, None);
+        let parsed = SparkGeoMetadata::from_json(metadata)?;
+        assert!(matches!(parsed.kind, SparkGeoKind::Geometry));
         assert_eq!(parsed.srid, -1);
-        assert!(!parsed.is_geography());
 
         // Test PROJJSON CRS (used by GeoPandas, DuckDB, SedonaDB)
         let metadata = r#"{"crs":{"$schema":"https://proj.org/schemas/v0.7/projjson.schema.json","type":"GeographicCRS","name":"WGS 84 (CRS84)","id":{"authority":"OGC","code":"CRS84"}},"edges":"spherical"}"#;
-        let parsed = GeoArrowMetadata::from_json(metadata)?;
+        let parsed = SparkGeoMetadata::from_json(metadata)?;
+        assert!(matches!(parsed.kind, SparkGeoKind::Geography));
         assert_eq!(parsed.srid, 4326);
-        assert!(parsed.is_geography());
 
         // Test PROJJSON with numeric EPSG code (Geometry)
         let metadata = r#"{"crs":{"type":"GeographicCRS","name":"NAD83","id":{"authority":"EPSG","code":3857}}}"#;
-        let parsed = GeoArrowMetadata::from_json(metadata)?;
+        let parsed = SparkGeoMetadata::from_json(metadata)?;
+        assert!(matches!(parsed.kind, SparkGeoKind::Geometry));
         assert_eq!(parsed.srid, 3857);
-        assert!(!parsed.is_geography());
 
         // Test SRID:0 (unspecified)
         let metadata = r#"{"crs":"SRID:0"}"#;
-        let parsed = GeoArrowMetadata::from_json(metadata)?;
+        let parsed = SparkGeoMetadata::from_json(metadata)?;
         assert_eq!(parsed.srid, 0);
 
         // Test error on invalid JSON
-        assert!(GeoArrowMetadata::from_json("invalid").is_err());
+        assert!(SparkGeoMetadata::from_json("invalid").is_err());
 
         // Test error on unsupported CRS (Spark 4.1 only supports OGC:CRS84, EPSG:3857, SRID:0)
-        assert!(GeoArrowMetadata::from_json(r#"{"crs":"EPSG:32632"}"#).is_err());
-        assert!(GeoArrowMetadata::from_json(r#"{"crs":"EPSG:4326"}"#).is_err());
-        assert!(GeoArrowMetadata::from_json(r#"{"crs":"UNKNOWN:FOO"}"#).is_err());
+        assert!(SparkGeoMetadata::from_json(r#"{"crs":"EPSG:32632"}"#).is_err());
+        assert!(SparkGeoMetadata::from_json(r#"{"crs":"EPSG:4326"}"#).is_err());
+        assert!(SparkGeoMetadata::from_json(r#"{"crs":"UNKNOWN:FOO"}"#).is_err());
 
         // Test error on invalid edges value
-        assert!(GeoArrowMetadata::from_json(r#"{"edges":"planar"}"#).is_err());
-        assert!(GeoArrowMetadata::from_json(r#"{"edges":"invalid"}"#).is_err());
+        assert!(SparkGeoMetadata::from_json(r#"{"edges":"planar"}"#).is_err());
+        assert!(SparkGeoMetadata::from_json(r#"{"edges":"invalid"}"#).is_err());
 
         // Test error on PROJJSON without id member
-        assert!(GeoArrowMetadata::from_json(r#"{"crs":{"type":"GeographicCRS"}}"#).is_err());
+        assert!(SparkGeoMetadata::from_json(r#"{"crs":{"type":"GeographicCRS"}}"#).is_err());
 
         // Test error on PROJJSON with unsupported authority:code
-        assert!(GeoArrowMetadata::from_json(
+        assert!(SparkGeoMetadata::from_json(
             r#"{"crs":{"type":"GeographicCRS","id":{"authority":"EPSG","code":32632}}}"#
         )
         .is_err());
@@ -460,7 +455,7 @@ mod tests {
         // Time32 Second -> TIME(0)
         let arrow_type = adt::DataType::Time32(adt::TimeUnit::Second);
         assert_eq!(
-            crate::spark::connect::DataType::try_from(arrow_type)?,
+            DataType::try_from(arrow_type)?,
             DataType {
                 kind: Some(Kind::Time(Time {
                     precision: Some(0),
@@ -472,7 +467,7 @@ mod tests {
         // Time32 Millisecond -> TIME(3)
         let arrow_type = adt::DataType::Time32(adt::TimeUnit::Millisecond);
         assert_eq!(
-            crate::spark::connect::DataType::try_from(arrow_type)?,
+            DataType::try_from(arrow_type)?,
             DataType {
                 kind: Some(Kind::Time(Time {
                     precision: Some(3),
@@ -484,7 +479,7 @@ mod tests {
         // Time64 Microsecond -> TIME(6)
         let arrow_type = adt::DataType::Time64(adt::TimeUnit::Microsecond);
         assert_eq!(
-            crate::spark::connect::DataType::try_from(arrow_type)?,
+            DataType::try_from(arrow_type)?,
             DataType {
                 kind: Some(Kind::Time(Time {
                     precision: Some(6),

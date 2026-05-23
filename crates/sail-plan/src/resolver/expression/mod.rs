@@ -405,6 +405,7 @@ mod tests {
     use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
     use sail_catalog::provider::CatalogProvider;
     use sail_catalog_memory::MemoryCatalogProvider;
+    use sail_common::geoarrow::extension::GeoArrowWkbType;
     use sail_common::spec;
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::session::plan::PlanService;
@@ -599,7 +600,7 @@ mod tests {
         assert_metadata_value(
             &metadata_map,
             arrow_schema::extension::EXTENSION_TYPE_NAME_KEY,
-            spec::GeoArrowWkbType::NAME,
+            GeoArrowWkbType::NAME,
         );
         assert_metadata_value(
             &metadata_map,
@@ -643,7 +644,7 @@ mod tests {
         assert_metadata_value(
             &metadata_map,
             arrow_schema::extension::EXTENSION_TYPE_NAME_KEY,
-            spec::GeoArrowWkbType::NAME,
+            GeoArrowWkbType::NAME,
         );
         assert_metadata_value(
             &metadata_map,
