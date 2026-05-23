@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/main/src/variant_get.rs>
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
+use chumsky::prelude::*;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion_common::{arrow_datafusion_err, exec_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -36,16 +37,6 @@ fn type_hint_from_scalar(field_name: &str, scalar: &ScalarValue) -> Result<Field
 
     let dt = spark_type_to_arrow(type_name)?;
     Ok(Arc::new(Field::new(field_name, dt, true)))
-}
-
-/// Strips Spark's JSON-path prefix from a path string.
-/// - `$.field` → `field`
-/// - `$[0]` → `[0]`
-/// - `$` → `` (empty, root access)
-fn strip_spark_path_prefix(path: &str) -> &str {
-    path.strip_prefix("$.")
-        .or_else(|| path.strip_prefix("$"))
-        .unwrap_or(path)
 }
 
 fn build_get_options<'a>(path: VariantPath<'a>, as_type: &Option<FieldRef>) -> GetOptions<'a> {
@@ -128,17 +119,11 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
 
     // Parse the Spark path: strip leading "$." or "$"
     // Validate: "$." alone is invalid (trailing dot with no field name)
-    if path_str == "$." {
-        return Err(generic_exec_err(
-            name,
-            "path '$.' is not a valid variant extraction path",
-        ));
-    }
-    let clean_path = strip_spark_path_prefix(&path_str);
+    let clean_path = spark_path_to_variant_path(&path_str, name)?;
     let variant_path = if clean_path.is_empty() {
         VariantPath::default()
     } else {
-        VariantPath::try_from(clean_path)?
+        VariantPath::try_from(clean_path.as_str())?
     };
 
     // Resolve the target type.
@@ -189,7 +174,7 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
                     if clean_path.is_empty() {
                         VariantPath::default()
                     } else {
-                        VariantPath::try_from(clean_path).map_err(|e| arrow_datafusion_err!(e))?
+                        VariantPath::try_from(clean_path.as_str())?
                     },
                     &bool_field,
                 );
@@ -424,6 +409,83 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SparkVariantPathSegment {
+    Field(String),
+    Index(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SparkVariantPath {
+    segments: Vec<SparkVariantPathSegment>,
+}
+
+impl SparkVariantPath {
+    fn to_variant_path(&self) -> String {
+        let mut out = String::new();
+
+        for segment in &self.segments {
+            match segment {
+                SparkVariantPathSegment::Field(name) => {
+                    if !out.is_empty() && !out.ends_with(']') {
+                        out.push('.');
+                    }
+                    out.push_str(name);
+                }
+                SparkVariantPathSegment::Index(index) => {
+                    out.push('[');
+                    out.push_str(&index.to_string());
+                    out.push(']');
+                }
+            }
+        }
+
+        out
+    }
+}
+
+fn spark_variant_path_parser<'src>(
+) -> impl Parser<'src, &'src str, SparkVariantPath, extra::Err<Rich<'src, char>>> {
+    let field_name = text::ident().map(|s: &str| s.to_string());
+
+    let field = just('.')
+        .ignore_then(field_name)
+        .map(SparkVariantPathSegment::Field);
+
+    let index = just('[')
+        .ignore_then(text::int(10).try_map(|s: &str, span| {
+            s.parse::<usize>()
+                .map_err(|e| Rich::custom(span, format!("invalid array index: {e}")))
+        }))
+        .then_ignore(just(']'))
+        .map(SparkVariantPathSegment::Index);
+
+    just('$')
+        .ignore_then(choice((field, index)).repeated().collect::<Vec<_>>())
+        .then_ignore(end())
+        .map(|segments| SparkVariantPath { segments })
+}
+
+fn spark_path_to_variant_path(path: &str, name: &str) -> Result<String> {
+    let parsed = spark_variant_path_parser()
+        .parse(path)
+        .into_result()
+        .map_err(|errors| {
+            let details = errors
+                .into_iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            generic_exec_err(
+                name,
+                &format!("invalid variant extraction path '{path}': {details}"),
+            )
+        })?;
+
+    Ok(parsed.to_variant_path())
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::array::{ArrayRef, BinaryArray, Int64Array, StructArray};
@@ -624,6 +686,81 @@ mod tests {
             spark_type_to_arrow("decimal(10,2)")?,
             DataType::Decimal128(10, 2)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_get_accepts_spark_array_under_field_path() -> Result<()> {
+        let variant = variant_scalar_from_json(serde_json::json!({"a": [42]}))?;
+        let args = build_args(ColumnarValue::Scalar(variant), "$.a[0]", Some("int"));
+
+        let udf = SparkVariantGet::new(false);
+        let result = udf.invoke_with_args(args)?;
+
+        let ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) = result else {
+            return exec_err!("expected Int32 scalar, got {result:?}");
+        };
+        assert_eq!(v, 42);
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_get_rejects_field_without_dot_after_root() -> Result<()> {
+        let variant = variant_scalar_from_json(serde_json::json!({"a": [42]}))?;
+        let args = build_args(ColumnarValue::Scalar(variant), "$a[0]", Some("int"));
+
+        let udf = SparkVariantGet::new(false);
+        let err = match udf.invoke_with_args(args) {
+            Ok(result) => return exec_err!("expected error for invalid path, got {result:?}"),
+            Err(err) => err,
+        };
+
+        let err = err.to_string();
+        assert!(
+            err.contains("invalid variant extraction path '$a[0]'"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_get_accepts_root_array_path() -> Result<()> {
+        let variant = variant_scalar_from_json(serde_json::json!([42]))?;
+        let args = build_args(ColumnarValue::Scalar(variant), "$[0]", Some("int"));
+
+        let udf = SparkVariantGet::new(false);
+        let result = udf.invoke_with_args(args)?;
+
+        let ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) = result else {
+            return exec_err!("expected Int32 scalar, got {result:?}");
+        };
+        assert_eq!(v, 42);
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_variant_path_parser_accepts_valid_paths() -> Result<()> {
+        assert_eq!(spark_path_to_variant_path("$", "variant_get")?, "");
+        assert_eq!(spark_path_to_variant_path("$.a", "variant_get")?, "a");
+        assert_eq!(spark_path_to_variant_path("$.a[0]", "variant_get")?, "a[0]");
+        assert_eq!(spark_path_to_variant_path("$[0]", "variant_get")?, "[0]");
+        assert_eq!(
+            spark_path_to_variant_path("$.a.b.c", "variant_get")?,
+            "a.b.c"
+        );
+        assert_eq!(
+            spark_path_to_variant_path("$.a[0].b", "variant_get")?,
+            "a[0]b"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_variant_path_parser_rejects_invalid_paths() -> Result<()> {
+        assert!(spark_path_to_variant_path("$a[0]", "variant_get").is_err());
+        assert!(spark_path_to_variant_path("$.", "variant_get").is_err());
+        assert!(spark_path_to_variant_path("a[0]", "variant_get").is_err());
+        assert!(spark_path_to_variant_path("$.a[]", "variant_get").is_err());
         Ok(())
     }
 }
