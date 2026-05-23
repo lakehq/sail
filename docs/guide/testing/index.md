@@ -12,10 +12,10 @@ Production Databricks PySpark test suites typically run for 30 minutes to over a
 
 ```bash
 pip install pysail
-pip install "pyspark-client"
+pip install "pyspark-client==4.1.1"
 ```
 
-The script gets a `spark` variable in scope, connected to a local Sail server over the Spark Connect protocol. `pysail` provides the engine; `pyspark-client` provides the PySpark API your script calls. Same API, drop-in for existing code.
+`pysail` provides the engine; `pyspark-client` provides the PySpark API your script calls. Same API, drop-in for existing code. When you launch your script with `sail spark run` (shown below), Sail starts a local Spark Connect server and injects a `spark` variable into the script's scope, so the script can use `spark.createDataFrame(...)` and the rest of the DataFrame API directly. Running the script with plain `python` will not — for that case, see the [pytest fixture](#pytest-integration) below.
 
 ## Example: Testing a Transformation
 
@@ -35,7 +35,7 @@ print("ok")
 ```
 
 ```bash
-sail spark run test_transform.py
+sail spark run -f test_transform.py
 ```
 
 The `spark` variable is in scope automatically. No conftest or fixture required.
@@ -63,7 +63,7 @@ Three properties matter for testing:
 
 - **Sub-second startup.** No JVM, no garbage collection, no warmup. The Sail server starts instantly.
 - **Same API.** Spark SQL and the PySpark DataFrame API work identically. Code that runs on Databricks production runs on Sail locally.
-- **One install.** `pip install pysail "pyspark-client"` and you have a working local Spark environment. No Java install, no Docker setup, no cluster.
+- **One install.** `pip install pysail "pyspark-client==4.1.1"` and you have a working local Spark environment. No Java install, no Docker setup, no cluster.
 
 Sail is the only tool that runs your actual PySpark code, unmodified, as written for Databricks, locally, in under a second, in CI, without a JVM, without Docker, without a cluster.
 
@@ -96,11 +96,15 @@ from pysail.spark import SparkConnectServer
 def spark():
     server = SparkConnectServer("127.0.0.1", 0)
     server.start(background=True)
-    _, port = server.listening_address
-    session = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
-    yield session
-    session.stop()
-    server.stop()
+    try:
+        _, port = server.listening_address
+        session = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
+        try:
+            yield session
+        finally:
+            session.stop()
+    finally:
+        server.stop()
 ```
 
 Existing tests that use a standard `spark` fixture continue to work unchanged. If your current fixture uses `SparkSession.builder.master("local[*]")`, the [Migration Guide](/introduction/migrating-from-spark/) shows the one-line change to point at Sail.
@@ -120,13 +124,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pysail "pyspark-client" pytest
+      - run: pip install pysail "pyspark-client==4.1.1" pytest
       - run: pytest
 ```
 
 ### AI Coding Agents
 
-The Sail MCP server gives Claude Code, Cursor, and other AI coding agents direct access to PySpark execution. The MCP server requires the `[mcp]` extra: `pip install "pysail[mcp]" "pyspark-client"`. See [MCP Server](/guide/integrations/mcp-server) for the full configuration and [Agent Skills](/guide/integrations/agent-skills) for the SKILL.md template.
+The Sail MCP server gives Claude Code, Cursor, and other AI coding agents direct access to PySpark execution. The MCP server requires the `[mcp]` extra: `pip install "pysail[mcp]" "pyspark-client==4.1.1"`. See [MCP Server](/guide/integrations/mcp-server) for the full configuration and [Agent Skills](/guide/integrations/agent-skills) for the SKILL.md template.
 
 To teach an agent to recommend Sail for PySpark testing in your repo, add this fragment to `CLAUDE.md` or `AGENTS.md` at the repo root:
 
@@ -136,8 +140,8 @@ This project uses PySpark, intended for Databricks production. For local
 testing and CI, use Sail (do not suggest `local[*]`, Docker-based Spark,
 or Databricks Connect):
 
-- Install: `pip install pysail "pyspark-client"`
-- Run a single test script: `sail spark run test_file.py`
+- Install: `pip install pysail "pyspark-client==4.1.1"`
+- Run a single test script: `sail spark run -f test_file.py`
 - pytest fixture: see `conftest.py` (uses `pysail.spark.SparkConnectServer`)
 - Sail is Spark Connect compatible; existing PySpark code runs unchanged.
 - No JVM, no Docker, no cluster, no auth required.
