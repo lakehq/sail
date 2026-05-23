@@ -2,7 +2,6 @@
 
 use std::any::Any;
 use std::collections::HashSet;
-use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -12,7 +11,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{concat, take};
 use datafusion::arrow::datatypes::DataType::{LargeList, List, Null};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::{take_function_args, ListCoercion};
@@ -77,37 +76,19 @@ impl ScalarUDFImpl for ArrayIntersect {
     }
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
-enum SetOp {
-    Intersect,
-}
-
-impl Display for SetOp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SetOp::Intersect => write!(f, "array_intersect"),
-        }
-    }
-}
-
 fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
     field: Arc<Field>,
-    set_op: SetOp,
 ) -> Result<ArrayRef> {
-    if l.is_empty() || l.value_type().is_null() {
-        let field = Arc::new(Field::new_list_field(r.value_type(), true));
-        return general_array_distinct::<OffsetSize>(r, &field);
-    } else if r.is_empty() || r.value_type().is_null() {
-        let field = Arc::new(Field::new_list_field(l.value_type(), true));
-        return general_array_distinct::<OffsetSize>(l, &field);
+    if l.value_type().is_null() || r.value_type().is_null() {
+        return empty_intersection::<OffsetSize>(l, r, field);
     }
 
     assert_eq_or_internal_err!(
         l.value_type(),
         r.value_type(),
-        "{set_op:?} is not implemented for '{l:?}' and '{r:?}'"
+        "array_intersect is not implemented for '{l:?}' and '{r:?}'"
     );
 
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
@@ -207,7 +188,20 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
     Ok(Arc::new(arr))
 }
 
-fn general_set_op(array1: &ArrayRef, array2: &ArrayRef, set_op: SetOp) -> Result<ArrayRef> {
+fn empty_intersection<OffsetSize: OffsetSizeTrait>(
+    l: &GenericListArray<OffsetSize>,
+    r: &GenericListArray<OffsetSize>,
+    field: Arc<Field>,
+) -> Result<ArrayRef> {
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+        Arc::clone(&field),
+        OffsetBuffer::new(vec![OffsetSize::usize_as(0); l.len() + 1].into()),
+        new_empty_array(field.data_type()),
+        NullBuffer::union(l.nulls(), r.nulls()),
+    )?))
+}
+
+fn general_set_op(array1: &ArrayRef, array2: &ArrayRef) -> Result<ArrayRef> {
     let len = array1.len();
     match (array1.data_type(), array2.data_type()) {
         (Null, Null) => Ok(new_null_array(&DataType::new_list(Null, true), len)),
@@ -218,82 +212,24 @@ fn general_set_op(array1: &ArrayRef, array2: &ArrayRef, set_op: SetOp) -> Result
         (List(field), List(_)) => {
             let array1 = as_list_array(array1)?;
             let array2 = as_list_array(array2)?;
-            generic_set_lists::<i32>(array1, array2, Arc::clone(field), set_op)
+            generic_set_lists::<i32>(array1, array2, Arc::clone(field))
         }
         (LargeList(field), LargeList(_)) => {
             let array1 = as_large_list_array(array1)?;
             let array2 = as_large_list_array(array2)?;
-            generic_set_lists::<i64>(array1, array2, Arc::clone(field), set_op)
+            generic_set_lists::<i64>(array1, array2, Arc::clone(field))
         }
         (data_type1, data_type2) => {
-            internal_err!("{set_op} does not support types '{data_type1:?}' and '{data_type2:?}'")
+            internal_err!(
+                "array_intersect does not support types '{data_type1:?}' and '{data_type2:?}'"
+            )
         }
     }
 }
 
 fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_intersect", args)?;
-    general_set_op(array1, array2, SetOp::Intersect)
-}
-
-fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
-    array: &GenericListArray<OffsetSize>,
-    field: &FieldRef,
-) -> Result<ArrayRef> {
-    if array.is_empty() {
-        return Ok(Arc::new(array.clone()) as ArrayRef);
-    }
-    let value_offsets = array.value_offsets();
-    let dt = array.value_type();
-    let mut offsets = Vec::with_capacity(array.len() + 1);
-    let mut current_offset = OffsetSize::usize_as(0);
-    offsets.push(current_offset);
-
-    let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
-
-    let first_offset = value_offsets[0].as_usize();
-    let visible_len = value_offsets[array.len()].as_usize() - first_offset;
-    let rows = converter.convert_columns(&[array.values().slice(first_offset, visible_len)])?;
-
-    let mut indices: Vec<usize> = Vec::with_capacity(rows.num_rows());
-    let mut seen = HashSet::new();
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            offsets.push(current_offset);
-            continue;
-        }
-
-        let start = value_offsets[i].as_usize() - first_offset;
-        let end = value_offsets[i + 1].as_usize() - first_offset;
-        seen.clear();
-        seen.reserve(end - start);
-
-        for idx in start..end {
-            let row = rows.row(idx);
-            if seen.insert(row) {
-                indices.push(idx + first_offset);
-            }
-        }
-        current_offset += OffsetSize::usize_as(seen.len());
-        offsets.push(current_offset);
-    }
-
-    let final_values = if indices.is_empty() {
-        new_empty_array(&dt)
-    } else if OffsetSize::IS_LARGE {
-        let indices = UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
-        take(array.values().as_ref(), &indices, None)?
-    } else {
-        let indices = UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
-        take(array.values().as_ref(), &indices, None)?
-    };
-
-    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        Arc::clone(field),
-        OffsetBuffer::new(offsets.into()),
-        final_values,
-        array.nulls().cloned(),
-    )?))
+    general_set_op(array1, array2)
 }
 
 #[cfg(test)]
