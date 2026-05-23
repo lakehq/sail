@@ -10,6 +10,7 @@ use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
@@ -26,6 +27,10 @@ fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
 
 fn array_compact(array: expr::Expr) -> expr::Expr {
     ScalarUDF::from(SparkArrayCompact::new()).call(vec![array])
+}
+
+fn array_intersect(left: expr::Expr, right: expr::Expr) -> expr::Expr {
+    ScalarUDF::from(ArrayIntersect::new()).call(vec![left, right])
 }
 
 fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -285,7 +290,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::ternary(array_insert)),
-        ("array_intersect", F::binary(expr_fn::array_intersect)),
+        ("array_intersect", F::binary(array_intersect)),
         ("array_join", F::udf(ArrayToString::new())),
         ("array_max", F::udf(ArrayMax::new())),
         ("array_min", F::udf(ArrayMin::new())),
