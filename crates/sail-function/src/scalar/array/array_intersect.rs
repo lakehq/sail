@@ -16,7 +16,7 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::{take_function_args, ListCoercion};
-use datafusion_common::{assert_eq_or_internal_err, exec_err, internal_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, internal_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -125,15 +125,7 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     let combined_values = concat(&[l_values.as_ref(), r_values.as_ref()])?;
     let r_offset = l_len;
 
-    generic_set_loop::<OffsetSize>(
-        l,
-        r,
-        &rows_l,
-        &rows_r,
-        field,
-        &combined_values,
-        r_offset,
-    )
+    generic_set_loop::<OffsetSize>(l, r, &rows_l, &rows_r, field, &combined_values, r_offset)
 }
 
 fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
@@ -396,7 +388,13 @@ mod tests {
                 config_options: Arc::new(ConfigOptions::default()),
             })?;
 
-            assert_eq!(result.data_type(), udf.return_type(&[input_field.data_type().clone(), input_field.data_type().clone()])?);
+            assert_eq!(
+                result.data_type(),
+                udf.return_type(&[
+                    input_field.data_type().clone(),
+                    input_field.data_type().clone()
+                ])?
+            );
         }
         Ok(())
     }
