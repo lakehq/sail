@@ -76,6 +76,42 @@ Feature: struct function
         | result       |
         | {1, {2, 3}}  |
 
+  Rule: Struct casts
+
+    Scenario: struct cast maps fields by position when names do not overlap
+      When query
+        """
+        SELECT CAST(named_struct('a', 1, 'b', '2') AS STRUCT<x: BIGINT, y: INT>) AS result
+        """
+      Then query result
+        | result |
+        | {1, 2} |
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = false)
+         |    |-- x: long (nullable = true)
+         |    |-- y: integer (nullable = true)
+        """
+
+    Scenario: struct cast remains positional when one target name overlaps
+      When query
+        """
+        SELECT CAST(named_struct('x', 1, 'b', 2) AS STRUCT<a: STRING, b: STRING>) AS result
+        """
+      Then query result
+        | result |
+        | {1, 2} |
+
+    Scenario: struct cast preserves a NULL top-level struct
+      When query
+        """
+        SELECT CAST(CAST(NULL AS STRUCT<a: INT, b: INT>) AS STRUCT<x: BIGINT, y: BIGINT>) IS NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
   Rule: named_struct
 
     Scenario: named_struct basic

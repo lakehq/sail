@@ -198,3 +198,35 @@ Feature: percentile() aggregate function computes percentiles
       Then query result
       | percentiles                |
       | [0.0, 2.5, 5.0, 7.5, 10.0] |
+
+  Rule: Ordered-set percentile functions
+
+    Scenario: percentile_cont with WITHIN GROUP
+      When query
+      """
+      SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY x) AS p
+      FROM (VALUES (0), (10)) AS t(x)
+      """
+      Then query result
+      | p   |
+      | 2.5 |
+
+    Scenario: percentile_disc with WITHIN GROUP
+      When query
+      """
+      SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY x) AS p
+      FROM (VALUES (0), (10)) AS t(x)
+      """
+      Then query result
+      | p |
+      | 0.0 |
+
+    Scenario: percentile_disc with descending WITHIN GROUP
+      When query
+      """
+      SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY x DESC) AS p
+      FROM (VALUES (0), (10)) AS t(x)
+      """
+      Then query result
+      | p  |
+      | 10.0 |

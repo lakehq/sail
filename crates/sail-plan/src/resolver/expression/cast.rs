@@ -1,9 +1,10 @@
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Fields, IntervalUnit, TimeUnit};
+use datafusion::functions::core::get_field;
 use datafusion_common::{DFSchemaRef, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -15,6 +16,7 @@ use sail_function::scalar::datetime::spark_interval::{
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
@@ -160,11 +162,92 @@ impl PlanResolver<'_> {
                 }
                 lit(ScalarValue::try_from(&to)?)
             }
+            (DataType::Struct(from_fields), DataType::Struct(to_fields), _) => {
+                spark_struct_cast_by_position(expr, schema, from_fields, to_fields, is_try)?
+            }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
         Ok(NamedExpr::new(name, expr))
     }
+}
+
+fn spark_struct_cast_by_position(
+    expr: expr::Expr,
+    schema: &DFSchemaRef,
+    from_fields: Fields,
+    to_fields: Fields,
+    is_try: bool,
+) -> PlanResult<expr::Expr> {
+    if from_fields.len() != to_fields.len() {
+        return Err(PlanError::invalid(format!(
+            "cannot cast struct with {} fields to struct with {} fields",
+            from_fields.len(),
+            to_fields.len()
+        )));
+    }
+
+    let field_exprs = from_fields
+        .iter()
+        .zip(to_fields.iter())
+        .map(|(from_field, to_field)| {
+            let field_expr = expr::Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+                get_field(),
+                vec![expr.clone(), lit(from_field.name().to_string())],
+            ));
+            spark_struct_field_cast(
+                field_expr,
+                from_field.data_type().clone(),
+                to_field.data_type().clone(),
+                schema,
+                is_try,
+            )
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+
+    let field_names = to_fields
+        .iter()
+        .map(|field| field.name().to_string())
+        .collect();
+    let struct_expr = ScalarUDF::from(StructFunction::new(field_names)).call(field_exprs);
+
+    if spark_struct_expr_nullable(&expr, schema)? {
+        Ok(when(
+            expr.clone().is_null(),
+            lit(ScalarValue::try_from(&DataType::Struct(to_fields))?),
+        )
+        .when(lit(true), struct_expr)
+        .end()?)
+    } else {
+        Ok(struct_expr)
+    }
+}
+
+fn spark_struct_expr_nullable(expr: &expr::Expr, schema: &DFSchemaRef) -> PlanResult<bool> {
+    match expr {
+        expr::Expr::ScalarFunction(expr::ScalarFunction { func, .. })
+            if func.name() == "named_struct" || func.inner().as_any().is::<StructFunction>() =>
+        {
+            Ok(false)
+        }
+        _ => Ok(expr.nullable(schema)?),
+    }
+}
+
+fn spark_struct_field_cast(
+    expr: expr::Expr,
+    from_type: DataType,
+    to_type: DataType,
+    schema: &DFSchemaRef,
+    is_try: bool,
+) -> PlanResult<expr::Expr> {
+    Ok(match (from_type, to_type) {
+        (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
+            spark_struct_cast_by_position(expr, schema, from_fields, to_fields, is_try)?
+        }
+        (_, to_type) if is_try => try_cast(expr, to_type),
+        (_, to_type) => cast(expr, to_type),
+    })
 }
 
 fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {

@@ -3,8 +3,8 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, ArrowNumericType, AsArray, BooleanArray, ListArray, PrimitiveArray,
-    PrimitiveBuilder,
+    Array, ArrayRef, ArrowNumericType, AsArray, BooleanArray, Float64Builder, ListArray,
+    PrimitiveArray,
 };
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{DataType, Field};
@@ -12,7 +12,10 @@ use datafusion::common::{DataFusionError, HashSet, Result, ScalarValue};
 use datafusion::logical_expr::{Accumulator, EmitTo, GroupsAccumulator};
 use datafusion::physical_expr::aggregate::utils::Hashable;
 
-use crate::aggregate::utils::{calculate_percentile_disc, cast_to_type, filtered_null_mask};
+use crate::aggregate::utils::{
+    calculate_percentile_disc, cast_percentile_disc_value_to_float64, cast_to_type,
+    filtered_null_mask,
+};
 
 #[derive(Debug)]
 pub struct PercentileDiscGroupsAccumulator<T: ArrowNumericType + Send> {
@@ -195,11 +198,13 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let emit_group_values = emit_to.take_needed(&mut self.group_values);
 
-        let mut evaluate_result_builder =
-            PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
+        let mut evaluate_result_builder = Float64Builder::new();
         for values in emit_group_values {
             let value = calculate_percentile_disc::<T>(values, self.percentile);
-            evaluate_result_builder.append_option(value);
+            evaluate_result_builder.append_option(cast_percentile_disc_value_to_float64::<T>(
+                value,
+                &self.data_type,
+            )?);
         }
 
         Ok(Arc::new(evaluate_result_builder.finish()))
@@ -313,7 +318,9 @@ impl<T: ArrowNumericType> Accumulator for DistinctPercentileDiscAccumulator<T> {
             .map(|v| v.0)
             .collect::<Vec<_>>();
         let value = calculate_percentile_disc::<T>(d, self.percentile);
-        ScalarValue::new_primitive::<T>(value, &self.data_type)
+        Ok(ScalarValue::Float64(
+            cast_percentile_disc_value_to_float64::<T>(value, &self.data_type)?,
+        ))
     }
 
     fn size(&self) -> usize {

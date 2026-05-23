@@ -144,6 +144,8 @@ impl PlanResolver<'_> {
             };
             func(input)?
         } else if let Ok(func) = get_built_in_aggregate_function(&canonical_function_name) {
+            let ignore_nulls =
+                normalize_aggregate_null_treatment(&canonical_function_name, ignore_nulls)?;
             let filter = match filter {
                 Some(x) => Some(Box::new(self.resolve_expression(*x, schema, state).await?)),
                 None => None,
@@ -427,4 +429,36 @@ fn extract_metadata_from_udf(
     } else {
         Ok(vec![])
     }
+}
+
+fn normalize_aggregate_null_treatment(
+    function_name: &str,
+    ignore_nulls: Option<bool>,
+) -> PlanResult<Option<bool>> {
+    if aggregate_supports_null_treatment(function_name) {
+        return Ok(ignore_nulls);
+    }
+
+    match ignore_nulls {
+        Some(true) => Err(PlanError::invalid(format!(
+            "function `{function_name}` does not support IGNORE NULLS"
+        ))),
+        // Spark treats RESPECT NULLS as the default for aggregates that do not
+        // have explicit null-handling syntax.
+        Some(false) | None => Ok(None),
+    }
+}
+
+fn aggregate_supports_null_treatment(function_name: &str) -> bool {
+    matches!(
+        function_name,
+        "any_value"
+            | "array_agg"
+            | "collect_list"
+            | "collect_set"
+            | "first"
+            | "first_value"
+            | "last"
+            | "last_value"
+    )
 }

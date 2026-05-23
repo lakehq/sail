@@ -61,6 +61,19 @@ pub fn validate_percentile(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     Ok(percentile)
 }
 
+pub fn cast_percentile_disc_value_to_float64<T: ArrowNumericType>(
+    value: Option<T::Native>,
+    data_type: &DataType,
+) -> Result<Option<f64>> {
+    match ScalarValue::new_primitive::<T>(value, data_type)?.cast_to(&DataType::Float64)? {
+        ScalarValue::Float64(value) => Ok(value),
+        value => Err(DataFusionError::Internal(format!(
+            "expected percentile_disc value cast to Float64, got {}",
+            value.data_type()
+        ))),
+    }
+}
+
 pub fn filtered_null_mask(
     opt_filter: Option<&BooleanArray>,
     input: &dyn Array,

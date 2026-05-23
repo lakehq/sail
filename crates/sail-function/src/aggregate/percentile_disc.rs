@@ -22,7 +22,10 @@ use datafusion::logical_expr::{
 use crate::aggregate::percentile_disc_groups::{
     DistinctPercentileDiscAccumulator, PercentileDiscGroupsAccumulator,
 };
-use crate::aggregate::utils::{calculate_percentile_disc, cast_to_type, validate_percentile};
+use crate::aggregate::utils::{
+    calculate_percentile_disc, cast_percentile_disc_value_to_float64, cast_to_type,
+    validate_percentile,
+};
 
 macro_rules! dispatch_numeric_type {
     ($input_dt:expr, $helper:ident, $err_msg:expr) => {
@@ -101,8 +104,12 @@ impl AggregateUDFImpl for PercentileDisc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn supports_within_group_clause(&self) -> bool {
+        true
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -227,7 +234,9 @@ impl<T: ArrowNumericType> Accumulator for PercentileDiscAccumulator<T> {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let d = std::mem::take(&mut self.all_values);
         let value = calculate_percentile_disc::<T>(d, self.percentile);
-        ScalarValue::new_primitive::<T>(value, &self.data_type)
+        Ok(ScalarValue::Float64(
+            cast_percentile_disc_value_to_float64::<T>(value, &self.data_type)?,
+        ))
     }
 
     fn size(&self) -> usize {
