@@ -872,6 +872,10 @@ pub struct HtmlString {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDefinition {
+    /// Whether the table is explicitly marked as external.
+    /// Note that the table may still be considered external semantically
+    /// when the location or path is specified, even when this field is `false`.
+    pub external: bool,
     pub columns: Vec<TableColumnDefinition>,
     pub comment: Option<String>,
     pub constraints: Vec<TableConstraint>,
@@ -886,6 +890,18 @@ pub struct TableDefinition {
     pub replace: bool,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+}
+
+/// Returns whether a non-empty path or location is specified,
+/// either via the `location` argument or via `"path"` / `"location"` keys in options.
+/// Key comparison is case-insensitive and empty-string values are ignored.
+pub fn has_path_or_location(location: Option<&str>, options: &[(String, String)]) -> bool {
+    let has_location = location.is_some_and(|s| !s.trim().is_empty());
+    let has_path_in_options = options.iter().any(|(k, v)| {
+        !v.trim().is_empty()
+            && (k.eq_ignore_ascii_case("path") || k.eq_ignore_ascii_case("location"))
+    });
+    has_location || has_path_in_options
 }
 
 /// A column reference or typed column definition used in a `PARTITIONED BY` clause.

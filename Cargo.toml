@@ -5,7 +5,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.6.2"
+version = "0.6.3"
 authors = ["LakeSail <hello@lakesail.com>"]
 edition = "2021"
 homepage = "https://lakesail.com"
@@ -70,7 +70,7 @@ url = "2.5.8"
 lexical-core = { version = "1.0.6", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 aws-config = "1.8.15"
 aws-credential-types = "1.2.14"
-aws-sdk-glue = { version = "1.145.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-glue = { version = "1.145.1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-runtime-api = "1.12.0"
 aws-smithy-types = "1.4.7"
 aws-smithy-async = "1.2.14"
@@ -107,7 +107,7 @@ hf-hub = { version = "0.5.0", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 percent-encoding = "2.3.2"
 rustls = "0.23.40"
-dashmap = "6.1.0"
+dashmap = "6.2.1"
 itertools = "0.14.0"
 moka = { version = "0.12.15", features = ["sync", "future"] }
 bytes = "1.11.1"

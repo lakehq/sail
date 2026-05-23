@@ -97,6 +97,7 @@ pub enum Statement {
     },
     ReplaceTable {
         replace: Replace,
+        external: Option<External>,
         table: Table,
         name: ObjectName,
         #[parser(function = |(_, _, e, d), o| compose((e, d), o))]
