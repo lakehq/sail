@@ -143,7 +143,9 @@ mod tests {
 
     #[test]
     fn test_expand_tilde() {
-        let home = std::env::var("HOME").unwrap();
+        let home = std::env::var("HOME");
+        assert!(home.is_ok(), "HOME should be set for path tests");
+        let home = home.unwrap_or_default();
         assert_eq!(expand_tilde("~/foo"), format!("{home}/foo"));
         assert_eq!(expand_tilde("~"), home);
         assert_eq!(expand_tilde("/bar"), "/bar");
@@ -158,10 +160,12 @@ mod tests {
 
     #[test]
     fn test_qualify_warehouse_directory() {
-        let cwd = std::env::current_dir()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
+        let cwd = std::env::current_dir();
+        assert!(
+            cwd.is_ok(),
+            "current_dir should be available for path tests"
+        );
+        let cwd = cwd.unwrap_or_default().to_string_lossy().to_string();
         assert_eq!(
             qualify_warehouse_directory("wh"),
             normalize_path(&format!("{cwd}/wh"))
@@ -274,7 +278,7 @@ mod tests {
 
         for wh in wh_options {
             for db in db_options {
-                let qualified_db = qualify_database_location(db, "my_db", wh);
+                let _qualified_db = qualify_database_location(db, "my_db", wh);
                 for tbl in tbl_options {
                     let qualified_tbl = qualify_table_location(tbl, db, wh);
 

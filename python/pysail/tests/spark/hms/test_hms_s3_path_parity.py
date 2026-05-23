@@ -1,11 +1,10 @@
-# ruff: noqa: S608
 """S3 (MinIO) path qualification parity tests between Sail and reference Spark."""
 
 from __future__ import annotations
 
+# ruff: noqa: SLF001
 import contextlib
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -27,6 +26,7 @@ pytestmark = pytest.mark.catalog_integration
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+    from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -139,9 +139,9 @@ def _create_table(spark: SparkSession, table_fqn: str, location: str | None) -> 
 
 
 def _assert_s3_location_prefix(location: str, expected_prefix: str) -> None:
-    assert location.startswith(
-        f"s3://{_HMS_S3_BUCKET}/{expected_prefix}"
-    ), f"expected s3://{_HMS_S3_BUCKET}/{expected_prefix} prefix, got: {location}"
+    assert location.startswith(f"s3://{_HMS_S3_BUCKET}/{expected_prefix}"), (
+        f"expected s3://{_HMS_S3_BUCKET}/{expected_prefix} prefix, got: {location}"
+    )
 
 
 def _reference_s3_options(endpoint: str) -> dict[str, str]:
@@ -153,6 +153,7 @@ def _reference_s3_options(endpoint: str) -> dict[str, str]:
 
 
 def _reset_classic_spark_state() -> None:
+    # PySpark does not expose a public helper for fully resetting classic-session globals.
     active_context = SparkContext._active_spark_context
     if active_context is not None:
         active_context.stop()
@@ -266,14 +267,14 @@ def _run_s3_path_case(
 def _canonicalize_s3_path(location: str, database: str, table: str | None = None) -> str:
     prefix = f"s3://{_HMS_S3_BUCKET}/"
     assert location.startswith(prefix), f"expected s3:// prefix, got: {location}"
-    path = location[len(prefix):]
+    path = location[len(prefix) :]
     path = path.replace(f"{database}.db", "{database}.db")
     path = path.replace(database, "{database}")
     if table is not None:
         path = path.replace(table, "{table}")
     parts = path.split("/")
     anchor = parts.index("s3_parity") if "s3_parity" in parts else 0
-    return "/".join(["{s3_parity_root}", *parts[anchor + 2:]])
+    return "/".join(["{s3_parity_root}", *parts[anchor + 2 :]])
 
 
 def _assert_matching_s3_path_shape(left: dict[str, str], right: dict[str, str]) -> None:

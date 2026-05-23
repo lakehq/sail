@@ -406,7 +406,7 @@ def test_ctas_table_location_matches_database(
         hms_s3_env,
         hms_warehouse_dir,
         warehouse_case,
-    ) as (sail, reference_spark, shared_root):
+    ) as (sail, reference_spark, _shared_root):
         for creator, observer, creator_name in [
             (sail, reference_spark, "sail"),
             (reference_spark, sail, "spark"),
@@ -421,9 +421,7 @@ def test_ctas_table_location_matches_database(
 
                 db_loc = _database_location_path(creator, database)
                 tbl_loc = _table_location_path(creator, table_fqn)
-                assert tbl_loc.is_relative_to(db_loc), (
-                    f"CTAS table {tbl_loc} should be under database {db_loc}"
-                )
+                assert tbl_loc.is_relative_to(db_loc), f"CTAS table {tbl_loc} should be under database {db_loc}"
                 assert tbl_loc.name == table or tbl_loc.parts[-1] == table, (
                     f"CTAS table path should end with {table}, got {tbl_loc}"
                 )
@@ -443,7 +441,7 @@ def test_partitioned_table_location_matches_database(
         hms_s3_env,
         hms_warehouse_dir,
         warehouse_case,
-    ) as (sail, reference_spark, shared_root):
+    ) as (sail, reference_spark, _shared_root):
         for creator, observer, creator_name in [
             (sail, reference_spark, "sail"),
             (reference_spark, sail, "spark"),
@@ -454,16 +452,11 @@ def test_partitioned_table_location_matches_database(
             _drop_database(creator, observer, database=database)
             try:
                 _create_database(creator, database, None)
-                creator.sql(
-                    f"CREATE TABLE {table_fqn} (id INT, note STRING) "
-                    f"USING PARQUET PARTITIONED BY (note)"
-                )
+                creator.sql(f"CREATE TABLE {table_fqn} (id INT, note STRING) USING PARQUET PARTITIONED BY (note)")
 
                 db_loc = _database_location_path(creator, database)
                 tbl_loc = _table_location_path(creator, table_fqn)
-                assert tbl_loc.is_relative_to(db_loc), (
-                    f"Partitioned table {tbl_loc} should be under database {db_loc}"
-                )
+                assert tbl_loc.is_relative_to(db_loc), f"Partitioned table {tbl_loc} should be under database {db_loc}"
 
                 creator.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
                 creator.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")
