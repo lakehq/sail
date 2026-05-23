@@ -10,7 +10,7 @@ use datafusion::arrow::array::{
     UInt32Array, UInt64Array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
-use datafusion::arrow::compute::{concat, take};
+use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
@@ -230,11 +230,8 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     let rows_r = converter.convert_columns(&[r.values().slice(r_first, r_len)])?;
 
     let l_values = l.values().slice(l_first, l_len);
-    let r_values = r.values().slice(r_first, r_len);
-    let combined_values = concat(&[l_values.as_ref(), r_values.as_ref()])?;
-    let r_offset = l_len;
 
-    generic_set_loop::<OffsetSize>(l, r, &rows_l, &rows_r, field, &combined_values, r_offset)
+    generic_set_loop::<OffsetSize>(l, r, &rows_l, &rows_r, field, &l_values)
 }
 
 fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
@@ -243,8 +240,7 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
     rows_l: &arrow::row::Rows,
     rows_r: &arrow::row::Rows,
     field: Arc<Field>,
-    combined_values: &ArrayRef,
-    r_offset: usize,
+    l_values: &ArrayRef,
 ) -> Result<ArrayRef> {
     let l_offsets = l.value_offsets();
     let r_offsets = r.value_offsets();
@@ -278,45 +274,35 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
 
         seen.clear();
 
-        let l_len = l_end - l_start;
-        let r_len = r_end - r_start;
-
-        // Select shorter side for lookup, longer side for probing.
-        // Track the probe side's offset into the combined values array.
-        let (lookup_rows, lookup_range, probe_rows, probe_range, probe_offset) = if l_len < r_len {
-            (rows_l, l_start..l_end, rows_r, r_start..r_end, r_offset)
-        } else {
-            (rows_r, r_start..r_end, rows_l, l_start..l_end, 0)
-        };
+        // Always build the lookup from the right array and probe the left array so
+        // that output order matches the left array (Spark's array_intersect contract).
         lookup_set.clear();
-        lookup_set.reserve(lookup_range.len());
+        lookup_set.reserve(r_end - r_start);
 
-        // Build lookup table
-        for idx in lookup_range {
-            lookup_set.insert(lookup_rows.row(idx));
+        for idx in r_start..r_end {
+            lookup_set.insert(rows_r.row(idx));
         }
 
-        // Probe and emit distinct intersected rows
-        for idx in probe_range {
-            let row = probe_rows.row(idx);
+        for idx in l_start..l_end {
+            let row = rows_l.row(idx);
             if lookup_set.contains(&row) && seen.insert(row) {
-                indices.push(idx + probe_offset);
+                indices.push(idx);
             }
         }
 
         result_offsets.push(last_offset + OffsetSize::usize_as(seen.len()));
     }
 
-    // Gather distinct values by index from the combined values array.
+    // Gather distinct left-side values by index.
     // Use UInt64Array for LargeList to support values arrays exceeding u32::MAX.
     let final_values = if indices.is_empty() {
         new_empty_array(&l.value_type())
     } else if OffsetSize::IS_LARGE {
         let indices = UInt64Array::from(indices.into_iter().map(|i| i as u64).collect::<Vec<_>>());
-        take(combined_values.as_ref(), &indices, None)?
+        take(l_values.as_ref(), &indices, None)?
     } else {
         let indices = UInt32Array::from(indices.into_iter().map(|i| i as u32).collect::<Vec<_>>());
-        take(combined_values.as_ref(), &indices, None)?
+        take(l_values.as_ref(), &indices, None)?
     };
 
     let arr = GenericListArray::<OffsetSize>::try_new(

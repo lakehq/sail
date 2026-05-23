@@ -12,6 +12,30 @@ Feature: array_intersect() returns common array elements without duplicates
         | result |
         | [a, c] |
 
+    Scenario: array_intersect on array columns preserves first-array order
+      When query
+        """
+        SELECT array_intersect(c1, c2) AS result
+        FROM VALUES
+          (array('b', 'a', 'c'), array('c', 'd', 'a', 'f'))
+        AS t(c1, c2)
+        """
+      Then query result
+        | result |
+        | [a, c] |
+
+    Scenario: array_intersect preserves left-array order when left is shorter
+      When query
+        """
+        SELECT array_intersect(c1, c2) AS result
+        FROM VALUES
+          (array(1, 2), array(2, 1, 3))
+        AS t(c1, c2)
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+
     Scenario: array_intersect with no common elements
       When query
         """
@@ -58,6 +82,18 @@ Feature: array_intersect() returns common array elements without duplicates
       Then query result
         | result |
         | [2, 3] |
+
+    Scenario: array_intersect on identical arrays deduplicates in left-array order
+      When query
+        """
+        SELECT array_intersect(c1, c2) AS result
+        FROM VALUES
+          (array('b', 'a', 'c', 'c'), array('b', 'a', 'c', 'c'))
+        AS t(c1, c2)
+        """
+      Then query result
+        | result  |
+        | [b, a, c] |
 
     Scenario: array_intersect across multiple rows
       When query
@@ -116,7 +152,8 @@ Feature: array_intersect() returns common array elements without duplicates
         SELECT id, array_intersect(left_arr, right_arr) AS result
         FROM VALUES
           (1, array(NULL), array(NULL, NULL)),
-          (2, array(NULL), array())
+          (2, array(NULL), array()),
+          (3, array(NULL, NULL), array(NULL))
         AS t(id, left_arr, right_arr)
         ORDER BY id
         """
@@ -124,6 +161,24 @@ Feature: array_intersect() returns common array elements without duplicates
         | id | result |
         | 1  | [NULL] |
         | 2  | []     |
+        | 3  | [NULL] |
+
+    Scenario: array<null> elements do not match typed non-null elements
+      When query
+        """
+        SELECT id, array_intersect(left_arr, right_arr) AS result
+        FROM VALUES
+          (1, array(NULL, NULL), array('d', 'e', 'f')),
+          (2, array(NULL),       CAST(array() AS ARRAY<STRING>)),
+          (3, array(),           CAST(array() AS ARRAY<STRING>))
+        AS t(id, left_arr, right_arr)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result |
+        | 1  | []     |
+        | 2  | []     |
+        | 3  | []     |
 
   Rule: Invalid inputs
 
