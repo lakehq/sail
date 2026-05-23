@@ -327,13 +327,18 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
 
   Rule: Invalid arguments raise an error
 
+    # Error scenarios pin a keyword from the expected validation message
+    # rather than matching `.*`. This keeps the tests asserting that the
+    # FAILURE PATH is the one we intend (out-of-range vs. type mismatch),
+    # not just that "some error" happened.
+
     Scenario: Negative percentile is rejected
       When query
         """
         SELECT percentile_disc(-0.1) WITHIN GROUP (ORDER BY x) AS p
         FROM (VALUES (1), (2), (3)) AS t(x)
         """
-      Then query error .*
+      Then query error .*(out of range|VALUE_OUT_OF_RANGE).*
 
     Scenario: Percentile greater than 1 is rejected
       When query
@@ -341,7 +346,7 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         SELECT percentile_disc(1.1) WITHIN GROUP (ORDER BY x) AS p
         FROM (VALUES (1), (2), (3)) AS t(x)
         """
-      Then query error .*
+      Then query error .*(out of range|VALUE_OUT_OF_RANGE).*
 
     Scenario: Out-of-range value inside percentile array is rejected
       When query
@@ -349,7 +354,7 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         SELECT percentile_disc(array(0.5, 1.5)) WITHIN GROUP (ORDER BY x) AS p
         FROM (VALUES (1), (2), (3)) AS t(x)
         """
-      Then query error .*
+      Then query error .*(out of range|VALUE_OUT_OF_RANGE).*
 
     Scenario: DISTINCT with WITHIN GROUP is rejected
       When query
@@ -357,7 +362,7 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         SELECT percentile_disc(DISTINCT 0.5) WITHIN GROUP (ORDER BY x) AS p
         FROM (VALUES (1), (2), (3), (2), (1)) AS t(x)
         """
-      Then query error .*
+      Then query error .*(DISTINCT|distinct).*
 
     Scenario: BOOLEAN ORDER BY is rejected
       When query
@@ -365,7 +370,7 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
         FROM (VALUES (true), (false)) AS t(x)
         """
-      Then query error .*
+      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
 
     Scenario: DATE ORDER BY is rejected
       When query
@@ -373,7 +378,7 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
         FROM (VALUES (DATE '2024-01-01'), (DATE '2024-01-02')) AS t(x)
         """
-      Then query error .*
+      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
 
     Scenario: ARRAY ORDER BY is rejected
       When query
@@ -381,4 +386,28 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
         FROM (VALUES (array(1)), (array(2))) AS t(x)
         """
-      Then query error .*
+      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
+
+    Scenario: BOOLEAN percentile arg is rejected
+      When query
+        """
+        SELECT percentile_disc(true) WITHIN GROUP (ORDER BY x) AS p
+        FROM (VALUES (1), (2), (3)) AS t(x)
+        """
+      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
+
+    Scenario: DATE percentile arg is rejected
+      When query
+        """
+        SELECT percentile_disc(DATE '2024-01-01') WITHIN GROUP (ORDER BY x) AS p
+        FROM (VALUES (1), (2), (3)) AS t(x)
+        """
+      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*
+
+    Scenario: Array of strings as percentile arg is rejected
+      When query
+        """
+        SELECT percentile_disc(array('0.5')) WITHIN GROUP (ORDER BY x) AS p
+        FROM (VALUES (1), (2), (3)) AS t(x)
+        """
+      Then query error .*(numeric|UNEXPECTED_INPUT_TYPE).*

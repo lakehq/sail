@@ -11,16 +11,14 @@ use datafusion::arrow::datatypes::{
     Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
 };
-use datafusion::common::{DataFusionError, HashSet, Result, ScalarValue};
+use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{
     Accumulator, AggregateUDFImpl, GroupsAccumulator, Signature, Volatility,
 };
 
-use crate::aggregate::percentile_disc_groups::{
-    DistinctPercentileDiscAccumulator, PercentileDiscGroupsAccumulator,
-};
+use crate::aggregate::percentile_disc_groups::PercentileDiscGroupsAccumulator;
 use crate::aggregate::utils::{
     calculate_percentile_disc, cast_to_type, extract_percentile_literal, extract_percentiles_array,
 };
@@ -150,24 +148,51 @@ impl AggregateUDFImpl for PercentileDisc {
                 )));
             }
         };
-        // arg[1]: percentile literal — either a single numeric (scalar form) or
-        // a `List`/`LargeList`/`FixedSizeList` of numerics (array form). Coerce
-        // to `Float64` / `List<Float64>` respectively so the accumulator gets a
-        // predictable shape.
+        // arg[1]: percentile literal — either a single value (scalar form) or
+        // a `List`/`LargeList`/`FixedSizeList` (array form). Coerce to
+        // `Float64` / `List<Float64>` respectively. The accepted-type
+        // matrix mirrors what Spark validates at planning time:
+        //
+        //                       scalar       array element
+        //   numeric              ✓            ✓
+        //   STRING (Utf8 etc.)   ✓ (lazy)     ✗
+        //   `Null` (untyped)     ✗            ✓ (empty `array()`)
+        //   bool/date/timestamp/binary/etc. ✗  ✗
+        //
+        // STRING is permitted only for the scalar form because Spark accepts
+        // it via implicit cast there but rejects `array<string>` at planning.
+        // `Null` element is permitted for the array form because that is the
+        // type of an empty `array()` literal (and of `array(NULL)`, which
+        // Spark also accepts treating NULL as `0.0`).
         let percentile = match &arg_types[1] {
-            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _) => {
+                let elem = field.data_type();
+                if !elem.is_numeric() && !matches!(elem, DataType::Null) {
+                    return Err(DataFusionError::Plan(format!(
+                        "percentile_disc: percentile array elements must be numeric, got {elem}"
+                    )));
+                }
                 DataType::List(Arc::new(Field::new("item", DataType::Float64, true)))
             }
-            _ => DataType::Float64,
+            dt if dt.is_numeric() => DataType::Float64,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Float64,
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "percentile_disc: percentile must be numeric, got {other}"
+                )));
+            }
         };
         Ok(vec![order_by, percentile])
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // arg_types here are already coerced by `coerce_types`, so decimals
-        // arrive as `Float64`. For the array-of-percentiles form we return
-        // `List<Float64>` (Spark's `array<double>`); for the scalar form we
-        // preserve the (already-coerced) input numeric type.
+        // `coerce_types` already mapped every ORDER BY input to `Float64` and
+        // the percentile arg to either `Float64` (scalar) or
+        // `List<Float64>` (array form). So:
+        //   - scalar form → `Float64` (matches Spark's `double` return)
+        //   - array form  → `List<Float64>` (Spark's `array<double>`)
         if matches!(arg_types.get(1), Some(DataType::List(_))) {
             return Ok(DataType::List(Arc::new(Field::new(
                 "item",
@@ -231,23 +256,15 @@ impl AggregateUDFImpl for PercentileDisc {
         let percentile = Self::resolve_percentile(&args)?;
         let descending = Self::is_descending(&args);
 
+        // DISTINCT was rejected above, so there's only one accumulator shape.
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
-                if args.is_distinct {
-                    Ok(Box::new(DistinctPercentileDiscAccumulator::<$t> {
-                        data_type: $dt.clone(),
-                        distinct_values: HashSet::default(),
-                        percentile,
-                        descending,
-                    }))
-                } else {
-                    Ok(Box::new(PercentileDiscAccumulator::<$t> {
-                        data_type: $dt.clone(),
-                        all_values: vec![],
-                        percentile,
-                        descending,
-                    }))
-                }
+                Ok(Box::new(PercentileDiscAccumulator::<$t> {
+                    data_type: $dt.clone(),
+                    all_values: vec![],
+                    percentile,
+                    descending,
+                }))
             };
         }
 
@@ -415,25 +432,46 @@ impl Accumulator for MultiPercentileDiscAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // `calculate_percentile_disc::<Float64Type>` returns `Option<f64>`. When
-        // the input is empty OR the percentile array is empty (e.g. callers
-        // passed `array()`), return a NULL list — matches Spark, which
+        // When the input is empty OR the percentile array is empty (e.g.
+        // callers passed `array()`), return a NULL list — matches Spark, which
         // collapses `percentile_disc(array()) WITHIN GROUP (ORDER BY x)` to
         // NULL rather than an empty `array<double>`.
         if self.all_values.is_empty() || self.percentiles.is_empty() {
             let field = Arc::new(Field::new_list_field(DataType::Float64, true));
             return Ok(ScalarValue::List(Arc::new(ListArray::new_null(field, 1))));
         }
-        // Compute each percentile on a fresh copy of the buffer (the kernel
-        // uses `select_nth_unstable_by`, which would reorder shared state).
+        // Sort once (O(n log n)) and index into the sorted slice for each
+        // percentile (O(1) per pick). This avoids cloning the full value
+        // buffer for every requested percentile, which was O(k·n) for `k`
+        // percentiles and `n` values. f64 uses total_cmp to keep NaN ordering
+        // consistent with `calculate_percentile_disc`'s ArrowNativeTypeOp.
+        let mut sorted = std::mem::take(&mut self.all_values);
+        sorted.sort_unstable_by(|a, b| a.total_cmp(b));
+        let len = sorted.len();
         let mut results: Vec<Option<f64>> = Vec::with_capacity(self.percentiles.len());
         for &p in &self.percentiles {
-            let buf = self.all_values.clone();
-            results.push(calculate_percentile_disc::<Float64Type>(
-                buf,
-                p,
-                self.descending,
-            ));
+            // Same index formula as `calculate_percentile_disc`, kept here
+            // because we've already paid the sort cost and don't want to
+            // re-run `select_nth_unstable_by` per percentile.
+            let index = if self.descending {
+                if p == 0.0 {
+                    len - 1
+                } else if p == 1.0 {
+                    0
+                } else {
+                    len.saturating_sub((p * len as f64).ceil() as usize)
+                        .min(len - 1)
+                }
+            } else if p == 0.0 {
+                0
+            } else if p == 1.0 {
+                len - 1
+            } else {
+                ((p * len as f64).ceil() as usize)
+                    .saturating_sub(1)
+                    .min(len - 1)
+            };
+            results.push(Some(sorted[index]));
         }
         let values_array = Float64Array::from_iter(results);
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, values_array.len() as i32]));
