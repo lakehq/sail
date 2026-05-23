@@ -136,10 +136,7 @@ pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructFi
 /// Checks if any field (including nested) in an Arrow schema contains a Variant extension field.
 pub(crate) fn contains_variant_arrow(schema: &datafusion::arrow::datatypes::Schema) -> bool {
     fn is_variant_field(field: &datafusion::arrow::datatypes::Field) -> bool {
-        if field.extension_type_name() != Some(VariantType::NAME) {
-            return false;
-        }
-        field.try_extension_type::<VariantType>().is_ok()
+        field.extension_type_name() == Some(VariantType::NAME)
     }
 
     fn has_variant(field: &datafusion::arrow::datatypes::Field) -> bool {

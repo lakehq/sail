@@ -183,10 +183,7 @@ fn is_iceberg_variant_type(iceberg_type: &Type) -> bool {
 }
 
 fn is_variant_arrow_field(field: &ArrowField) -> bool {
-    if field.extension_type_name() != Some(VariantType::NAME) {
-        return false;
-    }
-    field.try_extension_type::<VariantType>().is_ok()
+    field.extension_type_name() == Some(VariantType::NAME)
 }
 
 fn is_unshredded_variant_arrow_type(arrow_type: &ArrowDataType) -> bool {
