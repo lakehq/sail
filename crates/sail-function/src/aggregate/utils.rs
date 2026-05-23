@@ -93,7 +93,7 @@ pub(crate) fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64> {
         | ScalarValue::UInt32(_)
         | ScalarValue::UInt64(_) => {
             let int_val = LiteralValue(scalar).try_to_i64().map_err(|e| {
-                DataFusionError::Execution(format!(
+                DataFusionError::Plan(format!(
                     "Cannot convert percentile literal {scalar:?} to integer: {e}"
                 ))
             })?;
@@ -103,7 +103,7 @@ pub(crate) fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64> {
             (*v as f64) / 10f64.powi(*scale as i32)
         }
         _ => {
-            return Err(DataFusionError::Execution(format!(
+            return Err(DataFusionError::Plan(format!(
                 "Cannot convert percentile literal {scalar:?} to f64"
             )))
         }
@@ -113,20 +113,11 @@ pub(crate) fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64> {
 
 /// Extract a single `f64` percentile from a physical expression literal.
 ///
-/// Validates that the value is within `[0.0, 1.0]`.
+/// Validates that the value is within `[0.0, 1.0]`. Errors with
+/// `DataFusionError::Plan` for non-literal arguments and out-of-range values —
+/// both are detectable at planning time.
 pub(crate) fn extract_percentile_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
-    let fields: Vec<Field> = vec![];
-    let schema = Arc::new(Schema::new(fields));
-    let batch = RecordBatch::try_new_with_options(
-        schema,
-        vec![],
-        &RecordBatchOptions::default().with_row_count(Some(1)),
-    )?;
-    let col_val = expr.evaluate(&batch)?;
-    let scalar = match col_val {
-        ColumnarValue::Scalar(s) => s,
-        ColumnarValue::Array(arr) => ScalarValue::try_from_array(arr.as_ref(), 0)?,
-    };
+    let scalar = evaluate_percentile_literal(expr)?;
     if matches!(scalar, ScalarValue::List(_)) {
         return Err(DataFusionError::Plan(
             "expected a scalar percentile literal, got a list".into(),
@@ -134,7 +125,7 @@ pub(crate) fn extract_percentile_literal(expr: &Arc<dyn PhysicalExpr>) -> Result
     }
     let percentile = scalar_to_f64(&scalar)?;
     if !(0.0..=1.0).contains(&percentile) {
-        return Err(DataFusionError::Execution(format!(
+        return Err(DataFusionError::Plan(format!(
             "Percentile value {percentile} is out of range [0.0, 1.0]"
         )));
     }
@@ -144,29 +135,7 @@ pub(crate) fn extract_percentile_literal(expr: &Arc<dyn PhysicalExpr>) -> Result
 /// Extract a vector of `f64` percentiles from a physical expression that
 /// evaluates to a `List` of numeric scalars.
 pub(crate) fn extract_percentiles_array(expr: &Arc<dyn PhysicalExpr>) -> Result<Vec<f64>> {
-    let fields: Vec<Field> = vec![];
-    let schema = Arc::new(Schema::new(fields));
-    let batch = RecordBatch::try_new_with_options(
-        schema,
-        vec![],
-        &RecordBatchOptions::default().with_row_count(Some(1)),
-    )?;
-
-    let col_val = expr.evaluate(&batch).map_err(|e| {
-        DataFusionError::Execution(format!("Failed to evaluate percentile expression: {e}"))
-    })?;
-    let scalar = match col_val {
-        ColumnarValue::Scalar(s) => s,
-        ColumnarValue::Array(arr) => {
-            if arr.is_empty() {
-                return Err(DataFusionError::Execution(
-                    "Cannot extract percentile from empty array".into(),
-                ));
-            }
-            ScalarValue::try_from_array(arr.as_ref(), 0)?
-        }
-    };
-
+    let scalar = evaluate_percentile_literal(expr)?;
     match scalar {
         ScalarValue::List(arr) => {
             // An empty array literal yields an empty Vec; callers decide what
@@ -184,7 +153,7 @@ pub(crate) fn extract_percentiles_array(expr: &Arc<dyn PhysicalExpr>) -> Result<
                     scalar_to_f64(&val_scalar)?
                 };
                 if !(0.0..=1.0).contains(&percentile) {
-                    return Err(DataFusionError::Execution(format!(
+                    return Err(DataFusionError::Plan(format!(
                         "Percentile value {percentile} is out of range [0.0, 1.0]"
                     )));
                 }
@@ -192,41 +161,52 @@ pub(crate) fn extract_percentiles_array(expr: &Arc<dyn PhysicalExpr>) -> Result<
             }
             Ok(percentiles)
         }
-        other => Err(DataFusionError::Execution(format!(
+        other => Err(DataFusionError::Plan(format!(
             "Expected List type for percentiles array, got: {other:?}"
         ))),
     }
 }
 
-/// Returns the value at the given discrete percentile.
+/// Evaluate `expr` as a constant percentile literal and return the scalar.
 ///
-/// Returns an actual value from the dataset (no interpolation). Specifically,
-/// returns the first value whose cumulative distribution is >= the requested
-/// percentile.
-///
-/// `descending=true` mirrors `ORDER BY x DESC` and selects the position from
-/// the high end of the sorted data. Note that the `1 - percentile` shortcut
-/// commonly used for `percentile_cont` does NOT work here, because
-/// `percentile_disc`'s index formula `ceil(p * n) - 1` is not symmetric: e.g.
-/// for `[1,2,3,4]` with `p=0.25 DESC`, the answer is `4` (first when sorted
-/// descending), not `3` (which is what `(1 - 0.25)` on ASC would return).
-pub fn calculate_percentile_disc<T: ArrowNumericType>(
-    mut values: Vec<T::Native>,
-    percentile: f64,
-    descending: bool,
-) -> Option<T::Native> {
-    let len = values.len();
-    if len == 0 {
-        return None;
+/// Rejects non-literal expressions (e.g. column references) with
+/// `DataFusionError::Plan` so the failure is detected at planning time with a
+/// clear message, rather than as a low-level evaluation error against a
+/// synthetic empty `RecordBatch`.
+fn evaluate_percentile_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
+    if expr
+        .as_any()
+        .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
+        .is_none()
+    {
+        return Err(DataFusionError::Plan(
+            "percentile must be a literal (constant) value".into(),
+        ));
     }
+    let schema = Arc::new(Schema::new(Vec::<Field>::new()));
+    let batch = RecordBatch::try_new_with_options(
+        schema,
+        vec![],
+        &RecordBatchOptions::default().with_row_count(Some(1)),
+    )?;
+    let col_val = expr.evaluate(&batch)?;
+    Ok(match col_val {
+        ColumnarValue::Scalar(s) => s,
+        ColumnarValue::Array(arr) => ScalarValue::try_from_array(arr.as_ref(), 0)?,
+    })
+}
 
-    let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
-
-    // For ASC: index = ceil(p * n) - 1, with p=0 mapped to 0 and p=1 to len-1.
-    // For DESC: the equivalent ASC index is `len - ceil(p * n)`, with p=0
-    // mapped to len-1 (max) and p=1 mapped to 0 (min). Both branches clamp
-    // into the valid range.
-    let index = if descending {
+/// ASC-sorted index for `percentile_disc(percentile)` over a population of
+/// length `len`. `descending=true` returns the equivalent index for an
+/// `ORDER BY ... DESC` selection performed on the same ASC-sorted slice.
+///
+/// `percentile_disc`'s index formula is asymmetric, so the `1 - percentile`
+/// shortcut used for `percentile_cont` does NOT work here (e.g. for
+/// `[1,2,3,4]` with `p=0.25 DESC` the answer is `4`, not `3`). Callers must
+/// pass a non-empty `len` and a percentile already validated to `[0.0, 1.0]`.
+pub fn percentile_disc_index(len: usize, percentile: f64, descending: bool) -> usize {
+    debug_assert!(len > 0);
+    if descending {
         if percentile == 0.0 {
             len - 1
         } else if percentile == 1.0 {
@@ -243,8 +223,25 @@ pub fn calculate_percentile_disc<T: ArrowNumericType>(
         ((percentile * len as f64).ceil() as usize)
             .saturating_sub(1)
             .min(len - 1)
-    };
+    }
+}
 
+/// Returns the value at the given discrete percentile.
+///
+/// Returns an actual value from the dataset (no interpolation). Specifically,
+/// returns the first value whose cumulative distribution is >= the requested
+/// percentile. See [`percentile_disc_index`] for the DESC semantics.
+pub fn calculate_percentile_disc<T: ArrowNumericType>(
+    mut values: Vec<T::Native>,
+    percentile: f64,
+    descending: bool,
+) -> Option<T::Native> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
+    let index = percentile_disc_index(len, percentile, descending);
     // select_nth_unstable_by is O(n) partial sort - finds the value at index
     let (_, value, _) = values.select_nth_unstable_by(index, cmp);
     Some(*value)

@@ -21,6 +21,7 @@ use datafusion::logical_expr::{
 use crate::aggregate::percentile_disc_groups::PercentileDiscGroupsAccumulator;
 use crate::aggregate::utils::{
     calculate_percentile_disc, cast_to_type, extract_percentile_literal, extract_percentiles_array,
+    percentile_disc_index,
 };
 
 macro_rules! dispatch_numeric_type {
@@ -448,31 +449,11 @@ impl Accumulator for MultiPercentileDiscAccumulator {
         let mut sorted = std::mem::take(&mut self.all_values);
         sorted.sort_unstable_by(|a, b| a.total_cmp(b));
         let len = sorted.len();
-        let mut results: Vec<Option<f64>> = Vec::with_capacity(self.percentiles.len());
-        for &p in &self.percentiles {
-            // Same index formula as `calculate_percentile_disc`, kept here
-            // because we've already paid the sort cost and don't want to
-            // re-run `select_nth_unstable_by` per percentile.
-            let index = if self.descending {
-                if p == 0.0 {
-                    len - 1
-                } else if p == 1.0 {
-                    0
-                } else {
-                    len.saturating_sub((p * len as f64).ceil() as usize)
-                        .min(len - 1)
-                }
-            } else if p == 0.0 {
-                0
-            } else if p == 1.0 {
-                len - 1
-            } else {
-                ((p * len as f64).ceil() as usize)
-                    .saturating_sub(1)
-                    .min(len - 1)
-            };
-            results.push(Some(sorted[index]));
-        }
+        let results: Vec<Option<f64>> = self
+            .percentiles
+            .iter()
+            .map(|&p| Some(sorted[percentile_disc_index(len, p, self.descending)]))
+            .collect();
         let values_array = Float64Array::from_iter(results);
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, values_array.len() as i32]));
         let list_array = ListArray::new(
