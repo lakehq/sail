@@ -120,6 +120,14 @@ impl AggregateUDFImpl for PercentileDisc {
         &self.signature
     }
 
+    fn supports_within_group_clause(&self) -> bool {
+        // `percentile_disc` is an ordered-set aggregate (`WITHIN GROUP`).
+        // Tell DataFusion so it can format the schema name correctly
+        // (`WITHIN GROUP (ORDER BY ...)` instead of `ORDER BY ...`) and skip
+        // the duplicated leading arg when rendering.
+        true
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 2 {
             return Err(DataFusionError::Plan(format!(
