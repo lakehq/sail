@@ -79,7 +79,7 @@ mod tests {
 
     use crate::catalog::{CatalogCommandNode, SparkCatalogObjectDisplay};
     use crate::config::{qualify_database_location, PlanConfig};
-    use crate::error::PlanResult;
+    use crate::error::{PlanError, PlanResult};
     use crate::formatter::SparkPlanFormatter;
     use crate::resolver::PlanResolver;
 
@@ -228,17 +228,18 @@ mod tests {
         Ok(SessionContext::new_with_state(state))
     }
 
-    fn resolved_command(plan: LogicalPlan) -> sail_catalog::command::CatalogCommand {
+    fn resolved_command(plan: LogicalPlan) -> PlanResult<sail_catalog::command::CatalogCommand> {
         let LogicalPlan::Extension(extension) = plan else {
-            panic!("expected extension logical plan");
+            return Err(PlanError::internal("expected extension logical plan"));
         };
-        extension
+        let command = extension
             .node
             .as_any()
             .downcast_ref::<CatalogCommandNode>()
-            .expect("expected catalog command node")
+            .ok_or_else(|| PlanError::internal("expected catalog command node"))?
             .command()
-            .clone()
+            .clone();
+        Ok(command)
     }
 
     #[test]
@@ -259,9 +260,9 @@ mod tests {
         )?;
 
         let sail_catalog::command::CatalogCommand::CreateDatabase { options, .. } =
-            resolved_command(plan)
+            resolved_command(plan)?
         else {
-            panic!("expected create database command");
+            return Err(PlanError::internal("expected create database command"));
         };
         assert_eq!(
             options.location,
@@ -291,9 +292,9 @@ mod tests {
         )?;
 
         let sail_catalog::command::CatalogCommand::CreateDatabase { options, .. } =
-            resolved_command(plan)
+            resolved_command(plan)?
         else {
-            panic!("expected create database command");
+            return Err(PlanError::internal("expected create database command"));
         };
         assert_eq!(options.location, None);
         Ok(())
@@ -317,9 +318,9 @@ mod tests {
         )?;
 
         let sail_catalog::command::CatalogCommand::CreateDatabase { options, .. } =
-            resolved_command(plan)
+            resolved_command(plan)?
         else {
-            panic!("expected create database command");
+            return Err(PlanError::internal("expected create database command"));
         };
         assert_eq!(
             options.location,
