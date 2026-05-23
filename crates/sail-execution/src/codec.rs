@@ -2189,7 +2189,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
-            "array_intersect" => Ok(Arc::new(ScalarUDF::from(ArrayIntersect::new()))),
+            "array_intersect" | "list_intersect" => {
+                Ok(Arc::new(ScalarUDF::from(ArrayIntersect::new())))
+            }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
