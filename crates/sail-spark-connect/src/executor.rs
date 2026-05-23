@@ -318,11 +318,15 @@ pub(crate) async fn read_stream(
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
+    let batch =
+        sail_common_datafusion::array::record_batch::record_batch_with_deduplicated_nested_fields(
+            batch,
+        )?;
     let mut output = ArrowBatch::default();
     {
         let cursor = Cursor::new(&mut output.data);
         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
-        writer.write(batch)?;
+        writer.write(&batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;
     }
