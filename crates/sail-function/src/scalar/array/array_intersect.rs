@@ -1,4 +1,6 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/4a41173ba3df9b5d47638599c819a1e6e46ad92b/datafusion/functions-nested/src/set_ops.rs
+// Adapted from DataFusion's set operation implementation with Spark-compatible
+// empty array handling for array intersections.
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -145,6 +147,8 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
         let l_len = l_end - l_start;
         let r_len = r_end - r_start;
 
+        // Build the lookup set from the shorter side to reduce hash set size,
+        // then preserve the selected probe side's offset into the combined values.
         let (lookup_rows, lookup_range, probe_rows, probe_range, probe_offset) = if l_len < r_len {
             (rows_l, l_start..l_end, rows_r, r_start..r_end, r_offset)
         } else {
@@ -258,7 +262,7 @@ mod tests {
             Some(vec![Some(5), Some(7)]),
             Some(vec![Some(7), Some(1)]),
         ]);
-        let field = Arc::new(Field::new("item", l.data_type().clone(), true));
+        let field = Arc::new(Field::new("list_item", l.data_type().clone(), true));
         (l.slice(1, 2), r.slice(1, 2), field)
     }
 
