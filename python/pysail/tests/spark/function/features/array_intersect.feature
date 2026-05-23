@@ -110,6 +110,21 @@ Feature: array_intersect() returns common array elements without duplicates
         | result   |
         | [{2, b}] |
 
+    Scenario: array_intersect with array<null> element type
+      When query
+        """
+        SELECT id, array_intersect(left_arr, right_arr) AS result
+        FROM VALUES
+          (1, array(NULL), array(NULL, NULL)),
+          (2, array(NULL), array())
+        AS t(id, left_arr, right_arr)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result |
+        | 1  | [NULL] |
+        | 2  | []     |
+
   Rule: Invalid inputs
 
     Scenario: array_intersect rejects non-array inputs

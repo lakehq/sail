@@ -11,14 +11,16 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{concat, take};
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     assert_eq_or_internal_err, exec_err, internal_err, DataFusionError, Result,
 };
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -99,6 +101,21 @@ impl ScalarUDFImpl for ArrayIntersect {
         }
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let return_type = self.return_type(&arg_types)?;
+
+        Ok(Arc::new(Field::new(
+            self.name(),
+            return_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_intersect_inner)(&args.args)
     }
@@ -141,19 +158,6 @@ impl ScalarUDFImpl for ArrayIntersect {
             _ => Ok(arg_types),
         }
     }
-}
-
-fn empty_intersection<OffsetSize: OffsetSizeTrait>(
-    l: &GenericListArray<OffsetSize>,
-    r: &GenericListArray<OffsetSize>,
-    field: Arc<Field>,
-) -> Result<ArrayRef> {
-    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
-        Arc::clone(&field),
-        OffsetBuffer::new(vec![OffsetSize::usize_as(0); l.len() + 1].into()),
-        new_empty_array(field.data_type()),
-        NullBuffer::union(l.nulls(), r.nulls()),
-    )?))
 }
 
 fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -206,7 +210,7 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     field: Arc<Field>,
 ) -> Result<ArrayRef> {
     if l.value_type().is_null() || r.value_type().is_null() {
-        return empty_intersection::<OffsetSize>(l, r, field);
+        return null_element_intersection::<OffsetSize>(l, r, field);
     }
 
     assert_eq_or_internal_err!(
@@ -322,6 +326,70 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
         NullBuffer::union(l.nulls(), r.nulls()),
     )?;
     Ok(Arc::new(arr))
+}
+
+fn null_element_intersection<OffsetSize: OffsetSizeTrait>(
+    l: &GenericListArray<OffsetSize>,
+    r: &GenericListArray<OffsetSize>,
+    field: Arc<Field>,
+) -> Result<ArrayRef> {
+    let l_offsets = l.value_offsets();
+    let r_offsets = r.value_offsets();
+    let l_values = l.values();
+    let r_values = r.values();
+    let l_null_elem = l.value_type().is_null();
+    let r_null_elem = r.value_type().is_null();
+
+    let mut result_offsets = Vec::with_capacity(l.len() + 1);
+    result_offsets.push(OffsetSize::usize_as(0));
+    let mut null_count = 0usize;
+
+    for i in 0..l.len() {
+        let last_offset = *result_offsets.last().ok_or_else(|| {
+            DataFusionError::Internal(
+                "result_offsets should always have at least one element".to_string(),
+            )
+        })?;
+
+        if l.is_null(i) || r.is_null(i) {
+            result_offsets.push(last_offset);
+            continue;
+        }
+
+        let l_start = l_offsets[i].as_usize();
+        let l_end = l_offsets[i + 1].as_usize();
+        let r_start = r_offsets[i].as_usize();
+        let r_end = r_offsets[i + 1].as_usize();
+
+        // For DataType::Null element type every element is null; for a typed array we
+        // check whether any element in the row is actually null.
+        let l_has_null = if l_null_elem {
+            l_end > l_start
+        } else {
+            (l_start..l_end).any(|idx| l_values.is_null(idx))
+        };
+        let r_has_null = if r_null_elem {
+            r_end > r_start
+        } else {
+            (r_start..r_end).any(|idx| r_values.is_null(idx))
+        };
+
+        if l_has_null && r_has_null {
+            null_count += 1;
+            result_offsets.push(last_offset + OffsetSize::usize_as(1));
+        } else {
+            result_offsets.push(last_offset);
+        }
+    }
+
+    let values = new_null_array(field.data_type(), null_count);
+
+    Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
+        field,
+        OffsetBuffer::new(result_offsets.into()),
+        values,
+        NullBuffer::union(l.nulls(), r.nulls()),
+    )?))
 }
 
 #[cfg(test)]
