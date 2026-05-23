@@ -19,14 +19,16 @@ pub struct PercentileDiscGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,
     group_values: Vec<Vec<T::Native>>,
     percentile: f64,
+    descending: bool,
 }
 
 impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
-    pub fn new(data_type: DataType, percentile: f64) -> Self {
+    pub fn new(data_type: DataType, percentile: f64, descending: bool) -> Self {
         Self {
             data_type,
             group_values: Vec::new(),
             percentile,
+            descending,
         }
     }
 
@@ -198,7 +200,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
         for values in emit_group_values {
-            let value = calculate_percentile_disc::<T>(values, self.percentile);
+            let value = calculate_percentile_disc::<T>(values, self.percentile, self.descending);
             evaluate_result_builder.append_option(value);
         }
 
@@ -255,14 +257,15 @@ pub struct DistinctPercentileDiscAccumulator<T: ArrowNumericType> {
     pub data_type: DataType,
     pub distinct_values: HashSet<Hashable<T::Native>>,
     pub percentile: f64,
+    pub descending: bool,
 }
 
 impl<T: ArrowNumericType> Debug for DistinctPercentileDiscAccumulator<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "DistinctPercentileDiscAccumulator({}, percentile={})",
-            self.data_type, self.percentile
+            "DistinctPercentileDiscAccumulator({}, percentile={}, descending={})",
+            self.data_type, self.percentile, self.descending
         )
     }
 }
@@ -312,7 +315,7 @@ impl<T: ArrowNumericType> Accumulator for DistinctPercentileDiscAccumulator<T> {
             .into_iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
-        let value = calculate_percentile_disc::<T>(d, self.percentile);
+        let value = calculate_percentile_disc::<T>(d, self.percentile, self.descending);
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
 
