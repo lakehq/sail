@@ -1,15 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::extension::{
+    ExtensionType, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY,
+};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use datafusion::arrow::error::ArrowError;
 use itertools::Itertools;
-use sail_common::spec::{
-    EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, VARIANT_EXTENSION_NAME,
-};
+use parquet_variant_compute::VariantType;
 
 use crate::spec::schema::{
     ArrayType, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType,
@@ -40,7 +41,7 @@ impl TryFrom<&StructField> for ArrowField {
         if matches!(f.data_type(), DataType::Variant(_)) {
             metadata.insert(
                 EXTENSION_TYPE_NAME_KEY.to_string(),
-                VARIANT_EXTENSION_NAME.to_string(),
+                VariantType::NAME.to_string(),
             );
         }
 
@@ -207,10 +208,7 @@ fn parse_metadata_value(v: &str) -> MetadataValue {
 }
 
 fn is_variant_arrow_field(field: &ArrowField) -> bool {
-    field
-        .metadata()
-        .get(EXTENSION_TYPE_NAME_KEY)
-        .is_some_and(|name| name == VARIANT_EXTENSION_NAME)
+    field.extension_type_name() == Some(VariantType::NAME)
 }
 
 fn is_unshredded_variant_arrow_type(data_type: &ArrowDataType) -> bool {
