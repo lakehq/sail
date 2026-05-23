@@ -35,11 +35,13 @@ pub fn create_catalog_manager(
                     initial_database,
                     initial_database_comment,
                 } => {
+                    let warehouse_dir =
+                        sail_plan::config::qualify_warehouse_directory("spark-warehouse");
                     let provider = MemoryCatalogProvider::new(
                         name.clone(),
                         initial_database.clone().try_into()?,
                         initial_database_comment.clone(),
-                        None,
+                        Some(warehouse_dir),
                     );
                     Ok((name.clone(), Arc::new(provider)))
                 }
