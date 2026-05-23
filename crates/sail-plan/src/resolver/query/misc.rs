@@ -7,7 +7,7 @@ use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{
-    cast_record_batch, cast_record_batch_positionally, read_record_batches,
+    cast_record_batch_positionally, read_record_batches,
 };
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
 use sail_logical_plan::range::RangeNode;
