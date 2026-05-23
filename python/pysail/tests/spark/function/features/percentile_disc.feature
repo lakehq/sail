@@ -223,6 +223,28 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         | p   |
         | 0.0 |
 
+  Rule: STRING inputs are implicitly cast to DOUBLE (Spark-compat)
+
+    Scenario: percentile_disc on STRING numeric values
+      When query
+        """
+        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
+        FROM (VALUES ('1.5'), ('2.5'), ('3.5'), ('4.5'), ('5.5')) AS t(x)
+        """
+      Then query result
+        | p   |
+        | 3.5 |
+
+    Scenario: percentile_disc on STRING numeric values with array
+      When query
+        """
+        SELECT percentile_disc(array(0.0, 0.5, 1.0)) WITHIN GROUP (ORDER BY x) AS p
+        FROM (VALUES ('1'), ('2'), ('3'), ('4'), ('5')) AS t(x)
+        """
+      Then query result
+        | p               |
+        | [1.0, 3.0, 5.0] |
+
   Rule: DECIMAL inputs work under GROUP BY
 
     Scenario: per-group median on DECIMAL
@@ -334,5 +356,29 @@ Feature: percentile_disc() returns the discrete percentile for a numeric column
         """
         SELECT percentile_disc(DISTINCT 0.5) WITHIN GROUP (ORDER BY x) AS p
         FROM (VALUES (1), (2), (3), (2), (1)) AS t(x)
+        """
+      Then query error .*
+
+    Scenario: BOOLEAN ORDER BY is rejected
+      When query
+        """
+        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
+        FROM (VALUES (true), (false)) AS t(x)
+        """
+      Then query error .*
+
+    Scenario: DATE ORDER BY is rejected
+      When query
+        """
+        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
+        FROM (VALUES (DATE '2024-01-01'), (DATE '2024-01-02')) AS t(x)
+        """
+      Then query error .*
+
+    Scenario: ARRAY ORDER BY is rejected
+      When query
+        """
+        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x) AS p
+        FROM (VALUES (array(1)), (array(2))) AS t(x)
         """
       Then query error .*

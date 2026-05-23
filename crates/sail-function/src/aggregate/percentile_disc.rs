@@ -127,17 +127,20 @@ impl AggregateUDFImpl for PercentileDisc {
                 arg_types.len()
             )));
         }
-        // arg[0]: ORDER BY column. Spark accepts every numeric type and always
-        // returns `double` (Sail used to preserve the input type, which diverged
-        // from Spark; this PR aligns the return type). Route ALL numeric inputs
-        // through `Float64` so the accumulator produces `f64` consistently.
-        let order_by = if arg_types[0].is_numeric() {
-            DataType::Float64
-        } else {
-            return Err(DataFusionError::Plan(format!(
-                "percentile_disc: ORDER BY column must be numeric, got {}",
-                arg_types[0]
-            )));
+        // arg[0]: ORDER BY column. Spark accepts every numeric type and STRING
+        // (cast-to-double semantics) and always returns `double`. Route ALL
+        // accepted inputs through `Float64` so the accumulator produces `f64`
+        // consistently. Spark also accepts `INTERVAL`/`DURATION` (returns the
+        // interval type), but Sail's percentile_disc does not yet implement
+        // those accumulators — reject them at planning time with a clear error.
+        let order_by = match &arg_types[0] {
+            dt if dt.is_numeric() => DataType::Float64,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Float64,
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "percentile_disc: ORDER BY column must be numeric or string, got {other}"
+                )));
+            }
         };
         // arg[1]: percentile literal — either a single numeric (scalar form) or
         // a `List`/`LargeList`/`FixedSizeList` of numerics (array form). Coerce
