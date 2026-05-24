@@ -57,14 +57,10 @@ impl PlanFormatter for SparkPlanFormatter {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok("string".to_string()),
             DataType::Date32 => Ok("date".to_string()),
             DataType::Date64 => Ok("date64".to_string()),
-            DataType::Time32(time_unit) => Ok(format!(
-                "time32({})",
-                Self::time_unit_to_simple_string(time_unit)
-            )),
-            DataType::Time64(time_unit) => Ok(format!(
-                "time64({})",
-                Self::time_unit_to_simple_string(time_unit)
-            )),
+            DataType::Time32(TimeUnit::Second) => Ok("time(0)".to_string()),
+            DataType::Time32(TimeUnit::Millisecond) => Ok("time(3)".to_string()),
+            DataType::Time64(TimeUnit::Microsecond) => Ok("time(6)".to_string()),
+            DataType::Time64(TimeUnit::Nanosecond) => Ok("time(9)".to_string()),
             DataType::Duration(TimeUnit::Microsecond) => Ok("interval day to second".to_string()),
             DataType::Duration(time_unit) => Ok(format!(
                 "duration({})",
@@ -120,9 +116,9 @@ impl PlanFormatter for SparkPlanFormatter {
             )),
             DataType::RunEndEncoded(_, _)
             | DataType::Decimal32(_, _)
-            | DataType::Decimal64(_, _) => {
-                not_impl_err!("data type: {data_type:?}")
-            }
+            | DataType::Decimal64(_, _)
+            | DataType::Time32(_)
+            | DataType::Time64(_) => not_impl_err!("data type: {data_type:?}"),
         }
     }
 
@@ -978,19 +974,19 @@ mod tests {
 
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time32(TimeUnit::Second))?,
-            "time32(second)"
+            "time(0)"
         );
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time32(TimeUnit::Millisecond))?,
-            "time32(millisecond)"
+            "time(3)"
         );
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time64(TimeUnit::Microsecond))?,
-            "time64(microsecond)"
+            "time(6)"
         );
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time64(TimeUnit::Nanosecond))?,
-            "time64(nanosecond)"
+            "time(9)"
         );
 
         Ok(())
