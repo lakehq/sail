@@ -18,6 +18,9 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
+const PYSPARK_VARIANT_METADATA_KEY: &str = "variant";
+const PYSPARK_VARIANT_METADATA_VALUE: &str = "true";
+
 /// Map SRID to CRS string for Arrow metadata.
 ///
 /// Returns `None` for SRID -1 (mixed) since there is no single CRS for the column.
@@ -282,7 +285,12 @@ impl PlanResolver<'_> {
                 // Variant layout using Binary for PySpark compatibility.
                 // parquet-variant uses BinaryView internally but we convert to Binary
                 let fields = adt::Fields::from(vec![
-                    adt::Field::new("metadata", adt::DataType::Binary, false),
+                    adt::Field::new("metadata", adt::DataType::Binary, false).with_metadata(
+                        HashMap::from([(
+                            PYSPARK_VARIANT_METADATA_KEY.to_string(),
+                            PYSPARK_VARIANT_METADATA_VALUE.to_string(),
+                        )]),
+                    ),
                     adt::Field::new("value", adt::DataType::Binary, false),
                 ]);
                 Ok(adt::DataType::Struct(fields))

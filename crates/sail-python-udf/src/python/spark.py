@@ -17,9 +17,10 @@ from pyspark.sql.pandas.types import from_arrow_type
 from pyspark.sql.types import ArrayType, MapType, Row, StructField, StructType, UserDefinedType
 
 try:
-    from pyspark.sql.types import VariantType
+    from pyspark.sql.types import VariantType, VariantVal
 except ImportError:
     VariantType = None
+    VariantVal = None
 
 _PYARROW_HAS_VIEW_TYPES = all(hasattr(pa, x) for x in ("list_view", "large_list_view", "string_view", "binary_view"))
 _ARROW_EXTENSION_NAME_KEY = b"ARROW:extension:name"
@@ -113,7 +114,7 @@ def _field_type(field_or_type: pa.Field | pa.DataType) -> tuple[pa.Field | None,
 
 
 def _field_is_variant(field_or_type: pa.Field | pa.DataType) -> bool:
-    if VariantType is None:
+    if VariantType is None or VariantVal is None:
         return False
     field, data_type = _field_type(field_or_type)
     extension_name = _metadata_value(_field_metadata(field), _ARROW_EXTENSION_NAME_KEY)
@@ -259,6 +260,8 @@ def _get_converter(t: pa.Field | pa.DataType) -> Converter:
     field, t = _field_type(t)
     if _metadata_value(_field_metadata(field), _SAIL_SPARK_UDT_METADATA_KEY) is not None:
         return UdtConverter(field)
+    if _field_is_variant(field or t):
+        return VariantConverter(field or t)
     if pa.types.is_null(t):
         return NullConverter(t)
     if pa.types.is_boolean(t):
@@ -449,6 +452,49 @@ class UdtConverter(Converter):
     def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         values = [None if x is None else self._spark_data_type.toInternal(x) for x in data]
         return self._sql_converter.from_pyspark(values)
+
+
+class VariantConverter(Converter):
+    def __init__(self, field_or_type: pa.Field | pa.StructType):
+        _, data_type = _field_type(field_or_type)
+        super().__init__(data_type)
+        try:
+            self._fields = data_type.fields
+        except AttributeError:
+            self._fields = [data_type.field(i) for i in range(data_type.num_fields)]
+        self._field_converters = {f.name: _get_converter(f) for f in self._fields}
+        if set(self._field_converters) != {"metadata", "value"}:
+            msg = f"invalid Variant Arrow type: {data_type}"
+            raise ValueError(msg)
+        self._spark_data_type = VariantType()
+
+    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
+        if not isinstance(array, pa.StructArray):
+            msg = f"invalid data type for variant: {type(array)}"
+            raise TypeError(msg)
+        metadata = self._field_converters["metadata"].to_pyspark(array.field("metadata"))
+        values = self._field_converters["value"].to_pyspark(array.field("value"))
+        valid = array.is_valid().to_pylist()
+        return [None if not valid[i] else VariantVal(bytes(values[i]), bytes(metadata[i])) for i in range(len(array))]
+
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
+        columns_by_name = {f.name: [] for f in self._fields}
+        mask = []
+        for x in data:
+            value = self._spark_data_type.toInternal(x)
+            if value is None:
+                mask.append(True)
+                for values in columns_by_name.values():
+                    values.append(None)
+            else:
+                mask.append(False)
+                columns_by_name["metadata"].append(value["metadata"])
+                columns_by_name["value"].append(value["value"])
+        return pa.StructArray.from_arrays(
+            [self._field_converters[f.name].from_pyspark(columns_by_name[f.name]) for f in self._fields],
+            fields=self._fields,
+            mask=pa.array(mask, type=pa.bool_()),
+        )
 
 
 class ArrayConverter(Converter):
@@ -666,7 +712,7 @@ def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
             raise ValueError(error)
 
         arrays = []
-        names = []
+        fields = []
 
         for i, target_field in enumerate(data_type.fields):
             target_name = target_field.name
@@ -678,9 +724,9 @@ def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
                 source_array = source_array.cast(target_type)
 
             arrays.append(source_array)
-            names.append(target_name)
+            fields.append(target_field)
 
-        struct_arrays.append(pa.StructArray.from_arrays(arrays, names=names))
+        struct_arrays.append(pa.StructArray.from_arrays(arrays, fields=fields))
 
     return pa.concat_arrays(struct_arrays)
 
