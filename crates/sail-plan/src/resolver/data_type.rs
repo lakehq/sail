@@ -325,6 +325,27 @@ impl PlanResolver<'_> {
                 );
                 sql_type
             }
+            spec::DataType::Interval {
+                interval_unit: _,
+                start_field,
+                end_field,
+            } => {
+                if start_field.is_some() || end_field.is_some() {
+                    let interval = spec::SparkIntervalMetadata {
+                        start_field: *start_field,
+                        end_field: *end_field,
+                    };
+                    metadata.insert(
+                        spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                        serde_json::to_string(&interval).map_err(|e| {
+                            PlanError::internal(format!(
+                                "failed to serialize interval metadata: {e}"
+                            ))
+                        })?,
+                    );
+                }
+                data_type
+            }
             spec::DataType::Geometry { srid } => {
                 validate_geometry_srid(*srid)?;
                 // Add geoarrow extension type metadata for WKB-encoded geometries.

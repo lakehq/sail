@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
 use chrono::{NaiveTime, Timelike};
 use datafusion_expr::expr;
+use datafusion_expr::expr::FieldMetadata;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -22,6 +24,7 @@ impl PlanResolver<'_> {
         literal: spec::Literal,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let metadata = Self::literal_field_metadata(&literal)?;
         let literal = self.resolve_literal(literal, state)?;
         let service = self.ctx.extension::<PlanService>()?;
         let name = service
@@ -29,7 +32,7 @@ impl PlanResolver<'_> {
             .literal_to_string(&literal, &self.config.session_timezone)?;
         Ok(NamedExpr::new(
             vec![name],
-            expr::Expr::Literal(literal, None),
+            expr::Expr::Literal(literal, metadata),
         ))
     }
 
@@ -43,6 +46,31 @@ impl PlanResolver<'_> {
             days: Some(Date32Type::from_naive_date(date.try_into()?)),
         };
         self.resolve_expression_literal(literal, state)
+    }
+
+    fn literal_field_metadata(literal: &spec::Literal) -> PlanResult<Option<FieldMetadata>> {
+        let spec::Literal::IntervalYearMonth {
+            start_field,
+            end_field,
+            ..
+        } = literal
+        else {
+            return Ok(None);
+        };
+        if start_field.is_none() && end_field.is_none() {
+            return Ok(None);
+        }
+        let interval = spec::SparkIntervalMetadata {
+            start_field: *start_field,
+            end_field: *end_field,
+        };
+        let value = serde_json::to_string(&interval).map_err(|e| {
+            crate::error::PlanError::internal(format!("failed to serialize interval metadata: {e}"))
+        })?;
+        Ok(Some(FieldMetadata::new(BTreeMap::from([(
+            spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+            value,
+        )]))))
     }
 
     pub(super) fn resolve_expression_timestamp(

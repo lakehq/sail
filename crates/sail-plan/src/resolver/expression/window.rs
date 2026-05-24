@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
@@ -182,13 +182,20 @@ impl PlanResolver<'_> {
                     .map(|arg| arg.get_type(schema))
                     .collect::<Result<Vec<DataType>, DataFusionError>>(
                 )?;
+                let input_fields: Vec<Field> = arguments
+                    .iter()
+                    .map(|arg| {
+                        arg.to_field(schema)
+                            .map(|(_, field)| field.as_ref().clone())
+                    })
+                    .collect::<Result<Vec<Field>, DataFusionError>>()?;
                 let function = self.resolve_python_udf(function, state)?;
                 let payload = PySparkUdfPayload::build(
                     &function.python_version,
                     &function.command,
                     function.eval_type,
                     &((0..arguments.len()).collect::<Vec<_>>()),
-                    &input_types,
+                    &input_fields,
                     &kwargs,
                     &self.config.pyspark_udf_config,
                 )?;
@@ -286,6 +293,13 @@ impl PlanResolver<'_> {
             .iter()
             .map(|arg| arg.get_type(schema))
             .collect::<Result<Vec<DataType>, DataFusionError>>()?;
+        let input_fields: Vec<Field> = arguments
+            .iter()
+            .map(|arg| {
+                arg.to_field(schema)
+                    .map(|(_, field)| field.as_ref().clone())
+            })
+            .collect::<Result<Vec<Field>, DataFusionError>>()?;
         let output_type = udaf.output_type().cloned().ok_or_else(|| {
             PlanError::internal(format!(
                 "unresolved UDAF {function_name} has no return type"
@@ -296,7 +310,7 @@ impl PlanResolver<'_> {
             udaf.command(),
             udaf.eval_type(),
             &((0..arguments.len()).collect::<Vec<_>>()),
-            &input_types,
+            &input_fields,
             &[],
             &self.config.pyspark_udf_config,
         )?;

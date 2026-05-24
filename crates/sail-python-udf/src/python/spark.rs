@@ -1,6 +1,6 @@
 use std::ffi::CString;
 
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::sync::PyOnceLock;
 use pyo3::{intern, Bound, Py, PyAny, PyResult, Python};
@@ -36,26 +36,37 @@ impl PySpark {
     pub fn batch_udf<'py>(
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
-        input_types: &[DataType],
-        output_type: &DataType,
+        input_fields: &[Field],
+        output_field: &Field,
         _config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkBatchUdf"),
-            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+            (
+                udf,
+                input_fields.try_to_py(py)?,
+                output_field.try_to_py(py)?,
+            ),
         )
     }
 
     pub fn arrow_batch_udf<'py>(
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
+        input_fields: &[Field],
+        output_field: &Field,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkArrowBatchUdf"),
-            (udf, config.clone()),
+            (
+                udf,
+                input_fields.try_to_py(py)?,
+                output_field.try_to_py(py)?,
+                config.clone(),
+            ),
         )
     }
 

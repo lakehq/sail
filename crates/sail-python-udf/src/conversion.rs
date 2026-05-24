@@ -1,6 +1,6 @@
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::arrow::array::ArrayData;
 use pyo3::{Bound, BoundObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python};
 
@@ -24,6 +24,29 @@ impl<'py> TryToPy<'py> for &DataType {
 }
 
 impl<'py> TryToPy<'py> for &[DataType] {
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    fn try_to_py(&self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.iter()
+            .map(|x| x.to_pyarrow(py))
+            .collect::<PyResult<Vec<_>>>()
+            .map(|x| x.into_pyobject(py))?
+    }
+}
+
+impl<'py> TryToPy<'py> for &Field {
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    fn try_to_py(&self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.to_pyarrow(py).map(|obj| obj.into_bound())
+    }
+}
+
+impl<'py> TryToPy<'py> for &[Field] {
     type Target = PyAny;
     type Output = Bound<'py, Self::Target>;
     type Error = PyErr;

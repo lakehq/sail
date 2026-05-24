@@ -114,7 +114,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
                 })),
             }
         } else {
-            field.data_type().clone().try_into()?
+            let interval_metadata = field
+                .metadata()
+                .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                .map(|value| serde_json::from_str::<spec::SparkIntervalMetadata>(value))
+                .transpose()?;
+            data_type_with_interval_metadata(field.data_type().clone(), interval_metadata)?
         };
         Ok(sdt::StructField {
             name: field.name().clone(),
@@ -122,6 +127,66 @@ impl TryFrom<adt::Field> for sdt::StructField {
             nullable: field.is_nullable(),
             metadata: field.metadata().get(spec::SPARK_METADATA_JSON_KEY).cloned(),
         })
+    }
+}
+
+fn year_month_interval_field(field: spec::IntervalFieldType) -> SparkResult<i32> {
+    match field {
+        spec::IntervalFieldType::Year => Ok(spec::YearMonthIntervalField::Year as i32),
+        spec::IntervalFieldType::Month => Ok(spec::YearMonthIntervalField::Month as i32),
+        _ => Err(SparkError::invalid(format!(
+            "invalid year-month interval field: {field:?}"
+        ))),
+    }
+}
+
+fn day_time_interval_field(field: spec::IntervalFieldType) -> SparkResult<i32> {
+    match field {
+        spec::IntervalFieldType::Day => Ok(spec::DayTimeIntervalField::Day as i32),
+        spec::IntervalFieldType::Hour => Ok(spec::DayTimeIntervalField::Hour as i32),
+        spec::IntervalFieldType::Minute => Ok(spec::DayTimeIntervalField::Minute as i32),
+        spec::IntervalFieldType::Second => Ok(spec::DayTimeIntervalField::Second as i32),
+        _ => Err(SparkError::invalid(format!(
+            "invalid day-time interval field: {field:?}"
+        ))),
+    }
+}
+
+fn data_type_with_interval_metadata(
+    data_type: adt::DataType,
+    interval_metadata: Option<spec::SparkIntervalMetadata>,
+) -> SparkResult<DataType> {
+    let Some(metadata) = interval_metadata else {
+        return data_type.try_into();
+    };
+    match data_type {
+        adt::DataType::Interval(adt::IntervalUnit::YearMonth) => Ok(DataType {
+            kind: Some(sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
+                start_field: metadata
+                    .start_field
+                    .map(year_month_interval_field)
+                    .transpose()?,
+                end_field: metadata
+                    .end_field
+                    .map(year_month_interval_field)
+                    .transpose()?,
+                type_variation_reference: 0,
+            })),
+        }),
+        adt::DataType::Duration(adt::TimeUnit::Microsecond) => Ok(DataType {
+            kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                start_field: metadata
+                    .start_field
+                    .map(day_time_interval_field)
+                    .transpose()?,
+                end_field: metadata
+                    .end_field
+                    .map(day_time_interval_field)
+                    .transpose()?,
+                type_variation_reference: 0,
+            })),
+        }),
+        data_type => data_type.try_into(),
     }
 }
 

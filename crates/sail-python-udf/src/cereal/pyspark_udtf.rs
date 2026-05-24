@@ -1,5 +1,5 @@
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::ScalarValue;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
@@ -155,7 +155,12 @@ impl PySparkUdtfPayload {
         if matches!(pyspark_version, PySparkVersion::V4_1)
             && matches!(eval_type, spec::PySparkUdfType::ArrowTable)
         {
-            let schema_json = build_input_types_json(input_types)?;
+            let input_fields = input_types
+                .iter()
+                .enumerate()
+                .map(|(i, data_type)| Field::new(format!("_{i}"), data_type.clone(), true))
+                .collect::<Vec<_>>();
+            let schema_json = build_input_types_json(&input_fields)?;
             data.extend((schema_json.len() as i32).to_be_bytes());
             data.extend(schema_json.as_bytes());
         }

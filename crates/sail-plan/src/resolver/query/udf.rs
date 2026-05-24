@@ -205,12 +205,19 @@ impl PlanResolver<'_> {
         let args = args.into_iter().map(|x| x.expr).collect::<Vec<_>>();
         let grouping = grouping.into_iter().map(|x| x.expr).collect::<Vec<_>>();
         let input_types = Self::resolve_expression_types(&args, schema)?;
+        let input_fields = args
+            .iter()
+            .map(|arg| {
+                arg.to_field(schema)
+                    .map(|(_, field)| field.as_ref().clone())
+            })
+            .collect::<datafusion_common::Result<Vec<Field>>>()?;
         let payload = PySparkUdfPayload::build(
             &function.python_version,
             &function.command,
             function.eval_type,
             &offsets,
-            &input_types,
+            &input_fields,
             &[], // group map UDFs don't use kwargs
             &self.config.pyspark_udf_config,
         )?;
