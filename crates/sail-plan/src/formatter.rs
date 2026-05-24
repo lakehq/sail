@@ -61,6 +61,14 @@ impl PlanFormatter for SparkPlanFormatter {
             DataType::Time32(TimeUnit::Millisecond) => Ok("time(3)".to_string()),
             DataType::Time64(TimeUnit::Microsecond) => Ok("time(6)".to_string()),
             DataType::Time64(TimeUnit::Nanosecond) => Ok("time(9)".to_string()),
+            DataType::Time32(time_unit) => Ok(format!(
+                "time32({})",
+                Self::time_unit_to_simple_string(time_unit)
+            )),
+            DataType::Time64(time_unit) => Ok(format!(
+                "time64({})",
+                Self::time_unit_to_simple_string(time_unit)
+            )),
             DataType::Duration(TimeUnit::Microsecond) => Ok("interval day to second".to_string()),
             DataType::Duration(time_unit) => Ok(format!(
                 "duration({})",
@@ -116,9 +124,9 @@ impl PlanFormatter for SparkPlanFormatter {
             )),
             DataType::RunEndEncoded(_, _)
             | DataType::Decimal32(_, _)
-            | DataType::Decimal64(_, _)
-            | DataType::Time32(_)
-            | DataType::Time64(_) => not_impl_err!("data type: {data_type:?}"),
+            | DataType::Decimal64(_, _) => {
+                not_impl_err!("data type: {data_type:?}")
+            }
         }
     }
 
