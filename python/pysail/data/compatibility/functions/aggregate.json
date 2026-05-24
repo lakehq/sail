@@ -159,21 +159,6 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "theta_intersection_agg",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "theta_sketch_agg",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "theta_union_agg",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "kurtosis",
     "status": "supported"
   },
@@ -352,6 +337,21 @@
   {
     "module": "pyspark.sql.functions",
     "function": "sum_distinct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_intersection_agg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_sketch_agg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_union_agg",
     "status": "supported"
   },
   {
