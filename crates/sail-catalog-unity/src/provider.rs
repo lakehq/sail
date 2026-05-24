@@ -317,6 +317,7 @@ impl UnityCatalogProvider {
                 sort_by: vec![],
                 bucket_by: None,
                 properties,
+                is_external: true,
             },
         })
     }
@@ -517,6 +518,7 @@ impl CatalogProvider for UnityCatalogProvider {
             if_not_exists,
             replace,
             properties,
+            is_external: _,
         } = options;
 
         if replace {

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
@@ -8,6 +10,7 @@ use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
@@ -26,6 +29,23 @@ fn array_compact(array: expr::Expr) -> expr::Expr {
     ScalarUDF::from(SparkArrayCompact::new()).call(vec![array])
 }
 
+fn arrays_zip(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let field_names: Vec<String> = input
+        .arguments
+        .iter()
+        .zip(input.function_context.argument_display_names)
+        .enumerate()
+        .map(|(i, (expr, name))| match expr {
+            expr::Expr::Column(_) | expr::Expr::Alias(_) => name.clone(),
+            _ => format!("{i}"),
+        })
+        .collect();
+    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(ArraysZip::new(field_names))),
+        args: input.arguments,
+    }))
+}
+
 fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr {
     let start = cast(start, DataType::Int64);
     let length = cast(length, DataType::Int64);
@@ -33,7 +53,19 @@ fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr
     expr_fn::array_slice(array, start, end, None)
 }
 
-fn sort_array(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr> {
+fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (array, asc) = match input.arguments.len() {
+        1 => (
+            input.arguments.one()?,
+            lit(ScalarValue::Boolean(Some(true))),
+        ),
+        2 => input.arguments.two()?,
+        n => {
+            return Err(PlanError::invalid(format!(
+                "sort_array requires 1 or 2 arguments, got {n}"
+            )))
+        }
+    };
     let (sort, nulls) = match asc {
         expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _metadata) => (
             lit(ScalarValue::Utf8(Some("ASC".to_string()))),
@@ -229,24 +261,24 @@ fn make_nullable_array_type(data_type: &DataType) -> DataType {
     match data_type {
         DataType::List(field) => {
             let inner_type = make_nullable_array_type(field.data_type());
-            DataType::List(std::sync::Arc::new(
-                datafusion::arrow::datatypes::Field::new(field.name(), inner_type, true),
-            ))
+            DataType::List(Arc::new(arrow::datatypes::Field::new(
+                field.name(),
+                inner_type,
+                true,
+            )))
         }
         DataType::LargeList(field) => {
             let inner_type = make_nullable_array_type(field.data_type());
-            DataType::LargeList(std::sync::Arc::new(
-                datafusion::arrow::datatypes::Field::new(field.name(), inner_type, true),
-            ))
+            DataType::LargeList(Arc::new(arrow::datatypes::Field::new(
+                field.name(),
+                inner_type,
+                true,
+            )))
         }
         DataType::FixedSizeList(field, size) => {
             let inner_type = make_nullable_array_type(field.data_type());
             DataType::FixedSizeList(
-                std::sync::Arc::new(datafusion::arrow::datatypes::Field::new(
-                    field.name(),
-                    inner_type,
-                    true,
-                )),
+                Arc::new(arrow::datatypes::Field::new(field.name(), inner_type, true)),
                 *size,
             )
         }
@@ -266,7 +298,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::ternary(array_insert)),
-        ("array_intersect", F::binary(expr_fn::array_intersect)),
+        ("array_intersect", F::udf(ArrayIntersect::new())),
         ("array_join", F::udf(ArrayToString::new())),
         ("array_max", F::udf(ArrayMax::new())),
         ("array_min", F::udf(ArrayMin::new())),
@@ -280,13 +312,13 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ),
         ("array_union", F::binary(expr_fn::array_union)),
         ("arrays_overlap", F::custom(arrays_overlap)),
-        ("arrays_zip", F::udf(ArraysZip::new())),
+        ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::udf(SparkSequence::new())),
         ("shuffle", F::unary(array_fn::shuffle)),
         ("slice", F::ternary(slice)),
-        ("sort_array", F::binary(sort_array)),
+        ("sort_array", F::custom(sort_array)),
     ]
 }
 

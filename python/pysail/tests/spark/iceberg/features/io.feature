@@ -56,6 +56,60 @@ Feature: Iceberg Basic IO
         | 1  | first  |
         | 2  | second |
 
+    Scenario: Append after latest metadata uses UUID-prefixed naming
+      Given statement template
+        """
+        CREATE TABLE test_table (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO test_table VALUES (1, 'first')
+        """
+      Given iceberg latest metadata file uses UUID-prefixed naming
+      Given statement
+        """
+        INSERT INTO test_table VALUES (2, 'second')
+        """
+      Then iceberg latest metadata file is v2.metadata.json
+      Then iceberg version hint is 2
+      When query
+        """
+        SELECT * FROM test_table ORDER BY id
+        """
+      Then query result ordered
+        | id | value  |
+        | 1  | first  |
+        | 2  | second |
+
+    Scenario: Append after latest metadata uses UUID-prefixed gzip naming
+      Given statement template
+        """
+        CREATE TABLE test_table (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO test_table VALUES (1, 'first')
+        """
+      Given iceberg latest metadata file uses UUID-prefixed gzip naming
+      Given statement
+        """
+        INSERT INTO test_table VALUES (2, 'second')
+        """
+      Then iceberg latest metadata file is v2.metadata.json
+      Then iceberg version hint is 2
+      When query
+        """
+        SELECT * FROM test_table ORDER BY id
+        """
+      Then query result ordered
+        | id | value  |
+        | 1  | first  |
+        | 2  | second |
+
   Rule: Verify file layout for unpartitioned tables
     Background:
       Given variable location for temporary directory iceberg_io_layout

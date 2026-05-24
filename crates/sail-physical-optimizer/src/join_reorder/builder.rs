@@ -670,7 +670,7 @@ impl GraphBuilder {
 
         // First try a small set of cheap, deterministic heuristics that work well for common
         // predicates (e.g. col = literal, range filters, conjunctions).
-        if let Some(sel) = self.estimate_selectivity_from_stats(predicate, schema, input_stats) {
+        if let Some(sel) = Self::estimate_selectivity_from_stats(predicate, schema, input_stats) {
             return sel.clamp(0.0, 1.0);
         }
 
@@ -693,7 +693,6 @@ impl GraphBuilder {
     }
 
     fn estimate_selectivity_from_stats(
-        &self,
         expr: &Arc<dyn PhysicalExpr>,
         schema: &datafusion::arrow::datatypes::SchemaRef,
         input_stats: &datafusion::common::Statistics,
@@ -701,27 +700,26 @@ impl GraphBuilder {
         let bin = expr.as_any().downcast_ref::<BinaryExpr>()?;
         match bin.op() {
             Operator::And => {
-                let l = self.estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
-                let r = self.estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
+                let l = Self::estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
+                let r = Self::estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
                 Some((l * r).clamp(0.0, 1.0))
             }
             Operator::Or => {
-                let l = self.estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
-                let r = self.estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
+                let l = Self::estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
+                let r = Self::estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
                 // Independence assumption: P(A ∪ B) = P(A) + P(B) - P(A)P(B).
                 // This can misestimate correlated predicates (e.g. `x > 10 OR x > 5`), but is
                 // still a reasonable fallback when we do not have correlation statistics.
                 Some((l + r - l * r).clamp(0.0, 1.0))
             }
             Operator::Eq | Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
-                self.estimate_binary_selectivity_from_stats(bin, schema, input_stats)
+                Self::estimate_binary_selectivity_from_stats(bin, schema, input_stats)
             }
             _ => None,
         }
     }
 
     fn estimate_binary_selectivity_from_stats(
-        &self,
         bin: &BinaryExpr,
         schema: &datafusion::arrow::datatypes::SchemaRef,
         input_stats: &datafusion::common::Statistics,
@@ -754,7 +752,7 @@ impl GraphBuilder {
                 flipped_op,
                 Arc::new(Literal::new(l.value().clone())),
             );
-            return self.estimate_binary_selectivity_from_stats(&tmp, schema, input_stats);
+            return Self::estimate_binary_selectivity_from_stats(&tmp, schema, input_stats);
         } else {
             return None;
         };

@@ -18,8 +18,6 @@ pub(super) fn list_built_in_variant_functions() -> Vec<(&'static str, ScalarFunc
         ("to_variant_object", F::udf(SparkToVariantObjectUdf::new())),
         ("try_parse_json", F::unknown("try_parse_json")),
         ("try_variant_get", F::udf(SparkVariantGet::new(true))),
-        ("variant_explode", F::unknown("variant_explode")),
-        ("variant_explode_outer", F::unknown("variant_explode_outer")),
         ("variant_get", F::udf(SparkVariantGet::new(false))),
         ("variant_to_json", F::udf(SparkVariantToJsonUdf::new())),
     ]

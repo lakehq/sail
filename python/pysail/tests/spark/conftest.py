@@ -63,7 +63,7 @@ def remote():
 
 
 @pytest.fixture(scope="module")
-def spark(remote):
+def default_spark(remote):
     """Create and configure a Spark Session to be used in the tests.
     After the tests are finished, the Spark Session is stopped.
 
@@ -75,6 +75,11 @@ def spark(remote):
     patch_spark_connect_session(spark)
     yield spark
     spark.stop()
+
+
+@pytest.fixture(scope="module")
+def spark(default_spark):
+    return default_spark
 
 
 @pytest.fixture
@@ -119,6 +124,8 @@ def configure_spark_session(session):
     # in some local time zones. This would result in `pytz.exceptions.NonExistentTimeError`
     # when converting such timestamps from the local time zone to UTC.
     session.conf.set("spark.sql.session.timeZone", "UTC")
+    # Pin ANSI mode so plan snapshots are stable across PySpark 3.x and 4.x test environments.
+    session.conf.set("spark.sql.ansi.enabled", "true")
     # Enable Arrow to avoid data type errors when creating Spark DataFrame from Pandas.
     session.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
 
@@ -200,6 +207,15 @@ DOCTEST_MARKERS = [
         keywords=["test_arrow_udtf.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
     ),
+    DoctestMarker(
+        keywords=["test_ipython_key_completions.txt"],
+        markers=[
+            pytest.mark.skipif(
+                pyspark_version() < (4,),
+                reason="_ipython_key_completions_ is not defined on the PySpark 3.x Connect DataFrame",
+            )
+        ],
+    ),
 ]
 
 
@@ -237,3 +253,14 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
             # Note: pytest-bdd preserves the hyphen in marker names
             elif item.get_closest_marker("sail-only"):
                 item.add_marker(skip_sail_only)
+
+    # Deselect catalog integration tests by default unless user passed -m.
+    # This allows slower catalog tests outside dedicated directories to use
+    # the same marker-driven runner pattern.
+    markexpr = config.getoption("markexpr") or ""
+    if not markexpr:
+        deselected = [item for item in items if item.get_closest_marker("catalog_integration")]
+        if deselected:
+            remaining = [item for item in items if item not in deselected]
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = remaining

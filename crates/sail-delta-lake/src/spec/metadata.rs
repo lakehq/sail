@@ -141,6 +141,13 @@ impl Metadata {
         })
     }
 
+    pub fn with_partition_columns(self, partition_columns: Vec<String>) -> Metadata {
+        Metadata {
+            partition_columns,
+            ..self
+        }
+    }
+
     pub fn add_config_key(self, key: String, value: String) -> Metadata {
         let mut configuration = self.configuration;
         configuration.insert(key, value);

@@ -24,9 +24,11 @@ use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
 use crate::convert::{
-    build_database, build_generic_table, build_view, database_to_status, is_view_table,
-    table_to_status, validate_namespace, view_to_status, GenericTableFormat,
+    build_database, build_generic_table, build_view, database_to_status, inject_spark_metadata,
+    is_view_table, reject_spark_properties, reject_spark_property_keys, table_to_status,
+    validate_namespace, view_to_status, GenericTableFormat,
 };
+use crate::data_type::arrow_to_hive_type;
 use crate::security::{KerberosMakeTransport, SaslQop};
 
 #[derive(Debug, Clone, Default)]
@@ -81,9 +83,70 @@ fn build_drop_table_request(purge: bool) -> DropTableRequest {
     });
 
     DropTableRequest {
-        delete_data: true,
+        // Sail treats HMS DROP TABLE as metadata-only and never requests
+        // physical data deletion via the HMS delete_data flag.
+        delete_data: false,
         environment_context,
     }
+}
+
+fn apply_alter_table_options(
+    hms_table: &mut Table,
+    db_name: &str,
+    table_name: &str,
+    options: AlterTableOptions,
+) -> CatalogResult<()> {
+    match options {
+        AlterTableOptions::SetTableProperties { properties } => {
+            reject_spark_properties(&properties)?;
+            let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
+            for (key, value) in properties {
+                parameters.insert(key.into(), value.into());
+            }
+        }
+        AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+            reject_spark_property_keys(&keys)?;
+            let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
+            for key in keys {
+                if if_exists || parameters.contains_key(key.as_str()) {
+                    parameters.remove(key.as_str());
+                } else {
+                    return Err(CatalogError::InvalidArgument(format!(
+                        "Table property '{key}' does not exist on '{db_name}.{table_name}'"
+                    )));
+                }
+            }
+        }
+        AlterTableOptions::AlterColumnType { name, data_type } => {
+            let [column_name] = name.as_slice() else {
+                return Err(CatalogError::NotSupported(
+                    "Hive Metastore catalog does not support altering nested column types"
+                        .to_string(),
+                ));
+            };
+            let hive_type = arrow_to_hive_type(&data_type)?;
+            let storage = hms_table.sd.as_mut().ok_or_else(|| {
+                CatalogError::External(format!(
+                    "HMS table '{db_name}.{table_name}' is missing storage descriptor"
+                ))
+            })?;
+            let columns = storage.cols.as_mut().ok_or_else(|| {
+                CatalogError::External(format!(
+                    "HMS table '{db_name}.{table_name}' is missing column metadata"
+                ))
+            })?;
+            let Some(column) = columns
+                .iter_mut()
+                .find(|column| column.name.as_deref() == Some(column_name.as_str()))
+            else {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Column '{column_name}' does not exist on '{db_name}.{table_name}'"
+                )));
+            };
+            column.r#type = Some(FastStr::from(hive_type));
+        }
+    }
+    Ok(())
 }
 
 fn split_hms_uri_list(uris: &[String]) -> CatalogResult<Vec<String>> {
@@ -899,11 +962,13 @@ impl CatalogProvider for HmsCatalogProvider {
             .iter()
             .map(|field| field.column.clone())
             .collect();
-        let hms_table = build_generic_table(
+        let columns_for_metadata = options.columns.clone();
+        let format_for_metadata = format.logical_format.to_string();
+        let mut hms_table = build_generic_table(
             &db_name,
             table,
             options.columns,
-            partition_columns,
+            partition_columns.clone(),
             options.location,
             GenericTableFormat {
                 logical_format: format.logical_format,
@@ -911,6 +976,12 @@ impl CatalogProvider for HmsCatalogProvider {
             },
             options.comment,
             options.properties,
+        )?;
+        inject_spark_metadata(
+            &mut hms_table,
+            &columns_for_metadata,
+            &partition_columns,
+            &format_for_metadata,
         )?;
 
         self.create_hms_table(database, table, hms_table, options.if_not_exists)
@@ -1006,26 +1077,7 @@ impl CatalogProvider for HmsCatalogProvider {
                     }
                 };
 
-                let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
-                match options {
-                    AlterTableOptions::SetTableProperties { properties } => {
-                        for (key, value) in properties {
-                            parameters.insert(key.into(), value.into());
-                        }
-                    }
-                    AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-                        for key in keys {
-                            if if_exists || parameters.contains_key(key.as_str()) {
-                                parameters.remove(key.as_str());
-                            } else {
-                                return Err(CatalogError::InvalidArgument(format!(
-                                    "Table property '{key}' does not exist on \
-                                     '{db_name}.{table_name}'"
-                                )));
-                            }
-                        }
-                    }
-                }
+                apply_alter_table_options(&mut hms_table, &db_name, &table_name, options)?;
 
                 match client
                     .alter_table(db_name.clone().into(), table_name.clone().into(), hms_table)
@@ -1151,10 +1203,11 @@ mod tests {
     use std::time::Duration;
 
     use arrow::datatypes::DataType;
-    use pilota::FastStr;
+    use hive_metastore::Table;
+    use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{
-        CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
+        AlterTableOptions, CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
     };
     use sail_common::runtime::RuntimeHandle;
 
@@ -1203,6 +1256,7 @@ mod tests {
                     if_not_exists: false,
                     replace: false,
                     properties: vec![],
+                    is_external: true,
                 },
             )
             .await
@@ -1212,10 +1266,10 @@ mod tests {
     }
 
     #[test]
-    fn test_build_drop_table_request_without_purge_keeps_delete_data_enabled() {
+    fn test_build_drop_table_request_without_purge_preserves_data() {
         let request = super::build_drop_table_request(false);
 
-        assert!(request.delete_data);
+        assert!(!request.delete_data);
         assert!(request.environment_context.is_none());
     }
 
@@ -1223,7 +1277,7 @@ mod tests {
     fn test_build_drop_table_request_with_purge_sets_if_purge_context() {
         let request = super::build_drop_table_request(true);
 
-        assert!(request.delete_data);
+        assert!(!request.delete_data);
         let properties = request
             .environment_context
             .and_then(|context| context.properties)
@@ -1232,6 +1286,70 @@ mod tests {
             properties.get(&FastStr::from_static_str("ifPurge")),
             Some(&FastStr::from_static_str("TRUE"))
         );
+    }
+
+    #[test]
+    fn test_apply_alter_table_options_rejects_reserved_spark_properties() {
+        let mut table = Table {
+            parameters: Some(AHashMap::from_iter([(
+                FastStr::from_static_str("owner"),
+                FastStr::from_static_str("alice"),
+            )])),
+            ..Default::default()
+        };
+
+        let error = super::apply_alter_table_options(
+            &mut table,
+            "default",
+            "items",
+            AlterTableOptions::SetTableProperties {
+                properties: vec![(
+                    "spark.sql.sources.provider".to_string(),
+                    "parquet".to_string(),
+                )],
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CatalogError::InvalidArgument(_)));
+        assert!(table.parameters.as_ref().unwrap().contains_key("owner"));
+        assert!(!table
+            .parameters
+            .as_ref()
+            .unwrap()
+            .contains_key("spark.sql.sources.provider"));
+    }
+
+    #[test]
+    fn test_apply_alter_table_options_rejects_reserved_spark_unset_properties() {
+        let mut table = Table {
+            parameters: Some(AHashMap::from_iter([(
+                FastStr::from_static_str("spark.sql.sources.provider"),
+                FastStr::from_static_str("parquet"),
+            )])),
+            ..Default::default()
+        };
+
+        let error = super::apply_alter_table_options(
+            &mut table,
+            "default",
+            "items",
+            AlterTableOptions::UnsetTableProperties {
+                keys: vec![
+                    "EXTERNAL".to_string(),
+                    "spark.sql.sources.provider".to_string(),
+                ],
+                if_exists: true,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CatalogError::InvalidArgument(_)));
+        assert!(table
+            .parameters
+            .as_ref()
+            .unwrap()
+            .contains_key("spark.sql.sources.provider"));
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
 use datafusion::physical_expr::{
@@ -24,9 +24,17 @@ pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
 /// File-local row index metadata column for row-level modifications that write deletion vectors.
 pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 
-/// Row-level operation type column appended to the expanded MERGE output.
+/// Row-level operation type column appended to expanded row-level write output.
+///
+/// This is internal Sail metadata. Format writers may use it to route rows,
+/// collect operation metrics, or produce low-level delete artifacts, but must
+/// remove it before persisting user data.
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
+
+/// Internal column carrying pre-aggregated MERGE source row counts on
+/// [`RowLevelOperationType::SourceMetric`] rows.
+pub const MERGE_SOURCE_METRIC_COLUMN: &str = "__sail_merge_source_metric";
 
 /// A layer of options that can be applied to a data source.
 /// Multiple layers are used to represent different sources of options,
@@ -65,13 +73,34 @@ impl OptionLayer {
     }
 }
 
-/// Row-level operation type tag.
+/// Internal row intent tag for row-level write plans.
+///
+/// The numeric values are not table-format protocol values. They are stable
+/// within Sail physical plans so logical expansion and format writers can share
+/// a compact representation of per-row intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum RowLevelOperationType {
+    /// Existing target row is rewritten unchanged.
+    Copy = 0,
+    /// Existing target row is deleted.
     Delete = 1,
+    /// Existing target row is rewritten with updated values.
     Update = 2,
+    /// Source row is inserted as a new target row.
     Insert = 3,
+    /// Source row participates in metrics or checks but is not written.
+    Noop = 4,
+    /// Matched target row is deleted by a MERGE clause.
+    MatchedDelete = 5,
+    /// Matched target row is updated by a MERGE clause.
+    MatchedUpdate = 6,
+    /// Target-only row is deleted by a MERGE clause.
+    NotMatchedBySourceDelete = 7,
+    /// Target-only row is updated by a MERGE clause.
+    NotMatchedBySourceUpdate = 8,
+    /// Metric-only row carrying a MERGE source row count.
+    SourceMetric = 9,
 }
 
 impl RowLevelOperationType {
@@ -200,7 +229,9 @@ pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
         }
         None
     };
-    find("path").or_else(|| find("location"))
+    find("path")
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| find("location").filter(|v| !v.trim().is_empty()))
 }
 
 /// The kind of row-level DML command being executed.
@@ -277,6 +308,11 @@ pub trait TableFormat: Send + Sync {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
 
+    /// Infers the logical schema for planning without requiring callers to construct a read source.
+    async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
+        Ok(self.create_source(ctx, info).await?.schema())
+    }
+
     /// Creates a `ExecutionPlan` for write.
     async fn create_writer(
         &self,
@@ -323,6 +359,21 @@ pub trait TableFormat: Send + Sync {
             self.name()
         )
     }
+
+    /// Alters the type of a table column.
+    async fn alter_table_column_type(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        data_type: datafusion::arrow::datatypes::DataType,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, column_path, data_type);
+        not_impl_err!(
+            "Column type alteration not supported for {} format",
+            self.name()
+        )
+    }
 }
 
 /// Thread-safe registry of available `TableFormat` implementations.
@@ -355,7 +406,20 @@ impl TableFormatRegistry {
         formats
             .get(&name.to_lowercase())
             .cloned()
-            .ok_or_else(|| plan_datafusion_err!("No table format found for: {name}"))
+            .ok_or_else(|| missing_table_format_error(name))
+    }
+}
+
+fn missing_table_format_error(name: &str) -> datafusion::common::DataFusionError {
+    if name.eq_ignore_ascii_case("jdbc") {
+        plan_datafusion_err!(
+            "No table format found for: {name}. \
+             The JDBC data source is provided by pysail and must be registered before use: \
+             `from pysail.spark.datasource.jdbc import JdbcDataSource`; \
+             `spark.dataSource.register(JdbcDataSource)`"
+        )
+    } else {
+        plan_datafusion_err!("No table format found for: {name}")
     }
 }
 
@@ -417,4 +481,39 @@ pub fn get_partition_columns_and_file_schema(
         .collect::<Vec<_>>();
     let file_schema = Schema::new(file_schema_fields);
     Ok((partition_columns, file_schema))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_jdbc_table_format_error_includes_registration_hint(
+    ) -> std::result::Result<(), String> {
+        let registry = TableFormatRegistry::new();
+        let error = match registry.get("jdbc") {
+            Ok(_) => return Err("expected missing jdbc table format error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("No table format found for: jdbc"));
+        assert!(error.contains("from pysail.spark.datasource.jdbc import JdbcDataSource"));
+        assert!(error.contains("spark.dataSource.register(JdbcDataSource)"));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_non_jdbc_table_format_error_stays_generic() -> std::result::Result<(), String> {
+        let registry = TableFormatRegistry::new();
+        let error = match registry.get("unknown") {
+            Ok(_) => return Err("expected missing unknown table format error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(
+            error,
+            "Error during planning: No table format found for: unknown"
+        );
+        Ok(())
+    }
 }

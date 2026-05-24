@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -34,7 +35,6 @@ pub trait SchemaInfer: Debug + Send + Sync + 'static {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &ListingOptions,
-        options: &[OptionLayer],
     ) -> Result<Schema>;
 }
 
@@ -50,7 +50,6 @@ impl SchemaInfer for DefaultSchemaInfer {
         store: &Arc<dyn object_store::ObjectStore>,
         files: &[object_store::ObjectMeta],
         list_options: &ListingOptions,
-        _options: &[OptionLayer],
     ) -> Result<Schema> {
         Ok(list_options
             .format
@@ -61,28 +60,31 @@ impl SchemaInfer for DefaultSchemaInfer {
     }
 }
 
-/// A trait for defining the specifics of a listing table format.
-pub trait ListingFormat: Debug + Send + Sync + 'static {
-    fn name(&self) -> &'static str;
+/// A trait for creating format instances when reading and writing listing files.
+pub trait FormatFactory: Debug + Send + Sync + 'static {
+    type Read: ReadFormat;
+    type Write: WriteFormat;
+
+    /// The name of the format.
+    fn name() -> &'static str;
+
+    /// Creates the read format.
+    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read>;
+
+    /// Creates the write format.
+    fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write>;
+}
+
+/// A trait for format-specific logic for reading listing files.
+pub trait ReadFormat: Debug + Send + Sync + 'static {
     fn create_read_format(
         &self,
-        ctx: &dyn Session,
-        options: Vec<OptionLayer>,
         compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>>;
-    fn create_write_format(
-        &self,
-        ctx: &dyn Session,
-        options: Vec<OptionLayer>,
-    ) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
 
     /// Per-read override for the file extension used when listing files.
     /// Returning `None` keeps the default extension supplied by `ListingOptions`.
-    fn file_extension_override(
-        &self,
-        _ctx: &dyn Session,
-        _options: &[OptionLayer],
-    ) -> Result<Option<String>> {
+    fn file_extension_override(&self) -> Result<Option<String>> {
         Ok(None)
     }
 
@@ -90,31 +92,20 @@ pub trait ListingFormat: Debug + Send + Sync + 'static {
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer>;
 }
 
-#[derive(Debug)]
-pub struct ListingTableFormat<T: ListingFormat> {
-    inner: T,
+/// A trait for format-specific logic for writing listing files.
+pub trait WriteFormat: Debug + Send + Sync + 'static {
+    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
 }
 
-impl<T: ListingFormat> ListingTableFormat<T> {
-    pub fn new(format_def: T) -> Self {
-        Self { inner: format_def }
-    }
-
-    pub fn inner(&self) -> &T {
-        &self.inner
-    }
-}
-
-impl<T: ListingFormat + Default> Default for ListingTableFormat<T> {
-    fn default() -> Self {
-        Self::new(T::default())
-    }
+#[derive(Debug, Default)]
+pub struct ListingTableFormat<T: FormatFactory> {
+    phantom: PhantomData<T>,
 }
 
 #[async_trait]
-impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
+impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
     fn name(&self) -> &str {
-        self.inner.name()
+        T::name()
     }
 
     async fn create_source(
@@ -132,8 +123,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             options,
         } = info;
 
+        let read_format = T::read(ctx, options)?;
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
-        let file_format = self.inner.create_read_format(ctx, options.clone(), None)?;
+        let file_format = read_format.create_read_format(None)?;
         let extension_with_compression =
             file_format.compression_type().and_then(|compression_type| {
                 match file_format.get_ext_with_compression(&compression_type) {
@@ -142,7 +134,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                     _ => None,
                 }
             });
-        let file_extension_override = self.inner.file_extension_override(ctx, &options)?;
+        let file_extension_override = read_format.file_extension_override()?;
 
         let config = ctx.config();
         let mut listing_options = ListingOptions::new(file_format)
@@ -157,13 +149,12 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 // Detect compression from the actual files so e.g.
                 // `data.csv.gz` plus an explicit schema works without
                 // `option("compression", "gzip")`.
-                crate::listing::detect_listing_compression(
+                crate::listing::utils::detect_listing_compression(
                     ctx,
                     &urls,
                     &mut listing_options,
                     &extension_with_compression,
-                    &options,
-                    self,
+                    &read_format,
                 )
                 .await?;
                 // When the caller did not supply partition columns, auto-
@@ -205,13 +196,12 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 (Arc::new(schema), partition_by)
             }
             _ => {
-                let schema = crate::listing::resolve_listing_schema(
+                let schema = crate::listing::utils::resolve_listing_schema(
                     ctx,
                     &urls,
                     &mut listing_options,
                     &extension_with_compression,
-                    options,
-                    self,
+                    &read_format,
                 )
                 .await?;
                 let partition_by = partition_by
@@ -247,7 +237,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         };
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
-        let config = crate::listing::rewrite_listing_partitions(config)?;
+        let config = crate::listing::utils::rewrite_listing_partitions(config)?;
         Ok(provider_as_source(Arc::new(
             ListingTable::try_new(config)?.with_constraints(constraints),
         )))
@@ -299,7 +289,8 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .iter()
             .map(|field| (field.column.clone(), DataType::Null))
             .collect::<Vec<_>>();
-        let (format, compression) = self.inner.create_write_format(ctx, options)?;
+        let write_format = T::write(ctx, options)?;
+        let (format, compression) = write_format.create_write_format()?;
         let file_extension = if let Some(file_compression_type) = format.compression_type() {
             match format.get_ext_with_compression(&file_compression_type) {
                 Ok(ext) => ext,

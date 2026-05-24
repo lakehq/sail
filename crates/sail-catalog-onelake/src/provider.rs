@@ -272,6 +272,7 @@ impl OneLakeCatalogProvider {
                 sort_by: vec![],
                 bucket_by: None,
                 properties: vec![],
+                is_external: true,
             },
         })
     }

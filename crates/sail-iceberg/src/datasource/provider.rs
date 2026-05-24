@@ -234,6 +234,7 @@ impl IcebergTableProvider {
 
             let partition_spec_id = manifest_file.partition_spec_id;
             let parent_seq = manifest_file.sequence_number;
+            let mut inherited_next_row_id = manifest_file.first_row_id;
 
             // Collect (DataFile, seq) pairs preserving inheritance.
             let mut manifest_pairs: Vec<(DataFile, i64)> = Vec::new();
@@ -247,6 +248,12 @@ impl IcebergTableProvider {
                 }
                 let mut df = entry.data_file.clone();
                 df.partition_spec_id = partition_spec_id;
+                if df.first_row_id.is_none() {
+                    df.first_row_id = inherited_next_row_id;
+                }
+                if let Some(next_row_id) = &mut inherited_next_row_id {
+                    *next_row_id += df.record_count as i64;
+                }
                 let seq = entry.sequence_number.unwrap_or(parent_seq);
                 manifest_pairs.push((df, seq));
             }
@@ -333,8 +340,8 @@ impl IcebergTableProvider {
                     partition_spec_id,
                     is_unpartitioned_spec: is_unpartitioned,
                 };
-                // Guard: reject v3 deletion vectors explicitly. Silently skipping would
-                // corrupt read results.
+                // TODO(V3): Implement Puffin metadata parsing and RoaringBitmap delete application.
+                // Guard: reject v3 deletion vectors explicitly. Silently skipping would corrupt read results.
                 if file_ref.is_deletion_vector() {
                     return plan_err!(
                         "Iceberg v3 deletion vectors are not yet supported \

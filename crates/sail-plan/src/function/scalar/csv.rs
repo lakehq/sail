@@ -1,4 +1,5 @@
-use datafusion_expr::{Expr, ScalarUDF};
+use datafusion_expr::{expr, Expr, ScalarUDF};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 
@@ -7,11 +8,20 @@ use crate::function::common::{ScalarFunction, ScalarFunctionBuilder as F, Scalar
 
 fn from_csv(
     ScalarFunctionInput {
-        arguments,
+        mut arguments,
         function_context,
     }: ScalarFunctionInput,
 ) -> PlanResult<Expr> {
     let tz = function_context.plan_config.session_timezone.clone();
+    // Try to constant-fold the schema argument (index 1) if it's not already a literal.
+    // This handles cases like `from_csv(col, schema_of_csv(value))` where the schema
+    // is a constant expression that can be evaluated at planning time.
+    if arguments.len() >= 2 && !matches!(&arguments[1], expr::Expr::Literal(_, _)) {
+        let evaluator = LiteralEvaluator::new();
+        if let Ok(scalar) = evaluator.evaluate(&arguments[1]) {
+            arguments[1] = expr::Expr::Literal(scalar, None);
+        }
+    }
     let udf = ScalarUDF::from(SparkFromCSV::new(tz));
     Ok(udf.call(arguments))
 }

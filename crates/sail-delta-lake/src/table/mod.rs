@@ -22,14 +22,14 @@ use std::fmt;
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
 use object_store::ObjectStore;
 use url::Url;
 
-use crate::datasource::DeltaScanConfig;
+use crate::datasource::{df_logical_schema, DeltaScanConfig};
 pub mod features;
 pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
@@ -249,6 +249,43 @@ pub async fn create_delta_source(
     schema: Option<Schema>,
     options: DeltaReadOptions,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
+    let (snapshot, log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, false).await?;
+
+    Ok(Arc::new(DeltaTableSource::try_new(
+        snapshot,
+        log_store,
+        scan_config,
+    )?))
+}
+
+/// Infers the Delta logical schema for planning without constructing a logical read source.
+pub async fn infer_delta_logical_schema(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: DeltaReadOptions,
+) -> Result<SchemaRef> {
+    let (snapshot, _log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, true).await?;
+
+    Ok(df_logical_schema(
+        snapshot.as_ref(),
+        &scan_config.file_column_name,
+        &scan_config.row_index_column_name,
+        &scan_config.commit_version_column_name,
+        &scan_config.commit_timestamp_column_name,
+        scan_config.schema,
+    )?)
+}
+
+async fn load_delta_read_state(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: DeltaReadOptions,
+    metadata_only: bool,
+) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
     let storage_config = StorageConfig;
@@ -257,7 +294,7 @@ pub async fn create_delta_source(
 
     // Create a new DeltaTable instance but do not load it yet.
     // For metadata-as-data reads, avoid eagerly loading active file metadata on the driver.
-    let table_config = if options.metadata_as_data_read {
+    let table_config = if metadata_only || options.metadata_as_data_read {
         DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
@@ -288,11 +325,7 @@ pub async fn create_delta_source(
         delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
     };
 
-    Ok(Arc::new(DeltaTableSource::try_new(
-        snapshot,
-        log_store,
-        scan_config,
-    )?))
+    Ok((snapshot, log_store, scan_config))
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.

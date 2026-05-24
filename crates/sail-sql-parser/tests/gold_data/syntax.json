@@ -1660,7 +1660,7 @@
                         "nonTerminal": "IdentList"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Keyword(Sorted), Keyword(By), SortColumnList))"
+                        "nonTerminal": "Option(SortColumnClause)"
                       },
                       {
                         "nonTerminal": "Keyword(Into)"
@@ -2233,6 +2233,62 @@
               }
             },
             {
+              "name": "DatabaseKeyword",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Database)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Schema)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Namespace)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "DatabasesKeyword",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Databases)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Schemas)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Namespaces)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
               "name": "DecimalType",
               "node": {
                 "choice": [
@@ -2309,7 +2365,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "Option(Keyword(Extended))"
@@ -2462,32 +2518,6 @@
                   },
                   {
                     "nonTerminal": "Keyword(Columns)"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Either(Keyword(Database), Keyword(Schema))",
-              "node": {
-                "choice": [
-                  {
-                    "nonTerminal": "Keyword(Database)"
-                  },
-                  {
-                    "nonTerminal": "Keyword(Schema)"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Either(Keyword(Databases), Keyword(Schemas))",
-              "node": {
-                "choice": [
-                  {
-                    "nonTerminal": "Keyword(Databases)"
-                  },
-                  {
-                    "nonTerminal": "Keyword(Schemas)"
                   }
                 ]
               }
@@ -5173,6 +5203,22 @@
               }
             },
             {
+              "name": "Keyword(Namespace)",
+              "node": {
+                "terminal": {
+                  "keyword": "NAMESPACE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Namespaces)",
+              "node": {
+                "terminal": {
+                  "keyword": "NAMESPACES"
+                }
+              }
+            },
+            {
               "name": "Keyword(Natural)",
               "node": {
                 "terminal": {
@@ -7382,6 +7428,14 @@
               }
             },
             {
+              "name": "Option(SortColumnClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "SortColumnClause"
+                }
+              }
+            },
+            {
               "name": "Option(StringLiteral)",
               "node": {
                 "optional": {
@@ -7522,14 +7576,6 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Keyword(Or), Keyword(Replace))"
-                }
-              }
-            },
-            {
-              "name": "Option(Tuple(Keyword(Sorted), Keyword(By), SortColumnList))",
-              "node": {
-                "optional": {
-                  "nonTerminal": "Tuple(Keyword(Sorted), Keyword(By), SortColumnList)"
                 }
               }
             },
@@ -9024,10 +9070,26 @@
               "node": {
                 "sequence": [
                   {
-                    "nonTerminal": "Identifier"
+                    "nonTerminal": "Expression"
                   },
                   {
                     "nonTerminal": "Option(OrderDirection)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SortColumnClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Sorted)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(By)"
+                  },
+                  {
+                    "nonTerminal": "SortColumnList"
                   }
                 ]
               }
@@ -9078,7 +9140,7 @@
                         "nonTerminal": "Keyword(Use)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -9104,7 +9166,7 @@
                         "nonTerminal": "Keyword(Create)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
@@ -9123,7 +9185,7 @@
                         "nonTerminal": "Keyword(Alter)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -9139,7 +9201,7 @@
                         "nonTerminal": "Keyword(Drop)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Exists)))"
@@ -9158,7 +9220,7 @@
                         "nonTerminal": "Keyword(Show)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Databases), Keyword(Schemas))"
+                        "nonTerminal": "DatabasesKeyword"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Either(Keyword(From), Keyword(In)), ObjectName))"
@@ -9225,6 +9287,9 @@
                     "sequence": [
                       {
                         "nonTerminal": "Keyword(Replace)"
+                      },
+                      {
+                        "nonTerminal": "Option(Keyword(External))"
                       },
                       {
                         "nonTerminal": "Keyword(Table)"
@@ -9799,7 +9864,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Tuple(Keyword(Comment), Keyword(On), Either(Keyword(Database), Keyword(Schema)))"
+                        "nonTerminal": "Tuple(Keyword(Comment), Keyword(On), DatabaseKeyword)"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -10528,7 +10593,7 @@
               }
             },
             {
-              "name": "Tuple(Keyword(Comment), Keyword(On), Either(Keyword(Database), Keyword(Schema)))",
+              "name": "Tuple(Keyword(Comment), Keyword(On), DatabaseKeyword)",
               "node": {
                 "sequence": [
                   {
@@ -10538,7 +10603,7 @@
                     "nonTerminal": "Keyword(On)"
                   },
                   {
-                    "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                    "nonTerminal": "DatabaseKeyword"
                   }
                 ]
               }
@@ -10937,22 +11002,6 @@
                   },
                   {
                     "nonTerminal": "Keyword(By)"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Tuple(Keyword(Sorted), Keyword(By), SortColumnList)",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Keyword(Sorted)"
-                  },
-                  {
-                    "nonTerminal": "Keyword(By)"
-                  },
-                  {
-                    "nonTerminal": "SortColumnList"
                   }
                 ]
               }
