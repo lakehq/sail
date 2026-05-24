@@ -92,6 +92,13 @@ impl IcebergRestCatalogProvider {
         )
     }
 
+    fn namespace_location(properties: Option<&HashMap<String, String>>) -> Option<String> {
+        let props = properties?;
+        get_property(props, "location")
+            .or_else(|| get_property(props, "warehouse"))
+            .or_else(|| get_property(props, "path"))
+    }
+
     pub fn new(name: String, props: HashMap<String, String>) -> Self {
         let catalog_config = RestCatalogConfig {
             uri: props
@@ -614,10 +621,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     .properties
                     .as_ref()
                     .and_then(|p| get_property(p, "comment"));
-                let location = result
-                    .properties
-                    .as_ref()
-                    .and_then(|p| get_property(p, "location"));
+                let location = Self::namespace_location(result.properties.as_ref());
                 let properties: Vec<_> =
                     result.properties.unwrap_or_default().into_iter().collect();
 
@@ -672,10 +676,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .properties
             .as_ref()
             .and_then(|p| get_property(p, "comment"));
-        let location = result
-            .properties
-            .as_ref()
-            .and_then(|p| get_property(p, "location"));
+        let location = Self::namespace_location(result.properties.as_ref());
         let properties: Vec<_> = result.properties.unwrap_or_default().into_iter().collect();
 
         Ok(DatabaseStatus {
@@ -2866,6 +2867,43 @@ mod tests {
         assert_eq!(result.database, vec!["db3".to_string()]);
         assert_eq!(result.comment, Some("case insensitive".to_string()));
         assert_eq!(result.location, Some("s3://bucket/db3".to_string()));
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db4"),
+            serde_json::json!({
+                "namespace": ["db4"],
+                "properties": {
+                    "warehouse": "s3://bucket/from-warehouse"
+                }
+            }),
+        )
+        .await;
+
+        let namespace = Namespace::try_from(vec!["db4".to_string()]).unwrap();
+        let result = ctx.catalog.get_database(&namespace).await.unwrap();
+
+        assert_eq!(result.database, vec!["db4".to_string()]);
+        assert_eq!(
+            result.location,
+            Some("s3://bucket/from-warehouse".to_string())
+        );
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db5"),
+            serde_json::json!({
+                "namespace": ["db5"],
+                "properties": {
+                    "path": "s3://bucket/from-path"
+                }
+            }),
+        )
+        .await;
+
+        let namespace = Namespace::try_from(vec!["db5".to_string()]).unwrap();
+        let result = ctx.catalog.get_database(&namespace).await.unwrap();
+
+        assert_eq!(result.database, vec!["db5".to_string()]);
+        assert_eq!(result.location, Some("s3://bucket/from-path".to_string()));
     }
 
     #[tokio::test]

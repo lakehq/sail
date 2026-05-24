@@ -91,7 +91,10 @@ impl GlueCatalogProvider {
             catalog: self.name.clone(),
             database: vec![name.to_string()],
             comment: db.description().map(|s| s.to_string()),
-            location: db.location_uri().map(|s| s.to_string()),
+            location: db
+                .location_uri()
+                .map(|s| s.to_string())
+                .or_else(|| namespace_location_from_properties(&properties)),
             properties,
         })
     }
@@ -322,6 +325,46 @@ impl GlueCatalogProvider {
         builder
             .build()
             .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build view input: {e}")))
+    }
+}
+
+fn namespace_location_from_properties(properties: &[(String, String)]) -> Option<String> {
+    properties
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("location"))
+        .map(|(_, value)| value.clone())
+        .or_else(|| {
+            properties
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("warehouse"))
+                .map(|(_, value)| value.clone())
+        })
+        .or_else(|| {
+            properties
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+                .map(|(_, value)| value.clone())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use aws_sdk_glue::types::Database;
+
+    use super::GlueCatalogProvider;
+
+    #[test]
+    fn database_to_status_falls_back_to_namespace_properties() {
+        let provider = GlueCatalogProvider::new("glue".to_string(), Default::default());
+        let database = Database::builder()
+            .name("db")
+            .parameters("warehouse", "s3://warehouse/db")
+            .parameters("path", "s3://path/db")
+            .build()
+            .unwrap();
+
+        let status = provider.database_to_status(&database).unwrap();
+        assert_eq!(status.location.as_deref(), Some("s3://warehouse/db"));
     }
 }
 

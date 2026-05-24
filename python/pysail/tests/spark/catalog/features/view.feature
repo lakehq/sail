@@ -1,25 +1,27 @@
 Feature: Persistent views
 
   Background:
-    Given final statement
+    Given variable customers_table for random identifier with prefix view_customers_
+    Given variable orders_table for random identifier with prefix view_orders_
+    Given final statement template
       """
-      DROP TABLE IF EXISTS view_customers
+      DROP TABLE IF EXISTS {{ customers_table }}
       """
     Given final statement
       """
       DROP VIEW IF EXISTS customer_view
       """
-    Given statement
+    Given statement template
       """
-      CREATE TABLE view_customers (id INT, name STRING)
+      CREATE TABLE {{ customers_table }} (id INT, name STRING)
       """
-    Given statement
+    Given statement template
       """
-      INSERT INTO view_customers VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol')
+      INSERT INTO {{ customers_table }} VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol')
       """
-    Given statement
+    Given statement template
       """
-      CREATE VIEW customer_view AS SELECT * FROM view_customers
+      CREATE VIEW customer_view AS SELECT * FROM {{ customers_table }}
       """
 
   Scenario: Read from a persistent view
@@ -38,9 +40,9 @@ Feature: Persistent views
       """
       DROP VIEW IF EXISTS active_customers
       """
-    Given statement
+    Given statement template
       """
-      CREATE VIEW active_customers AS SELECT * FROM view_customers WHERE id = 1
+      CREATE VIEW active_customers AS SELECT * FROM {{ customers_table }} WHERE id = 1
       """
     When query
       """
@@ -55,28 +57,28 @@ Feature: Persistent views
       """
       DROP VIEW IF EXISTS active_customers
       """
-    Given final statement
+    Given final statement template
       """
-      DROP TABLE IF EXISTS view_orders
+      DROP TABLE IF EXISTS {{ orders_table }}
       """
-    Given statement
+    Given statement template
       """
-      CREATE VIEW active_customers AS SELECT * FROM view_customers WHERE id = 1
+      CREATE VIEW active_customers AS SELECT * FROM {{ customers_table }} WHERE id = 1
       """
-    Given statement
+    Given statement template
       """
-      CREATE TABLE view_orders (order_id INT, customer_id INT)
+      CREATE TABLE {{ orders_table }} (order_id INT, customer_id INT)
       """
-    Given statement
+    Given statement template
       """
-      INSERT INTO view_orders VALUES (100, 1), (101, 2)
+      INSERT INTO {{ orders_table }} VALUES (100, 1), (101, 2)
       """
-    When query
+    When query template
       """
-      SELECT active_customers.name, view_orders.order_id
+      SELECT active_customers.name, {{ orders_table }}.order_id
       FROM active_customers
-      JOIN view_orders ON active_customers.id = view_orders.customer_id
-      ORDER BY view_orders.order_id
+      JOIN {{ orders_table }} ON active_customers.id = {{ orders_table }}.customer_id
+      ORDER BY {{ orders_table }}.order_id
       """
     Then query result ordered
       | name  | order_id |
@@ -87,9 +89,9 @@ Feature: Persistent views
       """
       DROP VIEW IF EXISTS aliased_customers
       """
-    Given statement
+    Given statement template
       """
-      CREATE VIEW aliased_customers (customer_id, customer_name) AS SELECT id, name FROM view_customers
+      CREATE VIEW aliased_customers (customer_id, customer_name) AS SELECT id, name FROM {{ customers_table }}
       """
     When query
       """
@@ -123,7 +125,7 @@ Feature: Persistent views
       """
       SHOW TABLE EXTENDED LIKE '*'
       """
-    Then query result has row where "tableName" is "view_customers"
+    Then query result has row where "tableName" is "{{ customers_table }}"
     And query result has row where "tableName" is "customer_view"
 
   Scenario: SHOW TABLE EXTENDED reports persistent view type

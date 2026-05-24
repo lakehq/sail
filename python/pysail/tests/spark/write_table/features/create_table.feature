@@ -141,3 +141,33 @@ Feature: CREATE TABLE default location
         📂 fallback_t
           📄 part-<id>.<codec>.parquet
       """
+
+  @sail-only
+  Scenario: CREATE TABLE in default database uses the session warehouse directory
+    Given variable warehouse for temporary directory create_table_default_db_warehouse
+    Given config spark.sql.warehouse.dir = {{ warehouse.string }}
+    Given final statement
+      """
+      DROP TABLE IF EXISTS default_location_t
+      """
+    Given statement
+      """
+      CREATE TABLE default_location_t (id INT, name STRING)
+      USING DELTA
+      """
+    Given statement
+      """
+      INSERT INTO default_location_t VALUES (1, 'Alice')
+      """
+    When query
+      """
+      SELECT * FROM default_location_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name  |
+      | 1  | Alice |
+    Then file tree in warehouse matches
+      """
+      📂 default_location_t
+        📄 part-<id>.<codec>.parquet
+      """

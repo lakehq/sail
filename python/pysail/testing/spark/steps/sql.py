@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import time
+import uuid
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -24,6 +25,13 @@ def variables():
 def variable_for_json_value(name, definition, variables):
     """Defines a variable with a JSON value."""
     variables[name] = json.loads(definition)
+    return variables
+
+
+@given(parsers.parse("variable {name} for random identifier with prefix {prefix}"), target_fixture="variables")
+def variable_for_random_identifier(name, prefix, variables):
+    """Defines a variable with a random SQL identifier suffix for scenario-local object names."""
+    variables[name] = f"{prefix}{uuid.uuid4().hex[:8]}"
     return variables
 
 
@@ -208,9 +216,10 @@ def query_error(error, query, spark):
 
 
 @then(parsers.parse('query result has row where "{match_column}" is "{match_value}"'))
-def query_result_has_row(match_column: str, match_value: str, query: str, spark) -> None:
+def query_result_has_row(match_column: str, match_value: str, query: str, spark, variables) -> None:
+    resolved_match_value = Template(match_value).render(**variables)
     rows = spark.sql(query).collect()
-    assert any(str(row[match_column]) == match_value for row in rows)
+    assert any(str(row[match_column]) == resolved_match_value for row in rows)
 
 
 @then(
@@ -225,11 +234,14 @@ def query_result_row_value_contains(
     substring: str,
     query: str,
     spark,
+    variables,
 ) -> None:
+    resolved_match_value = Template(match_value).render(**variables)
+    resolved_substring = Template(substring).render(**variables)
     rows = spark.sql(query).collect()
-    matches = [row for row in rows if str(row[match_column]) == match_value]
+    matches = [row for row in rows if str(row[match_column]) == resolved_match_value]
     assert matches
-    assert substring in str(matches[0][value_column])
+    assert resolved_substring in str(matches[0][value_column])
 
 
 @then(
@@ -244,8 +256,11 @@ def query_result_row_value_equals(
     expected: str,
     query: str,
     spark,
+    variables,
 ) -> None:
+    resolved_match_value = Template(match_value).render(**variables)
+    resolved_expected = Template(expected).render(**variables)
     rows = spark.sql(query).collect()
-    matches = [row for row in rows if str(row[match_column]) == match_value]
+    matches = [row for row in rows if str(row[match_column]) == resolved_match_value]
     assert matches
-    assert str(matches[0][value_column]) == expected
+    assert str(matches[0][value_column]) == resolved_expected

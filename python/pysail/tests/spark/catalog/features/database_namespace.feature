@@ -13,9 +13,10 @@ Feature: Database, schema, and namespace aliases
       """
       SHOW <show_keyword> LIKE '<name>'
       """
-    Then query result
-      | name   | catalog | description | locationUri |
-      | <name> | sail    | <comment>   | NULL        |
+    Then query result has row where "name" is "<name>"
+    Then query result row where "name" is "<name>" has "catalog" equal to "sail"
+    Then query result row where "name" is "<name>" has "description" equal to "<comment>"
+    Then query result row where "name" is "<name>" has "locationUri" containing "<name>.db"
     When query
       """
       DESCRIBE <describe_keyword> EXTENDED <name>

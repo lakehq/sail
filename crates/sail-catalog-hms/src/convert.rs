@@ -54,13 +54,18 @@ pub(crate) fn database_to_status(
         .name
         .as_ref()
         .ok_or_else(|| CatalogError::External("Database is missing a name".to_string()))?;
+    let properties = map_to_vec(database.parameters.as_ref());
 
     Ok(DatabaseStatus {
         catalog: catalog.to_string(),
         database: vec![name.to_string()],
         comment: database.description.as_ref().map(ToString::to_string),
-        location: database.location_uri.as_ref().map(ToString::to_string),
-        properties: map_to_vec(database.parameters.as_ref()),
+        location: database
+            .location_uri
+            .as_ref()
+            .map(ToString::to_string)
+            .or_else(|| namespace_location_from_properties(&properties)),
+        properties,
     })
 }
 
@@ -608,6 +613,25 @@ pub(crate) fn map_to_vec(values: Option<&AHashMap<FastStr, FastStr>>) -> Vec<(St
     values
 }
 
+fn namespace_location_from_properties(properties: &[(String, String)]) -> Option<String> {
+    properties
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("location"))
+        .map(|(_, value)| value.clone())
+        .or_else(|| {
+            properties
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("warehouse"))
+                .map(|(_, value)| value.clone())
+        })
+        .or_else(|| {
+            properties
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+                .map(|(_, value)| value.clone())
+        })
+}
+
 fn build_columns(
     columns: Vec<CreateTableColumnOptions>,
     partition_columns: &[String],
@@ -755,6 +779,28 @@ mod tests {
         assert_eq!(
             status.location.as_deref(),
             Some("file:/tmp/warehouse/default.db")
+        );
+    }
+
+    #[test]
+    fn test_database_to_status_falls_back_to_namespace_properties() {
+        let database = Database {
+            name: Some("default".into()),
+            parameters: Some(
+                [
+                    ("warehouse".into(), "s3://warehouse/default.db".into()),
+                    ("path".into(), "s3://path/default.db".into()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+
+        let status = database_to_status("hms", &database).unwrap();
+        assert_eq!(
+            status.location.as_deref(),
+            Some("s3://warehouse/default.db")
         );
     }
 

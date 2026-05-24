@@ -6,7 +6,7 @@ use sail_catalog::provider::{
 };
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -58,8 +58,8 @@ impl PlanResolver<'_> {
             let catalog_manager = self.ctx.extension::<CatalogManager>()?;
             let db_location = catalog_manager
                 .get_database_by_qualifier(qualifier)
-                .await?
-                .location;
+                .await
+                .map(|status| database_location(&status))?;
             qualify_table_location(
                 &location,
                 db_location.as_deref(),
@@ -189,8 +189,8 @@ impl PlanResolver<'_> {
             let catalog_manager = self.ctx.extension::<CatalogManager>()?;
             let db_location = catalog_manager
                 .get_database_by_qualifier(qualifier)
-                .await?
-                .location;
+                .await
+                .map(|status| database_location(&status))?;
             qualify_table_location(
                 &location,
                 db_location.as_deref(),
@@ -239,8 +239,8 @@ impl PlanResolver<'_> {
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let location = catalog_manager
             .get_database_by_qualifier(qualifier)
-            .await?
-            .location;
+            .await
+            .map(|status| database_location(&status))?;
 
         Ok(qualify_table_location(
             &name,
@@ -558,4 +558,85 @@ fn extract_sort_int_arg(args: &[spec::Expr], index: usize, description: &str) ->
         )));
     }
     Ok(value)
+}
+
+fn database_location(status: &DatabaseStatus) -> Option<String> {
+    status
+        .location
+        .clone()
+        .or_else(|| namespace_location_from_properties(&status.properties))
+}
+
+fn namespace_location_from_properties(properties: &[(String, String)]) -> Option<String> {
+    properties
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("location"))
+        .map(|(_, value)| value.clone())
+        .or_else(|| {
+            properties
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("warehouse"))
+                .map(|(_, value)| value.clone())
+        })
+        .or_else(|| {
+            properties
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+                .map(|(_, value)| value.clone())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_common_datafusion::catalog::DatabaseStatus;
+
+    use super::{database_location, namespace_location_from_properties};
+
+    #[test]
+    fn namespace_location_prefers_location_then_warehouse_then_path() {
+        assert_eq!(
+            namespace_location_from_properties(&[
+                ("warehouse".to_string(), "s3://bucket/warehouse".to_string()),
+                ("path".to_string(), "s3://bucket/path".to_string()),
+            ]),
+            Some("s3://bucket/warehouse".to_string())
+        );
+        assert_eq!(
+            namespace_location_from_properties(&[(
+                "path".to_string(),
+                "s3://bucket/path".to_string(),
+            )]),
+            Some("s3://bucket/path".to_string())
+        );
+    }
+
+    #[test]
+    fn database_location_prefers_explicit_location_over_properties() {
+        let status = DatabaseStatus {
+            catalog: "test".to_string(),
+            database: vec!["db".to_string()],
+            comment: None,
+            location: Some("s3://bucket/explicit".to_string()),
+            properties: vec![("warehouse".to_string(), "s3://bucket/warehouse".to_string())],
+        };
+        assert_eq!(
+            database_location(&status).as_deref(),
+            Some("s3://bucket/explicit")
+        );
+    }
+
+    #[test]
+    fn database_location_falls_back_to_properties() {
+        let status = DatabaseStatus {
+            catalog: "test".to_string(),
+            database: vec!["db".to_string()],
+            comment: None,
+            location: None,
+            properties: vec![("warehouse".to_string(), "s3://bucket/warehouse".to_string())],
+        };
+        assert_eq!(
+            database_location(&status).as_deref(),
+            Some("s3://bucket/warehouse")
+        );
+    }
 }

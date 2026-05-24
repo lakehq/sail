@@ -1,13 +1,34 @@
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use url::Url;
 
-/// Expands a leading `~` to the value of the `HOME` environment variable.
-/// Returns the value unchanged if it does not start with `~` or if `HOME` is not set.
+fn home_directory() -> Option<String> {
+    std::env::var("HOME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var("USERPROFILE")
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            let drive = std::env::var("HOMEDRIVE").ok()?;
+            let path = std::env::var("HOMEPATH").ok()?;
+            if drive.is_empty() || path.is_empty() {
+                None
+            } else {
+                Some(format!("{drive}{path}"))
+            }
+        })
+}
+
+/// Expands a leading `~` to the current user's home directory when available.
+/// Returns the value unchanged if it does not start with `~` or if no home directory is set.
 pub fn expand_tilde(value: &str) -> String {
     if let Some(rest) = value.strip_prefix('~') {
         if rest.is_empty() || rest.starts_with('/') {
-            if let Ok(home) = std::env::var("HOME") {
+            if let Some(home) = home_directory() {
                 return format!("{home}{rest}");
             }
         }
@@ -39,20 +60,27 @@ pub fn normalize_path(value: &str) -> String {
         return value.to_string();
     }
     // Collect components, resolving `..` by popping the previous component.
-    let mut normalized = Vec::new();
+    let mut prefix = None::<OsString>;
+    let mut has_root = false;
+    let mut normalized = Vec::<OsString>::new();
     for comp in path.components() {
         match comp {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
                 normalized.pop();
             }
-            std::path::Component::Normal(c) => normalized.push(c),
-            std::path::Component::RootDir => {}
-            std::path::Component::Prefix(p) => normalized.push(p.as_os_str()),
+            std::path::Component::Normal(c) => normalized.push(c.to_os_string()),
+            std::path::Component::RootDir => has_root = true,
+            std::path::Component::Prefix(p) => prefix = Some(p.as_os_str().to_os_string()),
         }
     }
-    let mut result = std::path::PathBuf::new();
-    result.push("/");
+    let mut result = PathBuf::new();
+    if let Some(prefix) = prefix {
+        result.push(prefix);
+    }
+    if has_root {
+        result.push(std::path::MAIN_SEPARATOR_STR);
+    }
     for comp in normalized {
         result.push(comp);
     }
@@ -143,11 +171,16 @@ mod tests {
 
     #[test]
     fn test_expand_tilde() {
-        let home = std::env::var("HOME");
-        assert!(home.is_ok(), "HOME should be set for path tests");
-        let home = home.unwrap_or_default();
-        assert_eq!(expand_tilde("~/foo"), format!("{home}/foo"));
-        assert_eq!(expand_tilde("~"), home);
+        match home_directory() {
+            Some(home) => {
+                assert_eq!(expand_tilde("~/foo"), format!("{home}/foo"));
+                assert_eq!(expand_tilde("~"), home);
+            }
+            None => {
+                assert_eq!(expand_tilde("~/foo"), "~/foo");
+                assert_eq!(expand_tilde("~"), "~");
+            }
+        }
         assert_eq!(expand_tilde("/bar"), "/bar");
     }
 
@@ -156,6 +189,16 @@ mod tests {
         assert_eq!(normalize_path("/a/b/../c"), "/a/c");
         assert_eq!(normalize_path("/a/./b"), "/a/b");
         assert_eq!(normalize_path("s3://bucket/a/../b"), "s3://bucket/a/../b");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_normalize_path_preserves_windows_prefixes() {
+        assert_eq!(normalize_path(r"C:\tmp\a\..\b"), r"C:\tmp\b");
+        assert_eq!(
+            normalize_path(r"\\server\share\a\..\b"),
+            r"\\server\share\b"
+        );
     }
 
     #[test]
