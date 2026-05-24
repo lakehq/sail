@@ -1,4 +1,3 @@
-#[expect(clippy::disallowed_types)]
 use datafusion_common::{DFSchema, DFSchemaRef};
 #[expect(clippy::disallowed_types)]
 use datafusion_expr::{EmptyRelation, LogicalPlan, SetVariable, Statement};
