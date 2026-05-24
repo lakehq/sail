@@ -377,6 +377,10 @@ SKIPPED_SPARK_TESTS = [
         keywords=["pyspark.sql.catalog.Catalog.listCatalogs"],
         reason="Sail exposes an additional 'system' catalog that Spark does not have; ported to PySail test suite",
     ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame._ipython_key_completions_"],
+        reason="Not working with Spark patch; ported to PySail test suite",
+    ),
 ]
 
 
