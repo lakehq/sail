@@ -481,7 +481,10 @@ class VariantConverter(Converter):
         columns_by_name = {f.name: [] for f in self._fields}
         mask = []
         for x in data:
-            value = self._spark_data_type.toInternal(x)
+            if isinstance(x, dict) and all(k in x and isinstance(x[k], bytes) for k in ("metadata", "value")):
+                value = x
+            else:
+                value = self._spark_data_type.toInternal(x)
             if value is None:
                 mask.append(True)
                 for values in columns_by_name.values():
@@ -599,7 +602,12 @@ class StructConverter(Converter):
             msg = f"invalid data type for struct: {type(array)}"
             raise TypeError(msg)
         columns = [c.to_pyspark(col) for col, c in zip(array.flatten(), self._field_converters, strict=True)]
-        return [self._spark_data_type.fromInternal(x) for x in zip(*columns, strict=True)]
+        valid = array.is_valid().to_pylist()
+        names = [f.name for f in self._fields]
+        return [
+            None if not valid[i] else Row(**dict(zip(names, values, strict=True)))
+            for i, values in enumerate(zip(*columns, strict=True))
+        ]
 
     def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         n = len(self._fields)
