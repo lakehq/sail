@@ -20,7 +20,8 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
 use sail_common_datafusion::datasource::{
-    find_path_in_options, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
+    find_path_in_options, normalize_table_format_name, BucketBy, OptionLayer, SinkMode, SourceInfo,
+    TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -147,7 +148,7 @@ impl WritePlanBuilder {
 
     /// Sets the output format for the builder.
     pub fn with_format(mut self, format: String) -> Self {
-        self.format = Some(format);
+        self.format = Some(normalize_table_format_name(&format).into_owned());
         self
     }
 
@@ -291,8 +292,14 @@ impl PlanResolver<'_> {
                         | WriteMode::TruncatePartitions
                 );
                 if requires_existing && info.is_none() {
-                    return Err(PlanError::invalid(format!(
-                        "table does not exist: {table:?}"
+                    let table_name = table
+                        .parts()
+                        .iter()
+                        .map(|part| part.as_ref())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    return Err(PlanError::AnalysisError(format!(
+                        "[TABLE_OR_VIEW_NOT_FOUND] The table or view `{table_name}` cannot be found."
                     )));
                 }
 

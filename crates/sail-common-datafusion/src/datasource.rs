@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -394,19 +395,42 @@ impl TableFormatRegistry {
             .formats
             .write()
             .map_err(|_| plan_datafusion_err!("table format registry poisoned"))?;
-        formats.insert(format.name().to_lowercase(), format);
+        formats.insert(
+            normalize_table_format_name(format.name()).into_owned(),
+            format,
+        );
         Ok(())
     }
 
     pub fn get(&self, name: &str) -> Result<Arc<dyn TableFormat>> {
+        let name = normalize_table_format_name(name);
         let formats = self
             .formats
             .read()
             .map_err(|_| plan_datafusion_err!("table format registry poisoned"))?;
         formats
-            .get(&name.to_lowercase())
+            .get(name.as_ref())
             .cloned()
-            .ok_or_else(|| missing_table_format_error(name))
+            .ok_or_else(|| missing_table_format_error(name.as_ref()))
+    }
+}
+
+pub fn normalize_table_format_name(name: &str) -> Cow<'_, str> {
+    let name = name.to_lowercase();
+    match name.as_str() {
+        "org.apache.spark.sql.avro" => Cow::Borrowed("avro"),
+        "org.apache.spark.sql.csv" => Cow::Borrowed("csv"),
+        "org.apache.spark.sql.json" => Cow::Borrowed("json"),
+        "org.apache.spark.sql.orc" => Cow::Borrowed("orc"),
+        "org.apache.spark.sql.parquet" => Cow::Borrowed("parquet"),
+        "org.apache.spark.sql.text" => Cow::Borrowed("text"),
+        "org.apache.spark.sql.execution.datasources.avro" => Cow::Borrowed("avro"),
+        "org.apache.spark.sql.execution.datasources.csv" => Cow::Borrowed("csv"),
+        "org.apache.spark.sql.execution.datasources.json" => Cow::Borrowed("json"),
+        "org.apache.spark.sql.execution.datasources.orc" => Cow::Borrowed("orc"),
+        "org.apache.spark.sql.execution.datasources.parquet" => Cow::Borrowed("parquet"),
+        "org.apache.spark.sql.execution.datasources.text" => Cow::Borrowed("text"),
+        _ => Cow::Owned(name),
     }
 }
 
