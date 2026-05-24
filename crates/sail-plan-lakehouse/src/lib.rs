@@ -11,9 +11,11 @@ use sail_data_source::resolve_listing_urls;
 use sail_delta_lake::table::open_table_with_object_store_and_table_config;
 use sail_delta_lake::DeltaSnapshotConfig;
 use sail_logical_plan::file_delete::FileDeleteNode;
+use sail_logical_plan::file_vacuum::FileVacuumNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
+use sail_physical_plan::file_vacuum::create_file_vacuum_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::row_level_write::create_row_level_write_physical_plan;
@@ -113,6 +115,18 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
                 node.options().clone(),
             )
             .await?;
+            return Ok(Some(plan));
+        }
+
+        if let Some(node) = node.as_any().downcast_ref::<FileVacuumNode>() {
+            if !is_lakehouse_format(node.options().format.as_str()) {
+                return Ok(None);
+            }
+            if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
+                return internal_err!("FileVacuumNode should have no inputs");
+            }
+            let plan =
+                create_file_vacuum_physical_plan(session_state, node.options().clone()).await?;
             return Ok(Some(plan));
         }
 

@@ -18,4 +18,5 @@
 // pub mod merge;
 // pub mod optimize;
 // pub mod update;
+pub mod vacuum;
 pub mod write;

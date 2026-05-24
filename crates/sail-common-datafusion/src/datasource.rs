@@ -374,6 +374,26 @@ pub trait TableFormat: Send + Sync {
             self.name()
         )
     }
+
+    /// Creates an `ExecutionPlan` for `VACUUM` (remove stale unreferenced data files).
+    async fn create_vacuum_writer(
+        &self,
+        ctx: &dyn Session,
+        info: VacuumInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let _ = (ctx, info);
+        not_impl_err!("VACUUM is not supported for {} format", self.name())
+    }
+}
+
+/// Parameters passed to [`TableFormat::create_vacuum_writer`].
+#[derive(Debug, Clone)]
+pub struct VacuumInfo {
+    pub table_name: Vec<String>,
+    pub path: String,
+    pub retention_hours: Option<u64>,
+    pub dry_run: bool,
+    pub options: Vec<OptionLayer>,
 }
 
 /// Thread-safe registry of available `TableFormat` implementations.

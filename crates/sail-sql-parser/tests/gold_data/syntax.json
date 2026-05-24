@@ -4523,6 +4523,14 @@
               }
             },
             {
+              "name": "Keyword(Dry)",
+              "node": {
+                "terminal": {
+                  "keyword": "DRY"
+                }
+              }
+            },
+            {
               "name": "Keyword(Else)",
               "node": {
                 "terminal": {
@@ -5539,6 +5547,14 @@
               }
             },
             {
+              "name": "Keyword(Retain)",
+              "node": {
+                "terminal": {
+                  "keyword": "RETAIN"
+                }
+              }
+            },
+            {
               "name": "Keyword(Right)",
               "node": {
                 "terminal": {
@@ -5575,6 +5591,14 @@
               "node": {
                 "terminal": {
                   "keyword": "ROWS"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Run)",
+              "node": {
+                "terminal": {
+                  "keyword": "RUN"
                 }
               }
             },
@@ -6063,6 +6087,14 @@
               "node": {
                 "terminal": {
                   "keyword": "USING"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Vacuum)",
+              "node": {
+                "terminal": {
+                  "keyword": "VACUUM"
                 }
               }
             },
@@ -7508,6 +7540,14 @@
               }
             },
             {
+              "name": "Option(Tuple(Keyword(Dry), Keyword(Run)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(Dry), Keyword(Run))"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Keyword(Escaped), Keyword(By), StringLiteral))",
               "node": {
                 "optional": {
@@ -7576,6 +7616,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Keyword(Or), Keyword(Replace))"
+                }
+              }
+            },
+            {
+              "name": "Option(Tuple(Keyword(Retain), NumberLiteral, Keyword(Hours)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(Retain), NumberLiteral, Keyword(Hours))"
                 }
               }
             },
@@ -9908,6 +9956,22 @@
                         "nonTerminal": "CommentValue"
                       }
                     ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Vacuum)"
+                      },
+                      {
+                        "nonTerminal": "Either(ObjectName, StringLiteral)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Retain), NumberLiteral, Keyword(Hours)))"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Dry), Keyword(Run)))"
+                      }
+                    ]
                   }
                 ]
               }
@@ -10696,6 +10760,19 @@
               }
             },
             {
+              "name": "Tuple(Keyword(Dry), Keyword(Run))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Dry)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Run)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Keyword(Escaped), Keyword(By), StringLiteral)",
               "node": {
                 "sequence": [
@@ -10957,6 +11034,22 @@
                   },
                   {
                     "nonTerminal": "Keyword(Column)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Keyword(Retain), NumberLiteral, Keyword(Hours))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Retain)"
+                  },
+                  {
+                    "nonTerminal": "NumberLiteral"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Hours)"
                   }
                 ]
               }

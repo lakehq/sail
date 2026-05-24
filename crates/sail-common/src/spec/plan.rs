@@ -533,6 +533,19 @@ pub enum CommandNode {
         column: ObjectName,
         value: Option<String>,
     },
+    Vacuum {
+        target: VacuumTarget,
+        /// Retention window in hours. `None` uses the table's `delta.deletedFileRetentionDuration`.
+        retention_hours: Option<u64>,
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VacuumTarget {
+    Table(ObjectName),
+    Path(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

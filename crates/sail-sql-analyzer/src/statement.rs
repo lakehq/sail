@@ -1143,6 +1143,31 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::Vacuum {
+            vacuum: _,
+            target,
+            retain,
+            dry_run,
+        } => {
+            let target = match target {
+                Either::Left(name) => spec::VacuumTarget::Table(from_ast_object_name(name)?),
+                Either::Right(path) => spec::VacuumTarget::Path(from_ast_string(path)?),
+            };
+            let retention_hours = retain
+                .map(|(_, number, _)| {
+                    let text = number.text();
+                    text.trim().parse::<u64>().map_err(|_| {
+                        SqlError::invalid("VACUUM RETAIN: hours must be a non-negative integer")
+                    })
+                })
+                .transpose()?;
+            let node = spec::CommandNode::Vacuum {
+                target,
+                retention_hours,
+                dry_run: dry_run.is_some(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
     }
 }
 

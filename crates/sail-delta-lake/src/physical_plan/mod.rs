@@ -37,6 +37,7 @@ mod metadata_stats_exec;
 mod relaxed_tz_exec;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
+pub mod vacuum_exec;
 mod write_context;
 mod writer_exec;
 mod writer_options;

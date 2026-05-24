@@ -22,6 +22,7 @@ use sail_common_datafusion::streaming::event::schema::{
 };
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
+use sail_logical_plan::file_vacuum::FileVacuumNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
@@ -40,6 +41,7 @@ use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
+use sail_physical_plan::file_vacuum::create_file_vacuum_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -233,6 +235,11 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             }?;
             create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
                 .await?
+        } else if let Some(node) = node.as_any().downcast_ref::<FileVacuumNode>() {
+            if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
+                return internal_err!("FileVacuumNode should have no inputs");
+            }
+            create_file_vacuum_physical_plan(session_state, node.options().clone()).await?
         } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
             let _ = (
                 planner,

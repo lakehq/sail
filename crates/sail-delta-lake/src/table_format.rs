@@ -20,6 +20,7 @@ use sail_data_source::resolve_listing_urls;
 use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
+use crate::physical_plan::vacuum_exec::DeltaVacuumExec;
 use crate::physical_plan::planner::{
     plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
     DeltaPlannerConfig, PlannerContext,
@@ -567,6 +568,35 @@ impl TableFormat for DeltaTableFormat {
             .await
             .map(|_| ())
             .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+
+    async fn create_vacuum_writer(
+        &self,
+        ctx: &dyn Session,
+        info: sail_common_datafusion::datasource::VacuumInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let table_url = Self::parse_table_url(ctx, vec![info.path]).await?;
+
+        // Check whether the retention safety guard is disabled by a table property.
+        // We inspect the raw options list (before loading the full snapshot) to avoid a
+        // double-open.  The property is non-standard Sail-only; users set it via
+        // `ALTER TABLE ... SET TBLPROPERTIES ('delta.vacuum.retentionDurationCheck.enabled' = 'false')`.
+        let skip_retention_check = info.options.iter().any(|layer| match layer {
+            sail_common_datafusion::datasource::OptionLayer::TablePropertyList { items } => {
+                items.iter().any(|(k, v)| {
+                    k.eq_ignore_ascii_case("delta.vacuum.retentionDurationCheck.enabled")
+                        && v.eq_ignore_ascii_case("false")
+                })
+            }
+            _ => false,
+        });
+
+        Ok(Arc::new(DeltaVacuumExec::new(
+            table_url,
+            info.retention_hours,
+            info.dry_run,
+            skip_retention_check,
+        )))
     }
 }
 

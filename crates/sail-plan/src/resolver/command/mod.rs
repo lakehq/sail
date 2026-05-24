@@ -17,6 +17,7 @@ mod function;
 mod insert;
 mod merge;
 mod show;
+mod vacuum;
 mod variable;
 mod write;
 mod write_stream;
@@ -322,6 +323,14 @@ impl PlanResolver<'_> {
             }
             CommandNode::CommentOnColumn { .. } => {
                 Err(PlanError::todo("CommandNode::CommentOnColumn"))
+            }
+            CommandNode::Vacuum {
+                target,
+                retention_hours,
+                dry_run,
+            } => {
+                self.resolve_command_vacuum(target, retention_hours, dry_run, state)
+                    .await
             }
         }
     }
