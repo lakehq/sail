@@ -162,9 +162,7 @@ def _spark_type_from_field(field_or_type: pa.Field | pa.DataType):
             fields = data_type.fields
         except AttributeError:
             fields = [data_type.field(i) for i in range(data_type.num_fields)]
-        return StructType(
-            [StructField(f.name, _spark_type_from_field(f), f.nullable) for f in fields]
-        )
+        return StructType([StructField(f.name, _spark_type_from_field(f), f.nullable) for f in fields])
     return from_arrow_type(data_type)
 
 

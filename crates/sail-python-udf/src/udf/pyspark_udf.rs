@@ -43,6 +43,7 @@ pub struct PySparkUDF {
 }
 
 impl PySparkUDF {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         kind: PySparkUdfKind,
         name: String,

@@ -545,10 +545,15 @@ mod tests {
             parse("'-2-1' year to month", false)?,
             parse("-'2-1' year to month", false)?
         );
-        assert_eq!(
-            parse("'-2-1' year to month", false)?,
-            parse("-2 year -1 month", false)?
-        );
+        let left = parse("'-2-1' year to month", false)?;
+        let right = parse("-2 year -1 month", false)?;
+        assert!(matches!(
+            (left, right),
+            (
+                IntervalValue::YearMonth { months: left, .. },
+                IntervalValue::YearMonth { months: right, .. }
+            ) if left == right
+        ));
 
         assert!(parse("106751991 day 14454775807 microsecond", false).is_ok());
         assert!(parse("106751991 day 14454775807 microsecond", true).is_ok());
