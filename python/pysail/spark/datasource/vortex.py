@@ -17,6 +17,9 @@ Usage::
 
 from __future__ import annotations
 
+import glob
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
@@ -56,6 +59,51 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from pyspark.sql.datasource import Filter
+
+
+# ============================================================================
+# File finding helpers
+# ============================================================================
+
+
+def _get_vortex_files(path: str) -> list[str]:
+    """Resolve a path into a sorted list of Vortex files.
+
+    Path handling:
+    - File:         Returns [path] directly if it's a Vortex file.
+    - Directory:    Recursively collects all files; raises ValueError
+                    if any non-Vortex file is found, otherwise returns all.
+    - Glob pattern: If pattern targets Vortex (ends with ``.vortex``), expands
+                    the pattern, collects matching Vortex files and returns them;
+                    non-Vortex files are silently skipped.
+    """
+    vortex_files: list[str] = []
+
+    if os.path.isfile(path):
+        if not path.endswith(".vortex"):
+            msg = f"Path is not a Vortex file: '{path}'"
+            raise ValueError(msg)
+        vortex_files.append(path)
+    elif os.path.isdir(path):
+        for p in Path(path).rglob("*"):
+            if p.is_file():
+                f = str(p)
+                if not f.endswith(".vortex"):
+                    msg = f"Path contains non-Vortex file(s): '{path}'"
+                    raise ValueError(msg)
+                vortex_files.append(f)
+    else:
+        is_vortex_pattern = path.endswith(".vortex")
+        if is_vortex_pattern:
+            matched = glob.glob(path, recursive=True)
+            vortex_files.extend([m for m in matched if os.path.isfile(m) and m.endswith(".vortex")])
+
+    if not vortex_files:
+        msg = f"No Vortex files found in the specified path: '{path}'"
+        raise ValueError(msg)
+
+    return sorted(set(vortex_files))
+
 
 # ============================================================================
 # Filter helpers
@@ -193,15 +241,17 @@ def _cast_view_types(table: pa.Table) -> pa.Table:
 
 
 def _read_schema(path: str) -> pa.Schema:
-    """Read the Arrow schema from a Vortex file without loading all data."""
+    """Read the Arrow schema from first Vortex file without loading all data."""
+    vortex_files = _get_vortex_files(path)
+    vf_path = vortex_files[0]
     try:
-        vf = vortex.open(path)
+        vf = vortex.open(vf_path)
     except Exception as e:
-        msg = f"Failed to open Vortex file: {path!r}. Error: {e}"
+        msg = f"Failed to open Vortex file: {vf_path!r}. Error: {e}"
         raise RuntimeError(msg) from e
     first = next(iter(vf.scan()), None)
     if first is None:
-        msg = f"Cannot infer schema from empty Vortex file: {path!r}"
+        msg = f"Cannot infer schema from empty Vortex file: {vf_path!r}"
         raise ValueError(msg)
     return _normalize_schema(first.to_arrow_table().schema)
 
@@ -212,10 +262,10 @@ def _read_schema(path: str) -> pa.Schema:
 
 
 class VortexPartition(InputPartition):
-    """A single Vortex file partition."""
+    """Partition, one per Vortex file."""
 
-    def __init__(self, path: str) -> None:
-        super().__init__(0)  # partition index; single-file source always uses 0
+    def __init__(self, index: int, path: str) -> None:
+        super().__init__(index)  # partition index
         self.path = path
 
 
@@ -244,7 +294,8 @@ class VortexReader(DataSourceReader):
         return iter(rejected)
 
     def partitions(self) -> list[InputPartition]:
-        return [VortexPartition(self.path)]
+        vortex_files = _get_vortex_files(self.path)
+        return [VortexPartition(index, vf_path) for index, vf_path in enumerate(vortex_files)]
 
     def read(self, partition: InputPartition) -> Iterator[pa.RecordBatch]:
         if not isinstance(partition, VortexPartition):
@@ -282,14 +333,36 @@ class VortexDataSource(DataSource):
         from pysail.spark.datasource.vortex import VortexDataSource
 
         spark.dataSource.register(VortexDataSource)
+
+        # Read a single file
         df = spark.read.format("vortex").option("path", "/data/file.vortex").load()
 
-    Supported options:
+        # Read a directory recursively
+        df = spark.read.format("vortex").option("path", "/data/").load()
+
+        # Read with a glob pattern
+        df = spark.read.format("vortex").option("path", "/data/*.vortex").load()
+        df = (
+            spark.read.format("vortex").option("path", "/data/**/*.vortex").load()
+        )  # recursive
+
+    Read Mode
+    -------
+    Path handling:
+
+    - **File**: Must be a Vortex file. Raises ``ValueError`` otherwise.
+    - **Directory**: Recursively collects all files beneath the directory.
+      Raises ``ValueError`` if any non-Vortex file is encountered.
+    - **Glob pattern**: Only patterns ending with ``.vortex`` are expanded;
+    non-Vortex matches are silently skipped.
+
+    Supported Options:
 
     +--------+----------+------------------------------------------+
     | Option | Required | Description                              |
     +========+==========+==========================================+
-    | path   | Yes      | Path to the Vortex file (.vortex)        |
+    | path   | Yes      | Path to read: file, directory, or        |
+    |        |          | glob pattern ending with ``.vortex``     |
     +--------+----------+------------------------------------------+
 
     Supported filter pushdown: EqualTo, GreaterThan, GreaterThanOrEqual,
