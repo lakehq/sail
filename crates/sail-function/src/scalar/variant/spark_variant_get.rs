@@ -117,8 +117,8 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
         None
     };
 
-    // Parse the Spark path: strip leading "$." or "$"
-    // Validate: "$." alone is invalid (trailing dot with no field name)
+    // Parse and validate the Spark path expression, then convert it to
+    // parquet-variant path syntax for VariantPath construction.
     let clean_path = spark_path_to_variant_path(&path_str, name)?;
     let variant_path = if clean_path.is_empty() {
         VariantPath::default()
