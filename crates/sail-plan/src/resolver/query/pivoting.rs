@@ -23,6 +23,7 @@ use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    /// Resolve a PIVOT query into a logical plan with filtered aggregates, one column per pivot value.
     pub(super) async fn resolve_query_pivot(
         &self,
         pivot: spec::Pivot,
@@ -135,6 +136,7 @@ impl PlanResolver<'_> {
         )
     }
 
+    /// Infer the implicit GROUP BY columns for a pivot: input columns minus the pivot and aggregate columns.
     fn infer_pivot_grouping_columns(
         &self,
         schema: &DFSchemaRef,
@@ -195,10 +197,14 @@ impl PlanResolver<'_> {
         // the alias, sorting by `pivot_col_expr` would re-evaluate against
         // source columns that the project just dropped, breaking computed
         // pivot expressions like `col("year") + 1`.
+        // LIMIT before SORT bounds memory at pivot_max_values + 1: in the
+        // success case (<= max distinct values) it is a no-op, and in the
+        // failure case we error anyway so the unsorted overflow row is fine.
         const PIVOT_VALUE_ALIAS: &str = "__pivot_value";
         let distinct_plan = LogicalPlanBuilder::from(input.clone())
             .project(vec![pivot_col_expr.clone().alias(PIVOT_VALUE_ALIAS)])?
             .distinct()?
+            .limit(0, Some(self.config.pivot_max_values + 1))?
             .sort(vec![col(PIVOT_VALUE_ALIAS).sort(true, true)])?
             .build()?;
 
@@ -218,21 +224,22 @@ impl PlanResolver<'_> {
                     let name =
                         formatter.literal_to_string(&scalar, &self.config.session_timezone)?;
                     values.push((scalar, name));
-                    if values.len() > self.config.pivot_max_values {
-                        return Err(PlanError::AnalysisError(format!(
-                            "The pivot column {pivot_col_expr} has more than {} distinct values, \
-                             this could indicate an error. If this was intended, set \
-                             spark.sql.pivotMaxValues to at least the number of distinct values \
-                             of the pivot column.",
-                            self.config.pivot_max_values,
-                        )));
-                    }
                 }
             }
+        }
+        if values.len() > self.config.pivot_max_values {
+            return Err(PlanError::AnalysisError(format!(
+                "The pivot column {pivot_col_expr} has more than {} distinct values, \
+                 this could indicate an error. If this was intended, set \
+                 spark.sql.pivotMaxValues to at least the number of distinct values \
+                 of the pivot column.",
+                self.config.pivot_max_values,
+            )));
         }
         Ok(values)
     }
 
+    /// Resolve an UNPIVOT query into a logical plan that melts value columns into name/value rows.
     pub(super) async fn resolve_query_unpivot(
         &self,
         unpivot: spec::Unpivot,
@@ -390,6 +397,7 @@ impl PlanResolver<'_> {
     }
 }
 
+/// Return true if a sequence of data types can be coerced to a single common type.
 fn types_are_coercible(data_types: &[DataType]) -> bool {
     if data_types.is_empty() {
         return true;
