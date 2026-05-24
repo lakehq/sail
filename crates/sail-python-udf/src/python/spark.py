@@ -454,7 +454,11 @@ class ArrayConverter(Converter):
                 values.extend(x)
                 end += len(x)
         offsets.append(end)
-        return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), self._value_converter.from_pyspark(values))
+        return pa.ListArray.from_arrays(
+            pa.array(offsets, type=pa.int32()),
+            self._value_converter.from_pyspark(values),
+            type=self._data_type,
+        )
 
 
 class MapConverter(Converter):
@@ -498,6 +502,7 @@ class MapConverter(Converter):
             pa.array(offsets, type=pa.int32()),
             self._key_converter.from_pyspark(keys),
             self._value_converter.from_pyspark(values),
+            type=self._data_type,
         )
 
 

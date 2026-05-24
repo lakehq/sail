@@ -3,13 +3,14 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, ListArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::functions_aggregate::array_agg;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{
-    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, ReversedUDAF, Signature,
-    StatisticsArgs,
+    Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF,
+    Signature, StatisticsArgs,
 };
 use datafusion_expr::expr::{AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::function::AggregateFunctionSimplification;
@@ -29,6 +30,153 @@ impl SparkArrayAgg {
 
     fn with_inner(inner: Arc<AggregateUDF>) -> Self {
         Self { inner }
+    }
+
+    fn output_value_field(return_field: &FieldRef) -> Option<FieldRef> {
+        match return_field.data_type() {
+            DataType::List(field) => Some(Arc::clone(field)),
+            _ => None,
+        }
+    }
+}
+
+fn with_list_value_field(array: &ListArray, value_field: &FieldRef) -> ListArray {
+    ListArray::new(
+        Arc::clone(value_field),
+        array.offsets().clone(),
+        Arc::clone(array.values()),
+        array.nulls().cloned(),
+    )
+}
+
+fn with_list_scalar_value_field(value: ScalarValue, value_field: Option<&FieldRef>) -> ScalarValue {
+    match (value, value_field) {
+        (ScalarValue::List(array), Some(value_field)) => {
+            ScalarValue::List(Arc::new(with_list_value_field(array.as_ref(), value_field)))
+        }
+        (value, _) => value,
+    }
+}
+
+#[derive(Debug)]
+struct SparkArrayAggAccumulator {
+    inner: Box<dyn Accumulator>,
+    output_value_field: Option<FieldRef>,
+}
+
+impl SparkArrayAggAccumulator {
+    fn new(inner: Box<dyn Accumulator>, output_value_field: Option<FieldRef>) -> Self {
+        Self {
+            inner,
+            output_value_field,
+        }
+    }
+}
+
+impl Accumulator for SparkArrayAggAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.inner.update_batch(values)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let value = self.inner.evaluate()?;
+        Ok(with_list_scalar_value_field(
+            value,
+            self.output_value_field.as_ref(),
+        ))
+    }
+
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.inner.state()
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.inner.merge_batch(states)
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.inner.retract_batch(values)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        self.inner.supports_retract_batch()
+    }
+}
+
+struct SparkArrayAggGroupsAccumulator {
+    inner: Box<dyn GroupsAccumulator>,
+    output_value_field: Option<FieldRef>,
+}
+
+impl SparkArrayAggGroupsAccumulator {
+    fn new(inner: Box<dyn GroupsAccumulator>, output_value_field: Option<FieldRef>) -> Self {
+        Self {
+            inner,
+            output_value_field,
+        }
+    }
+
+    fn restore_output_field(&self, array: ArrayRef) -> ArrayRef {
+        match (
+            array.as_ref().as_any().downcast_ref::<ListArray>(),
+            self.output_value_field.as_ref(),
+        ) {
+            (Some(array), Some(value_field)) => Arc::new(with_list_value_field(array, value_field)),
+            _ => array,
+        }
+    }
+}
+
+impl GroupsAccumulator for SparkArrayAggGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.inner
+            .update_batch(values, group_indices, opt_filter, total_num_groups)
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let array = self.inner.evaluate(emit_to)?;
+        Ok(self.restore_output_field(array))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        self.inner.state(emit_to)
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.inner
+            .merge_batch(values, group_indices, opt_filter, total_num_groups)
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.inner.convert_to_state(values, opt_filter)
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        self.inner.supports_convert_to_state()
+    }
+
+    fn size(&self) -> usize {
+        self.inner.size()
     }
 }
 
@@ -85,7 +233,12 @@ impl AggregateUDFImpl for SparkArrayAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(acc_args)
+        let output_value_field = Self::output_value_field(&acc_args.return_field);
+        let accumulator = self.inner.accumulator(acc_args)?;
+        Ok(Box::new(SparkArrayAggAccumulator::new(
+            accumulator,
+            output_value_field,
+        )))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -100,7 +253,12 @@ impl AggregateUDFImpl for SparkArrayAgg {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
-        self.inner.create_groups_accumulator(args)
+        let output_value_field = Self::output_value_field(&args.return_field);
+        let accumulator = self.inner.create_groups_accumulator(args)?;
+        Ok(Box::new(SparkArrayAggGroupsAccumulator::new(
+            accumulator,
+            output_value_field,
+        )))
     }
 
     fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

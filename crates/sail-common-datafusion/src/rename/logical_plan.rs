@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion_common::exec_err;
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{Expr, LogicalPlan, Projection};
 
 /// Wraps a logical plan in a projection that aliases each column to a new name.
@@ -17,12 +18,19 @@ pub fn rename_logical_plan(
     }
     let expr = plan
         .schema()
-        .columns()
+        .fields()
+        .iter()
+        .zip(plan.schema().columns())
         .into_iter()
         .zip(names.iter())
-        .map(|(column, name)| {
+        .map(|((field, column), name)| {
             let relation = column.relation.clone();
-            Expr::Column(column).alias_qualified(relation, name)
+            let metadata = if field.metadata().is_empty() {
+                None
+            } else {
+                Some(FieldMetadata::from(field.metadata().clone()))
+            };
+            Expr::Column(column).alias_qualified_with_metadata(relation, name, metadata)
         })
         .collect();
     // The logical plan schema requires field names to be unique.
