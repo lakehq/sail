@@ -415,24 +415,24 @@ fn spark_path_to_variant_path(path: &str, name: &str) -> Result<VariantPath<'sta
         })
 }
 
+fn quoted_field_name<'src>(
+    quote: char,
+) -> impl Parser<'src, &'src str, String, extra::Err<Rich<'src, char>>> + Copy {
+    let escaped_char = just('\\').ignore_then(any());
+    let regular_char = none_of([quote, '\\']);
+
+    just(quote)
+        .ignore_then(escaped_char.or(regular_char).repeated().collect::<String>())
+        .then_ignore(just(quote))
+}
+
 fn spark_variant_path_parser<'src>(
 ) -> impl Parser<'src, &'src str, VariantPath<'static>, extra::Err<Rich<'src, char>>> {
     let ident_field_name = text::ident().map(|s: &str| VariantPathElement::field(s.to_string()));
 
-    let single_quoted_field_name = just('\'')
-        .ignore_then(none_of('\'').repeated().collect::<String>())
-        .then_ignore(just('\''))
-        .map(VariantPathElement::field);
-
-    let double_quoted_field_name = just('"')
-        .ignore_then(none_of('"').repeated().collect::<String>())
-        .then_ignore(just('"'))
-        .map(VariantPathElement::field);
-
-    let backtick_quoted_field_name = just('`')
-        .ignore_then(none_of('`').repeated().collect::<String>())
-        .then_ignore(just('`'))
-        .map(VariantPathElement::field);
+    let single_quoted_field_name = quoted_field_name('\'').map(VariantPathElement::field);
+    let double_quoted_field_name = quoted_field_name('"').map(VariantPathElement::field);
+    let backtick_quoted_field_name = quoted_field_name('`').map(VariantPathElement::field);
 
     let field = just('.').ignore_then(choice((
         ident_field_name,
@@ -556,6 +556,42 @@ mod tests {
         assert!(spark_path_to_variant_path("$.", "variant_get").is_err());
         assert!(spark_path_to_variant_path("a[0]", "variant_get").is_err());
         assert!(spark_path_to_variant_path("$.a[]", "variant_get").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_variant_path_parser_accepts_escaped_double_quote() -> Result<()> {
+        assert_eq!(
+            spark_path_to_variant_path("$[\"a\\\"b\"]", "variant_get")?,
+            variant_path(vec![VariantPathElement::field("a\"b".to_string())])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_variant_path_parser_accepts_escaped_single_quote() -> Result<()> {
+        assert_eq!(
+            spark_path_to_variant_path("$['a\\'b']", "variant_get")?,
+            variant_path(vec![VariantPathElement::field("a'b".to_string())])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_variant_path_parser_accepts_escaped_backtick() -> Result<()> {
+        assert_eq!(
+            spark_path_to_variant_path("$.`a\\`b`", "variant_get")?,
+            variant_path(vec![VariantPathElement::field("a`b".to_string())])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_variant_path_parser_accepts_escaped_backslash() -> Result<()> {
+        assert_eq!(
+            spark_path_to_variant_path("$[\"a\\\\b\"]", "variant_get")?,
+            variant_path(vec![VariantPathElement::field("a\\b".to_string())])
+        );
         Ok(())
     }
 }
