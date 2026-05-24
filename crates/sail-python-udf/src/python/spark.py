@@ -16,7 +16,15 @@ from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, Arrow
 from pyspark.sql.pandas.types import from_arrow_type
 from pyspark.sql.types import ArrayType, MapType, Row, StructField, StructType, UserDefinedType
 
+try:
+    from pyspark.sql.types import VariantType
+except ImportError:
+    VariantType = None
+
 _PYARROW_HAS_VIEW_TYPES = all(hasattr(pa, x) for x in ("list_view", "large_list_view", "string_view", "binary_view"))
+_ARROW_EXTENSION_NAME_KEY = b"ARROW:extension:name"
+_ARROW_PARQUET_VARIANT_EXTENSION_NAME = "arrow.parquet.variant"
+_PYSPARK_VARIANT_METADATA_KEY = b"variant"
 _SAIL_SPARK_UDT_METADATA_KEY = b"SAIL::spark::udt"
 
 if _PYARROW_HAS_VIEW_TYPES:
@@ -104,6 +112,27 @@ def _field_type(field_or_type: pa.Field | pa.DataType) -> tuple[pa.Field | None,
     return None, field_or_type
 
 
+def _field_is_variant(field_or_type: pa.Field | pa.DataType) -> bool:
+    if VariantType is None:
+        return False
+    field, data_type = _field_type(field_or_type)
+    extension_name = _metadata_value(_field_metadata(field), _ARROW_EXTENSION_NAME_KEY)
+    if isinstance(extension_name, bytes):
+        extension_name = extension_name.decode("utf-8")
+    if extension_name == _ARROW_PARQUET_VARIANT_EXTENSION_NAME:
+        return True
+    if not isinstance(data_type, pa.StructType):
+        return False
+    try:
+        fields = data_type.fields
+    except AttributeError:
+        fields = [data_type.field(i) for i in range(data_type.num_fields)]
+    return any(
+        f.name == "metadata" and _metadata_value(f.metadata, _PYSPARK_VARIANT_METADATA_KEY) in (b"true", "true")
+        for f in fields
+    ) and any(f.name == "value" for f in fields)
+
+
 def _list_value_field(data_type: _PyArrowListType) -> pa.Field:
     field = getattr(data_type, "value_field", None)
     if field is not None:
@@ -147,6 +176,8 @@ def _spark_type_from_field(field_or_type: pa.Field | pa.DataType):
             value["serializedClass"] = udt["serialized_python_class"]
         return UserDefinedType.fromJson(value)
 
+    if _field_is_variant(field_or_type):
+        return VariantType()
     if isinstance(data_type, _PYARROW_LIST_TYPES):
         value_field = _list_value_field(data_type)
         return ArrayType(_spark_type_from_field(value_field), value_field.nullable)
