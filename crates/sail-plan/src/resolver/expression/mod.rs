@@ -49,6 +49,15 @@ impl NamedExpr {
                         .collect()
                 })
                 .unwrap_or(vec![]),
+            expr::Expr::Literal(_literal, field_metadata) => field_metadata
+                .as_ref()
+                .map(|x| {
+                    x.inner()
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect()
+                })
+                .unwrap_or(vec![]),
             _ => vec![],
         };
         Self {

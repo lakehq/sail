@@ -207,6 +207,15 @@ DOCTEST_MARKERS = [
         keywords=["test_arrow_udtf.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
     ),
+    DoctestMarker(
+        keywords=["test_ipython_key_completions.txt"],
+        markers=[
+            pytest.mark.skipif(
+                pyspark_version() < (4,),
+                reason="_ipython_key_completions_ is not defined on the PySpark 3.x Connect DataFrame",
+            )
+        ],
+    ),
 ]
 
 
