@@ -258,13 +258,16 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             input,
             mode,
             partition_by,
-            bucket_by: _,
+            bucket_by,
             sort_order,
             options,
             logical_schema: _,
         } = info;
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
+        }
+        if bucket_by.is_some() {
+            return not_impl_err!("bucketing for writing listing table format");
         }
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for writing listing table format");
@@ -348,7 +351,7 @@ async fn prepare_listing_write(
     }
 
     for path in table_paths {
-        let store = ctx.runtime_env().object_store(&path.object_store())?;
+        let store = ctx.runtime_env().object_store(path.object_store())?;
         let locations = store
             .list(Some(path.prefix()))
             .map_ok(|meta| meta.location)

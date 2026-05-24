@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use sail_common_datafusion::datasource::normalize_table_format_name;
 use sail_plan::config::{DefaultTimestampType, PlanConfig};
 use sail_python_udf::config::PySparkUdfConfig;
 
@@ -197,7 +196,7 @@ fn versioned_default_value(key: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn get_pyspark_major_version() -> Option<u64> {
+fn get_pyspark_major_version() -> Option<u64> {
     static PYSPARK_MAJOR_VERSION: OnceLock<Option<u64>> = OnceLock::new();
 
     *PYSPARK_MAJOR_VERSION.get_or_init(|| {
@@ -245,7 +244,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .get(SPARK_SQL_SOURCES_DEFAULT)?
             .map(|x| x.to_string())
         {
-            output.default_table_file_format = normalize_table_format_name(&value).into_owned();
+            output.default_table_file_format = value;
         }
 
         if let Some(value) = config.get(SPARK_SQL_WAREHOUSE_DIR)? {

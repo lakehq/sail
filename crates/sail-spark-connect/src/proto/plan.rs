@@ -1723,14 +1723,6 @@ impl TryFrom<WriteOperationV2> for spec::WriteTo {
         let table_properties = table_properties.into_iter().collect();
         let mode = Mode::try_from(mode).required("write operation v2 mode")?;
         let overwrite_condition = overwrite_condition.map(|x| x.try_into()).transpose()?;
-        if mode == Mode::Create
-            && provider.is_none()
-            && crate::config::get_pyspark_major_version().is_some_and(|x| x < 4)
-        {
-            return Err(SparkError::AnalysisError(
-                "[NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT] CREATE Hive TABLE (AS SELECT) is not supported without Hive support.".to_string(),
-            ));
-        }
         let mode = match (mode, overwrite_condition) {
             (Mode::Unspecified, _) => {
                 return Err(SparkError::invalid("unspecified write operation v2 method"));

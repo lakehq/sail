@@ -20,8 +20,7 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
 use sail_common_datafusion::datasource::{
-    find_path_in_options, normalize_table_format_name, BucketBy, OptionLayer, SinkMode, SourceInfo,
-    TableFormatRegistry,
+    find_path_in_options, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -148,7 +147,7 @@ impl WritePlanBuilder {
 
     /// Sets the output format for the builder.
     pub fn with_format(mut self, format: String) -> Self {
-        self.format = Some(normalize_table_format_name(&format).into_owned());
+        self.format = Some(format);
         self
     }
 
