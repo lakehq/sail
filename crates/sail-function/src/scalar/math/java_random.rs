@@ -21,6 +21,22 @@ impl JavaRandom {
         (bits * (1u64 << 27) + frac) as f64 / ((1u64 << 53) as f64)
     }
 
+    /// Returns the next random `i32` in `[0, bound)`, matching `Random.nextInt(bound)`.
+    pub fn next_i32_bound(&mut self, bound: i32) -> i32 {
+        assert!(bound > 0, "bound must be positive");
+        let mask = bound - 1;
+        if bound & mask == 0 {
+            return (((bound as i64) * (self.next_bits(31) as i64)) >> 31) as i32;
+        }
+        loop {
+            let bits = self.next_bits(31);
+            let value = bits % bound;
+            if bits.wrapping_sub(value).wrapping_add(mask) >= 0 {
+                return value;
+            }
+        }
+    }
+
     fn next_bits(&mut self, bits: u32) -> i32 {
         self.state = self.state.wrapping_mul(0x5DEECE66D).wrapping_add(0xB) & ((1u64 << 48) - 1);
         (self.state >> (48 - bits)) as i32

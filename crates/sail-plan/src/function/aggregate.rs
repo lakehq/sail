@@ -18,7 +18,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
+use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -40,6 +42,7 @@ use crate::function::common::{
 use crate::function::transform_count_star_wildcard_expr;
 
 const DEFAULT_THETA_LG_NOM_ENTRIES: i32 = 12;
+const DEFAULT_HLL_LG_CONFIG_K: i32 = 12;
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
@@ -563,6 +566,96 @@ fn theta_args_with_default_lg(
     }
 }
 
+fn hll_args_with_default_lg(
+    arguments: Vec<expr::Expr>,
+    function_name: &str,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(DEFAULT_HLL_LG_CONFIG_K)])
+        }
+        2 => {
+            let (value, lg_config_k) = arguments.two()?;
+            Ok(vec![value, cast(lg_config_k, DataType::Int32)])
+        }
+        count => Err(PlanError::invalid(format!(
+            "{function_name} requires 1 or 2 arguments, got {count}"
+        ))),
+    }
+}
+
+fn hll_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = hll_args_with_default_lg(input.arguments, "hll_sketch_agg")?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HllSketchAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn hll_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = match input.arguments.len() {
+        1 => {
+            let value = input.arguments.one()?;
+            vec![value, lit(false)]
+        }
+        2 => {
+            let (value, allow_different_lg_config_k) = input.arguments.two()?;
+            vec![value, cast(allow_different_lg_config_k, DataType::Boolean)]
+        }
+        count => {
+            return Err(PlanError::invalid(format!(
+                "hll_union_agg requires 1 or 2 arguments, got {count}"
+            )))
+        }
+    };
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HllUnionAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn count_min_sketch(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = match input.arguments.len() {
+        4 => {
+            let (value, eps, confidence, seed) = input.arguments.four()?;
+            vec![
+                value,
+                cast(eps, DataType::Float64),
+                cast(confidence, DataType::Float64),
+                seed,
+            ]
+        }
+        count => {
+            return Err(PlanError::invalid(format!(
+                "count_min_sketch requires 4 arguments, got {count}"
+            )))
+        }
+    };
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(CountMinSketchFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn theta_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = theta_args_with_default_lg(input.arguments, "theta_sketch_agg")?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -629,7 +722,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("corr", F::default(correlation::corr_udaf)),
         ("count", F::custom(count)),
         ("count_if", F::custom(count_if)),
-        ("count_min_sketch", F::unknown("count_min_sketch")),
+        ("count_min_sketch", F::custom(count_min_sketch)),
         ("covar_pop", F::default(covariance::covar_pop_udaf)),
         ("covar_samp", F::default(covariance::covar_samp_udaf)),
         ("every", F::default(bool_and_or::bool_and_udaf)),
@@ -638,8 +731,8 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("grouping", F::default(grouping::grouping_udaf)),
         ("grouping_id", F::unknown("grouping_id")),
         ("histogram_numeric", F::custom(histogram_numeric)),
-        ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
-        ("hll_union_agg", F::unknown("hll_union_agg")),
+        ("hll_sketch_agg", F::custom(hll_sketch_agg)),
+        ("hll_union_agg", F::custom(hll_union_agg)),
         (
             "theta_intersection_agg",
             F::default(|| Arc::new(AggregateUDF::from(ThetaIntersectionAggFunction::new()))),

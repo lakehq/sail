@@ -101,7 +101,9 @@ use sail_delta_lake::spec::{Action, ColumnMappingMode, DeltaOperation, StructTyp
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
+use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -171,6 +173,7 @@ use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
+use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
@@ -2241,6 +2244,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
             "spark_reverse" | "reverse" => Ok(Arc::new(ScalarUDF::from(SparkReverse::new()))),
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
+            "hll_sketch_estimate" => {
+                Ok(Arc::new(ScalarUDF::from(HllSketchEstimateFunction::new())))
+            }
+            "hll_union" => Ok(Arc::new(ScalarUDF::from(HllUnionFunction::new()))),
             "theta_difference" => Ok(Arc::new(ScalarUDF::from(ThetaDifferenceFunction::new()))),
             "theta_intersection" => Ok(Arc::new(ScalarUDF::from(ThetaIntersectionFunction::new()))),
             "theta_sketch_estimate" => Ok(Arc::new(ScalarUDF::from(
@@ -2463,6 +2470,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTrySubtract>()
             || node_inner.is::<SparkTryToBinary>()
             || node_inner.is::<SparkTryToTimestamp>()
+            || node_inner.is::<HllSketchEstimateFunction>()
+            || node_inner.is::<HllUnionFunction>()
             || node_inner.is::<ThetaDifferenceFunction>()
             || node_inner.is::<ThetaIntersectionFunction>()
             || node_inner.is::<ThetaSketchEstimateFunction>()
@@ -2617,9 +2626,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     BitmapConstructAggFunction::new(),
                 ))),
                 "bitmap_or_agg" => Ok(Arc::new(AggregateUDF::from(BitmapOrAggFunction::new()))),
+                "count_min_sketch" => {
+                    Ok(Arc::new(AggregateUDF::from(CountMinSketchFunction::new())))
+                }
                 "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
                     HistogramNumericFunction::new(),
                 ))),
+                "hll_sketch_agg" => Ok(Arc::new(AggregateUDF::from(HllSketchAggFunction::new()))),
+                "hll_union_agg" => Ok(Arc::new(AggregateUDF::from(HllUnionAggFunction::new()))),
                 "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
@@ -2729,7 +2743,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let udaf_kind = if node.inner().as_any().is::<BitmapAndAggFunction>()
             || node.inner().as_any().is::<BitmapConstructAggFunction>()
             || node.inner().as_any().is::<BitmapOrAggFunction>()
+            || node.inner().as_any().is::<CountMinSketchFunction>()
             || node.inner().as_any().is::<HistogramNumericFunction>()
+            || node.inner().as_any().is::<HllSketchAggFunction>()
+            || node.inner().as_any().is::<HllUnionAggFunction>()
             || node.inner().as_any().is::<KurtosisFunction>()
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()

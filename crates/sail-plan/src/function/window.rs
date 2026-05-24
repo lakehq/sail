@@ -24,7 +24,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
+use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -538,7 +540,10 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("corr", F::aggregate(correlation::corr_udaf)),
         ("count", F::custom(count)),
         ("count_if", F::custom(count_if)),
-        ("count_min_sketch", F::unknown("count_min_sketch")),
+        (
+            "count_min_sketch",
+            F::aggregate(|| Arc::new(AggregateUDF::from(CountMinSketchFunction::new()))),
+        ),
         ("covar_pop", F::aggregate(covariance::covar_pop_udaf)),
         ("covar_samp", F::aggregate(covariance::covar_samp_udaf)),
         ("every", F::aggregate(bool_and_or::bool_and_udaf)),
@@ -550,8 +555,14 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             "histogram_numeric",
             F::aggregate(|| Arc::new(AggregateUDF::from(HistogramNumericFunction::new()))),
         ),
-        ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
-        ("hll_union_agg", F::unknown("hll_union_agg")),
+        (
+            "hll_sketch_agg",
+            F::aggregate(|| Arc::new(AggregateUDF::from(HllSketchAggFunction::new()))),
+        ),
+        (
+            "hll_union_agg",
+            F::aggregate(|| Arc::new(AggregateUDF::from(HllUnionAggFunction::new()))),
+        ),
         (
             "theta_intersection_agg",
             F::aggregate(|| Arc::new(AggregateUDF::from(ThetaIntersectionAggFunction::new()))),

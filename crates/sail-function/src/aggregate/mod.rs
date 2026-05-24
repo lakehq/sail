@@ -76,7 +76,9 @@ macro_rules! duration_none {
 pub mod bitmap_and_agg;
 pub mod bitmap_construct_agg;
 pub mod bitmap_or_agg;
+pub mod count_min_sketch;
 pub mod histogram_numeric;
+pub mod hll_sketch;
 pub mod kurtosis;
 pub mod max_min_by;
 pub mod mode;
