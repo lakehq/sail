@@ -4039,7 +4039,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: theta_sketch_agg"
+        "success": "ok"
       }
     },
     {
@@ -4061,7 +4061,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: theta_sketch_agg"
+        "success": "ok"
       }
     },
     {
@@ -4083,7 +4083,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: theta_sketch_agg"
+        "success": "ok"
       }
     },
     {

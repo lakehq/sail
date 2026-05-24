@@ -75,6 +75,26 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "theta_difference",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_intersection",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_sketch_estimate",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_union",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "input_file_block_length",
     "status": "planned",
     "ref": "https://github.com/lakehq/sail/issues/507"

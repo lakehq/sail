@@ -30,6 +30,9 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::theta_sketch::{
+    ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
+};
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::window::spark_ntile_udwf;
 
@@ -549,6 +552,18 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
+        (
+            "theta_intersection_agg",
+            F::aggregate(|| Arc::new(AggregateUDF::from(ThetaIntersectionAggFunction::new()))),
+        ),
+        (
+            "theta_sketch_agg",
+            F::aggregate(|| Arc::new(AggregateUDF::from(ThetaSketchAggFunction::new()))),
+        ),
+        (
+            "theta_union_agg",
+            F::aggregate(|| Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new()))),
+        ),
         ("kurtosis", F::custom(kurtosis)),
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),

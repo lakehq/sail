@@ -27,6 +27,9 @@ use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::product::ProductFunction;
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::theta_sketch::{
+    ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
+};
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::struct_function::StructFunction;
 
@@ -35,6 +38,8 @@ use crate::function::common::{
     get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
 };
 use crate::function::transform_count_star_wildcard_expr;
+
+const DEFAULT_THETA_LG_NOM_ENTRIES: i32 = 12;
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
@@ -539,6 +544,53 @@ fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn theta_args_with_default_lg(
+    arguments: Vec<expr::Expr>,
+    function_name: &str,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(DEFAULT_THETA_LG_NOM_ENTRIES)])
+        }
+        2 => {
+            let (value, lg_nom_entries) = arguments.two()?;
+            Ok(vec![value, cast(lg_nom_entries, DataType::Int32)])
+        }
+        count => Err(PlanError::invalid(format!(
+            "{function_name} requires 1 or 2 arguments, got {count}"
+        ))),
+    }
+}
+
+fn theta_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = theta_args_with_default_lg(input.arguments, "theta_sketch_agg")?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(ThetaSketchAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn theta_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = theta_args_with_default_lg(input.arguments, "theta_union_agg")?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 /// Creates a list of built-in aggregate functions.
 /// This is used to create a hashmap that the resolver uses to look up
 /// aggregate functions by name.
@@ -588,6 +640,12 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("histogram_numeric", F::custom(histogram_numeric)),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
+        (
+            "theta_intersection_agg",
+            F::default(|| Arc::new(AggregateUDF::from(ThetaIntersectionAggFunction::new()))),
+        ),
+        ("theta_sketch_agg", F::custom(theta_sketch_agg)),
+        ("theta_union_agg", F::custom(theta_union_agg)),
         ("kurtosis", F::custom(kurtosis)),
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),
