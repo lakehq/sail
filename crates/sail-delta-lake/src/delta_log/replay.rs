@@ -14,8 +14,8 @@ use super::{
     ResolvedLogSegment,
 };
 use crate::kernel::checkpoints::{
-    decode_checkpoint_rows, read_checkpoint_main_rows_from_parquet,
-    read_checkpoint_rows_from_parquet, replay_commit_actions_with_compactions,
+    decode_checkpoint_rows, read_checkpoint_main_rows_from_checkpoint_file,
+    read_checkpoint_rows_from_checkpoint_file, replay_commit_actions_with_compactions,
     replay_commit_header_actions_with_compactions, ReconciledCheckpointState,
     ReconciledHeaderState, ReplayedTableState,
 };
@@ -24,12 +24,12 @@ use crate::spec::{
 };
 use crate::storage::LogStore;
 
-async fn read_checkpoint_header_from_parquet(
+async fn read_checkpoint_header_from_checkpoint_file(
     root_store: Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<ReconciledHeaderState> {
     if is_json_checkpoint_location(&meta) {
-        let rows = read_checkpoint_main_rows_from_parquet(root_store, meta).await?;
+        let rows = read_checkpoint_main_rows_from_checkpoint_file(root_store, meta).await?;
         let mut state = ReconciledHeaderState::default();
         for row in rows {
             state.apply_checkpoint_row(row)?;
@@ -104,7 +104,7 @@ pub(crate) async fn load_replayed_table_state(
     let store = log_store.object_store(None);
     let mut state = ReconciledCheckpointState::default();
     let start_commit_version = if let Some(cp_meta) = checkpoint {
-        let rows = read_checkpoint_rows_from_parquet(store.clone(), cp_meta).await?;
+        let rows = read_checkpoint_rows_from_checkpoint_file(store.clone(), cp_meta).await?;
         for row in rows {
             state.apply_checkpoint_row(row)?;
         }
@@ -193,7 +193,7 @@ pub(crate) async fn load_replayed_table_header(
             let (mut state, start_commit_version, mut commit_timestamps) = match checkpoint {
                 Some(cp_meta) => {
                     let cp_state =
-                        read_checkpoint_header_from_parquet(store.clone(), cp_meta).await?;
+                        read_checkpoint_header_from_checkpoint_file(store.clone(), cp_meta).await?;
                     let next_v = commit_files
                         .first()
                         .map(|(v, _)| *v)

@@ -581,7 +581,7 @@ impl<'a> CheckpointManager<'a> {
 
         let mut state = ReconciledCheckpointState::default();
         let start_commit_version = if let Some((cp_ver, cp_meta)) = checkpoint_entries.pop() {
-            let rows = read_checkpoint_rows_from_parquet(store.clone(), cp_meta).await?;
+            let rows = read_checkpoint_rows_from_checkpoint_file(store.clone(), cp_meta).await?;
             for row in rows {
                 state.apply_checkpoint_row(row)?;
             }
@@ -856,7 +856,7 @@ pub(crate) async fn replay_commit_actions(
 /// Read only the main checkpoint file (without loading sidecars).
 /// Useful when callers only need non-file actions (protocol, metadata, sidecar
 /// descriptors, etc.) — for example during sidecar garbage collection.
-pub(crate) async fn read_checkpoint_main_rows_from_parquet(
+pub(crate) async fn read_checkpoint_main_rows_from_checkpoint_file(
     root_store: std::sync::Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
@@ -893,11 +893,11 @@ pub(crate) async fn read_checkpoint_main_rows_from_parquet(
     .map_err(DeltaTableError::generic_err)?
 }
 
-pub(crate) async fn read_checkpoint_rows_from_parquet(
+pub(crate) async fn read_checkpoint_rows_from_checkpoint_file(
     root_store: std::sync::Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
-    let mut rows = read_checkpoint_main_rows_from_parquet(root_store.clone(), meta).await?;
+    let mut rows = read_checkpoint_main_rows_from_checkpoint_file(root_store.clone(), meta).await?;
 
     // Collect sidecar descriptors from V2 checkpoint rows and load add/remove
     // payload from the referenced sidecar parquet files.
@@ -1391,8 +1391,8 @@ mod tests {
 
     use super::{
         checkpoint_fields, decode_checkpoint_rows, encode_checkpoint_rows,
-        read_checkpoint_rows_from_parquet, replay_commit_header_actions, ReconciledCheckpointState,
-        ReconciledHeaderState,
+        read_checkpoint_rows_from_checkpoint_file, replay_commit_header_actions,
+        ReconciledCheckpointState, ReconciledHeaderState,
     };
     use crate::kernel::checkpoint_augment::{
         normalize_checkpoint_batch_for_decode, AddAugmentationConfig,
@@ -2019,7 +2019,7 @@ mod tests {
         store.put(&checkpoint_path, bytes.into()).await?;
 
         let meta = store.head(&checkpoint_path).await?;
-        let rows = read_checkpoint_rows_from_parquet(store, meta).await?;
+        let rows = read_checkpoint_rows_from_checkpoint_file(store, meta).await?;
         let mut state = ReconciledCheckpointState::default();
         for row in rows {
             state.apply_checkpoint_row(row)?;
