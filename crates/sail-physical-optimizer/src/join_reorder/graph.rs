@@ -142,8 +142,8 @@ pub struct QueryGraph {
     pub relations: Vec<RelationNode>,
     /// Original edges vector for backward compatibility and edge access by index
     pub edges: Vec<JoinEdge>,
-    /// Cache for neighbor lookups to avoid repeated computation
-    neighbor_cache: HashMap<(JoinSet, JoinSet), Vec<JoinSet>>,
+    /// Cache for neighbor lookups before applying the caller's forbidden set.
+    neighbor_cache: HashMap<JoinSet, Vec<JoinSet>>,
 }
 
 impl QueryGraph {
@@ -167,35 +167,39 @@ impl QueryGraph {
 
     /// Gets all neighbor hypernodes of a given JoinSet, excluding nodes in `forbidden`.
     pub fn get_neighbors(&mut self, nodes: JoinSet, forbidden: JoinSet) -> Vec<JoinSet> {
-        // Check cache first
-        if let Some(cached) = self.neighbor_cache.get(&(nodes, forbidden)) {
-            return cached.clone();
-        }
+        let neighbors = if let Some(cached) = self.neighbor_cache.get(&nodes) {
+            cached.clone()
+        } else {
+            let mut candidates = Vec::new();
 
-        let blocked = nodes | forbidden;
-        let mut candidates = Vec::new();
-
-        for edge in &self.edges {
-            if edge.left_endpoint.is_subset(&nodes)
-                && !edge.right_endpoint.is_empty()
-                && edge.right_endpoint.is_disjoint(&blocked)
-            {
-                candidates.push(edge.right_endpoint);
+            for edge in &self.edges {
+                if edge.left_endpoint.is_subset(&nodes)
+                    && !edge.right_endpoint.is_empty()
+                    && edge.right_endpoint.is_disjoint(&nodes)
+                {
+                    candidates.push(edge.right_endpoint);
+                }
+                if edge.right_endpoint.is_subset(&nodes)
+                    && !edge.left_endpoint.is_empty()
+                    && edge.left_endpoint.is_disjoint(&nodes)
+                {
+                    candidates.push(edge.left_endpoint);
+                }
             }
-            if edge.right_endpoint.is_subset(&nodes)
-                && !edge.left_endpoint.is_empty()
-                && edge.left_endpoint.is_disjoint(&blocked)
-            {
-                candidates.push(edge.left_endpoint);
-            }
+
+            let result = Self::minimize_neighbor_sets(candidates);
+            self.neighbor_cache.insert(nodes, result.clone());
+            result
+        };
+
+        if forbidden.is_empty() {
+            neighbors
+        } else {
+            neighbors
+                .into_iter()
+                .filter(|neighbor| neighbor.is_disjoint(&forbidden))
+                .collect()
         }
-
-        let result = Self::minimize_neighbor_sets(candidates);
-
-        // Cache the result
-        self.neighbor_cache
-            .insert((nodes, forbidden), result.clone());
-        result
     }
 
     fn minimize_neighbor_sets(mut candidates: Vec<JoinSet>) -> Vec<JoinSet> {
@@ -279,7 +283,7 @@ impl QueryGraph {
 
                 // Preserve original left/right orientation for non-inner joins. Full joins are
                 // commutative in principle, but keeping the original orientation avoids output-map
-                // and null-supplying-side surprises in this conservative Phase 2 implementation.
+                // and null-supplying-side surprises in this conservative implementation.
                 if !(edge.left_endpoint.is_subset(&left) && edge.right_endpoint.is_subset(&right)) {
                     return false;
                 }

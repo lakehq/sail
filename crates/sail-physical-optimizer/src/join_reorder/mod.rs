@@ -1,5 +1,7 @@
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
@@ -61,9 +63,8 @@ impl Default for JoinReorderOptions {
 
 pub struct JoinReorder {
     options: JoinReorderOptions,
-    /// Per-region outcome trace recorded by `try_optimize_region`. Always-on (the recording
-    /// cost is a single small struct push per region) so tests can assert which enumeration
-    /// path actually ran (DP completed vs greedy fallback vs no-op).
+    /// Per-region outcome trace recorded by `try_optimize_region` for tests.
+    #[cfg(test)]
     recorded_outcomes: Mutex<Vec<RegionOutcome>>,
 }
 
@@ -93,6 +94,7 @@ impl JoinReorder {
     pub fn new(options: JoinReorderOptions) -> Self {
         Self {
             options,
+            #[cfg(test)]
             recorded_outcomes: Mutex::new(Vec::new()),
         }
     }
@@ -112,11 +114,15 @@ impl JoinReorder {
         }
     }
 
+    #[cfg(test)]
     fn record_outcome(&self, outcome: RegionOutcome) {
         if let Ok(mut guard) = self.recorded_outcomes.lock() {
             guard.push(outcome);
         }
     }
+
+    #[cfg(not(test))]
+    fn record_outcome(&self, _outcome: RegionOutcome) {}
 }
 
 impl Default for JoinReorder {

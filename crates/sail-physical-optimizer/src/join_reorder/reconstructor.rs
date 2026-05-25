@@ -1400,10 +1400,12 @@ mod tests {
     }
 
     fn add_test_edge(graph: &mut QueryGraph, left: usize, right: usize) -> Result<usize> {
+        let left_name = StableColumn::format_stable_name(left, 0);
+        let right_name = StableColumn::format_stable_name(right, 0);
         let filter = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("R0.C0", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new(&left_name, 0)) as Arc<dyn PhysicalExpr>,
             Operator::Eq,
-            Arc::new(Column::new("R1.C0", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new(&right_name, 0)) as Arc<dyn PhysicalExpr>,
         )) as Arc<dyn PhysicalExpr>;
         let edge_index = graph.edges.len();
         graph.add_edge(JoinEdge::new(
