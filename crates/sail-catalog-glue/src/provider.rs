@@ -843,8 +843,8 @@ mod tests {
     use super::GlueCatalogProvider;
 
     #[test]
-    fn database_to_status_falls_back_to_namespace_properties()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn database_to_status_falls_back_to_namespace_properties(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let provider = GlueCatalogProvider::new("glue".to_string(), Default::default());
         let database = Database::builder()
             .name("db")
