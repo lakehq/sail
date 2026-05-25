@@ -198,6 +198,10 @@ fn normalize_checkpoint_action_for_decode(
             DeltaTableError::schema(format!("expected {action_name} to be a struct column"))
         })?;
 
+    if !checkpoint_action_needs_normalization(action_struct, &expected_fields) {
+        return Ok(batch);
+    }
+
     let existing: HashMap<&str, ArrayRef> = action_struct
         .fields()
         .iter()
@@ -243,6 +247,24 @@ fn normalize_checkpoint_action_for_decode(
         action_struct.nulls().cloned(),
     )?;
     replace_struct_column(batch, action_idx, action_field, action_name, new_action)
+}
+
+fn checkpoint_action_needs_normalization(
+    action_struct: &StructArray,
+    expected_fields: &[FieldRef],
+) -> bool {
+    let fields = action_struct.fields();
+    if fields.len() != expected_fields.len() {
+        return true;
+    }
+    fields
+        .iter()
+        .zip(expected_fields)
+        .any(|(actual, expected)| {
+            actual.name() != expected.name()
+                || actual.data_type() != expected.data_type()
+                || actual.is_nullable() != expected.is_nullable()
+        })
 }
 
 fn normalize_checkpoint_field_for_decode(
