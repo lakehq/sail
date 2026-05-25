@@ -604,7 +604,7 @@ impl PlanFormatter for SparkPlanFormatter {
                 let sep = *list.first().unwrap_or(&"0");
                 Ok(format!("{name}({value}, {sep})"))
             }
-            "startsWith" | "endsWith" => {
+            "startswith" | "endswith" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("{}({arguments})", name.to_lowercase()))
             }
