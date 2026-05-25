@@ -365,7 +365,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used, clippy::expect_used)]
+    #![expect(clippy::unwrap_used)]
 
     use pyo3::Python;
     use sail_plan::config::qualify_warehouse_directory;

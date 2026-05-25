@@ -193,7 +193,7 @@ pub async fn find_latest_metadata_file(
 
     match metadata_files {
         Ok(mut files) => {
-            log::trace!("find_latest_metadata_file: found files: {:?}", &files);
+            log::trace!("find_latest_metadata_file: found files: {:?}", files);
             files.sort_by(|left, right| {
                 left.0
                     .cmp(&right.0)
@@ -208,7 +208,7 @@ pub async fn find_latest_metadata_file(
                     log::trace!(
                         "find_latest_metadata_file: selected by filename hint version {} path={}",
                         version,
-                        &path
+                        path
                     );
                     return Ok(path.clone());
                 }
@@ -217,7 +217,7 @@ pub async fn find_latest_metadata_file(
                     log::trace!(
                         "find_latest_metadata_file: selected by numeric hint version {} path={}",
                         version,
-                        &path
+                        path
                     );
                     return Ok(path.clone());
                 }
@@ -227,7 +227,7 @@ pub async fn find_latest_metadata_file(
                 log::trace!(
                     "find_latest_metadata_file: selected version {} path={}",
                     version,
-                    &latest_file
+                    latest_file
                 );
                 Ok(latest_file.clone())
             } else {
