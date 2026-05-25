@@ -7330,6 +7330,7 @@ dependencies = [
  "cbc",
  "chrono",
  "chrono-tz",
+ "chumsky 0.12.0",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",

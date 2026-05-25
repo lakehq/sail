@@ -60,7 +60,14 @@ pub fn sidecars_dir_path() -> Path {
 }
 
 pub fn sidecar_file_path(sidecar_filename: &str) -> Path {
-    Path::from(format!("{DELTA_LOG_DIR}/{SIDECARS_DIR}/{sidecar_filename}"))
+    let path = sidecar_filename.trim_start_matches(DELIMITER);
+    if path.starts_with(&format!("{DELTA_LOG_DIR}{DELIMITER}")) {
+        Path::from(path)
+    } else if path.starts_with(&format!("{SIDECARS_DIR}{DELIMITER}")) {
+        Path::from(format!("{DELTA_LOG_DIR}{DELIMITER}{path}"))
+    } else {
+        Path::from(format!("{DELTA_LOG_DIR}/{SIDECARS_DIR}/{path}"))
+    }
 }
 
 pub fn uuid_checkpoint_path(version: i64, uuid: &Uuid) -> Path {
@@ -102,8 +109,10 @@ pub fn parse_checkpoint_version(filename: &str) -> Option<i64> {
     // Handles three checkpoint naming schemes:
     // 1. Classic: `{version:020}.checkpoint.parquet`
     // 2. Multi-part: `{version:020}.checkpoint.{part:010}.{total:010}.parquet`
-    // 3. UUID-named V2: `{version:020}.checkpoint.{uuid}.parquet`
-    if !filename.contains(".checkpoint") || !filename.ends_with(".parquet") {
+    // 3. UUID-named V2: `{version:020}.checkpoint.{uuid}.{json|parquet}`
+    if !filename.contains(".checkpoint")
+        || !(filename.ends_with(".parquet") || filename.ends_with(".json"))
+    {
         return None;
     }
     parse_version_prefix(filename)
@@ -111,12 +120,14 @@ pub fn parse_checkpoint_version(filename: &str) -> Option<i64> {
 
 /// Returns `true` if the checkpoint filename uses the UUID-named V2 naming scheme.
 pub fn is_uuid_checkpoint_filename(filename: &str) -> bool {
-    // UUID-named: `{version:020}.checkpoint.{uuid}.parquet`
-    // The UUID part is 36 chars (8-4-4-4-12), total = 20 + 12 + 36 + 8 = 76
-    // Pattern: 20 digits + ".checkpoint." + 36 UUID + ".parquet"
-    if filename.len() != 76 || !filename.ends_with(".parquet") {
+    // UUID-named: `{version:020}.checkpoint.{uuid}.{json|parquet}`.
+    let extension_len = if filename.ends_with(".parquet") {
+        ".parquet".len()
+    } else if filename.ends_with(".json") {
+        ".json".len()
+    } else {
         return false;
-    }
+    };
     if parse_version_prefix(filename).is_none() {
         return false;
     }
@@ -126,8 +137,17 @@ pub fn is_uuid_checkpoint_filename(filename: &str) -> bool {
     if !rest.starts_with(".checkpoint.") {
         return false;
     }
-    let uuid_part = &rest[12..48]; // 36-char UUID
+    let uuid_start = ".checkpoint.".len();
+    if rest.len() != uuid_start + 36 + extension_len {
+        return false;
+    }
+    let uuid_part = &rest[uuid_start..uuid_start + 36];
     Uuid::parse_str(uuid_part).is_ok()
+}
+
+/// Returns `true` if the filename is a UUID-named V2 JSON checkpoint manifest.
+pub fn is_json_checkpoint_filename(filename: &str) -> bool {
+    is_uuid_checkpoint_filename(filename) && filename.ends_with(".json")
 }
 
 /// Parses a compacted JSON filename and returns the (start_version, end_version) pair.
@@ -203,6 +223,52 @@ mod tests {
     fn parse_compacted_json_rejects_checkpoint() {
         let filename = "00000000000000000004.checkpoint.parquet";
         assert_eq!(parse_compacted_json_versions(filename), None);
+    }
+
+    #[test]
+    fn parse_checkpoint_version_accepts_v2_json_checkpoint() {
+        assert_eq!(
+            parse_checkpoint_version(
+                "00000000000000000002.checkpoint.c13805b3-8c9f-45f0-b1e4-a16b695fc042.json"
+            ),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn is_uuid_checkpoint_accepts_json_and_parquet_extensions() {
+        assert!(is_uuid_checkpoint_filename(
+            "00000000000000000002.checkpoint.c13805b3-8c9f-45f0-b1e4-a16b695fc042.json"
+        ));
+        assert!(is_uuid_checkpoint_filename(
+            "00000000000000000002.checkpoint.c13805b3-8c9f-45f0-b1e4-a16b695fc042.parquet"
+        ));
+        assert!(!is_uuid_checkpoint_filename(
+            "00000000000000000002.checkpoint.0000000001.0000000001.parquet"
+        ));
+    }
+
+    #[test]
+    fn is_json_checkpoint_only_accepts_uuid_json_checkpoint() {
+        assert!(is_json_checkpoint_filename(
+            "00000000000000000002.checkpoint.c13805b3-8c9f-45f0-b1e4-a16b695fc042.json"
+        ));
+        assert!(!is_json_checkpoint_filename(
+            "00000000000000000002.checkpoint.c13805b3-8c9f-45f0-b1e4-a16b695fc042.parquet"
+        ));
+        assert!(!is_json_checkpoint_filename("00000000000000000002.json"));
+    }
+
+    #[test]
+    fn sidecar_file_path_accepts_filename_or_relative_sidecar_path() {
+        assert_eq!(
+            sidecar_file_path("part.parquet").as_ref(),
+            "_delta_log/_sidecars/part.parquet"
+        );
+        assert_eq!(
+            sidecar_file_path("_sidecars/part.parquet").as_ref(),
+            "_delta_log/_sidecars/part.parquet"
+        );
     }
 
     #[test]
