@@ -1,13 +1,15 @@
-use arrow_schema::extension::ExtensionType;
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/shared.rs>
+use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, Field};
 use datafusion_common::{exec_err, ScalarValue};
 use parquet_variant_compute::{VariantArray, VariantType};
-use sail_common::spec::VARIANT_EXTENSION_NAME;
 
 /// Returns `true` if the field has Variant extension metadata.
 pub fn is_variant_field(field: &Field) -> bool {
-    field.extension_type_name() == Some(VARIANT_EXTENSION_NAME)
+    if field.extension_type_name() != Some(VariantType::NAME) {
+        return false;
+    }
+    field.try_extension_type::<VariantType>().is_ok()
 }
 
 pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()> {

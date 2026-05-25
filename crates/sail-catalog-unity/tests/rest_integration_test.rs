@@ -671,6 +671,7 @@ async fn test_create_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
             },
         )
         .await
@@ -803,6 +804,7 @@ async fn test_create_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
             },
         )
         .await;
@@ -824,6 +826,7 @@ async fn test_create_table() {
                 if_not_exists: true,
                 replace: false,
                 properties: vec![],
+                is_external: true,
             },
         )
         .await;
@@ -878,6 +881,7 @@ async fn test_create_table() {
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                is_external: true,
             },
         )
         .await
@@ -1043,6 +1047,7 @@ async fn test_get_table() {
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                is_external: true,
             },
         )
         .await
@@ -1194,6 +1199,7 @@ async fn test_list_tables() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
             },
         )
         .await
@@ -1215,6 +1221,7 @@ async fn test_list_tables() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
             },
         )
         .await
@@ -1285,6 +1292,7 @@ async fn test_drop_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
             },
         )
         .await

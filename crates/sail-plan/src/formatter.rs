@@ -604,7 +604,7 @@ impl PlanFormatter for SparkPlanFormatter {
                 let sep = *list.first().unwrap_or(&"0");
                 Ok(format!("{name}({value}, {sep})"))
             }
-            "startsWith" | "endsWith" => {
+            "startswith" | "endswith" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("{}({arguments})", name.to_lowercase()))
             }
@@ -615,6 +615,10 @@ impl PlanFormatter for SparkPlanFormatter {
             "explode" | "explode_outer" => Ok("col".to_string()),
             "stack" => Ok("col0".to_string()),
             "current_database" => Ok("current_schema()".to_string()),
+            "spark_partition_id" => {
+                let arguments = arguments.join(", ");
+                Ok(format!("{}({arguments})", name.to_uppercase()))
+            }
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "exp"
             | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "rlike"
             | "signum" | "sqrt" | "cos" | "cosh" | "cot" | "degrees" | "power" | "radians"

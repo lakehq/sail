@@ -36,6 +36,7 @@ pub struct CreateTableOptions {
     pub if_not_exists: bool,
     pub replace: bool,
     pub properties: Vec<(String, String)>,
+    pub is_external: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]

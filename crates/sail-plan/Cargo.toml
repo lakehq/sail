@@ -39,8 +39,10 @@ uuid = { workspace = true }
 object_store = { workspace = true }
 half = { workspace = true }
 arrow = { workspace = true }
+arrow-schema = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+parquet-variant-compute = { workspace = true }

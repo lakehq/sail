@@ -1256,6 +1256,7 @@ mod tests {
                     if_not_exists: false,
                     replace: false,
                     properties: vec![],
+                    is_external: true,
                 },
             )
             .await

@@ -14,17 +14,29 @@ use super::{
     ResolvedLogSegment,
 };
 use crate::kernel::checkpoints::{
-    decode_checkpoint_rows, read_checkpoint_rows_from_parquet,
-    replay_commit_actions_with_compactions, replay_commit_header_actions_with_compactions,
-    ReconciledCheckpointState, ReconciledHeaderState, ReplayedTableState,
+    decode_checkpoint_rows, read_checkpoint_main_rows_from_checkpoint_file,
+    read_checkpoint_rows_from_checkpoint_file, replay_commit_actions_with_compactions,
+    replay_commit_header_actions_with_compactions, ReconciledCheckpointState,
+    ReconciledHeaderState, ReplayedTableState,
 };
-use crate::spec::{CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult};
+use crate::spec::{
+    is_json_checkpoint_filename, CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult,
+};
 use crate::storage::LogStore;
 
-async fn read_checkpoint_header_from_parquet(
+async fn read_checkpoint_header_from_checkpoint_file(
     root_store: Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<ReconciledHeaderState> {
+    if is_json_checkpoint_location(&meta) {
+        let rows = read_checkpoint_main_rows_from_checkpoint_file(root_store, meta).await?;
+        let mut state = ReconciledHeaderState::default();
+        for row in rows {
+            state.apply_checkpoint_row(row)?;
+        }
+        return Ok(state);
+    }
+
     let bytes = root_store.get(&meta.location).await?.bytes().await?;
     SpawnedTask::spawn_blocking(move || {
         let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
@@ -53,6 +65,14 @@ async fn read_checkpoint_header_from_parquet(
     })
     .await
     .map_err(DeltaTableError::generic_err)?
+}
+
+fn is_json_checkpoint_location(meta: &ObjectMeta) -> bool {
+    meta.location
+        .as_ref()
+        .rsplit('/')
+        .next()
+        .is_some_and(is_json_checkpoint_filename)
 }
 
 pub(crate) async fn load_replayed_table_state(
@@ -84,7 +104,7 @@ pub(crate) async fn load_replayed_table_state(
     let store = log_store.object_store(None);
     let mut state = ReconciledCheckpointState::default();
     let start_commit_version = if let Some(cp_meta) = checkpoint {
-        let rows = read_checkpoint_rows_from_parquet(store.clone(), cp_meta).await?;
+        let rows = read_checkpoint_rows_from_checkpoint_file(store.clone(), cp_meta).await?;
         for row in rows {
             state.apply_checkpoint_row(row)?;
         }
@@ -173,7 +193,7 @@ pub(crate) async fn load_replayed_table_header(
             let (mut state, start_commit_version, mut commit_timestamps) = match checkpoint {
                 Some(cp_meta) => {
                     let cp_state =
-                        read_checkpoint_header_from_parquet(store.clone(), cp_meta).await?;
+                        read_checkpoint_header_from_checkpoint_file(store.clone(), cp_meta).await?;
                     let next_v = commit_files
                         .first()
                         .map(|(v, _)| *v)

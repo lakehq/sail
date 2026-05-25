@@ -229,7 +229,9 @@ pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
         }
         None
     };
-    find("path").or_else(|| find("location"))
+    find("path")
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| find("location").filter(|v| !v.trim().is_empty()))
 }
 
 /// The kind of row-level DML command being executed.
