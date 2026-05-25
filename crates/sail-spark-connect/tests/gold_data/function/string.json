@@ -2516,6 +2516,32 @@
     },
     {
       "input": {
+        "query": "SELECT regexp_extract_all('100-200, 300-400', '(\\\\d+)-(\\\\d+)');",
+        "result": [
+          "[\"100\",\"300\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_extract_all(100-200, 300-400, (\\d+)-(\\d+), 1)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT regexp_instr('user@spark.apache.org', '@[^.]*');",
         "result": [
           "5"
