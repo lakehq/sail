@@ -33,10 +33,10 @@ fn to_csv(
         function_context,
     }: ScalarFunctionInput,
 ) -> PlanResult<Expr> {
+    // Pass the current session timezone to the `to_csv` UDF.
+    // It is used to localize TIMESTAMP (LTZ) values when formatting to CSV,
+    // following the same pattern as `from_csv`.
     let tz = function_context.plan_config.session_timezone.clone();
-    // Constructs the `to_csv` UDF with the current session timezone
-    // The session timezone is required to correctly format `TIMESTAMP` values
-    // that carry a timezone (e.g. `TIMESTAMP WITH LOCAL TIME ZONE`)
     let udf = ScalarUDF::from(SparkToCsv::new(tz));
     Ok(udf.call(arguments))
 }

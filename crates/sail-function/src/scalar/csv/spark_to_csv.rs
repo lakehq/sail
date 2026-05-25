@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::prelude::*;
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
@@ -43,7 +44,7 @@ impl SparkToCsvOptions {
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
 
     // Default formats matching Spark's defaults
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3fZ";
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3f";
     pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
 
     /// Build `SparkToCsvOptions` from a DataFusion `MapArray` of key-value pairs.
@@ -88,8 +89,8 @@ impl SparkToCsv {
     /// Constructor for the UDF.
     ///
     /// `session_timezone` is the Spark session timezone (e.g. `"UTC"`, `"Asia/Shanghai"`).
-    /// It is stored for codec serialization (distributed execution) but not used
-    /// during formatting, since `to_csv` always outputs timestamps in UTC.
+    /// It is used to localize `TIMESTAMP` (LTZ) values when formatting to CSV,
+    /// and for codec serialization in distributed mode.
     pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
             session_timezone,
@@ -152,13 +153,13 @@ impl ScalarUDFImpl for SparkToCsv {
 /// # Parameters
 /// - `args[0]`: `StructArray` — rows to serialize.
 /// - `args[1]` (optional): `MapArray` — CSV options (sep, timestampFormat, dateFormat).
-/// - `_session_timezone`: kept for API consistency with `from_csv` but unused,
-///   since `to_csv` always outputs timestamps in UTC.
+/// - `session_timezone`: the Spark session timezone, used to localize
+///   `TIMESTAMP` (LTZ) values when formatting to CSV.
 ///
 /// # Returns
 /// A `StringArray` where each entry is the CSV representation of the struct row,
 /// or `null` if the input row was null.
-fn spark_to_csv_inner(args: &[ArrayRef], _session_timezone: &str) -> Result<ArrayRef> {
+fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 2 {
         return exec_err!(
             "`{}` function requires 1 or 2 arguments, got {}",
@@ -205,8 +206,19 @@ fn spark_to_csv_inner(args: &[ArrayRef], _session_timezone: &str) -> Result<Arra
 
         for (col_idx, field) in fields.iter().enumerate() {
             let col = &columns[col_idx];
-            let value_str = format_field_to_csv(col, row_idx, field.data_type(), &options)?;
-            parts.push(value_str);
+            if col.is_null(row_idx) {
+                // Null field: empty string, no quoting
+                parts.push(String::new());
+            } else {
+                let value_str = format_field_to_csv(
+                    col,
+                    row_idx,
+                    field.data_type(),
+                    &options,
+                    session_timezone,
+                )?;
+                parts.push(quote_csv_field(&value_str, &options.sep));
+            }
         }
 
         output.push(Some(parts.join(&options.sep)));
@@ -218,14 +230,16 @@ fn spark_to_csv_inner(args: &[ArrayRef], _session_timezone: &str) -> Result<Arra
 /// Extracts a timestamp value from an Arrow array at `row_idx` as microseconds,
 /// then formats it as a UTC string using the configured `timestampFormat` option.
 ///
-/// Timestamps are always output in UTC with a Z suffix, matching Spark's default
-/// behaviour. All time unit variants (Second, Millisecond, Microsecond, Nanosecond)
-/// are normalised to microseconds before formatting.
+/// For TIMESTAMP (LTZ), the output is localized to the session timezone with an
+/// ISO 8601 offset (e.g. `+08:00` or `Z` for UTC), matching Spark's behaviour.
+/// For TIMESTAMP_NTZ, no timezone offset is appended.
 fn format_timestamp_field(
     array: &ArrayRef,
     row_idx: usize,
     time_unit: &TimeUnit,
+    tz_opt: &Option<Arc<str>>,
     options: &SparkToCsvOptions,
+    session_timezone: &str,
 ) -> Result<String> {
     // Normalise every variant to microseconds for uniform handling.
     let micros = match time_unit {
@@ -269,16 +283,44 @@ fn format_timestamp_field(
 
     let secs = micros.div_euclid(1_000_000);
     let nanos = (micros.rem_euclid(1_000_000) * 1_000) as u32;
-    let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos)
-        .ok_or_else(|| DataFusionError::Execution(format!("Timestamp out of range: {micros}")))?;
-    // Spark always outputs UTC with Z suffix regardless of session timezone
-    Ok(utc_dt.format(&options.timestamp_format).to_string())
+    let is_default_format = options.timestamp_format == SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT;
+
+    if tz_opt.is_some() {
+        // TIMESTAMP LTZ — localize to session timezone and emit offset
+        let tz: Tz = session_timezone.parse().map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Invalid session timezone '{session_timezone}': {e}"
+            ))
+        })?;
+        let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
+            DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
+        })?;
+        let local_dt = utc_dt.with_timezone(&tz);
+        if is_default_format {
+            // Spark default: ISO 8601 with offset — Z for UTC, +HH:MM otherwise
+            Ok(local_dt
+                .format("%Y-%m-%dT%H:%M:%S%.3f%:z")
+                .to_string()
+                .replace("+00:00", "Z"))
+        } else {
+            // Custom timestampFormat — apply format, no offset appended
+            Ok(local_dt.format(&options.timestamp_format).to_string())
+        }
+    } else {
+        // TIMESTAMP_NTZ — no timezone, no offset suffix
+        let naive = DateTime::from_timestamp(secs, nanos)
+            .map(|dt| dt.naive_utc())
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
+            })?;
+        Ok(naive.format(&options.timestamp_format).to_string())
+    }
 }
 
 /// Converts a single struct field cell from an Arrow array into its CSV string representation.
 ///
-/// - Null cell → empty string (Spark behaviour).
 /// - `Timestamp` → formatted via [`format_timestamp_field`] using `timestampFormat` option.
+/// -  Null cells are handled upstream in `spark_to_csv_inner` before this function is called.
 /// - `Date32` / `Date64` → formatted using `dateFormat` option.
 /// - Everything else → plain value string via `ScalarValue`.
 fn format_field_to_csv(
@@ -286,16 +328,11 @@ fn format_field_to_csv(
     row_idx: usize,
     data_type: &DataType,
     options: &SparkToCsvOptions,
+    session_timezone: &str,
 ) -> Result<String> {
-    // Null cell → empty string (Spark behaviour)
-    if array.is_null(row_idx) {
-        return Ok(String::new());
-    }
-
     match data_type {
-        // Timezone is ignored, Spark always serializes timestamps in UTC with Z suffix.
-        DataType::Timestamp(time_unit, _tz_opt) => {
-            format_timestamp_field(array, row_idx, time_unit, options)
+        DataType::Timestamp(time_unit, tz_opt) => {
+            format_timestamp_field(array, row_idx, time_unit, tz_opt, options, session_timezone)
         }
 
         // --- Dates: format with user-specified or default dateFormat ---
@@ -398,7 +435,34 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
     keys.iter()
         .enumerate()
         .find(|(_, k)| k.as_deref() == Some(search_key))
-        .map(|(i, _)| values.value(i).to_string())
+        .and_then(|(i, _)| {
+            // Return None if the value is null
+            if values.is_null(i) {
+                None
+            } else {
+                Some(values.value(i).to_string())
+            }
+        })
+}
+
+/// Applies RFC4180-style CSV quoting to a field value, matching Spark's behaviour:
+/// - Empty strings are always quoted → `""`
+/// - Fields containing the separator, quotes, or newlines are quoted
+/// - Inner double quotes are escaped with a backslash → `\"`
+/// - NULL fields are handled upstream and never reach this function
+fn quote_csv_field(value: &str, sep: &str) -> String {
+    let needs_quoting = value.is_empty()
+        || value.contains(sep)
+        || value.contains('"')
+        || value.contains('\n')
+        || value.contains('\r');
+
+    if needs_quoting {
+        let escaped = value.replace('"', "\\\"");
+        format!("\"{}\"", escaped)
+    } else {
+        value.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -593,7 +657,8 @@ mod tests {
         Ok(())
     }
 
-    /// Timestamp default format: %Y-%m-%d %H:%M:%S (matches Spark docs second example).
+    /// Timestamp default format: %Y-%m-%dT%H:%M:%S%.3f with UTC offset (ISO 8601),
+    /// matching Spark's default `to_csv` timestamp serialization behaviour
     #[test]
     fn test_to_csv_timestamp_default_format() -> Result<()> {
         // 2015-08-26 00:00:00 UTC in microseconds
@@ -636,7 +701,7 @@ mod tests {
 
         let output = result.as_any().downcast_ref::<StringArray>().unwrap();
         // UTC epoch localised to Asia/Shanghai is 08:00:00
-        assert_eq!(output.value(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(output.value(0), "1970-01-01T08:00:00.000+08:00");
         Ok(())
     }
 
@@ -668,9 +733,8 @@ mod tests {
     /// Custom separator via the options map changes the CSV delimiter.
     /// This mirrors the `sep` / `delimiter` option from Spark.
     ///
-    /// We test the options struct directly since building a MapArray in unit
-    /// tests requires significant boilerplate; the options parsing path is the
-    /// same one used by `spark_to_csv_inner`.
+    /// Tests the separator option by constructing `SparkToCsvOptions` directly.
+    /// End-to-end option parsing via `MapArray` is covered by the BDD feature tests.
     #[test]
     fn test_to_csv_custom_separator() -> Result<()> {
         let fields = Fields::from(vec![
@@ -695,7 +759,15 @@ mod tests {
         let parts: Vec<String> = fields
             .iter()
             .enumerate()
-            .map(|(i, f)| format_field_to_csv(&columns[i], 0, f.data_type(), &options))
+            .map(|(i, f)| {
+                format_field_to_csv(
+                    &columns[i],
+                    0,
+                    f.data_type(),
+                    &options,
+                    DEFAULT_SESSION_TIMEZONE,
+                )
+            })
             .collect::<Result<_>>()?;
 
         assert_eq!(parts.join(&options.sep), "1|2");
@@ -786,25 +858,99 @@ mod tests {
         Ok(())
     }
 
-    /// All timestamp time_unit variants (Second, Millisecond, Nanosecond).
+    /// All timestamp time_unit variants (Second, Millisecond, Microsecond, Nanosecond)
+    /// are normalised to microseconds and formatted identically
     #[test]
     fn test_to_csv_timestamp_all_time_units() -> Result<()> {
-        // Test that Second/Millisecond/Nanosecond variants all format correctly
         let secs: i64 = 1440547200; // 2015-08-26 00:00:00 UTC
 
-        let fields_sec = Fields::from(vec![Arc::new(Field::new(
+        // --- Second ---
+        let fields = Fields::from(vec![Arc::new(Field::new(
             "ts",
             DataType::Timestamp(TimeUnit::Second, Some(Arc::from("UTC"))),
             true,
         ))]);
-        let col_sec =
+        let col =
             Arc::new(TimestampSecondArray::from(vec![Some(secs)]).with_timezone("UTC")) as ArrayRef;
-        let struct_sec = make_struct_array(fields_sec, vec![col_sec], None);
-        let result_sec = spark_to_csv_inner(&[struct_sec], DEFAULT_SESSION_TIMEZONE)?;
-        let output_sec = result_sec.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(output_sec.value(0), "2015-08-26T00:00:00.000Z");
+        let result = spark_to_csv_inner(
+            &[make_struct_array(fields, vec![col], None)],
+            DEFAULT_SESSION_TIMEZONE,
+        )?;
+        assert_eq!(
+            result
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "2015-08-26T00:00:00.000Z"
+        );
 
-        // Similar for Millisecond and Nanosecond...
+        // --- Millisecond ---
+        let fields = Fields::from(vec![Arc::new(Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC"))),
+            true,
+        ))]);
+        let col = Arc::new(
+            TimestampMillisecondArray::from(vec![Some(secs * 1_000)]).with_timezone("UTC"),
+        ) as ArrayRef;
+        let result = spark_to_csv_inner(
+            &[make_struct_array(fields, vec![col], None)],
+            DEFAULT_SESSION_TIMEZONE,
+        )?;
+        assert_eq!(
+            result
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "2015-08-26T00:00:00.000Z"
+        );
+
+        // --- Microsecond ---
+        let fields = Fields::from(vec![Arc::new(Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            true,
+        ))]);
+        let col = Arc::new(
+            TimestampMicrosecondArray::from(vec![Some(secs * 1_000_000)]).with_timezone("UTC"),
+        ) as ArrayRef;
+        let result = spark_to_csv_inner(
+            &[make_struct_array(fields, vec![col], None)],
+            DEFAULT_SESSION_TIMEZONE,
+        )?;
+        assert_eq!(
+            result
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "2015-08-26T00:00:00.000Z"
+        );
+
+        // --- Nanosecond ---
+        let fields = Fields::from(vec![Arc::new(Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("UTC"))),
+            true,
+        ))]);
+        let col = Arc::new(
+            TimestampNanosecondArray::from(vec![Some(secs * 1_000_000_000)]).with_timezone("UTC"),
+        ) as ArrayRef;
+        let result = spark_to_csv_inner(
+            &[make_struct_array(fields, vec![col], None)],
+            DEFAULT_SESSION_TIMEZONE,
+        )?;
+        assert_eq!(
+            result
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "2015-08-26T00:00:00.000Z"
+        );
+
         Ok(())
     }
 
@@ -833,9 +979,69 @@ mod tests {
         let struct_arr = binding.as_any().downcast_ref::<StructArray>().unwrap();
 
         let field = &struct_arr.fields()[0];
-        let result = format_field_to_csv(&struct_arr.columns()[0], 0, field.data_type(), &options)?;
+        let result = format_field_to_csv(
+            &struct_arr.columns()[0],
+            0,
+            field.data_type(),
+            &options,
+            DEFAULT_SESSION_TIMEZONE,
+        )?;
 
         assert_eq!(result, "26/08/2015");
+        Ok(())
+    }
+
+    /// Fields containing the separator are quoted per RFC4180, matches Spark behaviour
+    #[test]
+    fn test_to_csv_quoting_separator_in_field() -> Result<()> {
+        let fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Utf8, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+        let col_a = Arc::new(StringArray::from(vec![Some("hello,world")])) as ArrayRef;
+        let col_b = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
+
+        let struct_array = make_struct_array(fields, vec![col_a, col_b], None);
+        let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
+
+        let output = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(output.value(0), "\"hello,world\",2");
+        Ok(())
+    }
+
+    /// Fields containing double quotes are quoted and inner quotes escaped with backslash
+    #[test]
+    fn test_to_csv_quoting_double_quote_in_field() -> Result<()> {
+        let fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Utf8, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+        let col_a = Arc::new(StringArray::from(vec![Some("say \"hello\"")])) as ArrayRef;
+        let col_b = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
+
+        let struct_array = make_struct_array(fields, vec![col_a, col_b], None);
+        let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
+
+        let output = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(output.value(0), "\"say \\\"hello\\\"\",2");
+        Ok(())
+    }
+
+    /// Empty string fields (not null) are always quoted, matches Spark behaviour
+    #[test]
+    fn test_to_csv_quoting_empty_string_field() -> Result<()> {
+        let fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Utf8, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+        let col_a = Arc::new(StringArray::from(vec![Some("")])) as ArrayRef;
+        let col_b = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
+
+        let struct_array = make_struct_array(fields, vec![col_a, col_b], None);
+        let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
+
+        let output = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(output.value(0), "\"\",2");
         Ok(())
     }
 }
