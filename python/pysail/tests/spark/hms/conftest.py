@@ -22,6 +22,7 @@ from testcontainers.core.waiting_utils import wait_for_logs
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Auto-mark HMS tests and deselect them unless explicitly opted in."""
     this_dir = os.path.dirname(os.path.abspath(__file__))

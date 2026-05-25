@@ -347,27 +347,6 @@ fn namespace_location_from_properties(properties: &[(String, String)]) -> Option
         })
 }
 
-#[cfg(test)]
-mod tests {
-    use aws_sdk_glue::types::Database;
-
-    use super::GlueCatalogProvider;
-
-    #[test]
-    fn database_to_status_falls_back_to_namespace_properties() {
-        let provider = GlueCatalogProvider::new("glue".to_string(), Default::default());
-        let database = Database::builder()
-            .name("db")
-            .parameters("warehouse", "s3://warehouse/db")
-            .parameters("path", "s3://path/db")
-            .build()
-            .unwrap();
-
-        let status = provider.database_to_status(&database).unwrap();
-        assert_eq!(status.location.as_deref(), Some("s3://warehouse/db"));
-    }
-}
-
 #[async_trait::async_trait]
 impl CatalogProvider for GlueCatalogProvider {
     fn get_name(&self) -> &str {
@@ -854,5 +833,27 @@ impl CatalogProvider for GlueCatalogProvider {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aws_sdk_glue::types::Database;
+
+    use super::GlueCatalogProvider;
+
+    #[test]
+    fn database_to_status_falls_back_to_namespace_properties()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let provider = GlueCatalogProvider::new("glue".to_string(), Default::default());
+        let database = Database::builder()
+            .name("db")
+            .parameters("warehouse", "s3://warehouse/db")
+            .parameters("path", "s3://path/db")
+            .build()?;
+
+        let status = provider.database_to_status(&database)?;
+        assert_eq!(status.location.as_deref(), Some("s3://warehouse/db"));
+        Ok(())
     }
 }
