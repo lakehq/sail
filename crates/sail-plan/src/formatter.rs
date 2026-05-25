@@ -424,6 +424,14 @@ impl PlanFormatter for SparkPlanFormatter {
     ) -> Result<String> {
         match name.to_lowercase().as_str() {
             "!" | "not" => Ok(format!("(NOT {})", arguments.one()?)),
+            "assert_true" => {
+                let (col, rest) = arguments.at_least_one()?;
+                if let Some(err_msg) = rest.first() {
+                    Ok(format!("assert_true({col}, {err_msg})"))
+                } else {
+                    Ok(format!("assert_true({col}, '{col}' is not true!)"))
+                }
+            }
             "~" => Ok(format!("{name}{}", arguments.one()?)),
             "+" | "-" => {
                 if arguments.len() < 2 {
