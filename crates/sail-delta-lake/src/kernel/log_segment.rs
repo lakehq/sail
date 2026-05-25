@@ -12,7 +12,7 @@
 
 pub(crate) use crate::delta_log::ReplayedTableHeader;
 use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
-use crate::kernel::checkpoints::read_checkpoint_main_rows_from_parquet;
+use crate::kernel::checkpoints::read_checkpoint_main_rows_from_checkpoint_file;
 use crate::spec::{is_uuid_checkpoint_filename, DeltaResult};
 
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
@@ -72,7 +72,7 @@ pub async fn list_log_segment_files(
 
         // Only UUID-named checkpoints (V2) can contain sidecar references.
         if is_uuid_checkpoint_filename(&filename) {
-            let rows = read_checkpoint_main_rows_from_parquet(store, meta).await?;
+            let rows = read_checkpoint_main_rows_from_checkpoint_file(store, meta).await?;
             for row in &rows {
                 if let Some(ref sidecar) = row.sidecar {
                     sidecar_files.push(format!("_sidecars/{}", sidecar.path));
