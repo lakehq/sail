@@ -92,6 +92,30 @@ impl ScalarUDFImpl for SparkArray {
         let first_type = arg_types.first().ok_or_else(|| {
             plan_datafusion_err!("Spark array function requires at least one argument")
         })?;
+        // Spark non-ANSI semantics: when mixing strings with other (non-null) types,
+        // coerce everything to string. DataFusion 54 changed `comparison_coercion` to
+        // prefer numeric types, which breaks Spark's string-wins behavior and causes
+        // runtime cast failures for values like `array('a', 1)`.
+        let is_string_like = |dt: &DataType| {
+            matches!(
+                dt,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            )
+        };
+        let has_string = arg_types.iter().any(is_string_like);
+        let has_non_string_non_null = arg_types
+            .iter()
+            .any(|dt| !is_string_like(dt) && !dt.is_null());
+        if has_string && has_non_string_non_null {
+            let string_type = if arg_types.iter().any(|dt| matches!(dt, DataType::LargeUtf8)) {
+                DataType::LargeUtf8
+            } else if arg_types.iter().any(|dt| matches!(dt, DataType::Utf8View)) {
+                DataType::Utf8View
+            } else {
+                DataType::Utf8
+            };
+            return Ok(vec![string_type; arg_types.len()]);
+        }
         let new_type = arg_types
             .iter()
             .skip(1)
