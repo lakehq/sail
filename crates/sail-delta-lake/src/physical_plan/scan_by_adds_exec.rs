@@ -79,7 +79,6 @@ struct ScanByAddsStreamState {
 }
 
 impl ScanByAddsStreamState {
-    #[expect(clippy::too_many_arguments)]
     fn new(
         input: SendableRecordBatchStream,
         context: Arc<TaskContext>,
