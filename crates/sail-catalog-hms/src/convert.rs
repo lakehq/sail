@@ -14,11 +14,11 @@ use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
 
-use crate::hms::{Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table};
 use crate::data_type::{
     arrow_to_hive_type, hive_type_to_arrow, spark_struct_json_from_fields,
     spark_struct_json_to_fields,
 };
+use crate::hms::{Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table};
 
 pub(crate) const COMMENT_KEY: &str = "comment";
 pub(crate) const EXTERNAL_KEY: &str = "EXTERNAL";
@@ -706,7 +706,6 @@ mod tests {
     #![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use arrow::datatypes::{DataType, Field, Fields};
-    use crate::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
     use pilota::{AHashMap, FastStr};
     use sail_catalog::hive_format::HiveStorageFormat;
     use sail_catalog::provider::{
@@ -718,6 +717,7 @@ mod tests {
         inject_spark_metadata, is_view_table, map_to_vec, validate_namespace, GenericTableFormat,
         COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
     };
+    use crate::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     #[test]
     fn test_validate_namespace_rejects_nested_namespaces() {

@@ -3,7 +3,7 @@ mod data_type;
 mod provider;
 mod security;
 
-#[expect(clippy::all, clippy::allow_attributes)]
+#[expect(clippy::allow_attributes)]
 pub mod hms {
     include!(concat!(env!("OUT_DIR"), "/volo_gen.rs"));
 
