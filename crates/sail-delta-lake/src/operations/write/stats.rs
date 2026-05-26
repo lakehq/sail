@@ -38,7 +38,10 @@ use crate::spec::{
     Add, ColumnCountStat, ColumnValueStat, DeltaError as DeltaTableError, StatValue, Stats,
 };
 
-/// Creates an [`Add`] log action struct with statistics.
+/// Build an [`Add`] log action with row-group-derived stats.
+///
+/// Reserves `[baseRowId, baseRowId + num_records)` when row tracking is active.
+/// `defaultRowCommitVersion` is stamped post-commit by `finalize_attempt_actions`.
 pub fn create_add(
     partition_values: &IndexMap<String, ScalarValue>,
     path: String,
@@ -46,6 +49,7 @@ pub fn create_add(
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    row_tracking: &mut crate::table::features::RowTrackingToken,
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
         partition_values,
@@ -53,15 +57,17 @@ pub fn create_add(
         num_indexed_cols,
         stats_columns,
     )?;
+    let num_records = stats.num_records;
     let stats_string = stats
         .to_json_string()
         .map_err(|e| DeltaTableError::generic(format!("Failed to serialize stats: {e}")))?;
 
-    // Determine the modification timestamp to include in the add action - milliseconds since epoch
     let modification_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| DeltaTableError::generic(format!("System time before Unix epoch: {e}")))?
         .as_millis() as i64;
+
+    let base_row_id = row_tracking.reserve_row_ids(num_records);
 
     Ok(Add {
         path,
@@ -84,10 +90,7 @@ pub fn create_add(
         stats: Some(stats_string),
         tags: None,
         deletion_vector: None,
-        // TODO(row-tracking): Keep row IDs unset until writer-side high-water-mark allocation is
-        // implemented. Now row-tracking tables are still rejected by commit-time protocol
-        // checks.
-        base_row_id: None,
+        base_row_id,
         default_row_commit_version: None,
         clustering_provider: None,
         commit_version: None,

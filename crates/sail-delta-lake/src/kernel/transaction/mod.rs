@@ -38,12 +38,18 @@ use crate::kernel::checkpoints::{
 };
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::{DeltaOperation, DeltaSnapshotConfig};
+use crate::schema::{
+    validate_row_tracking_materialized_column_names,
+    ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+    ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
+};
 use crate::spec::{
-    checksum_path, temp_commit_path, Action, CommitAction, DeltaError, DeltaResult, Metadata,
-    TableFeature, Transaction, VersionChecksum,
+    checksum_path, temp_commit_path, Action, ColumnMappingMode, CommitAction, DeltaError,
+    DeltaResult, Metadata, TableFeature, Transaction, VersionChecksum,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
+use crate::table::features::parse_row_tracking_high_water_mark;
 use crate::table::DeltaSnapshot;
 
 mod conflict_checker;
@@ -53,6 +59,11 @@ use conflict_checker::ConflictChecker;
 pub use protocol::INSTANCE as PROTOCOL;
 
 pub(crate) const DEFAULT_RETRIES: usize = 15;
+pub(crate) const ROW_TRACKING_PRESERVED_TAG: &str = "delta.rowTracking.preserved";
+pub(crate) const ROW_TRACKING_ENABLEMENT_ONLY_TAG: &str = "rowTrackingEnablementOnly";
+const ROW_TRACKING_ENABLED_KEY: &str = "delta.enableRowTracking";
+const ROW_TRACKING_FEATURE_KEY: &str = "delta.feature.rowTracking";
+const DOMAIN_METADATA_FEATURE_KEY: &str = "delta.feature.domainMetadata";
 
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -709,6 +720,123 @@ fn finalized_commit_info(actions: &mut [CommitAction]) -> &mut crate::spec::Comm
     }
 }
 
+pub(crate) fn commit_info_tag_is_true(info: Option<&crate::spec::CommitInfo>, key: &str) -> bool {
+    info.and_then(|info| info.tags.as_ref())
+        .and_then(|tags| tags.get(key))
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+fn set_commit_info_tag_if_absent(info: &mut crate::spec::CommitInfo, key: &str, value: &str) {
+    let tags = info.tags.get_or_insert_with(HashMap::new);
+    tags.entry(key.to_string())
+        .or_insert_with(|| value.to_string());
+}
+
+fn set_commit_info_tag(info: &mut crate::spec::CommitInfo, key: &str, value: &str) {
+    info.tags
+        .get_or_insert_with(HashMap::new)
+        .insert(key.to_string(), value.to_string());
+}
+
+fn row_tracking_enabled(protocol: &crate::spec::Protocol, metadata: &Metadata) -> bool {
+    protocol_has_writer_feature(protocol, &TableFeature::RowTracking)
+        && table_property_enabled(metadata, ROW_TRACKING_ENABLED_KEY)
+}
+
+pub(crate) fn is_row_tracking_enablement_only_metadata_change(
+    old: &Metadata,
+    new: &Metadata,
+) -> bool {
+    if table_property_enabled(old, ROW_TRACKING_ENABLED_KEY)
+        || !table_property_enabled(new, ROW_TRACKING_ENABLED_KEY)
+    {
+        return false;
+    }
+    if old.name() != new.name()
+        || old.description() != new.description()
+        || old.partition_columns() != new.partition_columns()
+        || old.parse_schema().ok() != new.parse_schema().ok()
+    {
+        return false;
+    }
+    const ALLOWED_CONFIG_KEYS: &[&str] = &[
+        ROW_TRACKING_ENABLED_KEY,
+        ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
+        ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+        ROW_TRACKING_FEATURE_KEY,
+        DOMAIN_METADATA_FEATURE_KEY,
+    ];
+    old.configuration()
+        .keys()
+        .chain(new.configuration().keys())
+        .all(|key| {
+            old.configuration().get(key) == new.configuration().get(key)
+                || ALLOWED_CONFIG_KEYS.contains(&key.as_str())
+        })
+}
+
+pub(crate) fn is_row_tracking_enablement_only_protocol_upgrade(
+    old: &crate::spec::Protocol,
+    new: &crate::spec::Protocol,
+) -> bool {
+    if old.min_reader_version() != new.min_reader_version()
+        || old.min_writer_version() > new.min_writer_version()
+    {
+        return false;
+    }
+    let old_reader = old.reader_features().unwrap_or_default();
+    let new_reader = new.reader_features().unwrap_or_default();
+    if new_reader
+        .iter()
+        .any(|feature| !old_reader.contains(feature))
+    {
+        return false;
+    }
+    let old_writer = old.writer_features().unwrap_or_default();
+    let new_writer = new.writer_features().unwrap_or_default();
+    new_writer
+        .iter()
+        .filter(|feature| !old_writer.contains(feature))
+        .all(|feature| {
+            matches!(
+                feature,
+                TableFeature::RowTracking | TableFeature::DomainMetadata
+            )
+        })
+}
+
+fn tag_row_tracking_commit(
+    actions: &mut [CommitAction],
+    read_snapshot: Option<&Arc<DeltaSnapshot>>,
+    effective_protocol_and_metadata: Option<&(crate::spec::Protocol, Metadata)>,
+) {
+    let row_tracking_is_enabled = effective_protocol_and_metadata
+        .is_some_and(|(protocol, metadata)| row_tracking_enabled(protocol, metadata));
+    let enablement_only = read_snapshot.is_some_and(|snapshot| {
+        actions
+            .iter()
+            .find_map(|action| match action {
+                CommitAction::Metadata(metadata) => Some(metadata),
+                _ => None,
+            })
+            .is_some_and(|metadata| {
+                is_row_tracking_enablement_only_metadata_change(snapshot.metadata(), metadata)
+            })
+    });
+    let Some(commit_info) = actions.first_mut().and_then(|action| match action {
+        CommitAction::CommitInfo(info) => Some(info),
+        _ => None,
+    }) else {
+        return;
+    };
+    if row_tracking_is_enabled {
+        set_commit_info_tag_if_absent(commit_info, ROW_TRACKING_PRESERVED_TAG, "true");
+    }
+    if enablement_only {
+        set_commit_info_tag(commit_info, ROW_TRACKING_ENABLEMENT_ONLY_TAG, "true");
+    }
+}
+
 fn finalize_attempt_actions(
     base_actions: &[CommitAction],
     read_snapshot: Option<&Arc<DeltaSnapshot>>,
@@ -781,7 +909,189 @@ fn finalize_attempt_actions(
         }
     }
 
+    tag_row_tracking_commit(
+        &mut finalized_actions,
+        read_snapshot,
+        effective_protocol_and_metadata.as_ref(),
+    );
+    stamp_row_tracking_actions(&mut finalized_actions, read_snapshot, version)?;
+
     Ok(finalized_actions)
+}
+
+/// Stamp `defaultRowCommitVersion` on row-tracked `Add` actions and merge the
+/// `delta.rowTracking` domain metadata high-water-mark for this commit.
+fn stamp_row_tracking_actions(
+    actions: &mut Vec<CommitAction>,
+    read_snapshot: Option<&Arc<DeltaSnapshot>>,
+    version: i64,
+) -> DeltaResult<()> {
+    let actions_as_actions = actions
+        .iter()
+        .cloned()
+        .map(Action::from)
+        .collect::<Vec<_>>();
+    let Some((protocol, metadata)) = resolve_effective_protocol_and_metadata(
+        read_snapshot.map(|snapshot| snapshot.protocol()),
+        read_snapshot.map(|snapshot| snapshot.metadata()),
+        &actions_as_actions,
+    ) else {
+        return Ok(());
+    };
+    let row_tracking_supported = protocol_has_writer_feature(&protocol, &TableFeature::RowTracking);
+    let suspended = table_property_enabled(&metadata, "delta.rowTrackingSuspended");
+    if !row_tracking_supported {
+        return Ok(());
+    }
+
+    let has_manual_row_tracking_domain = actions.iter().any(|action| {
+        matches!(
+            action,
+            CommitAction::DomainMetadata(dm) if dm.domain == "delta.rowTracking"
+        )
+    });
+    if has_manual_row_tracking_domain {
+        return Err(DeltaError::generic(
+            "Manually setting the Row ID high water mark is not allowed",
+        ));
+    }
+
+    if suspended {
+        strip_row_tracking_fields_for_suspended_table(actions, read_snapshot);
+        return Ok(());
+    }
+
+    let previous_high_water_mark = read_snapshot
+        .and_then(|snapshot| snapshot.domain_metadata().get("delta.rowTracking"))
+        .map(|domain| parse_row_tracking_high_water_mark(&domain.configuration))
+        .transpose()?;
+    let active_paths = read_snapshot
+        .map(|snapshot| {
+            snapshot
+                .adds()
+                .iter()
+                .map(|add| add.path.clone())
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let mut next_row_id = previous_high_water_mark
+        .map(|value| value.saturating_add(1))
+        .unwrap_or(0);
+    let mut max_assigned = previous_high_water_mark;
+    for action in actions.iter_mut() {
+        if let CommitAction::Add(add) = action {
+            let num_records = add_num_records(add)?;
+            let assigned_base = match add.base_row_id {
+                Some(base) if active_paths.contains(&add.path) => base,
+                Some(base) if base >= next_row_id => base,
+                _ => {
+                    add.base_row_id = Some(next_row_id);
+                    next_row_id
+                }
+            };
+            if add.default_row_commit_version.is_none() {
+                add.default_row_commit_version = Some(version);
+            }
+            if num_records > 0 {
+                let last = assigned_base.saturating_add(num_records.saturating_sub(1));
+                max_assigned = Some(max_assigned.map_or(last, |current| current.max(last)));
+                next_row_id = next_row_id.max(last.saturating_add(1));
+            } else if assigned_base >= next_row_id {
+                next_row_id = assigned_base;
+            }
+        }
+    }
+
+    let Some(new_high_water_mark) = max_assigned else {
+        return Ok(());
+    };
+    if previous_high_water_mark.is_some_and(|prev| new_high_water_mark <= prev) {
+        return Ok(());
+    }
+    let new_high_water_mark = match previous_high_water_mark {
+        Some(prev) => prev.max(new_high_water_mark),
+        None => new_high_water_mark,
+    };
+
+    let configuration =
+        serde_json::json!({ "rowIdHighWaterMark": new_high_water_mark }).to_string();
+
+    let existing = actions.iter_mut().find_map(|action| match action {
+        CommitAction::DomainMetadata(dm) if dm.domain == "delta.rowTracking" => Some(dm),
+        _ => None,
+    });
+    if let Some(dm) = existing {
+        dm.configuration = configuration;
+        dm.removed = false;
+    } else {
+        actions.push(CommitAction::DomainMetadata(crate::spec::DomainMetadata {
+            domain: "delta.rowTracking".to_string(),
+            configuration,
+            removed: false,
+        }));
+    }
+    Ok(())
+}
+
+fn strip_row_tracking_fields_for_suspended_table(
+    actions: &mut Vec<CommitAction>,
+    read_snapshot: Option<&Arc<DeltaSnapshot>>,
+) {
+    actions.retain(|action| {
+        !matches!(
+            action,
+            CommitAction::DomainMetadata(dm) if dm.domain == "delta.rowTracking"
+        )
+    });
+    for action in &mut *actions {
+        match action {
+            CommitAction::Add(add) => {
+                add.base_row_id = None;
+                add.default_row_commit_version = None;
+            }
+            CommitAction::Remove(remove) => {
+                remove.base_row_id = None;
+                remove.default_row_commit_version = None;
+            }
+            _ => {}
+        }
+    }
+    if read_snapshot
+        .and_then(|snapshot| snapshot.domain_metadata().get("delta.rowTracking"))
+        .is_some()
+    {
+        actions.push(CommitAction::DomainMetadata(crate::spec::DomainMetadata {
+            domain: "delta.rowTracking".to_string(),
+            configuration: String::new(),
+            removed: true,
+        }));
+    }
+}
+
+fn add_num_records(add: &crate::spec::Add) -> DeltaResult<i64> {
+    let stats = add.stats.as_deref().ok_or_else(|| {
+        DeltaError::generic(format!(
+            "row tracking requires Add action stats.numRecords for file '{}'",
+            add.path
+        ))
+    })?;
+    let stats: Value = serde_json::from_str(stats)?;
+    let num_records = stats
+        .get("numRecords")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            DeltaError::generic(format!(
+                "row tracking requires Add action stats.numRecords for file '{}'",
+                add.path
+            ))
+        })?;
+    if num_records < 0 {
+        return Err(DeltaError::generic(format!(
+            "row tracking requires non-negative Add action stats.numRecords for file '{}'",
+            add.path
+        )));
+    }
+    Ok(num_records)
 }
 
 fn table_property_enabled(metadata: &Metadata, key: &str) -> bool {
@@ -874,11 +1184,16 @@ fn validate_effective_commit_target(
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
 
-    // TODO(row-tracking-writes): We still rely on commit-time protocol rejection for tables that
-    // advertise rowTracking/domainMetadata. When row-tracking writes are implemented, this needs
-    // to grow into explicit validation of baseRowId/defaultRowCommitVersion assignment.
-    let row_tracking_requested = table_property_enabled(&metadata, "delta.enableRowTracking")
-        || table_property_enabled(&metadata, "delta.rowTrackingSuspended");
+    // Row Tracking: every Add in a commit on a supported, non-suspended table MUST
+    // carry baseRowId and defaultRowCommitVersion.
+    let row_tracking_enabled = table_property_enabled(&metadata, "delta.enableRowTracking");
+    let row_tracking_suspended = table_property_enabled(&metadata, "delta.rowTrackingSuspended");
+    if row_tracking_enabled && row_tracking_suspended {
+        return Err(DeltaError::generic(
+            "delta.enableRowTracking and delta.rowTrackingSuspended cannot both be true",
+        ));
+    }
+    let row_tracking_requested = row_tracking_enabled || row_tracking_suspended;
     if row_tracking_requested && !protocol_has_writer_feature(&protocol, &TableFeature::RowTracking)
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::RowTracking).into());
@@ -888,8 +1203,82 @@ fn validate_effective_commit_target(
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DomainMetadata).into());
     }
+    if row_tracking_enabled {
+        for key in [
+            ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
+            ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+        ] {
+            if metadata
+                .configuration()
+                .get(key)
+                .map(|value| value.is_empty())
+                .unwrap_or(true)
+            {
+                return Err(DeltaError::generic(format!(
+                    "{key} is required when delta.enableRowTracking = true"
+                )));
+            }
+        }
+        let column_mapping_mode = metadata
+            .configuration()
+            .get("delta.columnMapping.mode")
+            .and_then(|value| ColumnMappingMode::try_from(value.as_str()).ok())
+            .unwrap_or_default();
+        validate_row_tracking_materialized_column_names(
+            &metadata.parse_schema()?,
+            metadata.configuration(),
+            column_mapping_mode,
+        )?;
+    }
+    if row_tracking_enabled {
+        validate_enabled_row_tracking_active_adds(read_snapshot, &actions_as_actions)?;
+    }
 
     Ok(())
+}
+
+fn validate_enabled_row_tracking_active_adds(
+    read_snapshot: Option<&Arc<DeltaSnapshot>>,
+    actions: &[Action],
+) -> DeltaResult<()> {
+    let Some(snapshot) = read_snapshot else {
+        return Ok(());
+    };
+    if !snapshot.load_config().require_files {
+        return Ok(());
+    }
+    let added_keys = actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Add(add) => Some(add_logical_file_key(
+                add.path.as_str(),
+                add.deletion_vector.as_ref(),
+            )),
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let has_untracked_active_add = snapshot.adds().iter().any(|add| {
+        !added_keys.contains(&add_logical_file_key(
+            add.path.as_str(),
+            add.deletion_vector.as_ref(),
+        )) && (add.base_row_id.is_none() || add.default_row_commit_version.is_none())
+    });
+    if has_untracked_active_add {
+        return Err(DeltaError::generic(
+            "enabling row tracking requires backfilling baseRowId and defaultRowCommitVersion for all active Add actions",
+        ));
+    }
+    Ok(())
+}
+
+fn add_logical_file_key(
+    path: &str,
+    deletion_vector: Option<&crate::spec::DeletionVectorDescriptor>,
+) -> (String, Option<String>) {
+    (
+        path.to_string(),
+        deletion_vector.map(|descriptor| descriptor.unique_id()),
+    )
 }
 
 #[async_trait]
@@ -2083,7 +2472,7 @@ mod tests {
     use super::*;
     use crate::schema::protocol_for_create;
     use crate::spec::{
-        checksum_path, Action, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata,
+        checksum_path, Action, Add, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata,
         Metadata, Protocol, SaveMode, StructField, StructType, TableFeature, VersionChecksum,
     };
     use crate::storage::{default_logstore, get_actions, StorageConfig};
@@ -2112,6 +2501,24 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    fn test_add(path: &str, base_row_id: Option<i64>, stats: Option<&str>) -> Add {
+        Add {
+            path: path.to_string(),
+            partition_values: HashMap::new(),
+            size: 0,
+            modification_time: 0,
+            data_change: true,
+            stats: stats.map(str::to_string),
+            tags: None,
+            deletion_vector: None,
+            base_row_id,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
+        }
     }
 
     async fn read_commit_actions(log_store: &LogStoreRef, version: i64) -> Vec<Action> {
@@ -2456,6 +2863,653 @@ mod tests {
             DeltaError::Transaction(TransactionError::TableFeaturesRequired(
                 TableFeature::DomainMetadata
             ))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn stamp_row_tracking_empty_files_do_not_advance_high_watermark() -> DeltaResult<()> {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let mut actions = vec![
+            CommitAction::Protocol(protocol),
+            CommitAction::Metadata(metadata),
+            CommitAction::Add(test_add(
+                "empty.parquet",
+                Some(0),
+                Some(r#"{"numRecords":0}"#),
+            )),
+        ];
+
+        stamp_row_tracking_actions(&mut actions, None, 5)?;
+
+        let Some(add) = actions.iter().find_map(|action| match action {
+            CommitAction::Add(add) => Some(add),
+            _ => None,
+        }) else {
+            return Err(DeltaError::generic("expected add action"));
+        };
+        assert_eq!(add.default_row_commit_version, Some(5));
+        assert!(
+            !actions.iter().any(|action| matches!(
+                action,
+                CommitAction::DomainMetadata(dm) if dm.domain == "delta.rowTracking"
+            )),
+            "empty files must not publish a rowTracking high-water-mark"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stamp_row_tracking_requires_num_records() -> DeltaResult<()> {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let mut actions = vec![
+            CommitAction::Protocol(protocol),
+            CommitAction::Metadata(metadata),
+            CommitAction::Add(test_add("missing-stats.parquet", None, None)),
+        ];
+
+        let err = match stamp_row_tracking_actions(&mut actions, None, 5) {
+            Ok(()) => {
+                return Err(DeltaError::generic(
+                    "missing numRecords should be rejected under row tracking",
+                ));
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("stats.numRecords"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_manual_row_tracking_domain_on_table_creation() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let result = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+                CommitAction::DomainMetadata(DomainMetadata {
+                    domain: "delta.rowTracking".to_string(),
+                    configuration: r#"{"rowIdHighWaterMark":"10"}"#.to_string(),
+                    removed: false,
+                }),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await;
+
+        let err = match result {
+            Ok(_) => {
+                return Err(DeltaError::generic(
+                    "manual rowTracking domain should be rejected on create",
+                ));
+            }
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("Manually setting the Row ID high water mark is not allowed"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_writes_row_tracking_tags() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(1, 1, None, None);
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+
+        let enabled_protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let enabled_metadata = test_metadata([
+            ("delta.enableRowTracking", "true"),
+            (
+                "delta.rowTracking.materializedRowIdColumnName",
+                "_row-id-col-test",
+            ),
+            (
+                "delta.rowTracking.materializedRowCommitVersionColumnName",
+                "_row-commit-version-col-test",
+            ),
+        ]);
+        CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(enabled_protocol),
+                CommitAction::Metadata(enabled_metadata),
+            ])
+            .build(
+                created.snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::SetTableProperties {
+                    properties: HashMap::from([(
+                        "delta.enableRowTracking".to_string(),
+                        "true".to_string(),
+                    )]),
+                },
+            )
+            .await?;
+
+        let actions = read_commit_actions(&log_store, 1).await;
+        let tags = commit_info(&actions)?
+            .tags
+            .as_ref()
+            .ok_or_else(|| DeltaError::generic("expected commitInfo tags"))?;
+        assert_eq!(
+            tags.get(ROW_TRACKING_PRESERVED_TAG).map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            tags.get(ROW_TRACKING_ENABLEMENT_ONLY_TAG)
+                .map(String::as_str),
+            Some("true")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn blind_append_survives_concurrent_row_tracking_enablement() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(1, 1, None, None);
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+
+        let enabled_protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let enabled_metadata = test_metadata([
+            ("delta.enableRowTracking", "true"),
+            (
+                "delta.rowTracking.materializedRowIdColumnName",
+                "_row-id-col-test",
+            ),
+            (
+                "delta.rowTracking.materializedRowCommitVersionColumnName",
+                "_row-commit-version-col-test",
+            ),
+        ]);
+        CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(enabled_protocol),
+                CommitAction::Metadata(enabled_metadata),
+            ])
+            .build(
+                created.snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::SetTableProperties {
+                    properties: HashMap::from([(
+                        "delta.enableRowTracking".to_string(),
+                        "true".to_string(),
+                    )]),
+                },
+            )
+            .await?;
+
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(test_add(
+                "concurrent.parquet",
+                None,
+                Some(r#"{"numRecords":1}"#),
+            ))])
+            .build(
+                created.snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        let actions = read_commit_actions(&log_store, 2).await;
+        let add = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::Add(add) => Some(add),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("expected add action"))?;
+        assert_eq!(add.base_row_id, Some(0));
+        assert_eq!(add.default_row_commit_version, Some(2));
+        let domain = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::DomainMetadata(dm) if dm.domain == "delta.rowTracking" => Some(dm),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("expected rowTracking domain update"))?;
+        assert_eq!(
+            parse_row_tracking_high_water_mark(&domain.configuration)?,
+            0
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_manual_row_tracking_domain_on_existing_table() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+
+        let result = CommitBuilder::default()
+            .with_actions(vec![CommitAction::DomainMetadata(DomainMetadata {
+                domain: "delta.rowTracking".to_string(),
+                configuration: r#"{"rowIdHighWaterMark":100}"#.to_string(),
+                removed: false,
+            })])
+            .build(
+                created.snapshot.clone(),
+                log_store,
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await;
+
+        let err = match result {
+            Ok(_) => {
+                return Err(DeltaError::generic(
+                    "manual rowTracking domain should be rejected",
+                ));
+            }
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("Manually setting the Row ID high water mark is not allowed"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_strips_row_tracking_fields_when_suspended() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+                CommitAction::Add(test_add(
+                    "initial.parquet",
+                    None,
+                    Some(r#"{"numRecords":2}"#),
+                )),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+        let suspended_metadata = test_metadata([("delta.rowTrackingSuspended", "true")]);
+        let mut stamped_add = test_add("suspended.parquet", Some(2), Some(r#"{"numRecords":1}"#));
+        stamped_add.default_row_commit_version = Some(1);
+
+        CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Metadata(suspended_metadata),
+                CommitAction::Add(stamped_add),
+            ])
+            .build(
+                created.snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        let actions = read_commit_actions(&log_store, 1).await;
+        let add = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::Add(add) => Some(add),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("expected add action"))?;
+        assert_eq!(add.base_row_id, None);
+        assert_eq!(add.default_row_commit_version, None);
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            Action::DomainMetadata(dm) if dm.domain == "delta.rowTracking" && dm.removed
+        )));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_reassigns_stale_row_tracking_base_row_id() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+                CommitAction::Add(test_add(
+                    "initial.parquet",
+                    None,
+                    Some(r#"{"numRecords":2}"#),
+                )),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(test_add(
+                "retry.parquet",
+                Some(0),
+                Some(r#"{"numRecords":1}"#),
+            ))])
+            .build(
+                created.snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        let actions = read_commit_actions(&log_store, 1).await;
+        let add = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::Add(add) => Some(add),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("expected add action"))?;
+        assert_eq!(add.base_row_id, Some(2));
+        let domain = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::DomainMetadata(dm) if dm.domain == "delta.rowTracking" => Some(dm),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("expected rowTracking domain update"))?;
+        assert_eq!(
+            parse_row_tracking_high_water_mark(&domain.configuration)?,
+            2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn commit_rebases_row_tracking_after_concurrent_append() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([]);
+        let created = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+                CommitAction::Add(test_add(
+                    "initial.parquet",
+                    None,
+                    Some(r#"{"numRecords":2}"#),
+                )),
+            ])
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+        let stale_snapshot = created.snapshot.clone();
+
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(test_add(
+                "first-writer.parquet",
+                Some(0),
+                Some(r#"{"numRecords":2}"#),
+            ))])
+            .build(
+                stale_snapshot.clone(),
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        CommitBuilder::default()
+            .with_actions(vec![CommitAction::Add(test_add(
+                "second-writer.parquet",
+                Some(0),
+                Some(r#"{"numRecords":2}"#),
+            ))])
+            .build(
+                stale_snapshot,
+                log_store.clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        let actions = read_commit_actions(&log_store, 2).await;
+        let add = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::Add(add) => Some(add),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("expected add action"))?;
+        assert_eq!(add.base_row_id, Some(4));
+        let domain = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::DomainMetadata(dm) if dm.domain == "delta.rowTracking" => Some(dm),
+                _ => None,
+            })
+            .ok_or_else(|| DeltaError::generic("expected rowTracking domain update"))?;
+        assert_eq!(
+            parse_row_tracking_high_water_mark(&domain.configuration)?,
+            5
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validate_rejects_enabled_and_suspended_row_tracking() -> DeltaResult<()> {
+        let protocol = Protocol::new(
+            1,
+            7,
+            None,
+            Some(vec![
+                TableFeature::DomainMetadata,
+                TableFeature::RowTracking,
+            ]),
+        );
+        let metadata = test_metadata([
+            ("delta.enableRowTracking", "true"),
+            ("delta.rowTrackingSuspended", "true"),
+        ]);
+        let err = match validate_effective_commit_target(
+            None,
+            &[
+                CommitAction::Protocol(protocol),
+                CommitAction::Metadata(metadata),
+            ],
+        ) {
+            Ok(()) => {
+                return Err(DeltaError::generic(
+                    "expected rowTracking enabled/suspended conflict",
+                ));
+            }
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains(
+            "delta.enableRowTracking and delta.rowTrackingSuspended cannot both be true"
         ));
         Ok(())
     }

@@ -28,8 +28,9 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{
-    align_schemas_for_union, build_log_replay_pipeline_with_options, build_standard_write_layers,
-    LogReplayOptions,
+    align_schemas_for_union, append_null_row_tracking_columns,
+    build_log_replay_pipeline_with_options, build_standard_write_layers,
+    materialize_row_tracking_columns, row_tracking_preserving_scan_schema, LogReplayOptions,
 };
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
@@ -189,6 +190,7 @@ async fn build_overwrite_if_plan(
             create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)
         })
         .and_then(|plan| create_sort(plan, ctx.partition_columns().to_vec(), sort_order))?;
+    let new_plan = append_null_row_tracking_columns(new_plan, &snapshot_state)?;
 
     let (aligned_new, aligned_old) = align_schemas_for_union(new_plan, old_data_plan)?;
     let union_plan = UnionExec::try_new(vec![aligned_new, aligned_old])?;
@@ -235,7 +237,16 @@ async fn build_overwrite_if_plan(
     )?);
 
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
+    let row_tracking_state = snapshot_state
+        .get_row_tracking_state()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let include_row_tracking = matches!(
+        row_tracking_state,
+        crate::table::features::RowTrackingToken::Enabled(_)
+            | crate::table::features::RowTrackingToken::SupportedOnly(_)
+    );
     let log_replay_options = LogReplayOptions {
+        include_row_tracking,
         // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
         // for partition-only overwrites where data-skipping itself does not need stats_json.
         include_stats_json: true,
@@ -290,7 +301,16 @@ async fn build_old_data_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let version = snapshot_state.version();
     let partition_only = !predicate_requires_stats(&condition_expr, ctx.partition_columns());
+    let row_tracking_state = snapshot_state
+        .get_row_tracking_state()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let include_row_tracking = matches!(
+        row_tracking_state,
+        crate::table::features::RowTrackingToken::Enabled(_)
+            | crate::table::features::RowTrackingToken::SupportedOnly(_)
+    );
     let log_replay_options = LogReplayOptions {
+        include_row_tracking,
         include_stats_json: !partition_only,
         ..Default::default()
     };
@@ -323,12 +343,14 @@ async fn build_old_data_plan(
         Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
+    let scan_output_schema =
+        row_tracking_preserving_scan_schema(snapshot_state, table_schema.clone())?;
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
         version,
         table_schema.clone(),
-        table_schema,
+        scan_output_schema,
         crate::datasource::DeltaScanConfig::default(),
         None,
         None,
@@ -336,7 +358,9 @@ async fn build_old_data_plan(
     ));
 
     let negated_condition = Arc::new(NotExpr::new(condition));
-    let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+    let filter_exec: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+    let filter_exec = materialize_row_tracking_columns(filter_exec, snapshot_state)?;
 
     Ok(filter_exec)
 }

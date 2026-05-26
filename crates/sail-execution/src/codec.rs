@@ -95,9 +95,10 @@ use sail_delta_lake::physical_plan::{
     DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCastColumnExpr,
     DeltaCommitContext, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
     DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaSnapshotContext,
-    DeltaWriteContext, DeltaWriterExec, RelaxedTzCastExec,
+    DeltaWriteContext, DeltaWriterExec, RelaxedTzCastExec, RowTrackingMaterializeExec,
 };
 use sail_delta_lake::spec::{Action, ColumnMappingMode, DeltaOperation, StructType};
+use sail_delta_lake::table::RowTrackingMaterializedColumnNames;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -754,6 +755,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     )
                     .with_output_statistics(statistics),
                 ))
+            }
+            NodeKind::RowTrackingMaterialize(gen::RowTrackingMaterializeExecNode {
+                input,
+                metadata_column_name,
+                row_id_column_name,
+                row_commit_version_column_name,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                Ok(Arc::new(RowTrackingMaterializeExec::try_new(
+                    input,
+                    metadata_column_name,
+                    row_id_column_name,
+                    row_commit_version_column_name,
+                )?))
             }
             NodeKind::DeltaDiscovery(gen::DeltaDiscoveryExecNode {
                 table_url,
@@ -1623,6 +1638,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pushdown_filter,
                 version: delta_scan_by_adds_exec.version(),
                 statistics,
+            })
+        } else if let Some(row_tracking_materialize_exec) =
+            node.as_any().downcast_ref::<RowTrackingMaterializeExec>()
+        {
+            NodeKind::RowTrackingMaterialize(gen::RowTrackingMaterializeExecNode {
+                input: self.try_encode_plan(row_tracking_materialize_exec.input())?,
+                metadata_column_name: row_tracking_materialize_exec.metadata_column_name().into(),
+                row_id_column_name: row_tracking_materialize_exec.row_id_column_name().into(),
+                row_commit_version_column_name: row_tracking_materialize_exec
+                    .row_commit_version_column_name()
+                    .into(),
             })
         } else if let Some(delta_discovery_exec) =
             node.as_any().downcast_ref::<DeltaDiscoveryExec>()
@@ -3018,6 +3044,21 @@ impl RemoteExecutionCodec {
             .as_deref()
             .map(|schema| self.try_decode_json::<StructType>(schema, "Delta logical schema"))
             .transpose()?;
+        let materialized_row_tracking_columns = match (
+            context.row_tracking_materialized_row_id_column,
+            context.row_tracking_materialized_row_commit_version_column,
+        ) {
+            (Some(row_id), Some(row_commit_version)) => Some(RowTrackingMaterializedColumnNames {
+                row_id,
+                row_commit_version,
+            }),
+            (None, None) => None,
+            _ => {
+                return plan_err!(
+                    "Incomplete row tracking materialized columns for DeltaWriteContext"
+                )
+            }
+        };
 
         Ok(DeltaWriteContext {
             commit_context,
@@ -3029,6 +3070,7 @@ impl RemoteExecutionCodec {
             operation,
             logical_kernel_for_mapping,
             physical_partition_columns: context.physical_partition_columns,
+            materialized_row_tracking_columns,
         })
     }
 
@@ -3056,6 +3098,16 @@ impl RemoteExecutionCodec {
             .as_ref()
             .map(|schema| self.try_encode_json(schema, "Delta logical schema"))
             .transpose()?;
+        let (
+            row_tracking_materialized_row_id_column,
+            row_tracking_materialized_row_commit_version_column,
+        ) = match context.materialized_row_tracking_columns.as_ref() {
+            Some(columns) => (
+                Some(columns.row_id.clone()),
+                Some(columns.row_commit_version.clone()),
+            ),
+            None => (None, None),
+        };
 
         Ok(gen::DeltaWriteContext {
             commit_context: Some(self.try_encode_delta_commit_context(&context.commit_context)?),
@@ -3068,6 +3120,8 @@ impl RemoteExecutionCodec {
             operation_json,
             logical_kernel_for_mapping_json,
             physical_partition_columns: context.physical_partition_columns.clone(),
+            row_tracking_materialized_row_id_column,
+            row_tracking_materialized_row_commit_version_column,
         })
     }
 

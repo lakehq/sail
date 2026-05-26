@@ -62,6 +62,7 @@ message ExtendedPhysicalPlanNode {
     SparkPartitionIdExecNode spark_partition_id = 47;
     DeletionVectorWriterExecNode deletion_vector_writer = 48;
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
+    RowTrackingMaterializeExecNode row_tracking_materialize = 50;
   }
 }
 
@@ -546,6 +547,8 @@ message DeltaWriteContext {
   optional string operation_json = 6;
   optional string logical_kernel_for_mapping_json = 7;
   repeated string physical_partition_columns = 8;
+  optional string row_tracking_materialized_row_id_column = 9;
+  optional string row_tracking_materialized_row_commit_version_column = 10;
 }
 
 message DeltaWriterExecNode {
@@ -583,6 +586,13 @@ message DeltaScanByAddsExecNode {
   int64 version = 9;
   optional bytes statistics = 10;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
+}
+
+message RowTrackingMaterializeExecNode {
+  bytes input = 1;
+  string metadata_column_name = 2;
+  string row_id_column_name = 3;
+  string row_commit_version_column_name = 4;
 }
 
 message DeltaDiscoveryExecNode {

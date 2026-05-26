@@ -21,6 +21,7 @@ pub async fn build_update_plan(
     _ctx: &PlannerContext<'_>,
     _input: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    // TODO(row-tracking): Preserve materialized row tracking columns when UPDATE is implemented.
     Err(DataFusionError::NotImplemented(
         "UPDATE planner not implemented".to_string(),
     ))

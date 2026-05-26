@@ -23,7 +23,10 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
-use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
+use super::utils::{
+    build_log_replay_pipeline_with_options, materialize_row_tracking_columns,
+    row_tracking_preserving_scan_schema, LogReplayOptions,
+};
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
     prepare_delta_write_context, DeltaCommitContext, DeltaDiscoveryExec,
@@ -56,7 +59,16 @@ pub async fn build_delete_plan(
     // Partition-only predicates can delete entire files without scanning data. In that case,
     // build a visible metadata pipeline over a log-derived meta table.
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
+    let row_tracking_state = snapshot_state
+        .get_row_tracking_state()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let include_row_tracking = matches!(
+        row_tracking_state,
+        crate::table::features::RowTrackingToken::Enabled(_)
+            | crate::table::features::RowTrackingToken::SupportedOnly(_)
+    );
     let log_replay_options = LogReplayOptions {
+        include_row_tracking,
         // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
         // for partition-only deletes where data-skipping itself does not need stats_json.
         include_stats_json: true,
@@ -89,12 +101,14 @@ pub async fn build_delete_plan(
         Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
+    let scan_output_schema =
+        row_tracking_preserving_scan_schema(snapshot_state, table_schema.clone())?;
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
         version,
         table_schema.clone(),
-        table_schema.clone(),
+        scan_output_schema,
         crate::datasource::DeltaScanConfig::default(),
         None,
         None,
@@ -114,6 +128,7 @@ pub async fn build_delete_plan(
     let negated_condition = Arc::new(NotExpr::new(adapted_condition));
     let filter_exec: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+    let filter_exec = materialize_row_tracking_columns(filter_exec, snapshot_state)?;
 
     let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,
@@ -193,6 +208,13 @@ pub async fn build_delete_plan_mor(
 
     let log_replay_options = LogReplayOptions {
         include_stats_json: true,
+        include_row_tracking: matches!(
+            snapshot_state
+                .get_row_tracking_state()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            crate::table::features::RowTrackingToken::Enabled(_)
+                | crate::table::features::RowTrackingToken::SupportedOnly(_)
+        ),
         ..Default::default()
     };
 

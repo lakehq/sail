@@ -1,0 +1,33 @@
+# serializer version: 1
+---
+name: "test_explain_plan_for_row_tracking_materialization_during_delete"
+data:
+  |-
+    == Physical Plan ==
+    DeltaCommitExec(table_path=file://<tmp>/delta_rt_delete_materialize_explain/)
+      CoalescePartitionsExec
+        UnionExec
+          DeltaWriterExec(table_path=file://<tmp>/delta_rt_delete_materialize_explain/)
+            RowTrackingMaterializeExec: metadata=_metadata, row_id=_row-id-col-<uuid>, row_commit_version=_row-commit-version-col-<uuid>
+              FilterExec: NOT id@0 = 2
+                DeltaScanByAddsExec(table_path=file://<tmp>/delta_rt_delete_materialize_explain/, version=0, projection=None, limit=None, pushdown=false)
+                  DeltaDiscoveryExec(table_path=file://<tmp>/delta_rt_delete_materialize_explain/)
+                    FilterExec: get_field(stats_parsed@9, minValues, id) IS NULL OR get_field(stats_parsed@9, maxValues, id) IS NULL OR get_field(stats_parsed@9, minValues, id) <= 2 AND get_field(stats_parsed@9, maxValues, id) >= 2
+                      DeltaMetadataStatsExec(output=stats_parsed, columns=[id])
+                        DeltaLogReplayExec(table_path=file://<tmp>/delta_rt_delete_materialize_explain/, version=0)
+                          SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
+                            RepartitionExec: partitioning=Hash([__sail_delta_replay_path@9], 4), input_partitions=4
+                              ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, baseRowId) END as baseRowId, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, defaultRowCommitVersion) END as defaultRowCommitVersion, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/delta_rt_delete_materialize_explain/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
+          DeltaRemoveActionsExec
+            CoalescePartitionsExec
+              DeltaDiscoveryExec(table_path=file://<tmp>/delta_rt_delete_materialize_explain/)
+                FilterExec: get_field(stats_parsed@9, minValues, id) IS NULL OR get_field(stats_parsed@9, maxValues, id) IS NULL OR get_field(stats_parsed@9, minValues, id) <= 2 AND get_field(stats_parsed@9, maxValues, id) >= 2
+                  DeltaMetadataStatsExec(output=stats_parsed, columns=[id])
+                    DeltaLogReplayExec(table_path=file://<tmp>/delta_rt_delete_materialize_explain/, version=0)
+                      SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
+                        RepartitionExec: partitioning=Hash([__sail_delta_replay_path@9], 4), input_partitions=4
+                          ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, __sail_delta_log_version@2 as _commit_version, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, baseRowId) END as baseRowId, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, defaultRowCommitVersion) END as defaultRowCommitVersion, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END ELSE CASE WHEN remove@1 IS NOT NULL THEN get_field(remove@1, path) END END as __sail_delta_replay_path, remove@1 IS NOT NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
+                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                              DataSourceExec: file_groups={1 group: [[<tmp>/delta_rt_delete_materialize_explain/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json

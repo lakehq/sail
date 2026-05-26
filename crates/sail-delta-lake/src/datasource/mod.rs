@@ -49,7 +49,13 @@ pub use expressions::{
 };
 pub use pruning::{prune_files, PruningResult};
 pub use scan::build_file_scan_config;
-pub use schema::df_logical_schema;
+pub use schema::{
+    df_logical_schema, is_metadata_struct_field, metadata_struct_field,
+    metadata_struct_field_with_name, metadata_struct_fields,
+    snapshot_exposes_row_tracking_metadata, METADATA_BASE_ROW_ID_FIELD, METADATA_COLUMN_NAME,
+    METADATA_DEFAULT_ROW_COMMIT_VERSION_FIELD, METADATA_ROW_COMMIT_VERSION_FIELD,
+    METADATA_ROW_ID_FIELD,
+};
 
 pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStoreUrl> {
     Ok(ObjectStoreUrl::parse(

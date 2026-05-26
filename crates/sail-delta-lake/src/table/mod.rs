@@ -32,8 +32,9 @@ use url::Url;
 use crate::datasource::{df_logical_schema, DeltaScanConfig};
 pub mod features;
 pub use features::{
-    ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
-    EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
+    enabled_row_tracking_materialized_column_names, ChangeDataFeedSupport, ChangeDataFeedToken,
+    ColumnMappingToken, DeletionVectorToken, EnabledRowTrackingToken,
+    RowTrackingMaterializedColumnNames, RowTrackingToken, SupportedRowTrackingToken,
 };
 use sail_data_source::options::gen::DeltaReadOptions;
 

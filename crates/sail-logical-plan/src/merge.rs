@@ -710,6 +710,22 @@ pub fn expand_merge(
             );
         }
     }
+    for (idx, field) in target_plan.schema().fields().iter().enumerate() {
+        if idx < desired_target_names.len() {
+            continue;
+        }
+        let name = field.name();
+        if !is_row_tracking_metadata_column_name(name) {
+            continue;
+        }
+        let already_present = target_proj_exprs
+            .iter()
+            .any(|expr| matches!(expr, Expr::Alias(alias) if alias.name == *name));
+        if !already_present {
+            target_proj_exprs
+                .push(Expr::Column(Column::from_name(name.clone())).alias(name.clone()));
+        }
+    }
 
     trace!(
         "target projection expr names: {:?}",
@@ -756,6 +772,11 @@ pub fn expand_merge(
     if let Some(row_index_column) = row_index_column {
         target_rename_map.insert(row_index_column.to_string(), row_index_column.to_string());
     }
+    for field in target_plan.schema().fields() {
+        target_rename_map
+            .entry(field.name().clone())
+            .or_insert_with(|| field.name().clone());
+    }
     // keep row id stable if present
     target_rename_map.insert(
         TARGET_ROW_ID_COLUMN.to_string(),
@@ -795,6 +816,20 @@ pub fn expand_merge(
 
     let target_schema = target_plan.schema();
     let source_schema = source_plan.schema();
+    let preserved_target_columns = target_schema
+        .fields()
+        .iter()
+        .filter_map(|field| {
+            let name = field.name();
+            (!desired_target_names
+                .iter()
+                .any(|target_name| target_name == name)
+                && name != path_column
+                && row_index_column.is_none_or(|c| name != c)
+                && name != TARGET_ROW_ID_COLUMN)
+                .then_some(name.clone())
+        })
+        .collect::<Vec<_>>();
     trace!(
         "expand_merge target/source fields - target: {:?}, source: {:?}",
         target_schema
@@ -930,6 +965,7 @@ pub fn expand_merge(
         should_check_cardinality,
         path_column,
         row_index_column,
+        &preserved_target_columns,
     )
 }
 
@@ -941,6 +977,7 @@ fn build_default_merge_expansion(
     should_check_cardinality: bool,
     path_column: &str,
     row_index_column: Option<&str>,
+    preserved_target_columns: &[String],
 ) -> Result<MergeExpansion> {
     let target_schema = target_plan.schema();
     let source_schema = source_plan.schema();
@@ -1052,6 +1089,7 @@ fn build_default_merge_expansion(
         source_schema,
         path_column,
         row_index_column,
+        preserved_target_columns,
     )?;
     trace!("projection exprs: {:?}", &projection_exprs);
     let projected = LogicalPlanBuilder::from(filtered)
@@ -1580,13 +1618,56 @@ fn or_pred(existing: Option<Expr>, expr: Expr) -> Option<Expr> {
     })
 }
 
+fn is_materialized_row_commit_version_column(name: &str) -> bool {
+    name.starts_with("_row-commit-version-col-")
+}
+
+fn is_row_tracking_metadata_column_name(name: &str) -> bool {
+    name == "_metadata" || name.starts_with("_metadata_")
+}
+
+fn build_row_commit_version_update_predicate(options: &MergeIntoOptions) -> Option<Expr> {
+    let mut update_pred: Option<Expr> = None;
+    for clause in &options.matched_clauses {
+        if matches!(
+            clause.action,
+            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_)
+        ) {
+            let mut pred = col(TARGET_PRESENT_COLUMN)
+                .is_not_null()
+                .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
+            if let Some(cond) = &clause.condition {
+                pred = pred.and(cond.expr.clone());
+            }
+            update_pred = or_pred(update_pred, pred);
+        }
+    }
+    for clause in &options.not_matched_by_source_clauses {
+        if matches!(clause.action, MergeNotMatchedBySourceAction::UpdateSet(_)) {
+            let mut pred = col(TARGET_PRESENT_COLUMN)
+                .is_not_null()
+                .and(col(SOURCE_PRESENT_COLUMN).is_null());
+            if let Some(cond) = &clause.condition {
+                pred = pred.and(cond.expr.clone());
+            }
+            update_pred = or_pred(update_pred, pred);
+        }
+    }
+    update_pred
+}
+
 fn build_merge_projection(
     options: &MergeIntoOptions,
     target_schema: &DFSchemaRef,
     source_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
+    preserved_target_columns: &[String],
 ) -> Result<Vec<Expr>> {
+    let preserved_target_columns = preserved_target_columns
+        .iter()
+        .map(|name| name.as_str())
+        .collect::<std::collections::HashSet<_>>();
     let mut cases: Vec<(String, Vec<(Expr, Expr)>)> = target_schema
         .fields()
         .iter()
@@ -1594,6 +1675,7 @@ fn build_merge_projection(
             f.name() != path_column
                 && row_index_column.is_none_or(|c| f.name() != c)
                 && f.name() != TARGET_ROW_ID_COLUMN
+                && !preserved_target_columns.contains(f.name().as_str())
         })
         .map(|f| (f.name().clone(), Vec::new()))
         .collect();
@@ -1602,6 +1684,7 @@ fn build_merge_projection(
     for field in target_schema.fields() {
         target_exprs.push(Expr::Column(Column::from_name(field.name().clone())));
     }
+    let row_commit_version_update_pred = build_row_commit_version_update_predicate(options);
 
     let source_exprs_by_name: HashMap<String, Expr> = source_schema
         .fields()
@@ -1637,6 +1720,9 @@ fn build_merge_projection(
             MergeMatchedAction::Delete => {}
             MergeMatchedAction::UpdateAll => {
                 for field in target_schema.fields().iter() {
+                    if preserved_target_columns.contains(field.name().as_str()) {
+                        continue;
+                    }
                     let value = source_expr_for_target(field.name());
                     if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
                         entry.1.push((pred.clone(), value));
@@ -1687,6 +1773,9 @@ fn build_merge_projection(
         match &clause.action {
             MergeNotMatchedByTargetAction::InsertAll => {
                 for field in target_schema.fields().iter() {
+                    if preserved_target_columns.contains(field.name().as_str()) {
+                        continue;
+                    }
                     let value = source_expr_for_target(field.name());
                     if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
                         entry.1.push((pred.clone(), value));
@@ -1719,11 +1808,20 @@ fn build_merge_projection(
             .cloned()
             .unwrap_or_else(|| lit(ScalarValue::Null));
 
-        let case_branches = cases
-            .iter_mut()
-            .find(|(col, _)| col == name)
-            .map(|(_, branches)| branches.split_off(0))
-            .unwrap_or_default();
+        let case_branches = if preserved_target_columns.contains(name.as_str())
+            && is_materialized_row_commit_version_column(name)
+        {
+            row_commit_version_update_pred
+                .clone()
+                .map(|pred| vec![(pred, lit(ScalarValue::Null))])
+                .unwrap_or_default()
+        } else {
+            cases
+                .iter_mut()
+                .find(|(col, _)| col == name)
+                .map(|(_, branches)| branches.split_off(0))
+                .unwrap_or_default()
+        };
 
         let expr = if case_branches.is_empty() {
             default_expr

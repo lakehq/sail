@@ -136,6 +136,9 @@ pub struct DeltaWriter {
     current_writer: Option<PartitionWriter>,
     /// Actions produced by completed partition writers
     completed_actions: Vec<Add>,
+    /// Row tracking allocator. Each flushed file reserves a contiguous range via
+    /// [`RowTrackingToken::reserve_row_ids`] when row tracking is active.
+    row_tracking: crate::table::features::RowTrackingToken,
     /// Partition keys that have been closed (debug-only contract enforcement)
     #[cfg(debug_assertions)]
     closed_partition_keys: std::collections::HashSet<String>,
@@ -143,6 +146,20 @@ pub struct DeltaWriter {
 
 impl DeltaWriter {
     pub fn new(object_store: Arc<dyn ObjectStore>, table_path: Path, config: WriterConfig) -> Self {
+        Self::new_with_row_tracking(
+            object_store,
+            table_path,
+            config,
+            crate::table::features::RowTrackingToken::Unsupported,
+        )
+    }
+
+    pub fn new_with_row_tracking(
+        object_store: Arc<dyn ObjectStore>,
+        table_path: Path,
+        config: WriterConfig,
+        row_tracking: crate::table::features::RowTrackingToken,
+    ) -> Self {
         Self {
             object_store,
             table_path,
@@ -150,9 +167,15 @@ impl DeltaWriter {
             current_partition_key: None,
             current_writer: None,
             completed_actions: Vec::new(),
+            row_tracking,
             #[cfg(debug_assertions)]
             closed_partition_keys: std::collections::HashSet::new(),
         }
+    }
+
+    /// Final row-id high-water-mark, or `None` when row tracking is inactive.
+    pub fn row_tracking_high_water_mark(&self) -> Option<i64> {
+        self.row_tracking.high_water_mark()
     }
 
     /// Write a record batch to the appropriate partition
@@ -196,7 +219,7 @@ impl DeltaWriter {
             )?;
 
             if let Some(writer) = self.current_writer.as_mut() {
-                writer.write(&record_batch).await?;
+                writer.write(&record_batch, &mut self.row_tracking).await?;
             } else {
                 return Err(DeltaTableError::generic(
                     "internal error: current writer not initialized".to_string(),
@@ -220,7 +243,7 @@ impl DeltaWriter {
 
         // Close current writer if any
         if let Some(writer) = self.current_writer.take() {
-            let actions = writer.close().await?;
+            let actions = writer.close(&mut self.row_tracking).await?;
             self.completed_actions.extend(actions);
 
             if let Some(old_key) = self.current_partition_key.take() {
@@ -263,7 +286,7 @@ impl DeltaWriter {
     /// Close the writer and get the Add actions
     pub async fn close(mut self) -> Result<Vec<Add>, DeltaTableError> {
         if let Some(writer) = self.current_writer.take() {
-            let actions = writer.close().await?;
+            let actions = writer.close(&mut self.row_tracking).await?;
             self.completed_actions.extend(actions);
         }
 
@@ -353,7 +376,11 @@ impl PartitionWriter {
         })
     }
 
-    pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
+    pub async fn write(
+        &mut self,
+        batch: &RecordBatch,
+        row_tracking: &mut crate::table::features::RowTrackingToken,
+    ) -> Result<(), DeltaTableError> {
         if batch.schema() != self.config.file_schema {
             return Err(DeltaTableError::generic(format!(
                 "Schema mismatch: expected {:?}, got {:?}",
@@ -386,7 +413,7 @@ impl PartitionWriter {
             let estimated_size: u64 = buffer_len as u64 + in_progress_size as u64;
 
             if estimated_size >= self.config.target_file_size {
-                self.flush_writer().await?;
+                self.flush_writer(row_tracking).await?;
             }
         }
 
@@ -394,7 +421,10 @@ impl PartitionWriter {
     }
 
     /// Flush the current writer and create a new file
-    async fn flush_writer(&mut self) -> Result<(), DeltaTableError> {
+    async fn flush_writer(
+        &mut self,
+        row_tracking: &mut crate::table::features::RowTrackingToken,
+    ) -> Result<(), DeltaTableError> {
         let writer = self
             .arrow_writer
             .take()
@@ -431,7 +461,8 @@ impl PartitionWriter {
             .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {e}")))?;
 
         // Create Add action with statistics
-        let add_action = self.create_add_action(&relative_path, file_size, &metadata)?;
+        let add_action =
+            self.create_add_action(&relative_path, file_size, &metadata, row_tracking)?;
         self.files_written.push(add_action);
 
         self.reset_writer()?;
@@ -486,6 +517,7 @@ impl PartitionWriter {
         path: &str,
         file_size: i64,
         metadata: &ParquetMetaData,
+        row_tracking: &mut crate::table::features::RowTrackingToken,
     ) -> Result<Add, DeltaTableError> {
         create_add(
             &self.config.partition_values,
@@ -494,6 +526,7 @@ impl PartitionWriter {
             metadata,
             self.num_indexed_cols,
             &self.stats_columns,
+            row_tracking,
         )
     }
 
@@ -512,8 +545,11 @@ impl PartitionWriter {
     }
 
     /// Close the writer and return all Add actions
-    pub async fn close(mut self) -> Result<Vec<Add>, DeltaTableError> {
-        self.flush_writer().await?;
+    pub async fn close(
+        mut self,
+        row_tracking: &mut crate::table::features::RowTrackingToken,
+    ) -> Result<Vec<Add>, DeltaTableError> {
+        self.flush_writer(row_tracking).await?;
         Ok(self.files_written)
     }
 }

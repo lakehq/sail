@@ -21,6 +21,14 @@ use crate::logical_expr::ExprWithSource;
 /// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
 pub const MERGE_FILE_COLUMN: &str = "__sail_file_path";
 
+/// Arrow field metadata key used by table formats for columns that are available for
+/// explicit resolution but should be excluded from wildcard expansion.
+pub const SAIL_METADATA_COLUMN_KEY: &str = "sail.metadata_column";
+
+/// Arrow field metadata key carrying the user-facing name for a metadata column whose internal
+/// schema field name may have been changed to avoid collisions with data columns.
+pub const SAIL_METADATA_COLUMN_NAME_KEY: &str = "sail.metadata_column_name";
+
 /// File-local row index metadata column for row-level modifications that write deletion vectors.
 pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 

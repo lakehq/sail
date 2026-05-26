@@ -19,7 +19,7 @@ use datafusion::common::{
 };
 use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
 use datafusion::logical_expr::Expr;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::expressions::{Column, Literal};
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -38,13 +38,15 @@ use super::context::PlannerContext;
 use super::log_scan::{build_delta_log_datasource_scans_with_options, LogScanOptions};
 use super::log_segment::{resolve_log_segment_files, LogSegmentResolveOptions};
 use crate::datasource::{
-    simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
+    df_logical_schema, is_metadata_struct_field, simplify_expr, COMMIT_TIMESTAMP_COLUMN,
+    COMMIT_VERSION_COLUMN, PATH_COLUMN,
 };
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions, COL_LOG_IS_REMOVE,
-    COL_LOG_VERSION, COL_REPLAY_PATH,
+    create_projection, create_repartition, create_sort,
+    enabled_row_tracking_materialized_column_names, DeltaCommitExec, DeltaLogReplayExec,
+    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions,
+    RowTrackingMaterializeExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH,
 };
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
@@ -59,6 +61,8 @@ use crate::table::DeltaSnapshot;
 pub struct LogReplayOptions {
     /// Whether to include `stats_json` in the replay output (as a Utf8 column).
     pub include_stats_json: bool,
+    /// Whether to include `baseRowId` / `defaultRowCommitVersion` in the replay output.
+    pub include_row_tracking: bool,
     /// Whether to carry Add-action metadata fields needed to faithfully re-emit an Add action.
     pub include_extended_add_metadata: bool,
     /// Optional inclusive log version range for commit JSON files.
@@ -80,6 +84,7 @@ impl Default for LogReplayOptions {
         Self {
             // Preserve current behavior: always project stats.
             include_stats_json: true,
+            include_row_tracking: false,
             include_extended_add_metadata: false,
             commit_version_range: None,
             log_filter: None,
@@ -91,6 +96,7 @@ impl Default for LogReplayOptions {
 fn replay_output_schema(
     partition_columns: &[(String, String)],
     include_stats_json: bool,
+    include_row_tracking: bool,
     include_extended_add_metadata: bool,
 ) -> SchemaRef {
     let mut fields = vec![
@@ -119,8 +125,12 @@ fn replay_output_schema(
             DataType::Map(Arc::new(Field::new("entries", map_entries, false)), false),
             true,
         ));
+    }
+    if include_row_tracking || include_extended_add_metadata {
         fields.push(Field::new("baseRowId", DataType::Int64, true));
         fields.push(Field::new("defaultRowCommitVersion", DataType::Int64, true));
+    }
+    if include_extended_add_metadata {
         fields.push(Field::new("clusteringProvider", DataType::Utf8, true));
     }
     Arc::new(Schema::new(fields))
@@ -166,6 +176,76 @@ pub fn build_standard_write_layers(
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
     )))
+}
+
+pub fn row_tracking_preserving_scan_schema(
+    snapshot: &DeltaSnapshot,
+    table_schema: SchemaRef,
+) -> Result<SchemaRef> {
+    if enabled_row_tracking_materialized_column_names(snapshot)?.is_none() {
+        return Ok(table_schema);
+    }
+    df_logical_schema(snapshot, &None, &None, &None, &None, Some(table_schema))
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
+pub fn materialize_row_tracking_columns(
+    input: Arc<dyn ExecutionPlan>,
+    snapshot: &DeltaSnapshot,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let Some(columns) = enabled_row_tracking_materialized_column_names(snapshot)? else {
+        return Ok(input);
+    };
+    let metadata_column_name = input
+        .schema()
+        .fields()
+        .iter()
+        .find(|field| is_metadata_struct_field(field))
+        .map(|field| field.name().clone())
+        .ok_or_else(|| {
+            DataFusionError::Plan(
+                "row tracking materialization requires a row tracking _metadata struct column"
+                    .to_string(),
+            )
+        })?;
+    Ok(Arc::new(RowTrackingMaterializeExec::try_new(
+        input,
+        metadata_column_name,
+        columns.row_id,
+        columns.row_commit_version,
+    )?))
+}
+
+pub fn append_null_row_tracking_columns(
+    input: Arc<dyn ExecutionPlan>,
+    snapshot: &DeltaSnapshot,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let Some(columns) = enabled_row_tracking_materialized_column_names(snapshot)? else {
+        return Ok(input);
+    };
+
+    let schema = input.schema();
+    let mut projections = Vec::with_capacity(schema.fields().len() + 2);
+    for (index, field) in schema.fields().iter().enumerate() {
+        let name = field.name();
+        if name == &columns.row_id || name == &columns.row_commit_version {
+            continue;
+        }
+        projections.push((
+            Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>,
+            name.clone(),
+        ));
+    }
+    projections.push((
+        Arc::new(Literal::new(ScalarValue::Int64(None))) as Arc<dyn PhysicalExpr>,
+        columns.row_id,
+    ));
+    projections.push((
+        Arc::new(Literal::new(ScalarValue::Int64(None))) as Arc<dyn PhysicalExpr>,
+        columns.row_commit_version,
+    ));
+
+    Ok(Arc::new(ProjectionExec::try_new(projections, input)?))
 }
 
 pub fn align_schemas_for_union(
@@ -304,6 +384,7 @@ async fn build_log_replay_pipeline_with_files(
             datafusion::physical_plan::empty::EmptyExec::new(replay_output_schema(
                 &partition_columns,
                 options.include_stats_json,
+                options.include_row_tracking,
                 options.include_extended_add_metadata,
             )),
         );
@@ -499,6 +580,8 @@ async fn build_log_replay_pipeline_with_files(
                 "tags".to_string(),
             ));
         }
+    }
+    if options.include_row_tracking || options.include_extended_add_metadata {
         if let Some(field) = add_field_name(&["baseRowId", "base_row_id"]) {
             final_proj.push((
                 simplify(Expr::Cast(Cast::new(
@@ -519,6 +602,8 @@ async fn build_log_replay_pipeline_with_files(
                 "defaultRowCommitVersion".to_string(),
             ));
         }
+    }
+    if options.include_extended_add_metadata {
         if let Some(field) = add_field_name(&["clusteringProvider", "clustering_provider"]) {
             final_proj.push((
                 simplify(Expr::Cast(Cast::new(

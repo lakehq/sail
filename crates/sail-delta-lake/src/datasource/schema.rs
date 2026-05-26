@@ -18,14 +18,75 @@
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
+    DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema, SchemaRef,
 };
+use sail_common_datafusion::datasource::{SAIL_METADATA_COLUMN_KEY, SAIL_METADATA_COLUMN_NAME_KEY};
 
 use crate::kernel::snapshot::DeltaSnapshot;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
+use crate::table::features::RowTrackingToken;
+
+/// Name of the synthetic struct column exposing row-tracking metadata to SQL.
+pub const METADATA_COLUMN_NAME: &str = "_metadata";
+pub const METADATA_ROW_ID_FIELD: &str = "row_id";
+pub const METADATA_BASE_ROW_ID_FIELD: &str = "base_row_id";
+pub const METADATA_DEFAULT_ROW_COMMIT_VERSION_FIELD: &str = "default_row_commit_version";
+pub const METADATA_ROW_COMMIT_VERSION_FIELD: &str = "row_commit_version";
+
+pub fn metadata_struct_fields() -> Fields {
+    Fields::from(vec![
+        Field::new(METADATA_ROW_ID_FIELD, ArrowDataType::Int64, true),
+        Field::new(METADATA_BASE_ROW_ID_FIELD, ArrowDataType::Int64, true),
+        Field::new(
+            METADATA_DEFAULT_ROW_COMMIT_VERSION_FIELD,
+            ArrowDataType::Int64,
+            true,
+        ),
+        Field::new(
+            METADATA_ROW_COMMIT_VERSION_FIELD,
+            ArrowDataType::Int64,
+            true,
+        ),
+    ])
+}
+
+pub fn is_metadata_struct_field(field: &Field) -> bool {
+    field
+        .metadata()
+        .get(SAIL_METADATA_COLUMN_KEY)
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+        && field
+            .metadata()
+            .get(SAIL_METADATA_COLUMN_NAME_KEY)
+            .is_some_and(|value| value == METADATA_COLUMN_NAME)
+}
+
+pub fn metadata_struct_field_with_name(name: impl Into<String>) -> Field {
+    Field::new(name, ArrowDataType::Struct(metadata_struct_fields()), true).with_metadata(
+        HashMap::from([
+            (SAIL_METADATA_COLUMN_KEY.to_string(), "true".to_string()),
+            (
+                SAIL_METADATA_COLUMN_NAME_KEY.to_string(),
+                METADATA_COLUMN_NAME.to_string(),
+            ),
+        ]),
+    )
+}
+
+pub fn metadata_struct_field() -> Field {
+    metadata_struct_field_with_name(METADATA_COLUMN_NAME)
+}
+
+pub fn snapshot_exposes_row_tracking_metadata(snapshot: &DeltaSnapshot) -> bool {
+    matches!(
+        snapshot.get_row_tracking_state(),
+        Ok(RowTrackingToken::Enabled(_))
+    )
+}
 
 /// The logical schema for a Deltatable is different from the protocol level schema since partition
 /// columns must appear at the end of the schema. This is to align with how partition are handled
@@ -91,5 +152,20 @@ pub fn df_logical_schema(
         )));
     }
 
+    if snapshot_exposes_row_tracking_metadata(snapshot) {
+        let metadata_name = unique_metadata_column_name(&fields);
+        fields.push(Arc::new(metadata_struct_field_with_name(metadata_name)));
+    }
+
     Ok(Arc::new(ArrowSchema::new(fields)))
+}
+
+fn unique_metadata_column_name(fields: &[Arc<Field>]) -> String {
+    let mut name = METADATA_COLUMN_NAME.to_string();
+    let mut idx = 0;
+    while fields.iter().any(|field| field.name() == &name) {
+        idx += 1;
+        name = format!("{METADATA_COLUMN_NAME}_{idx}");
+    }
+    name
 }

@@ -114,8 +114,22 @@ pub async fn build_adds_from_touched_files(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let touched_plan = reset_plan_states(touched_file_plan)?;
 
-    let meta_scan: Arc<dyn ExecutionPlan> =
-        build_log_replay_pipeline_with_options(ctx, snapshot, log_replay_options).await?;
+    let include_row_tracking = matches!(
+        snapshot
+            .get_row_tracking_state()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        crate::table::features::RowTrackingToken::Enabled(_)
+            | crate::table::features::RowTrackingToken::SupportedOnly(_)
+    );
+    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
+        ctx,
+        snapshot,
+        LogReplayOptions {
+            include_row_tracking: log_replay_options.include_row_tracking || include_row_tracking,
+            ..log_replay_options
+        },
+    )
+    .await?;
 
     let touched_schema = touched_plan.schema();
     let touched_idx = touched_schema

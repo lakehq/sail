@@ -17,7 +17,9 @@ use sail_data_source::options::gen::DeltaWritePartialOptions;
 use sail_data_source::options::PartialOptions;
 
 use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
-use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
+use crate::datasource::{
+    df_logical_schema, is_metadata_struct_field, simplify_expr, DeltaScanConfig,
+};
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
@@ -218,11 +220,15 @@ pub(crate) async fn plan_delta_scan(
     let has_dvs = snapshot
         .protocol()
         .has_reader_feature(&crate::spec::TableFeature::DeletionVectors);
+    let wants_row_tracking_metadata = logical_schema
+        .fields()
+        .iter()
+        .any(|f| is_metadata_struct_field(f));
     let row_index_projected = config
         .row_index_column_name
         .as_ref()
         .is_some_and(|name| logical_schema.field_with_name(name).is_ok());
-    let files = if has_dvs || row_index_projected {
+    let files = if has_dvs || row_index_projected || wants_row_tracking_metadata {
         None
     } else {
         files
@@ -314,6 +320,7 @@ pub(crate) async fn plan_delta_scan(
         include_stats_json: pruning_expr
             .as_ref()
             .is_some_and(|expr| predicate_requires_stats(expr, &table_partition_cols)),
+        include_row_tracking: wants_row_tracking_metadata,
         ..Default::default()
     };
 

@@ -15,9 +15,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{ArrayRef, BooleanArray, Int64Array};
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, Int64Array, Int64Builder, StructArray,
+};
 use datafusion::arrow::buffer::BooleanBuffer;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::stats::ColumnStatistics;
 use datafusion::execution::context::TaskContext;
@@ -37,18 +39,35 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use url::Url;
 
 use crate::datasource::scan::{FileScanParams, TableStatsMode};
-use crate::datasource::{build_file_scan_config, df_logical_schema, DeltaScanConfig};
+use crate::datasource::{
+    build_file_scan_config, df_logical_schema, is_metadata_struct_field, metadata_struct_fields,
+    DeltaScanConfig, METADATA_COLUMN_NAME,
+};
 use crate::deletion_vector::DeletionVectorBitmap;
-use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
+use crate::physical_plan::{
+    decode_adds_from_batch, enabled_row_tracking_materialized_column_names, meta_adds, COL_ACTION,
+};
 use crate::schema::{arrow_field_physical_name, get_physical_schema};
 use crate::session_extension::{load_table_uncached, DeltaTableCache};
 use crate::spec::StructType;
 use crate::storage::LogStoreRef;
-use crate::table::DeltaSnapshot;
+use crate::table::{DeltaSnapshot, RowTrackingMaterializedColumnNames};
 
 // TODO(dynamic-file-scheduling): Replace fixed file-count chunking with byte-aware chunking
 // and optional work-stealing so executors pull remaining file work dynamically under skew.
 const ADD_SCAN_CHUNK_FILES: usize = 1024;
+
+struct BulkScanParams<'a> {
+    snapshot: &'a DeltaSnapshot,
+    log_store: &'a LogStoreRef,
+    session_state: &'a dyn datafusion::catalog::Session,
+    adds: &'a [crate::spec::Add],
+    file_schema: SchemaRef,
+    logical_names: &'a [String],
+    partition_columns: &'a [String],
+    materialized_columns: Option<&'a RowTrackingMaterializedColumnNames>,
+    disable_row_filtering: bool,
+}
 
 struct ScanByAddsStreamState {
     input: SendableRecordBatchStream,
@@ -69,6 +88,7 @@ struct ScanByAddsStreamState {
     file_schema: Option<SchemaRef>,
     partition_columns: Option<Vec<String>>,
     logical_names: Option<Vec<String>>,
+    metadata_column_name: Option<String>,
 
     // control
     partition_scan: Option<bool>,
@@ -108,6 +128,7 @@ impl ScanByAddsStreamState {
             file_schema: None,
             partition_columns: None,
             logical_names: None,
+            metadata_column_name: None,
             partition_scan: None,
             emitted_partition_empty: false,
             pending_adds: Vec::new(),
@@ -170,6 +191,11 @@ impl ScanByAddsStreamState {
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
+        let metadata_column_name = logical_schema
+            .fields()
+            .iter()
+            .find(|field| is_metadata_struct_field(field))
+            .map(|field| field.name().clone());
 
         let table_partition_cols = snapshot_state.metadata().partition_columns();
         let kmode = snapshot_state.effective_column_mapping_mode();
@@ -202,6 +228,7 @@ impl ScanByAddsStreamState {
         self.file_schema = Some(file_schema);
         self.partition_columns = Some(partition_columns);
         self.logical_names = Some(logical_names);
+        self.metadata_column_name = metadata_column_name;
         self.scan_config = scan_config;
         self.table_opened = true;
         Ok(())
@@ -246,15 +273,39 @@ impl ScanByAddsStreamState {
             .as_ref()
             .ok_or_else(|| DataFusionError::Internal("missing file_schema".into()))?
             .clone();
+        let partition_columns = self
+            .partition_columns
+            .as_ref()
+            .ok_or_else(|| DataFusionError::Internal("missing partition_columns".into()))?
+            .clone();
         let logical_names = self
             .logical_names
             .as_ref()
             .ok_or_else(|| DataFusionError::Internal("missing logical_names".into()))?
             .clone();
 
-        // Split adds into files with deletion vectors and files without.
-        // Files without DVs are scanned in bulk (fast path). Files with DVs are scanned
-        // individually so that we can track per-file row indices and filter deleted rows.
+        let wants_metadata = self.output_schema_has_row_tracking_metadata();
+        let metadata_column_name = if wants_metadata {
+            Some(self.row_tracking_metadata_column_name()?.to_string())
+        } else {
+            None
+        };
+        let materialized_columns = if wants_metadata {
+            row_tracking_materialized_columns(snapshot)?
+        } else {
+            None
+        };
+        let metadata_file_schema = if wants_metadata {
+            file_schema_with_materialized_columns(
+                Arc::clone(&file_schema),
+                materialized_columns.as_ref(),
+            )
+        } else {
+            Arc::clone(&file_schema)
+        };
+
+        // Split adds: files that need file-local row positions go through per-file scans;
+        // the rest use the bulk parallel scan.
         let adds = std::mem::take(&mut self.pending_adds);
         let mut all_streams: Vec<SendableRecordBatchStream> = Vec::new();
         let row_index_column = self
@@ -297,17 +348,31 @@ impl ScanByAddsStreamState {
                 };
 
             for (add, maybe_bitmap) in adds.iter().zip(bitmaps) {
-                let file_streams = self.build_bulk_scan(
+                let file_streams = self.build_bulk_scan(BulkScanParams {
                     snapshot,
                     log_store,
                     session_state,
-                    std::slice::from_ref(add),
-                    file_schema.clone(),
-                    &logical_names,
-                )?;
+                    adds: std::slice::from_ref(add),
+                    file_schema: metadata_file_schema.clone(),
+                    logical_names: &logical_names,
+                    partition_columns: &partition_columns,
+                    materialized_columns: materialized_columns.as_ref(),
+                    disable_row_filtering: maybe_bitmap.is_some(),
+                })?;
 
                 let maybe_bitmap = maybe_bitmap.map(Arc::new);
-                for inner in file_streams {
+                for mut inner in file_streams {
+                    if wants_metadata {
+                        inner = row_tracking_metadata_stream(
+                            inner,
+                            add.base_row_id,
+                            add.default_row_commit_version,
+                            materialized_columns.clone(),
+                            metadata_column_name
+                                .as_deref()
+                                .unwrap_or(METADATA_COLUMN_NAME),
+                        );
+                    }
                     let stream = append_row_index_stream(inner, row_index_column.clone())?;
                     if let Some(bitmap) = &maybe_bitmap {
                         all_streams.push(dv_filter_stream(stream, Arc::clone(bitmap)));
@@ -334,24 +399,26 @@ impl ScanByAddsStreamState {
             )));
             return Ok(());
         }
-        let (dv_adds, plain_adds): (Vec<_>, Vec<_>) =
-            adds.into_iter().partition(|a| a.deletion_vector.is_some());
+        let (per_file_adds, plain_adds): (Vec<_>, Vec<_>) = adds
+            .into_iter()
+            .partition(|a| a.deletion_vector.is_some() || wants_metadata);
 
-        // ── Fast path: bulk scan for files without deletion vectors ──────────
         if !plain_adds.is_empty() {
-            let streams = self.build_bulk_scan(
+            let streams = self.build_bulk_scan(BulkScanParams {
                 snapshot,
                 log_store,
                 session_state,
-                &plain_adds,
-                file_schema.clone(),
-                &logical_names,
-            )?;
+                adds: &plain_adds,
+                file_schema: file_schema.clone(),
+                logical_names: &logical_names,
+                partition_columns: &partition_columns,
+                materialized_columns: None,
+                disable_row_filtering: false,
+            })?;
             all_streams.extend(streams);
         }
 
-        // ── DV path: per-file scan with row-index filtering ─────────────────
-        if !dv_adds.is_empty() {
+        if !per_file_adds.is_empty() {
             let table_url = self.table_url.clone();
             let object_store = self
                 .context
@@ -360,40 +427,58 @@ impl ScanByAddsStreamState {
                 .get_store(&table_url)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            // Fetch all deletion vector bitmaps concurrently.
-            let dv_futures = dv_adds.iter().map(|add| {
+            let bitmap_futures = per_file_adds.iter().map(|add| {
                 let store = Arc::clone(&object_store);
                 let url = table_url.clone();
                 let dv_descriptor = add.deletion_vector.clone();
                 async move {
-                    let descriptor = dv_descriptor.ok_or_else(|| {
-                        DataFusionError::Internal("DV partition guarantees deletion vector".into())
-                    })?;
-                    let bitmap = crate::deletion_vector::read_deletion_vector(
-                        store.as_ref(),
-                        &url,
-                        &descriptor,
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    Ok::<_, DataFusionError>(bitmap)
+                    match dv_descriptor {
+                        Some(descriptor) => {
+                            let bitmap = crate::deletion_vector::read_deletion_vector(
+                                store.as_ref(),
+                                &url,
+                                &descriptor,
+                            )
+                            .await
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                            Ok::<_, DataFusionError>(Some(bitmap))
+                        }
+                        None => Ok(None),
+                    }
                 }
             });
-            let bitmaps = futures::future::try_join_all(dv_futures).await?;
+            let bitmaps = futures::future::try_join_all(bitmap_futures).await?;
 
-            for (add, bitmap) in dv_adds.iter().zip(bitmaps) {
-                let file_streams = self.build_bulk_scan(
+            for (add, bitmap) in per_file_adds.iter().zip(bitmaps) {
+                let file_streams = self.build_bulk_scan(BulkScanParams {
                     snapshot,
                     log_store,
                     session_state,
-                    std::slice::from_ref(add),
-                    file_schema.clone(),
-                    &logical_names,
-                )?;
+                    adds: std::slice::from_ref(add),
+                    file_schema: metadata_file_schema.clone(),
+                    logical_names: &logical_names,
+                    partition_columns: &partition_columns,
+                    materialized_columns: materialized_columns.as_ref(),
+                    disable_row_filtering: bitmap.is_some(),
+                })?;
 
-                let bitmap = Arc::new(bitmap);
-                for inner in file_streams {
-                    all_streams.push(dv_filter_stream(inner, Arc::clone(&bitmap)));
+                let bitmap = bitmap.map(Arc::new);
+                for mut inner in file_streams {
+                    if wants_metadata {
+                        inner = row_tracking_metadata_stream(
+                            inner,
+                            add.base_row_id,
+                            add.default_row_commit_version,
+                            materialized_columns.clone(),
+                            metadata_column_name
+                                .as_deref()
+                                .unwrap_or(METADATA_COLUMN_NAME),
+                        );
+                    }
+                    if let Some(bitmap) = bitmap.as_ref() {
+                        inner = dv_filter_stream(inner, Arc::clone(bitmap));
+                    }
+                    all_streams.push(inner);
                 }
             }
         }
@@ -418,23 +503,112 @@ impl ScanByAddsStreamState {
     }
 
     /// Build a bulk Parquet scan for a set of Add actions (no DV filtering).
+    fn output_schema_has_row_tracking_metadata(&self) -> bool {
+        self.output_schema.fields().iter().any(|field| {
+            is_metadata_struct_field(field)
+                || self
+                    .metadata_column_name
+                    .as_ref()
+                    .is_some_and(|name| field.name() == name)
+        })
+    }
+
+    fn row_tracking_metadata_column_name(&self) -> Result<&str> {
+        if let Some(field) = self
+            .output_schema
+            .fields()
+            .iter()
+            .find(|field| is_metadata_struct_field(field))
+        {
+            return Ok(field.name());
+        }
+        self.metadata_column_name
+            .as_deref()
+            .ok_or_else(|| DataFusionError::Internal("missing row tracking metadata column".into()))
+    }
+
+    /// `logical_names` with the `_metadata` entry removed.
+    fn inner_logical_names(&self, logical_names: &[String]) -> Vec<String> {
+        let metadata_column_name = self.metadata_column_name.as_deref();
+        logical_names
+            .iter()
+            .filter(|name| Some(name.as_str()) != metadata_column_name)
+            .cloned()
+            .collect()
+    }
+
+    fn inner_logical_names_for_metadata_scan(
+        &self,
+        logical_names: &[String],
+        partition_columns: &[String],
+        materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
+    ) -> Vec<String> {
+        let mut names = self.inner_logical_names(logical_names);
+        if let Some(columns) = materialized_columns {
+            let insert_at = names
+                .iter()
+                .position(|name| {
+                    partition_columns.iter().any(|p| p == name)
+                        || self.scan_config.file_column_name.as_ref() == Some(name)
+                        || self.scan_config.commit_version_column_name.as_ref() == Some(name)
+                        || self.scan_config.commit_timestamp_column_name.as_ref() == Some(name)
+                })
+                .unwrap_or(names.len());
+            names.insert(insert_at, columns.row_id.clone());
+            names.insert(insert_at + 1, columns.row_commit_version.clone());
+        }
+        names
+    }
+
+    fn inner_projection_for_metadata_scan(
+        &self,
+        logical_names: &[String],
+        inner_logical_names: &[String],
+        materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
+    ) -> Result<Option<Vec<usize>>> {
+        metadata_scan_projection(
+            self.projection.as_deref(),
+            logical_names,
+            inner_logical_names,
+            self.metadata_column_name.as_deref(),
+            materialized_columns,
+        )
+    }
+
     fn build_bulk_scan(
         &self,
-        snapshot: &DeltaSnapshot,
-        log_store: &LogStoreRef,
-        session_state: &dyn datafusion::catalog::Session,
-        adds: &[crate::spec::Add],
-        file_schema: SchemaRef,
-        logical_names: &[String],
+        params: BulkScanParams<'_>,
     ) -> Result<Vec<SendableRecordBatchStream>> {
+        let wants_metadata = self.output_schema_has_row_tracking_metadata();
+        let inner_logical_names_vec;
+        let inner_logical_names: &[String] = if wants_metadata {
+            inner_logical_names_vec = self.inner_logical_names_for_metadata_scan(
+                params.logical_names,
+                params.partition_columns,
+                params.materialized_columns,
+            );
+            &inner_logical_names_vec
+        } else {
+            params.logical_names
+        };
+        let inner_projection = if wants_metadata {
+            self.inner_projection_for_metadata_scan(
+                params.logical_names,
+                inner_logical_names,
+                params.materialized_columns,
+            )?
+        } else {
+            self.projection.clone()
+        };
+
         let mut scan_config = self.scan_config.clone();
         let row_index_idx = scan_config
             .row_index_column_name
             .as_ref()
-            .and_then(|name| logical_names.iter().position(|x| x == name));
+            .and_then(|name| inner_logical_names.iter().position(|x| x == name));
         scan_config.row_index_column_name = None;
 
-        let file_projection = match (self.projection.as_ref(), row_index_idx) {
+        let file_projection = match (inner_projection.as_ref(), row_index_idx) {
             (Some(projection), Some(row_index_idx)) => Some(
                 projection
                     .iter()
@@ -446,29 +620,34 @@ impl ScanByAddsStreamState {
             (None, _) => None,
         };
         let file_logical_names = match row_index_idx {
-            Some(row_index_idx) => logical_names
+            Some(row_index_idx) => inner_logical_names
                 .iter()
                 .enumerate()
                 .filter_map(|(idx, name)| (idx != row_index_idx).then_some(name.clone()))
                 .collect::<Vec<_>>(),
-            None => logical_names.to_vec(),
+            None => inner_logical_names.to_vec(),
+        };
+        let pushdown_filter = if wants_metadata || params.disable_row_filtering {
+            None
+        } else {
+            self.pushdown_filter.clone()
         };
 
         let file_scan_config = build_file_scan_config(
-            snapshot,
-            log_store,
-            adds,
+            params.snapshot,
+            params.log_store,
+            params.adds,
             &scan_config,
             FileScanParams {
                 pruning_mask: None,
                 projection: file_projection.as_ref(),
                 limit: self.limit,
-                pushdown_filter: self.pushdown_filter.clone(),
+                pushdown_filter,
                 sort_order: None,
                 table_stats_mode: TableStatsMode::AddsOnly,
             },
-            session_state,
-            file_schema,
+            params.session_state,
+            params.file_schema,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -502,6 +681,62 @@ impl ScanByAddsStreamState {
     }
 }
 
+fn push_projection_index_once(projection: &mut Vec<usize>, index: usize) {
+    if !projection.contains(&index) {
+        projection.push(index);
+    }
+}
+
+fn metadata_scan_projection(
+    projection: Option<&[usize]>,
+    logical_names: &[String],
+    inner_logical_names: &[String],
+    metadata_column_name: Option<&str>,
+    materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
+) -> Result<Option<Vec<usize>>> {
+    let Some(projection) = projection else {
+        return Ok(None);
+    };
+
+    let mut inner_projection =
+        Vec::with_capacity(projection.len() + usize::from(materialized_columns.is_some()) * 2);
+    for index in projection {
+        let name = logical_names.get(*index).ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "projection index {index} is out of bounds for Delta logical schema"
+            ))
+        })?;
+        if Some(name.as_str()) == metadata_column_name {
+            continue;
+        }
+        let inner_index = inner_logical_names
+            .iter()
+            .position(|inner_name| inner_name == name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "projected Delta column '{name}' is missing from metadata scan schema"
+                ))
+            })?;
+        push_projection_index_once(&mut inner_projection, inner_index);
+    }
+
+    if let Some(columns) = materialized_columns {
+        for name in [&columns.row_id, &columns.row_commit_version] {
+            let inner_index = inner_logical_names
+                .iter()
+                .position(|inner_name| inner_name == name)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Row Tracking materialized column '{name}' is missing from metadata scan schema"
+                    ))
+                })?;
+            push_projection_index_once(&mut inner_projection, inner_index);
+        }
+    }
+
+    Ok(Some(inner_projection))
+}
+
 /// Append a file-local row-index column to a single-file scan stream.
 ///
 /// Callers must only use this for streams that read one physical file, so the counter
@@ -511,7 +746,11 @@ fn append_row_index_stream(
     column_name: String,
 ) -> Result<SendableRecordBatchStream> {
     let mut fields = inner.schema().fields().iter().cloned().collect::<Vec<_>>();
-    fields.push(Arc::new(Field::new(column_name, DataType::Int64, false)));
+    fields.push(Arc::new(Field::new(
+        column_name,
+        ArrowDataType::Int64,
+        false,
+    )));
     let output_schema = Arc::new(Schema::new(fields));
     let stream_schema = Arc::clone(&output_schema);
 
@@ -596,6 +835,164 @@ fn dv_filter_stream(
         },
     );
     Box::pin(RecordBatchStreamAdapter::new(schema, filtered))
+}
+
+fn row_tracking_materialized_columns(
+    snapshot: &DeltaSnapshot,
+) -> Result<Option<RowTrackingMaterializedColumnNames>> {
+    enabled_row_tracking_materialized_column_names(snapshot)
+}
+
+fn file_schema_with_materialized_columns(
+    file_schema: SchemaRef,
+    materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
+) -> SchemaRef {
+    let Some(columns) = materialized_columns else {
+        return file_schema;
+    };
+    let mut fields = file_schema
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect::<Vec<_>>();
+    for name in [&columns.row_id, &columns.row_commit_version] {
+        if !fields.iter().any(|field| field.name() == name) {
+            fields.push(Field::new(name.clone(), ArrowDataType::Int64, true));
+        }
+    }
+    Arc::new(Schema::new(fields))
+}
+
+fn generated_row_id_array(
+    base_row_id: Option<i64>,
+    row_offset: i64,
+    num_rows: usize,
+) -> Int64Array {
+    match base_row_id {
+        Some(base) => {
+            let mut builder = Int64Builder::with_capacity(num_rows);
+            for i in 0..num_rows {
+                builder.append_value(base.saturating_add(row_offset).saturating_add(i as i64));
+            }
+            builder.finish()
+        }
+        None => Int64Array::new_null(num_rows),
+    }
+}
+
+fn constant_i64_array(value: Option<i64>, num_rows: usize) -> Int64Array {
+    match value {
+        Some(value) => Int64Array::from(vec![value; num_rows]),
+        None => Int64Array::new_null(num_rows),
+    }
+}
+
+fn coalesce_materialized_i64(
+    batch: &RecordBatch,
+    materialized_name: Option<&str>,
+    fallback: &Int64Array,
+) -> Result<ArrayRef> {
+    let Some(materialized_name) = materialized_name else {
+        return Ok(Arc::new(fallback.clone()));
+    };
+    let Some(array) = batch.column_by_name(materialized_name) else {
+        return Ok(Arc::new(fallback.clone()));
+    };
+    let materialized = array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "Row Tracking materialized column '{materialized_name}' must be Int64"
+        ))
+    })?;
+    let mut builder = Int64Builder::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        if materialized.is_valid(row) {
+            builder.append_value(materialized.value(row));
+        } else if fallback.is_valid(row) {
+            builder.append_value(fallback.value(row));
+        } else {
+            builder.append_null();
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+/// Append a `_metadata` struct column with Delta Row Tracking metadata.
+///
+/// `row_id` and `row_commit_version` prefer materialized hidden Parquet columns when present,
+/// and otherwise fall back to the Add-action defaults plus the physical file row index.
+fn row_tracking_metadata_stream(
+    inner: SendableRecordBatchStream,
+    base_row_id: Option<i64>,
+    default_row_commit_version: Option<i64>,
+    materialized_columns: Option<RowTrackingMaterializedColumnNames>,
+    metadata_column_name: &str,
+) -> SendableRecordBatchStream {
+    let inner_schema = inner.schema();
+    let struct_fields = metadata_struct_fields();
+    let metadata_field = Field::new(
+        metadata_column_name,
+        ArrowDataType::Struct(struct_fields.clone()),
+        true,
+    );
+    let mut out_fields: Vec<Field> = inner_schema
+        .fields()
+        .iter()
+        .map(|f| (**f).clone())
+        .collect();
+    out_fields.push(metadata_field);
+    let out_schema = Arc::new(Schema::new(out_fields));
+    let out_schema_stream = Arc::clone(&out_schema);
+
+    let stream = stream::try_unfold((inner, 0i64), move |(mut inner, mut row_offset)| {
+        let struct_fields = struct_fields.clone();
+        let out_schema = Arc::clone(&out_schema_stream);
+        let materialized_columns = materialized_columns.clone();
+        async move {
+            match inner.try_next().await? {
+                None => Ok(None),
+                Some(batch) => {
+                    let num_rows = batch.num_rows();
+
+                    let default_row_id = generated_row_id_array(base_row_id, row_offset, num_rows);
+                    let base_row_id_array = constant_i64_array(base_row_id, num_rows);
+                    let default_commit_version_array =
+                        constant_i64_array(default_row_commit_version, num_rows);
+                    let row_id_array = coalesce_materialized_i64(
+                        &batch,
+                        materialized_columns
+                            .as_ref()
+                            .map(|columns| columns.row_id.as_str()),
+                        &default_row_id,
+                    )?;
+                    let commit_version_array = coalesce_materialized_i64(
+                        &batch,
+                        materialized_columns
+                            .as_ref()
+                            .map(|columns| columns.row_commit_version.as_str()),
+                        &default_commit_version_array,
+                    )?;
+                    let struct_array = StructArray::new(
+                        struct_fields,
+                        vec![
+                            row_id_array,
+                            Arc::new(base_row_id_array) as ArrayRef,
+                            Arc::new(default_commit_version_array) as ArrayRef,
+                            commit_version_array,
+                        ],
+                        None,
+                    );
+
+                    let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+                    columns.push(Arc::new(struct_array) as ArrayRef);
+                    let out_batch = RecordBatch::try_new(out_schema, columns)?;
+
+                    row_offset += num_rows as i64;
+                    Ok(Some((out_batch, (inner, row_offset))))
+                }
+            }
+        }
+    });
+    Box::pin(RecordBatchStreamAdapter::new(out_schema, stream))
 }
 
 /// Physical execution node that scans Delta data files based on Add actions from upstream.
@@ -994,7 +1391,49 @@ mod tests {
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use url::Url;
 
-    use super::{map_statistics_to_schema, DeltaScanByAddsExec};
+    use super::{map_statistics_to_schema, metadata_scan_projection, DeltaScanByAddsExec};
+    use crate::table::RowTrackingMaterializedColumnNames;
+
+    #[test]
+    fn metadata_scan_projection_keeps_user_projection_and_materialized_columns() -> Result<()> {
+        let logical_names = ["id", "value", "_metadata", "part"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let inner_logical_names = [
+            "id",
+            "value",
+            "_row-id-col-test",
+            "_row-commit-version-col-test",
+            "part",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let materialized_columns = RowTrackingMaterializedColumnNames {
+            row_id: "_row-id-col-test".to_string(),
+            row_commit_version: "_row-commit-version-col-test".to_string(),
+        };
+
+        let projection = metadata_scan_projection(
+            Some(&[2]),
+            &logical_names,
+            &inner_logical_names,
+            Some("_metadata"),
+            Some(&materialized_columns),
+        )?;
+        assert_eq!(projection, Some(vec![2, 3]));
+
+        let projection = metadata_scan_projection(
+            Some(&[0, 2]),
+            &logical_names,
+            &inner_logical_names,
+            Some("_metadata"),
+            Some(&materialized_columns),
+        )?;
+        assert_eq!(projection, Some(vec![0, 2, 3]));
+        Ok(())
+    }
 
     #[test]
     fn test_map_statistics_to_schema_by_name() {

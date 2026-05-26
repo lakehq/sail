@@ -395,7 +395,6 @@ Feature: variant_explode and variant_explode_outer
         | id | pos | key  | value |
         | 1  | 0   | NULL | 1     |
         | 3  | 0   | a    | 1     |
-
     Scenario: Outer explode variant column skips null, empty, and non-container rows
       When query
         """
@@ -421,4 +420,3 @@ Feature: variant_explode and variant_explode_outer
         | id | pos | key  | value |
         | 1  | 0   | NULL | 1     |
         | 3  | 0   | a    | 1     |
-

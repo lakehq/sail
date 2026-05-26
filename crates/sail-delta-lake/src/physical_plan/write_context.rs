@@ -10,22 +10,28 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
+use crate::datasource::is_metadata_struct_field;
 use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
-    compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
-    is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
-    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
-    schema_contains_type_widening_metadata, schema_has_generated_columns,
+    compute_max_column_id, ensure_row_tracking_materialized_column_names, evolve_schema,
+    format_type_change_path, get_physical_schema, is_supported_type_change_for_schema_evolution,
+    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_can_write_type_widening,
+    protocol_for_create, schema_contains_type_widening_metadata, schema_has_generated_columns,
+    ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+    ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
 };
 use crate::spec::{
     contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
     ColumnMetadataKey, DomainMetadata, Metadata, MetadataValue, Protocol, StructField, StructType,
-    TableProperties, Transaction,
+    TableFeature, TableProperties, Transaction,
 };
 use crate::storage::LogStore;
-use crate::table::DeltaSnapshot;
+use crate::table::{
+    enabled_row_tracking_materialized_column_names, DeltaSnapshot, EnabledRowTrackingToken,
+    RowTrackingMaterializedColumnNames, RowTrackingToken, SupportedRowTrackingToken,
+};
 
 /// Metadata-only table state pinned during coordinator-side write planning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +90,19 @@ impl DeltaCommitContext {
     pub fn base_version(&self) -> Option<i64> {
         self.base_snapshot.as_ref().map(|snapshot| snapshot.version)
     }
+
+    pub fn row_tracking_state_for_write(
+        &self,
+        metadata_configuration: &HashMap<String, String>,
+    ) -> Result<RowTrackingToken> {
+        if let Some(snapshot) = self.base_snapshot.as_ref() {
+            row_tracking_state_from_snapshot_context(snapshot)
+        } else {
+            Ok(row_tracking_state_from_new_table_config(
+                metadata_configuration,
+            ))
+        }
+    }
 }
 
 /// Coordinator-prepared file-write context for Delta data-file producers.
@@ -97,6 +116,7 @@ pub struct DeltaWriteContext {
     pub operation: Option<DeltaOperation>,
     pub logical_kernel_for_mapping: Option<StructType>,
     pub physical_partition_columns: Vec<String>,
+    pub materialized_row_tracking_columns: Option<RowTrackingMaterializedColumnNames>,
 }
 
 impl DeltaWriteContext {
@@ -143,7 +163,17 @@ pub fn prepare_delta_write_context(
     input_schema: &SchemaRef,
     operation_override: Option<DeltaOperation>,
 ) -> Result<DeltaWriteContext> {
-    let input_schema = normalize_delta_schema(&schema_without_writer_metric_columns(input_schema));
+    let materialized_row_tracking_columns = table_snapshot
+        .map(|snapshot| {
+            enabled_row_tracking_materialized_column_names(snapshot)
+                .map_err(|e| DataFusionError::External(Box::new(e)))
+        })
+        .transpose()?
+        .flatten();
+    let input_schema = normalize_delta_schema(&schema_without_writer_internal_columns(
+        input_schema,
+        materialized_row_tracking_columns.as_ref(),
+    ));
     let mut initial_actions: Vec<Action> = Vec::new();
     let planned_operation = operation_for_sink_mode(table_url, partition_columns, sink_mode);
 
@@ -204,6 +234,7 @@ pub fn prepare_delta_write_context(
             kernel_schema
         };
 
+        ensure_row_tracking_materialized_column_names(&mut configuration, None);
         let protocol = protocol_for_create(
             !matches!(effective_mode, ColumnMappingMode::None),
             has_timestamp_ntz,
@@ -291,6 +322,127 @@ pub fn prepare_delta_write_context(
         operation: operation_override.or(operation),
         logical_kernel_for_mapping,
         physical_partition_columns,
+        materialized_row_tracking_columns,
+    })
+}
+
+fn row_tracking_state_from_snapshot_context(
+    context: &DeltaSnapshotContext,
+) -> Result<RowTrackingToken> {
+    let config = context.metadata.configuration();
+    let tracking_supported = context
+        .protocol
+        .has_writer_feature(&TableFeature::RowTracking);
+    let domain_metadata_supported = context
+        .protocol
+        .has_writer_feature(&TableFeature::DomainMetadata);
+    let tracking_enabled = config
+        .get("delta.enableRowTracking")
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let tracking_suspended = config
+        .get("delta.rowTrackingSuspended")
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+
+    if tracking_enabled && !tracking_supported {
+        return Err(DataFusionError::Plan(
+            "delta.enableRowTracking = true requires the rowTracking writer feature".to_string(),
+        ));
+    }
+    if tracking_supported && !domain_metadata_supported {
+        return Err(DataFusionError::Plan(
+            "rowTracking requires the domainMetadata writer feature".to_string(),
+        ));
+    }
+    if tracking_enabled && tracking_suspended {
+        return Err(DataFusionError::Plan(
+            "delta.enableRowTracking cannot be combined with delta.rowTrackingSuspended = true"
+                .to_string(),
+        ));
+    }
+    if tracking_enabled {
+        materialized_row_tracking_columns_from_config(config)?;
+    }
+
+    let next_row_id = context
+        .domain_metadata
+        .get("delta.rowTracking")
+        .map(|domain| {
+            crate::table::features::parse_row_tracking_high_water_mark(&domain.configuration)
+        })
+        .transpose()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .map(|value| value.saturating_add(1))
+        .unwrap_or(0);
+
+    if tracking_supported && tracking_suspended {
+        Ok(RowTrackingToken::Suspended)
+    } else if tracking_enabled {
+        Ok(RowTrackingToken::Enabled(EnabledRowTrackingToken {
+            next_row_id,
+        }))
+    } else if tracking_supported {
+        Ok(RowTrackingToken::SupportedOnly(SupportedRowTrackingToken {
+            next_row_id,
+        }))
+    } else {
+        Ok(RowTrackingToken::Unsupported)
+    }
+}
+
+fn row_tracking_state_from_new_table_config(config: &HashMap<String, String>) -> RowTrackingToken {
+    let tracking_supported = config
+        .get("delta.feature.rowTracking")
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("supported") || value.eq_ignore_ascii_case("enabled")
+        })
+        || config
+            .get("delta.enableRowTracking")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+        || config
+            .get("delta.rowTrackingSuspended")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let tracking_suspended = config
+        .get("delta.rowTrackingSuspended")
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let tracking_enabled = config
+        .get("delta.enableRowTracking")
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+
+    if tracking_supported && tracking_suspended {
+        RowTrackingToken::Suspended
+    } else if tracking_enabled {
+        RowTrackingToken::Enabled(EnabledRowTrackingToken { next_row_id: 0 })
+    } else if tracking_supported {
+        RowTrackingToken::SupportedOnly(SupportedRowTrackingToken { next_row_id: 0 })
+    } else {
+        RowTrackingToken::Unsupported
+    }
+}
+
+fn materialized_row_tracking_columns_from_config(
+    config: &HashMap<String, String>,
+) -> Result<RowTrackingMaterializedColumnNames> {
+    let row_id = config
+        .get(ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "{ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
+            ))
+        })?;
+    let row_commit_version = config
+        .get(ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "{ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY} is required when delta.enableRowTracking = true"
+            ))
+        })?;
+    Ok(RowTrackingMaterializedColumnNames {
+        row_id,
+        row_commit_version,
     })
 }
 
@@ -298,19 +450,34 @@ fn is_writer_metric_column(name: &str) -> bool {
     name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
 }
 
-fn schema_without_writer_metric_columns(schema: &SchemaRef) -> SchemaRef {
-    if !schema
-        .fields()
-        .iter()
-        .any(|field| is_writer_metric_column(field.name()))
-    {
+fn is_materialized_row_tracking_column(
+    name: &str,
+    materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
+) -> bool {
+    materialized_columns
+        .is_some_and(|columns| name == columns.row_id || name == columns.row_commit_version)
+}
+
+fn schema_without_writer_internal_columns(
+    schema: &SchemaRef,
+    materialized_columns: Option<&RowTrackingMaterializedColumnNames>,
+) -> SchemaRef {
+    if !schema.fields().iter().any(|field| {
+        is_writer_metric_column(field.name())
+            || is_metadata_struct_field(field)
+            || is_materialized_row_tracking_column(field.name(), materialized_columns)
+    }) {
         return Arc::clone(schema);
     }
     Arc::new(Schema::new(
         schema
             .fields()
             .iter()
-            .filter(|field| !is_writer_metric_column(field.name()))
+            .filter(|field| {
+                !is_writer_metric_column(field.name())
+                    && !is_metadata_struct_field(field)
+                    && !is_materialized_row_tracking_column(field.name(), materialized_columns)
+            })
             .map(|field| field.as_ref().clone())
             .collect::<Vec<_>>(),
     ))

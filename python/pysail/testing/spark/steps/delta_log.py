@@ -317,6 +317,39 @@ def _read_delta_log_json_file(location: Path, filename: str) -> object:
         return json.load(f)
 
 
+def _resolve_delta_log_commit_file(location: Path, filename: str) -> Path:
+    direct_path = location / filename
+    if direct_path.exists():
+        return direct_path
+
+    delta_log_path = location / "_delta_log" / filename
+    if delta_log_path.exists():
+        return delta_log_path
+
+    msg = f"delta log commit file does not exist: {direct_path} or {delta_log_path}"
+    raise AssertionError(msg)
+
+
+def _load_delta_log_actions(location: Path, filename: str) -> list[dict]:
+    file_path = _resolve_delta_log_commit_file(location, filename)
+    actions = []
+    with file_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            obj = json.loads(stripped)
+            assert isinstance(obj, dict), f"delta log action must be an object: {obj!r}"
+            actions.append(obj)
+    assert actions, f"no delta log actions found in {file_path}"
+    return actions
+
+
+def _path_exists(obj: object, path: str) -> bool:
+    expr = _compile_jsonpath(path)
+    return bool(expr.find(obj))
+
+
 def _parse_version_list(raw: str) -> list[int]:
     versions = []
     for raw_part in raw.split(","):
@@ -335,6 +368,65 @@ def _parse_i64_list(raw: str) -> list[int]:
             continue
         values.append(int(value_text))
     return values
+
+
+@then(parsers.parse("delta log commit {filename} in {location_var} contains action"))
+def delta_log_commit_contains_action(
+    filename: str,
+    location_var: str,
+    variables: dict,
+    datatable,
+) -> None:
+    """Assert a commit contains actions with expected path/value pairs."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    actions = _load_delta_log_actions(Path(location.path), filename)
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert len(header) == 2 and header[0] == "path" and header[1] == "value", (  # noqa: PLR2004 PT018
+        "expected datatable with columns: | path | value |"
+    )
+
+    for row in rows:
+        if not row or len(row) < 2:  # noqa: PLR2004
+            continue
+        path, raw_value = row[0], row[1]
+        expected = _parse_expected_value(raw_value)
+        matched = False
+        last_actual: object = None
+        for action in actions:
+            try:
+                actual = _get_by_path(action, path)
+            except KeyError:
+                continue
+            last_actual = actual
+            if actual == expected:
+                matched = True
+                break
+        assert matched, f"field {path!r}: expected {expected!r}, got {last_actual!r} across {len(actions)} actions"
+
+
+@then(parsers.parse("delta log commit {filename} in {location_var} has no action with sub-field {field} set"))
+def delta_log_commit_has_no_action_with_sub_field_set(
+    filename: str,
+    location_var: str,
+    field: str,
+    variables: dict,
+) -> None:
+    """Assert no action in a commit contains the given sub-field."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    actions = _load_delta_log_actions(Path(location.path), filename)
+    for action in actions:
+        assert not _path_exists(action, field), f"expected no action to contain sub-field {field!r}: {action!r}"
 
 
 @then(
@@ -782,3 +874,38 @@ def checkpoint_parquet_add_missing_field(
     assert field not in sub_names, (
         f"expected 'add' struct to not have sub-field {field!r}; found fields: {sorted(sub_names)}"
     )
+
+
+@then(parsers.parse("delta log commit {filename} in {location_var} has rowTracking high-water-mark {hwm:d}"))
+def delta_log_commit_row_tracking_hwm(
+    filename: str,
+    location_var: str,
+    hwm: int,
+    variables: dict,
+) -> None:
+    """Assert a commit has a ``delta.rowTracking`` high-water mark."""
+    if is_jvm_spark():
+        pytest.skip("Delta log assertions are Sail-only")
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    actions = _load_delta_log_actions(Path(location.path), filename)
+    for action in actions:
+        dm = action.get("domainMetadata") if isinstance(action, dict) else None
+        if not isinstance(dm, dict) or dm.get("domain") != "delta.rowTracking":
+            continue
+        cfg = dm.get("configuration")
+        if isinstance(cfg, str):
+            try:
+                cfg_obj = json.loads(cfg)
+            except json.JSONDecodeError as e:
+                msg = f"domainMetadata.configuration is not valid JSON: {cfg!r}"
+                raise AssertionError(msg) from e
+        else:
+            cfg_obj = cfg
+        actual = cfg_obj.get("rowIdHighWaterMark") if isinstance(cfg_obj, dict) else None
+        assert actual == hwm, f"rowIdHighWaterMark: expected {hwm!r}, got {actual!r} (configuration={cfg!r})"
+        return
+    msg = f"no domainMetadata action with domain 'delta.rowTracking' found in {filename}"
+    raise AssertionError(msg)

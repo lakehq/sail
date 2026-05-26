@@ -5,6 +5,7 @@ use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
+use sail_common_datafusion::datasource::{SAIL_METADATA_COLUMN_KEY, SAIL_METADATA_COLUMN_NAME_KEY};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -139,7 +140,17 @@ impl PlanResolverState {
     }
 
     pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {
-        self.register_field_info(field.as_ref().name(), false)
+        let field = field.as_ref();
+        let hidden = field
+            .metadata()
+            .get(SAIL_METADATA_COLUMN_KEY)
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        let name = field
+            .metadata()
+            .get(SAIL_METADATA_COLUMN_NAME_KEY)
+            .map(String::as_str)
+            .unwrap_or_else(|| field.name().as_str());
+        self.register_field_info(name, hidden)
     }
 
     /// Registers each field and returns unique internal names to avoid column name collisions.

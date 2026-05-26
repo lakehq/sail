@@ -374,24 +374,6 @@ impl TableFormat for DeltaTableFormat {
             .get_store(&url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        // Only protocol and metadata are needed for ALTER TABLE; skip loading file-level actions.
-        let table = open_table_with_object_store_and_table_config(
-            url,
-            object_store,
-            Default::default(),
-            DeltaSnapshotConfig {
-                require_files: false,
-                ..Default::default()
-            },
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let snapshot = table
-            .snapshot()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .clone();
-
         // Split `SET` and `UNSET` changes.
         let (set_changes, unset_changes): (Vec<_>, Vec<_>) =
             changes.into_iter().partition(|(_, v)| v.is_some());
@@ -409,6 +391,68 @@ impl TableFormat for DeltaTableFormat {
                     .unwrap_or_else(|| k.clone())
             })
             .collect();
+
+        let table = open_table_with_object_store_and_table_config(
+            url.clone(),
+            object_store.clone(),
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .clone();
+
+        let (row_tracking_enable_requires_files, row_tracking_suspend_requires_files) = {
+            let mut metadata = snapshot.metadata().clone();
+            for (key, value) in &validated_sets {
+                metadata = metadata.add_config_key(key.clone(), value.clone());
+            }
+            for key in &canonical_unsets {
+                metadata = metadata.remove_config_key(key);
+            }
+            let mut config = metadata.configuration().clone();
+            crate::schema::ensure_row_tracking_materialized_column_names(
+                &mut config,
+                Some(snapshot.metadata().configuration()),
+            );
+            (
+                enables_row_tracking(snapshot.metadata().configuration(), &config),
+                suspends_row_tracking(snapshot.metadata().configuration(), &config),
+            )
+        };
+
+        // File-level actions are only needed when ALTER TABLE enables or suspends row tracking,
+        // because existing Add actions must be recommitted to backfill or unbackfill row tracking.
+        // TODO(row-tracking): Move enablement backfill to Delta-compatible chunked backfill batches.
+        let (table, snapshot) =
+            if row_tracking_enable_requires_files || row_tracking_suspend_requires_files {
+                let table = open_table_with_object_store_and_table_config(
+                    url,
+                    object_store,
+                    Default::default(),
+                    DeltaSnapshotConfig {
+                        require_files: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                let snapshot = table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .clone();
+                (table, snapshot)
+            } else {
+                (table, snapshot)
+            };
 
         let existing_config = snapshot.metadata().configuration().clone();
 
@@ -432,9 +476,22 @@ impl TableFormat for DeltaTableFormat {
             new_metadata = new_metadata.remove_config_key(key);
         }
 
+        let mut new_config = new_metadata.configuration().clone();
+        let existing_config = snapshot.metadata().configuration();
+        crate::schema::ensure_row_tracking_materialized_column_names(
+            &mut new_config,
+            Some(existing_config),
+        );
+        for (key, value) in &new_config {
+            if new_metadata.configuration().get(key) != Some(value) {
+                new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+            }
+        }
+
         // Derive the desired protocol from the new configuration and merge it with the
         // existing protocol. We only ever upgrade: features already present on the table
         // are preserved, and new feature requirements are added.
+        // TODO(row-tracking): Add full DROP FEATURE downgrade cleanup after unbackfill.
         let desired_protocol = protocol_for_metadata(&new_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
@@ -452,6 +509,37 @@ impl TableFormat for DeltaTableFormat {
             actions.push(CommitAction::Protocol(merged_protocol));
         }
         actions.push(CommitAction::Metadata(new_metadata));
+        if enables_row_tracking(snapshot.metadata().configuration(), &new_config) {
+            actions.extend(
+                snapshot
+                    .adds()
+                    .iter()
+                    .filter(|add| {
+                        add.base_row_id.is_none() || add.default_row_commit_version.is_none()
+                    })
+                    .cloned()
+                    .map(|mut add| {
+                        add.data_change = false;
+                        add.base_row_id = None;
+                        add.default_row_commit_version = None;
+                        CommitAction::Add(add)
+                    }),
+            );
+        } else if suspends_row_tracking(snapshot.metadata().configuration(), &new_config) {
+            actions.extend(
+                snapshot
+                    .adds()
+                    .iter()
+                    .filter(|add| {
+                        add.base_row_id.is_some() || add.default_row_commit_version.is_some()
+                    })
+                    .cloned()
+                    .map(|mut add| {
+                        add.data_change = false;
+                        CommitAction::Add(add)
+                    }),
+            );
+        }
 
         let operation = match (validated_sets.is_empty(), canonical_unsets.is_empty()) {
             (false, true) => DeltaOperation::SetTableProperties {
@@ -707,6 +795,28 @@ fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
     } else {
         desired.clone()
     }
+}
+
+fn config_enabled(config: &HashMap<String, String>, key: &str) -> bool {
+    config
+        .get(key)
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+fn enables_row_tracking(
+    existing: &HashMap<String, String>,
+    updated: &HashMap<String, String>,
+) -> bool {
+    !config_enabled(existing, "delta.enableRowTracking")
+        && config_enabled(updated, "delta.enableRowTracking")
+}
+
+fn suspends_row_tracking(
+    existing: &HashMap<String, String>,
+    updated: &HashMap<String, String>,
+) -> bool {
+    !config_enabled(existing, "delta.rowTrackingSuspended")
+        && config_enabled(updated, "delta.rowTrackingSuspended")
 }
 
 /// Merge an existing protocol with a desired one. The result preserves every feature and

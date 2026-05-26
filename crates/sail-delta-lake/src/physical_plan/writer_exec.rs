@@ -30,7 +30,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::{filter_record_batch, SortOptions};
 use datafusion::arrow::datatypes::{
-    ArrowTimestampType, DataType, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
+    ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use datafusion::arrow::record_batch::RecordBatch;
@@ -514,6 +514,8 @@ impl DeltaWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
+        let metadata_configuration = self.metadata_configuration.clone();
+        let raw_input_schema = self.input.schema();
         let write_context = self.write_context.clone();
         let session_timezone = context
             .session_config()
@@ -534,6 +536,16 @@ impl DeltaWriterExec {
 
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
+            let materialized_row_tracking_columns =
+                write_context.materialized_row_tracking_columns.clone();
+            let input_has_materialized_row_tracking_columns = materialized_row_tracking_columns
+                .as_ref()
+                .is_some_and(|columns| {
+                    raw_input_schema.field_with_name(&columns.row_id).is_ok()
+                        && raw_input_schema
+                            .field_with_name(&columns.row_commit_version)
+                            .is_ok()
+                });
             match &sink_mode {
                 PhysicalSinkMode::Append
                 | PhysicalSinkMode::Overwrite
@@ -565,9 +577,34 @@ impl DeltaWriterExec {
             let initial_actions = write_context.initial_actions.clone();
             let operation = write_context.operation.clone();
             let kernel_mode = write_context.effective_column_mapping_mode;
-            let writer_schema = write_context.writer_schema()?;
+            let mut writer_schema = write_context.writer_schema()?;
             let physical_partition_columns = write_context.physical_partition_columns.clone();
             let logical_kernel_for_mapping = write_context.logical_kernel_for_mapping.clone();
+            if input_has_materialized_row_tracking_columns {
+                if let Some(columns) = materialized_row_tracking_columns.as_ref() {
+                    writer_schema = Self::schema_with_materialized_row_tracking_columns(
+                        writer_schema,
+                        &columns.row_id,
+                        &columns.row_commit_version,
+                    );
+                }
+            }
+            let stats_columns = input_has_materialized_row_tracking_columns.then(|| {
+                writer_schema
+                    .fields()
+                    .iter()
+                    .filter_map(|field| {
+                        let name = field.name();
+                        let is_partition = physical_partition_columns.iter().any(|p| p == name);
+                        let is_row_tracking = materialized_row_tracking_columns
+                            .as_ref()
+                            .is_some_and(|columns| {
+                                name == &columns.row_id || name == &columns.row_commit_version
+                            });
+                        (!is_partition && !is_row_tracking).then_some(name.clone())
+                    })
+                    .collect::<Vec<_>>()
+            });
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
@@ -577,11 +614,19 @@ impl DeltaWriterExec {
                 *target_file_size,
                 write_batch_size.get(),
                 32,
-                None,
+                stats_columns,
             );
 
             let writer_path = object_store::path::Path::from(table_url.path());
-            let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
+            let row_tracking = write_context
+                .commit_context
+                .row_tracking_state_for_write(&metadata_configuration)?;
+            let mut writer = DeltaWriter::new_with_row_tracking(
+                object_store.clone(),
+                writer_path,
+                writer_config,
+                row_tracking,
+            );
 
             // Compute physical-to-logical mapping once before the loop
             let phys_to_logical = logical_kernel_for_mapping.as_ref().map(|logical_kernel| {
@@ -752,6 +797,24 @@ impl DeltaWriterExec {
         name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
     }
 
+    fn schema_with_materialized_row_tracking_columns(
+        schema: SchemaRef,
+        row_id: &str,
+        row_commit_version: &str,
+    ) -> SchemaRef {
+        let mut fields = schema
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        for name in [row_id, row_commit_version] {
+            if !fields.iter().any(|field| field.name() == name) {
+                // TODO(row-tracking): Attach IcebergCompatV3 reserved field IDs when enabled.
+                fields.push(Field::new(name.to_string(), DataType::Int64, true));
+            }
+        }
+        Arc::new(Schema::new(fields))
+    }
     fn strip_metric_columns(batch: RecordBatch) -> Result<RecordBatch> {
         if !batch
             .schema()

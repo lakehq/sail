@@ -19,6 +19,30 @@ use crate::spec::{
     TableProperties,
 };
 
+pub const ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY: &str =
+    "delta.rowTracking.materializedRowIdColumnName";
+pub const ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY: &str =
+    "delta.rowTracking.materializedRowCommitVersionColumnName";
+pub const ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_PREFIX: &str = "_row-id-col-";
+pub const ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_PREFIX: &str =
+    "_row-commit-version-col-";
+
+fn configuration_enabled(configuration: &HashMap<String, String>, key: &str) -> bool {
+    configuration
+        .get(key)
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+}
+
+fn configuration_supports_row_tracking(configuration: &HashMap<String, String>) -> bool {
+    configuration_enabled(configuration, "delta.enableRowTracking")
+        || configuration_enabled(configuration, "delta.rowTrackingSuspended")
+        || configuration
+            .get("delta.feature.rowTracking")
+            .is_some_and(|v| {
+                v.eq_ignore_ascii_case("supported") || v.eq_ignore_ascii_case("enabled")
+            })
+}
+
 /// Check if a Delta StructType schema contains any columns with generation expressions.
 pub fn schema_has_generated_columns(schema: &StructType) -> bool {
     schema.fields().any(|f| {
@@ -179,6 +203,30 @@ pub fn protocol_for_create(
         }
     }
 
+    // RowTracking requires the DomainMetadata writer feature even when requested
+    // explicitly through `delta.feature.rowTracking`.
+    if configuration_supports_row_tracking(configuration) {
+        if !writer_features.contains(&TableFeature::RowTracking) {
+            writer_features.push(TableFeature::RowTracking);
+        }
+        if !writer_features.contains(&TableFeature::DomainMetadata) {
+            writer_features.push(TableFeature::DomainMetadata);
+        }
+        if let (Some(row_tracking_index), Some(domain_metadata_index)) = (
+            writer_features
+                .iter()
+                .position(|feature| feature == &TableFeature::RowTracking),
+            writer_features
+                .iter()
+                .position(|feature| feature == &TableFeature::DomainMetadata),
+        ) {
+            if row_tracking_index < domain_metadata_index {
+                let feature = writer_features.remove(domain_metadata_index);
+                writer_features.insert(row_tracking_index, feature);
+            }
+        }
+    }
+
     // `delta.enableTypeWidening = "true"` enables the stable TypeWidening feature unless
     // the table explicitly uses the preview feature.
     if TableProperties::from(configuration.iter()).enable_type_widening() {
@@ -220,13 +268,99 @@ pub fn protocol_for_create(
     ))
 }
 
+/// Auto-assign Row Tracking materialized column names when Row Tracking is supported.
+///
+/// Delta Spark assigns `delta.rowTracking.materializedRowIdColumnName` and
+/// `delta.rowTracking.materializedRowCommitVersionColumnName` as soon as the RowTracking feature is
+/// present, even if `delta.enableRowTracking` is not true. Existing values are preserved (e.g.
+/// carried over on ALTER TABLE) to keep parquet on-disk column names stable.
+pub fn ensure_row_tracking_materialized_column_names(
+    configuration: &mut HashMap<String, String>,
+    existing: Option<&HashMap<String, String>>,
+) {
+    if !configuration_supports_row_tracking(configuration) {
+        return;
+    }
+    for (key, prefix) in [
+        (
+            ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY,
+            ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_PREFIX,
+        ),
+        (
+            ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY,
+            ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_PREFIX,
+        ),
+    ] {
+        if configuration.get(key).map(|v| v.is_empty()).unwrap_or(true) {
+            let value = existing
+                .and_then(|cfg| cfg.get(key))
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("{prefix}{}", uuid::Uuid::new_v4()));
+            configuration.insert(key.to_string(), value);
+        }
+    }
+}
+
+pub fn validate_row_tracking_materialized_column_names(
+    schema: &StructType,
+    configuration: &HashMap<String, String>,
+    mode: ColumnMappingMode,
+) -> DeltaResult<()> {
+    let Some(row_id_name) = configuration
+        .get(ROW_TRACKING_MATERIALIZED_ROW_ID_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(row_commit_version_name) = configuration
+        .get(ROW_TRACKING_MATERIALIZED_ROW_COMMIT_VERSION_COLUMN_NAME_KEY)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+
+    if row_id_name.eq_ignore_ascii_case(row_commit_version_name) {
+        return Err(DeltaTableError::generic(format!(
+            "Row Tracking materialized column names must be unique: {row_id_name}"
+        )));
+    }
+
+    for materialized_name in [row_id_name, row_commit_version_name] {
+        for field in schema.fields() {
+            if field.name().eq_ignore_ascii_case(materialized_name) {
+                return Err(DeltaTableError::generic(format!(
+                    "Row Tracking materialized column name '{materialized_name}' conflicts with table column '{}'",
+                    field.name()
+                )));
+            }
+            if !matches!(mode, ColumnMappingMode::None)
+                && field
+                    .physical_name(mode)
+                    .eq_ignore_ascii_case(materialized_name)
+            {
+                return Err(DeltaTableError::generic(format!(
+                    "Row Tracking materialized column name '{materialized_name}' conflicts with physical column name '{}'",
+                    field.physical_name(mode)
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use super::{protocol_for_create, protocol_for_metadata};
+    use super::{
+        ensure_row_tracking_materialized_column_names, protocol_for_create, protocol_for_metadata,
+        validate_row_tracking_materialized_column_names,
+    };
     use crate::spec::{
-        ColumnMetadataKey, DataType, DeltaResult, Metadata, StructField, StructType, TableFeature,
+        ColumnMappingMode, ColumnMetadataKey, DataType, DeltaError as DeltaTableError, DeltaResult,
+        Metadata, MetadataValue, StructField, StructType, TableFeature,
     };
 
     #[test]
@@ -406,6 +540,175 @@ mod tests {
         let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert!(!protocol.has_reader_feature(&TableFeature::DeletionVectors));
         assert!(!protocol.has_writer_feature(&TableFeature::DeletionVectors));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_activates_row_tracking_from_enable_row_tracking() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert("delta.enableRowTracking".to_string(), "true".to_string());
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        assert!(protocol.has_writer_feature(&TableFeature::RowTracking));
+        assert!(protocol.has_writer_feature(&TableFeature::DomainMetadata));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_activates_row_tracking_from_suspended_flag() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert("delta.rowTrackingSuspended".to_string(), "true".to_string());
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        assert!(protocol.has_writer_feature(&TableFeature::RowTracking));
+        assert!(protocol.has_writer_feature(&TableFeature::DomainMetadata));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_adds_domain_metadata_for_explicit_row_tracking() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.feature.rowTracking".to_string(),
+            "supported".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        assert!(protocol.has_writer_feature(&TableFeature::RowTracking));
+        assert!(protocol.has_writer_feature(&TableFeature::DomainMetadata));
+        Ok(())
+    }
+
+    #[test]
+    fn ensure_materialized_column_names_noop_without_row_tracking_feature() {
+        let mut cfg = HashMap::new();
+        ensure_row_tracking_materialized_column_names(&mut cfg, None);
+        assert!(cfg.is_empty());
+    }
+
+    #[test]
+    fn ensure_materialized_column_names_generates_when_missing() {
+        let mut cfg = HashMap::new();
+        cfg.insert("delta.enableRowTracking".to_string(), "true".to_string());
+        ensure_row_tracking_materialized_column_names(&mut cfg, None);
+        let id = cfg
+            .get("delta.rowTracking.materializedRowIdColumnName")
+            .cloned()
+            .unwrap_or_default();
+        let cv = cfg
+            .get("delta.rowTracking.materializedRowCommitVersionColumnName")
+            .cloned()
+            .unwrap_or_default();
+        assert!(id.starts_with("_row-id-col-"));
+        assert!(cv.starts_with("_row-commit-version-col-"));
+        assert_ne!(id, cv);
+    }
+
+    #[test]
+    fn ensure_materialized_column_names_generates_for_explicit_row_tracking_feature() {
+        let mut cfg = HashMap::new();
+        cfg.insert(
+            "delta.feature.rowTracking".to_string(),
+            "supported".to_string(),
+        );
+        ensure_row_tracking_materialized_column_names(&mut cfg, None);
+        let id = cfg
+            .get("delta.rowTracking.materializedRowIdColumnName")
+            .cloned()
+            .unwrap_or_default();
+        let cv = cfg
+            .get("delta.rowTracking.materializedRowCommitVersionColumnName")
+            .cloned()
+            .unwrap_or_default();
+        assert!(id.starts_with("_row-id-col-"));
+        assert!(cv.starts_with("_row-commit-version-col-"));
+        assert_ne!(id, cv);
+    }
+
+    #[test]
+    fn ensure_materialized_column_names_preserves_existing() {
+        let mut cfg = HashMap::new();
+        cfg.insert("delta.enableRowTracking".to_string(), "true".to_string());
+        let mut existing = HashMap::new();
+        existing.insert(
+            "delta.rowTracking.materializedRowIdColumnName".to_string(),
+            "_row-id-col-kept".to_string(),
+        );
+        existing.insert(
+            "delta.rowTracking.materializedRowCommitVersionColumnName".to_string(),
+            "_row-commit-version-col-kept".to_string(),
+        );
+        ensure_row_tracking_materialized_column_names(&mut cfg, Some(&existing));
+        assert_eq!(
+            cfg.get("delta.rowTracking.materializedRowIdColumnName")
+                .map(String::as_str),
+            Some("_row-id-col-kept")
+        );
+        assert_eq!(
+            cfg.get("delta.rowTracking.materializedRowCommitVersionColumnName")
+                .map(String::as_str),
+            Some("_row-commit-version-col-kept")
+        );
+    }
+
+    #[test]
+    fn validate_materialized_column_names_rejects_logical_name_conflict() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::not_null("id", DataType::LONG)])?;
+        let mut cfg = HashMap::new();
+        cfg.insert(
+            "delta.rowTracking.materializedRowIdColumnName".to_string(),
+            "id".to_string(),
+        );
+        cfg.insert(
+            "delta.rowTracking.materializedRowCommitVersionColumnName".to_string(),
+            "_row-commit-version-col-test".to_string(),
+        );
+
+        let err = match validate_row_tracking_materialized_column_names(
+            &schema,
+            &cfg,
+            ColumnMappingMode::None,
+        ) {
+            Ok(()) => {
+                return Err(DeltaTableError::generic(
+                    "expected materialized row ID column name conflict",
+                ));
+            }
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("conflicts with table column"));
+        Ok(())
+    }
+
+    #[test]
+    fn validate_materialized_column_names_rejects_physical_name_conflict() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::not_null("id", DataType::LONG)
+            .with_metadata([(
+                "delta.columnMapping.physicalName",
+                MetadataValue::String("phys_id".to_string()),
+            )])])?;
+        let mut cfg = HashMap::new();
+        cfg.insert(
+            "delta.rowTracking.materializedRowIdColumnName".to_string(),
+            "phys_id".to_string(),
+        );
+        cfg.insert(
+            "delta.rowTracking.materializedRowCommitVersionColumnName".to_string(),
+            "_row-commit-version-col-test".to_string(),
+        );
+
+        let err = match validate_row_tracking_materialized_column_names(
+            &schema,
+            &cfg,
+            ColumnMappingMode::Name,
+        ) {
+            Ok(()) => {
+                return Err(DeltaTableError::generic(
+                    "expected materialized row ID physical column name conflict",
+                ));
+            }
+            Err(err) => err,
+        };
+        assert!(err
+            .to_string()
+            .contains("conflicts with physical column name"));
         Ok(())
     }
 }

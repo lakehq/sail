@@ -303,7 +303,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::AppendOnly);
     writer_features.insert(TableFeature::InCommitTimestamp);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
-    // writer_features.insert(TableFeature::DomainMetadata);
+    writer_features.insert(TableFeature::DomainMetadata);
     writer_features.insert(TableFeature::ColumnMapping);
     writer_features.insert(TableFeature::DeletionVectors);
     // writer_features.insert(TableFeature::ChangeDataFeed);
@@ -313,6 +313,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::GeneratedColumns);
     // writer_features.insert(TableFeature::IdentityColumns);
     writer_features.insert(TableFeature::V2Checkpoint);
+    writer_features.insert(TableFeature::RowTracking);
     writer_features.insert(TableFeature::TypeWideningPreview);
     writer_features.insert(TableFeature::TypeWidening);
     writer_features.insert(TableFeature::VariantType);

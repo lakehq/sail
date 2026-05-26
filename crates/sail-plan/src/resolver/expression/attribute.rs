@@ -20,7 +20,12 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         if is_metadata_column {
-            return Err(PlanError::todo("resolve metadata column"));
+            return match self.resolve_hidden_field(&name, plan_id, schema, state)? {
+                Some((name, expr)) => Ok(NamedExpr::new(vec![name], expr)),
+                None => Err(PlanError::AnalysisError(format!(
+                    "metadata attribute {name:?} is missing from the schema: cannot resolve metadata attribute"
+                ))),
+            };
         }
         if let Some((name, expr)) =
             self.resolve_aggregate_field(&name, state.get_grouping_for_having())?
@@ -142,29 +147,34 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
-        let [name] = name.parts() else {
-            return Ok(None);
-        };
+        let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
         let mut candidates = schema
             .iter()
-            .filter_map(|(qualifier, field)| {
-                if qualifier.is_some() {
-                    return None;
-                }
+            .flat_map(|(qualifier, field)| {
                 let Ok(info) = state.get_field_info(field.name()) else {
-                    return None;
+                    return vec![];
                 };
                 if !info.is_hidden() {
-                    return None;
+                    return vec![];
                 }
-                if info.matches(name.as_ref(), plan_id) {
-                    Some((
-                        name.as_ref().to_string(),
-                        expr::Expr::Column(Column::new_unqualified(field.name())),
-                    ))
-                } else {
-                    None
-                }
+                candidates
+                    .iter()
+                    .filter_map(|(q, name, inner)| {
+                        if qualifier_matches(q.as_ref(), qualifier)
+                            && info.matches(name.as_ref(), plan_id)
+                        {
+                            let expr = Self::resolve_potentially_nested_field(
+                                col((qualifier, field)),
+                                field.data_type(),
+                                inner,
+                            )?;
+                            let name = inner.last().unwrap_or(name).as_ref().to_string();
+                            Some((name, expr))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
             })
             .collect::<Vec<_>>();
         if candidates.len() > 1 {

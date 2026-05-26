@@ -22,6 +22,10 @@
 
 use std::collections::HashSet;
 
+use crate::kernel::transaction::{
+    commit_info_tag_is_true, is_row_tracking_enablement_only_metadata_change,
+    is_row_tracking_enablement_only_protocol_upgrade, ROW_TRACKING_ENABLEMENT_ONLY_TAG,
+};
 use crate::kernel::DeltaOperation;
 use crate::spec::{
     Action, Add, CommitAction, CommitConflictError, CommitInfo, DeltaError, DeltaResult,
@@ -85,6 +89,23 @@ impl<'a> TransactionInfo<'a> {
         self.actions
             .iter()
             .any(|a| matches!(a, CommitAction::Metadata(_)))
+    }
+
+    pub fn is_blind_append(&self) -> bool {
+        self.actions
+            .iter()
+            .find_map(|action| match action {
+                CommitAction::CommitInfo(info) => Some(info.is_blind_append.unwrap_or(false)),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                self.actions.iter().all(|action| {
+                    matches!(
+                        action,
+                        CommitAction::Add(_) | CommitAction::Txn(_) | CommitAction::CommitInfo(_)
+                    )
+                })
+            })
     }
 
     // TODO: properly handle predicates in the PhysicalPlan
@@ -212,6 +233,10 @@ impl WinningCommitSummary {
                 _ => None,
             })
             .collect()
+    }
+
+    pub fn has_commit_tag(&self, key: &str) -> bool {
+        commit_info_tag_is_true(self.commit_info.as_ref(), key)
     }
 
     pub fn domain_metadata_domains(&self) -> HashSet<String> {
@@ -348,6 +373,9 @@ impl<'a> ConflictChecker<'a> {
             };
         }
         if !self.winning_commit_summary.protocol().is_empty() {
+            if self.can_resolve_row_tracking_enablement_only_protocol_upgrade() {
+                return Ok(());
+            }
             if let Some(txn_protocol) = self.txn_info.protocol_action() {
                 let wins = self.winning_commit_summary.protocol();
                 if wins.iter().any(|p| p != txn_protocol) {
@@ -368,6 +396,9 @@ impl<'a> ConflictChecker<'a> {
     fn check_no_metadata_updates(&self) -> Result<(), CommitConflictError> {
         // Fail if the metadata is different than what the txn read.
         if !self.winning_commit_summary.metadata_updates().is_empty() {
+            if self.can_resolve_row_tracking_enablement_only_metadata_update() {
+                return Ok(());
+            }
             if let Some(txn_metadata) = self.txn_info.metadata_action() {
                 let wins = self.winning_commit_summary.metadata_updates();
                 if wins.iter().any(|m| m != txn_metadata) {
@@ -380,6 +411,40 @@ impl<'a> ConflictChecker<'a> {
         Ok(())
     }
 
+    fn can_resolve_row_tracking_enablement_only_protocol_upgrade(&self) -> bool {
+        if !self
+            .winning_commit_summary
+            .has_commit_tag(ROW_TRACKING_ENABLEMENT_ONLY_TAG)
+            || self.txn_info.protocol_action().is_some()
+            || !self.txn_info.is_blind_append()
+        {
+            return false;
+        }
+        let protocols = self.winning_commit_summary.protocol();
+        protocols.len() == 1
+            && is_row_tracking_enablement_only_protocol_upgrade(
+                self.txn_info.read_snapshot.protocol(),
+                &protocols[0],
+            )
+    }
+
+    fn can_resolve_row_tracking_enablement_only_metadata_update(&self) -> bool {
+        if !self
+            .winning_commit_summary
+            .has_commit_tag(ROW_TRACKING_ENABLEMENT_ONLY_TAG)
+            || self.txn_info.metadata_changed()
+            || !self.txn_info.is_blind_append()
+        {
+            return false;
+        }
+        let metadata_updates = self.winning_commit_summary.metadata_updates();
+        metadata_updates.len() == 1
+            && is_row_tracking_enablement_only_metadata_change(
+                self.txn_info.read_snapshot.metadata(),
+                &metadata_updates[0],
+            )
+    }
+
     fn check_no_domain_metadata_conflicts(&self) -> Result<(), CommitConflictError> {
         let txn_domains = self.txn_info.domain_metadata_domains();
         if txn_domains.is_empty() {
@@ -387,7 +452,11 @@ impl<'a> ConflictChecker<'a> {
         }
 
         let winning_domains = self.winning_commit_summary.domain_metadata_domains();
-        if let Some(domain) = txn_domains.intersection(&winning_domains).next() {
+        // TODO(row-tracking): Add backfill/unbackfill conflict resolution for this domain.
+        if let Some(domain) = txn_domains
+            .intersection(&winning_domains)
+            .find(|domain| domain.as_str() != "delta.rowTracking")
+        {
             Err(CommitConflictError::ConcurrentDomainMetadata(
                 (*domain).clone(),
             ))

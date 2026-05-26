@@ -35,7 +35,7 @@ use super::commit::{
     assemble_commit_plan, build_adds_from_touched_files, build_remove_from_touched_files,
 };
 use super::context::PlannerContext;
-use super::utils::LogReplayOptions;
+use super::utils::{materialize_row_tracking_columns, LogReplayOptions};
 use crate::datasource::PATH_COLUMN;
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::physical_plan::{prepare_delta_write_context, DeltaCommitExec, DeltaWriterExec};
@@ -64,7 +64,6 @@ pub async fn build_merge_plan(
         .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
-
     let mut options = DeltaWriterExecOptions::from(ctx.options().clone());
     if merge_info.with_schema_evolution {
         options.merge_schema = true;
@@ -92,6 +91,7 @@ pub async fn build_merge_plan(
     // DeltaWriterExec consumes operation/metric columns for MERGE metrics. Drop only
     // metadata already used for targeted rewrite before handing rows to the writer.
     let writer_input: Arc<dyn ExecutionPlan> = strip_internal_columns(writer_input)?;
+    let writer_input = materialize_row_tracking_columns(writer_input, &snapshot_state)?;
 
     // Build the remove source from the touched files, if any.
     let remove_source = if let Some(touched_plan) = &touched_plan_opt {
@@ -143,6 +143,7 @@ pub async fn build_merge_plan(
 /// UPDATE clauses are intentionally rejected for now: they require writing changed rows
 /// while deleting the original target rows via DVs, which needs a separate "changed rows
 /// only" MERGE projection. INSERT-only and DELETE+INSERT MERGE are supported.
+/// TODO(row-tracking): Preserve row tracking for Merge-on-Read MERGE UPDATE.
 pub async fn build_merge_plan_mor(
     ctx: &PlannerContext<'_>,
     merge_info: RowLevelWriteInfo,

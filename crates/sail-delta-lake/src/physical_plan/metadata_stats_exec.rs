@@ -1,13 +1,11 @@
 use std::any::Any;
 use std::fmt;
-use std::io::Cursor;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{new_null_array, ArrayRef, StringArray, StructArray};
+use datafusion::arrow::array::{new_null_array, ArrayRef, StringArray};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -21,6 +19,7 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::TryStreamExt;
 
 use crate::spec::fields::{FIELD_NAME_STATS_PARSED, STATS_FIELD_MIN_VALUES};
+use crate::spec::parse_stats_json_array;
 
 /// The column name used by the replay pipeline for the raw JSON stats string.
 const REPLAY_STATS_JSON_COLUMN: &str = "stats_json";
@@ -109,30 +108,9 @@ impl DeltaMetadataStatsExec {
                 )
             })?;
 
-        let estimated_json_bytes = stats_json
-            .iter()
-            .map(|value| value.map_or(2, str::len) + 1)
-            .sum();
-        let mut json_lines = String::with_capacity(estimated_json_bytes);
-        for value in stats_json.iter() {
-            if let Some(value) = value {
-                json_lines.push_str(value);
-            } else {
-                json_lines.push_str("{}");
-            }
-            json_lines.push('\n');
-        }
-
-        let mut reader = JsonReaderBuilder::new(Arc::clone(&self.stats_schema))
-            .with_batch_size(batch.num_rows().max(1))
-            .build(Cursor::new(json_lines))
+        let stats_array = parse_stats_json_array(stats_json, &self.stats_schema)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let parsed_batch = match reader.next() {
-            Some(batch) => batch.map_err(|e| DataFusionError::External(Box::new(e)))?,
-            None => RecordBatch::new_empty(Arc::clone(&self.stats_schema)),
-        };
-        let stats_array: Arc<StructArray> = Arc::new(parsed_batch.into());
-        Ok(stats_array)
+        Ok(Arc::new(stats_array))
     }
 }
 
@@ -234,7 +212,7 @@ impl Clone for DeltaMetadataStatsExec {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::array::{Array, Int32Array, Int64Array};
+    use datafusion::arrow::array::{Array, Int32Array, Int64Array, StructArray};
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
