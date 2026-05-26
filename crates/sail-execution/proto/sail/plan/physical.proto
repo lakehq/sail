@@ -101,6 +101,7 @@ message ExtendedScalarUdf {
     SparkAbsUdf spark_abs = 20;
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
+    SparkToCsvUdf spark_to_csv = 23;
   }
 }
 
@@ -200,6 +201,10 @@ message SparkAbsUdf {
 }
 
 message SparkFromCsvUdf {
+  string session_timezone = 1;
+}
+
+message SparkToCsvUdf {
   string session_timezone = 1;
 }
 
