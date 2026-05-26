@@ -93,7 +93,3 @@ The "merge-on-read" mode refers to updating the table with deletion vectors. Thi
 | AWS Glue / Hive Metastore      | :construction:     |
 | Streaming reads                | :construction:     |
 | Streaming writes               | :construction:     |
-
-`CHECK` constraint support covers stored `delta.constraints.*` expressions on
-Delta write and `MERGE` paths. Validating existing rows when adding constraints
-with `ALTER TABLE SET TBLPROPERTIES` is not yet supported.
