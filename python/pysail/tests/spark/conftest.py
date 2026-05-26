@@ -209,6 +209,14 @@ DOCTEST_MARKERS = [
         markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
     ),
     DoctestMarker(
+        keywords=["test_pandas_grouped_map_iter_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="applyInPandas iterator requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_grouped_map_iter_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="applyInArrow iterator requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
         keywords=["test_ipython_key_completions.txt"],
         markers=[
             pytest.mark.skipif(
