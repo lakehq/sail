@@ -16,6 +16,8 @@ use datafusion::physical_plan::{
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -204,8 +206,10 @@ fn build_job_graph(
             build_job_graph(right.clone(), usage, graph)?,
         ]
     } else if plan.downcast_ref::<RepartitionExec>().is_some()
+        || plan.downcast_ref::<ExplicitRepartitionExec>().is_some()
         || plan.downcast_ref::<CoalescePartitionsExec>().is_some()
         || plan.downcast_ref::<SortPreservingMergeExec>().is_some()
+        || plan.downcast_ref::<CoalesceExec>().is_some()
     {
         let child = plan.children().one()?;
         // At the stage boundary, we only expect to use the child partition once
@@ -249,6 +253,19 @@ fn build_job_graph(
                 create_shuffle(child, graph, properties, consumption)?
             }
         }
+    } else if let Some(repartition) = plan.downcast_ref::<ExplicitRepartitionExec>() {
+        let properties = repartition.properties().clone();
+        let child = plan.children().one()?;
+        match &properties.partitioning {
+            Partitioning::RoundRobinBatch(_) => {
+                create_shuffle(child, graph, properties, consumption)?
+            }
+            other => {
+                return Err(ExecutionError::DataFusionError(plan_datafusion_err!(
+                    "unexpected explicit repartition partitioning in distributed planning: {other:?}"
+                )));
+            }
+        }
     } else if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
         let properties = coalesce.properties().clone();
         let child = plan.children().one()?;
@@ -263,6 +280,9 @@ fn build_job_graph(
         let child = plan.children().one()?;
         plan.clone()
             .with_new_children(vec![create_merge_input(child, graph)?])?
+    } else if let Some(coalesce) = plan.downcast_ref::<CoalesceExec>() {
+        let child = plan.children().one()?;
+        create_rescale_input(child, coalesce.output_partitions(), graph)?
     } else if plan.downcast_ref::<SystemTableExec>().is_some()
         || plan.downcast_ref::<CatalogCommandExec>().is_some()
     {
@@ -294,6 +314,37 @@ fn create_merge_input(
         StageInput {
             stage: s,
             mode: InputMode::Merge,
+        },
+        properties,
+    )))
+}
+
+fn create_rescale_input(
+    plan: &Arc<dyn ExecutionPlan>,
+    output_partitions: usize,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let stage = Stage {
+        inputs,
+        plan,
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        placement: TaskPlacement::Worker,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    let properties = Arc::new(PlanProperties::new(
+        datafusion::physical_expr::EquivalenceProperties::new(graph.stages[s].plan.schema()),
+        Partitioning::UnknownPartitioning(output_partitions),
+        graph.stages[s].plan.pipeline_behavior(),
+        graph.stages[s].plan.boundedness(),
+    ));
+    Ok(Arc::new(StageInputExec::new(
+        StageInput {
+            stage: s,
+            mode: InputMode::Rescale,
         },
         properties,
     )))

@@ -122,6 +122,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
+use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -217,6 +218,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -231,7 +233,7 @@ use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_python_udf::config::PySparkUdfConfig;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
+use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
@@ -1027,6 +1029,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::Coalesce(gen::CoalesceExecNode {
+                input,
+                output_partitions,
+            }) => Ok(Arc::new(CoalesceExec::new(
+                self.try_decode_plan(&input, ctx)?,
+                usize::try_from(output_partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
+            ))),
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
@@ -1820,6 +1829,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: spark_partition_id.column_name().to_string(),
                 schema,
             })
+        } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {
+            let input = self.try_encode_plan(coalesce.input().clone())?;
+            NodeKind::Coalesce(gen::CoalesceExecNode {
+                input,
+                output_partitions: u64::try_from(coalesce.output_partitions())
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
+            })
         } else if let Some(relaxed_tz_cast) = node.downcast_ref::<RelaxedTzCastExec>() {
             let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
             let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
@@ -2126,6 +2142,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone }) => {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkToCsv(gen::SparkToCsvUdf { session_timezone }) => {
+                let udf = SparkToCsv::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone }) => {
@@ -2533,6 +2553,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkToCsv>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkToCsv(gen::SparkToCsvUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkFromJson>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone })
@@ -2639,6 +2662,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_type,
                 is_pandas,
                 config,
+                is_iter,
             })) => {
                 let input_types = input_types
                     .iter()
@@ -2656,7 +2680,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_names,
                     input_types,
                     output_type,
-                    is_pandas,
+                    PySparkGroupMapMode { is_pandas, is_iter },
                     Arc::new(config),
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
@@ -2742,6 +2766,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 is_pandas: func.is_pandas(),
+                is_iter: func.is_iter(),
                 config: Some(config),
             })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkBatchCollectorUDF>() {
