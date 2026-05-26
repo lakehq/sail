@@ -27,6 +27,17 @@ pub fn schema_has_generated_columns(schema: &StructType) -> bool {
     })
 }
 
+/// Check if a Delta metadata configuration contains table CHECK constraints.
+pub fn configuration_has_check_constraints(configuration: &HashMap<String, String>) -> bool {
+    const PREFIX: &str = "delta.constraints.";
+    configuration.keys().any(|key| {
+        key.len() > PREFIX.len()
+            && key
+                .get(..PREFIX.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
+    })
+}
+
 /// Evolve table schema and update metadata according to column mapping mode.
 pub fn evolve_schema(
     existing: &StructType,
@@ -122,6 +133,9 @@ pub fn protocol_for_create(
     }
     if enable_generated_columns {
         writer_features.push(TableFeature::GeneratedColumns);
+    }
+    if configuration_has_check_constraints(configuration) {
+        writer_features.push(TableFeature::CheckConstraints);
     }
     if enable_variant {
         reader_features.push(TableFeature::VariantType);
@@ -285,6 +299,21 @@ mod tests {
     }
 
     #[test]
+    fn protocol_for_create_activates_check_constraints_from_configuration() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.constraints.positive_id".to_string(),
+            "id > 0".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 1);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert_eq!(protocol.reader_features(), None);
+        assert!(protocol.has_writer_feature(&TableFeature::CheckConstraints));
+        Ok(())
+    }
+
+    #[test]
     fn protocol_for_metadata_activates_schema_and_property_features() -> DeltaResult<()> {
         let schema = StructType::try_new([
             StructField::nullable("id", DataType::INTEGER),
@@ -299,6 +328,10 @@ mod tests {
             "delta.enableInCommitTimestamps".to_string(),
             "true".to_string(),
         );
+        configuration.insert(
+            "delta.constraints.positive_id".to_string(),
+            "id > 0".to_string(),
+        );
         let metadata = Metadata::try_new(None, None, schema, vec![], 0, configuration)?;
 
         let protocol = protocol_for_metadata(&metadata)?;
@@ -311,6 +344,7 @@ mod tests {
         assert!(protocol.has_writer_feature(&TableFeature::TimestampWithoutTimezone));
         assert!(protocol.has_writer_feature(&TableFeature::InCommitTimestamp));
         assert!(protocol.has_writer_feature(&TableFeature::GeneratedColumns));
+        assert!(protocol.has_writer_feature(&TableFeature::CheckConstraints));
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
         assert!(protocol.has_writer_feature(&TableFeature::VariantType));
         Ok(())

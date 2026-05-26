@@ -26,6 +26,7 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
+use crate::check_constraints::{apply_delta_check_constraint_filter, DeltaCheckConstraintExpr};
 use crate::monotonic_id::MonotonicIdNode;
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
@@ -154,6 +155,8 @@ pub struct MergeIntoOptions {
     /// references target schema field IDs and is rewritten to actual column names
     /// by `expand_merge` before being applied as a post-processing projection.
     pub generated_column_exprs: Vec<(String, Expr)>,
+    /// Delta CHECK constraint expressions for the target table.
+    pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -838,6 +841,17 @@ pub fn expand_merge(
         .iter()
         .map(|(name, expr)| Ok((name.clone(), rewrite(expr.clone())?)))
         .collect::<Result<Vec<_>>>()?;
+    options.check_constraint_exprs = options
+        .check_constraint_exprs
+        .iter()
+        .map(|constraint| {
+            Ok(DeltaCheckConstraintExpr {
+                name: constraint.name.clone(),
+                expression: constraint.expression.clone(),
+                expr: rewrite(constraint.expr.clone())?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     trace!(
         "expand_merge options after rewrite - join_key_pairs: {:?}, matched_clauses: {:?}, not_matched_by_source_clauses: {:?}, not_matched_by_target_clauses: {:?}, on_condition: {:?}",
         &options.join_key_pairs,
@@ -911,6 +925,11 @@ pub fn expand_merge(
         let projected = LogicalPlanBuilder::from(insert_projected)
             .union(noop_projected)?
             .build()?;
+        let projected = apply_delta_check_constraint_filter(
+            projected,
+            &options.check_constraint_exprs,
+            Some(row_level_data_operation_expr()),
+        )?;
 
         let touched_plan = LogicalPlanBuilder::empty(false).build()?;
         let command_schema = Arc::new(DFSchema::empty());
@@ -1071,6 +1090,11 @@ fn build_default_merge_expansion(
     let projected = LogicalPlanBuilder::from(projected)
         .union(source_metric_projected)?
         .build()?;
+    let projected = apply_delta_check_constraint_filter(
+        projected,
+        &options.check_constraint_exprs,
+        Some(row_level_data_operation_expr()),
+    )?;
 
     let (rewrite_matched, rewrite_not_matched_by_source) =
         build_rewrite_predicates(&options, &matched_pred, &not_matched_by_source_pred);
@@ -1258,6 +1282,18 @@ fn apply_generation_projection(
         })
         .collect::<Result<Vec<Expr>>>()?;
     LogicalPlanBuilder::from(plan).project(post_exprs)?.build()
+}
+
+fn row_level_data_operation_expr() -> Expr {
+    let op = col(OPERATION_COLUMN);
+    op.clone()
+        .eq(lit(RowLevelOperationType::Copy.as_i32()))
+        .or(op.clone().eq(lit(RowLevelOperationType::Insert.as_i32())))
+        .or(op.clone().eq(lit(RowLevelOperationType::Update.as_i32())))
+        .or(op
+            .clone()
+            .eq(lit(RowLevelOperationType::MatchedUpdate.as_i32())))
+        .or(op.eq(lit(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32())))
 }
 
 fn build_insert_only_projection(

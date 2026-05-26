@@ -12,6 +12,7 @@ use crate::resolver::PlanResolver;
 
 mod catalog;
 mod delete;
+mod delta;
 mod explain;
 mod function;
 mod insert;

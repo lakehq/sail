@@ -187,6 +187,13 @@ pub struct SourceInfo {
     pub options: Vec<OptionLayer>,
 }
 
+/// Metadata about an existing table format instance needed during logical planning.
+#[derive(Debug, Clone)]
+pub struct TableFormatMetadata {
+    pub schema: SchemaRef,
+    pub properties: Vec<(String, String)>,
+}
+
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
@@ -311,6 +318,18 @@ pub trait TableFormat: Send + Sync {
     /// Infers the logical schema for planning without requiring callers to construct a read source.
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         Ok(self.create_source(ctx, info).await?.schema())
+    }
+
+    /// Infers table metadata for planning without requiring callers to construct a read source.
+    async fn infer_metadata(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<TableFormatMetadata> {
+        Ok(TableFormatMetadata {
+            schema: self.infer_schema(ctx, info).await?,
+            properties: vec![],
+        })
     }
 
     /// Creates a `ExecutionPlan` for write.
