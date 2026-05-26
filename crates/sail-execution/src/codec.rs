@@ -121,6 +121,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
+use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -2173,6 +2174,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkToCsv(gen::SparkToCsvUdf { session_timezone }) => {
+                let udf = SparkToCsv::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone }) => {
                 let udf = SparkFromJson::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2572,6 +2577,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkToCsv>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkToCsv(gen::SparkToCsvUdf { session_timezone })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromJson>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone })
