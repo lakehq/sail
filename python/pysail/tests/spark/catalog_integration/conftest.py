@@ -72,7 +72,12 @@ def stop_sail_server(
             os.environ[key] = old_value
 
 
-def create_spark_session(remote: str, app_name: str = "catalog_test") -> SparkSession:
+def create_spark_session(
+    remote: str,
+    app_name: str = "catalog_test",
+    *,
+    new_session: bool = False,
+) -> SparkSession:
     """Create a Spark session connected to the given remote."""
     # Deferred imports so pysail._native is not loaded at module collection time.
     from pyspark.sql import SparkSession
@@ -82,7 +87,8 @@ def create_spark_session(remote: str, app_name: str = "catalog_test") -> SparkSe
         patch_spark_connect_session,
     )
 
-    spark = SparkSession.builder.remote(remote).appName(app_name).getOrCreate()
+    builder = SparkSession.builder.remote(remote).appName(app_name)
+    spark = builder.create() if new_session else builder.getOrCreate()
     configure_spark_session(spark)
     patch_spark_connect_session(spark)
     return spark

@@ -215,6 +215,15 @@ DOCTEST_MARKERS = [
         keywords=["test_arrow_grouped_map_iter_udf.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="applyInArrow iterator requires PySpark 4.1+")],
     ),
+    DoctestMarker(
+        keywords=["test_ipython_key_completions.txt"],
+        markers=[
+            pytest.mark.skipif(
+                pyspark_version() < (4,),
+                reason="_ipython_key_completions_ is not defined on the PySpark 3.x Connect DataFrame",
+            )
+        ],
+    ),
 ]
 
 
