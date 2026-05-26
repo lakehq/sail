@@ -1,15 +1,6 @@
 use std::time::Duration;
 
 use futures::future::try_join_all;
-use hive_metastore::{
-    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
-    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
-    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
-    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
-    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
-    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
-    ThriftHiveMetastoreGetTableReqException,
-};
 use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
@@ -23,6 +14,15 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
+use crate::hms::{
+    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
+    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
+    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
+    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
+    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
+    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
+    ThriftHiveMetastoreGetTableReqException,
+};
 use crate::convert::{
     build_database, build_generic_table, build_view, database_to_status, inject_spark_metadata,
     is_view_table, reject_spark_properties, reject_spark_property_keys, table_to_status,
@@ -1203,7 +1203,7 @@ mod tests {
     use std::time::Duration;
 
     use arrow::datatypes::DataType;
-    use hive_metastore::Table;
+    use crate::hms::Table;
     use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{

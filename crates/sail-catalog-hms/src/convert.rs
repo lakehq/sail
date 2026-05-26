@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use arrow::datatypes::{DataType, Field};
 use chrono::Utc;
-use hive_metastore::{Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table};
 use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::hive_format::{HiveDetectedFormat, HiveStorageFormat};
@@ -15,6 +14,7 @@ use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
 
+use crate::hms::{Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table};
 use crate::data_type::{
     arrow_to_hive_type, hive_type_to_arrow, spark_struct_json_from_fields,
     spark_struct_json_to_fields,
@@ -706,7 +706,7 @@ mod tests {
     #![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use arrow::datatypes::{DataType, Field, Fields};
-    use hive_metastore::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
+    use crate::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
     use pilota::{AHashMap, FastStr};
     use sail_catalog::hive_format::HiveStorageFormat;
     use sail_catalog::provider::{
@@ -727,7 +727,7 @@ mod tests {
 
     #[test]
     fn test_database_to_status_reads_properties() {
-        let database = hive_metastore::Database {
+        let database = crate::hms::Database {
             name: Some("default".into()),
             description: Some("test".into()),
             parameters: Some([("k".into(), "v".into())].into_iter().collect()),
