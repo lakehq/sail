@@ -7,17 +7,17 @@ use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
     Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
-    Catalogs, Change, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns, Comment,
-    Compute, Cost, Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete,
-    Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain,
-    Extended, External, Fields, Fileformat, First, For, Format, Formatted, From, Function,
-    Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy,
-    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Namespace, Namespaces, Noscan,
-    Not, Null, On, Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions,
-    Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde,
-    Serdeproperties, Set, Show, Sorted, Source, Statistics, Stored, Table, Tables, Target,
-    Tblproperties, Temp, Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use,
-    Using, Values, Verbose, View, Views, When, With, Zone,
+    Catalogs, Change, Check, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns,
+    Comment, Compute, Constraint, Cost, Create, Data, Database, Databases, Dbproperties, Default,
+    Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
+    Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From,
+    Function, Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items,
+    Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Namespace,
+    Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite, Partition,
+    Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row,
+    Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Statistics, Stored, Table,
+    Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then, Time, To, Type, Uncache,
+    Unset, Update, Use, Using, Values, Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -652,6 +652,16 @@ pub enum AlterTableOperation {
         columns: Either<Column, Columns>,
         #[parser(function = |(e, d), o| compose((e, d), o))]
         items: ColumnAlterationList,
+    },
+    AddConstraint {
+        add: Add,
+        constraint: Constraint,
+        name: Ident,
+        check: Check,
+        left: LeftParenthesis,
+        #[parser(function = |(e, _), _| e)]
+        expression: Expr,
+        right: RightParenthesis,
     },
     DropColumns {
         drop: Drop,

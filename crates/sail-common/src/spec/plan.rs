@@ -1326,6 +1326,11 @@ pub enum AlterTableOperation {
         name: ObjectName,
         data_type: DataType,
     },
+    AddCheckConstraint {
+        name: Identifier,
+        expression: Expr,
+        expression_source: String,
+    },
     // TODO: add all the alter table operations
 }
 

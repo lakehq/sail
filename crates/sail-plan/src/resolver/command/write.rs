@@ -313,6 +313,9 @@ impl PlanResolver<'_> {
                     input = self
                         .rewrite_write_input(input, column_match, info, state)
                         .await?;
+                    input = self
+                        .apply_delta_table_constraints(input, info, state)
+                        .await?;
                     if file_write_options.partition_by.is_empty()
                         || !info.format.eq_ignore_ascii_case("iceberg")
                     {
@@ -613,8 +616,7 @@ impl PlanResolver<'_> {
         info: &TableInfo,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let has_generated = info.columns.iter().any(|c| c.generated_always_as.is_some());
-        if has_generated {
+        if Self::delta_table_requires_feature_rewrite(info) {
             self.rewrite_delta_write_input_with_generated_columns(input, column_match, info, state)
                 .await
         } else {

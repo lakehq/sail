@@ -119,6 +119,7 @@ pub fn protocol_for_create(
 ) -> DeltaResult<Protocol> {
     let mut reader_features = Vec::new();
     let mut writer_features = Vec::new();
+    let has_check_constraints = configuration_has_check_constraints(configuration);
 
     if enable_column_mapping {
         reader_features.push(TableFeature::ColumnMapping);
@@ -133,9 +134,6 @@ pub fn protocol_for_create(
     }
     if enable_generated_columns {
         writer_features.push(TableFeature::GeneratedColumns);
-    }
-    if configuration_has_check_constraints(configuration) {
-        writer_features.push(TableFeature::CheckConstraints);
     }
     if enable_variant {
         reader_features.push(TableFeature::VariantType);
@@ -176,6 +174,13 @@ pub fn protocol_for_create(
                 }
             }
         }
+    }
+
+    if has_check_constraints
+        && !writer_features.is_empty()
+        && !writer_features.contains(&TableFeature::CheckConstraints)
+    {
+        writer_features.push(TableFeature::CheckConstraints);
     }
 
     // `delta.enableDeletionVectors = "true"` implicitly activates DeletionVectors.
@@ -221,7 +226,8 @@ pub fn protocol_for_create(
     }
 
     if reader_features.is_empty() && writer_features.is_empty() {
-        return Ok(Protocol::new(1, 2, None, None));
+        let min_writer_version = if has_check_constraints { 3 } else { 2 };
+        return Ok(Protocol::new(1, min_writer_version, None, None));
     }
 
     let min_reader_version = if reader_features.is_empty() { 1 } else { 3 };

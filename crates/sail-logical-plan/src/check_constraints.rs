@@ -7,6 +7,14 @@ pub struct DeltaCheckConstraintExpr {
     pub name: String,
     pub expression: String,
     pub expr: Expr,
+    pub violation: DeltaConstraintViolation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum DeltaConstraintViolation {
+    Check,
+    NotNull { column: String },
+    Invariant { column: String },
 }
 
 pub fn apply_delta_check_constraint_filter(
@@ -28,11 +36,19 @@ pub fn apply_delta_check_constraint_filter(
 fn build_delta_check_constraint_expr(constraints: &[DeltaCheckConstraintExpr]) -> Result<Expr> {
     let mut predicate = lit(true);
     for constraint in constraints.iter().rev() {
-        let message = format!(
-            "[DELTA_CHECK_CONSTRAINT_VIOLATED] CHECK constraint `{}` \
-             (expression: {}) violated.",
-            constraint.name, constraint.expression
-        );
+        let message = match &constraint.violation {
+            DeltaConstraintViolation::Check => format!(
+                "[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES] CHECK constraint {} ({}) violated.",
+                constraint.name, constraint.expression
+            ),
+            DeltaConstraintViolation::NotNull { column } => format!(
+                "[DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: {column}"
+            ),
+            DeltaConstraintViolation::Invariant { column } => format!(
+                "[DELTA_VIOLATE_CONSTRAINT_WITH_VALUES] CHECK constraint {column} ({}) violated.",
+                constraint.expression
+            ),
+        };
         let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(message)]);
         predicate =
             when(Expr::IsTrue(Box::new(constraint.expr.clone())), predicate).otherwise(raise)?;

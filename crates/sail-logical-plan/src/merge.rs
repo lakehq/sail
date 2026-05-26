@@ -849,6 +849,7 @@ pub fn expand_merge(
                 name: constraint.name.clone(),
                 expression: constraint.expression.clone(),
                 expr: rewrite(constraint.expr.clone())?,
+                violation: constraint.violation.clone(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
