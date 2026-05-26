@@ -215,6 +215,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -1031,6 +1032,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::Coalesce(gen::CoalesceExecNode {
+                input,
+                output_partitions,
+            }) => Ok(Arc::new(CoalesceExec::new(
+                self.try_decode_plan(&input, ctx)?,
+                usize::try_from(output_partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
+            ))),
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
@@ -1837,6 +1845,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 column_name: spark_partition_id.column_name().to_string(),
                 schema,
+            })
+        } else if let Some(coalesce) = node.as_any().downcast_ref::<CoalesceExec>() {
+            let input = self.try_encode_plan(coalesce.input().clone())?;
+            NodeKind::Coalesce(gen::CoalesceExecNode {
+                input,
+                output_partitions: u64::try_from(coalesce.output_partitions())
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {
             let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
