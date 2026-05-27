@@ -814,6 +814,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 )
             }),
         ),
+        ("timestampdiff", F::custom(datediff)),
         ("to_date", F::custom(to_date)),
         ("to_time", F::var_arg(to_time)),
         (
