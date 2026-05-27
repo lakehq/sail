@@ -1,0 +1,97 @@
+# serializer version: 1
+---
+name: "test_explain_abs_bigint_column_keeps_spark_abs_ansi_path_retained"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as abs(v)]
+      ProjectionExec: expr=[spark_abs(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_abs_decimal_column_delegates_to_datafusion_abs"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as abs(v)]
+      ProjectionExec: expr=[abs(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_abs_double_column_delegates_to_datafusion_abs"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as abs(v)]
+      ProjectionExec: expr=[abs(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_abs_int_column_keeps_spark_abs_ansi_path_retained"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as abs(v)]
+      ProjectionExec: expr=[spark_abs(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_abs_interval_column_keeps_spark_abs_kernel_path_retained"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as abs(v)]
+      ProjectionExec: expr=[spark_abs(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_abs_of_ceil_keeps_spark_abs_delegation_chain_consistent"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as abs(CEIL(v))]
+      ProjectionExec: expr=[spark_abs(spark_ceil(column1@0)) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_abs_of_negative_int_literal_folds_to_positive"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as result]
+      ProjectionExec: expr=[5 as #0]
+        PlaceholderRowExec
+---
+name: "test_explain_abs_of_null_folds_to_null_literal"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as result]
+      ProjectionExec: expr=[NULL as #0]
+        PlaceholderRowExec
+---
+name: "test_explain_absabsdouble_col_does_not_collapse_datafusion_abs_lacks_idempotence"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as abs(abs(v))]
+      ProjectionExec: expr=[abs(abs(column1@0)) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_absabsint_col_collapses_to_single_spark_abs"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as abs(abs(v))]
+      ProjectionExec: expr=[spark_abs(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_ceil_of_abs_keeps_abs_in_invoke_for_integer_path"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as CEIL(abs(v))]
+      ProjectionExec: expr=[CAST(spark_abs(column1@0) AS Int64) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_triplenested_abs_collapses_to_single_spark_abs"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as abs(abs(abs(v)))]
+      ProjectionExec: expr=[spark_abs(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]

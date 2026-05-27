@@ -25,7 +25,6 @@ use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
-use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -322,12 +321,12 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("substring_index", F::ternary(expr_fn::substr_index)),
         ("to_binary", F::udf(SparkToBinary::new())),
         ("to_char", F::unknown("to_char")),
-        ("to_number", F::udf(SparkToNumber::new())),
+        ("to_number", F::udf(SparkToNumber::new(false))),
         ("to_varchar", F::unknown("to_varchar")),
         ("translate", F::ternary(expr_fn::translate)),
         ("trim", F::var_arg(rev_args(expr_fn::trim))),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
-        ("try_to_number", F::udf(SparkTryToNumber::new())),
+        ("try_to_number", F::udf(SparkToNumber::new(true))),
         ("try_validate_utf8", F::custom(try_validate_utf8)),
         ("ucase", F::custom(upper)),
         ("unbase64", F::udf(SparkUnbase64::new())),

@@ -566,6 +566,12 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }))
 }
 
+fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let udf = ScalarUDF::from(SparkAbs::new(ansi_mode));
+    Ok(udf.call(input.arguments))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -575,7 +581,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("+", F::custom(spark_plus)),
         ("-", F::custom(spark_minus)),
         ("/", F::custom(spark_divide)),
-        ("abs", F::udf(SparkAbs::new())),
+        ("abs", F::custom(spark_abs)),
         ("acos", F::unary(double(expr_fn::acos))),
         ("acosh", F::unary(double(expr_fn::acosh))),
         ("asin", F::unary(double(expr_fn::asin))),

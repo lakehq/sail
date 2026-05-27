@@ -129,6 +129,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         if_not_exists,
         replace,
         properties,
+        is_external: _,
     } = options;
 
     if replace {

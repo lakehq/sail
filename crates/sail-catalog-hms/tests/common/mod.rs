@@ -123,6 +123,7 @@ pub fn simple_table_options_with_format(
         if_not_exists: false,
         replace: false,
         properties: vec![],
+        is_external: true,
     }
 }
 

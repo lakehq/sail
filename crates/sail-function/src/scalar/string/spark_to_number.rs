@@ -8,7 +8,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, StringArray, *};
 use datafusion::arrow::datatypes::{DataType, *};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result, ScalarValue,
+    exec_datafusion_err, exec_err, internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -17,11 +17,13 @@ use datafusion_expr_common::signature::Volatility;
 use lazy_static::lazy_static;
 use regex::{Captures, Regex};
 
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::functions_nested_utils::downcast_arg;
 use crate::functions_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToNumber {
+    safe: bool,
     signature: Signature,
 }
 
@@ -35,18 +37,21 @@ lazy_static! {
 }
 
 impl SparkToNumber {
-    pub const NAME: &'static str = "to_number";
-
-    pub fn new() -> Self {
+    pub fn new(safe: bool) -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            safe,
+            signature: Signature::user_defined(Volatility::Immutable),
         }
+    }
+
+    pub fn safe(&self) -> bool {
+        self.safe
     }
 }
 
 impl Default for SparkToNumber {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -56,7 +61,11 @@ impl ScalarUDFImpl for SparkToNumber {
     }
 
     fn name(&self) -> &str {
-        Self::NAME
+        if self.safe {
+            "try_to_number"
+        } else {
+            "to_number"
+        }
     }
 
     fn signature(&self) -> &Signature {
@@ -69,22 +78,57 @@ impl ScalarUDFImpl for SparkToNumber {
         Ok(DataType::Struct(Fields::empty()))
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let func_name = self.name();
+        if arg_types.len() != 2 {
+            return Err(invalid_arg_count_exec_err(
+                func_name,
+                (2, 2),
+                arg_types.len(),
+            ));
+        }
+        for arg_type in arg_types {
+            match arg_type {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+                _ => {
+                    return Err(unsupported_data_type_exec_err(
+                        func_name, "STRING", arg_type,
+                    ));
+                }
+            }
+        }
+        Ok(vec![DataType::Utf8, DataType::Utf8])
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let format: &str = if let Some(Some(format)) = scalar_arguments.get(1) {
-            match format {
+        let format: &str = match scalar_arguments.get(1) {
+            Some(Some(format)) => match format {
                 ScalarValue::Utf8(Some(format))
                 | ScalarValue::LargeUtf8(Some(format))
                 | ScalarValue::Utf8View(Some(format)) => Ok(format.deref()),
+                // NULL format: safe mode returns all-NULL, strict mode errors at runtime
+                ScalarValue::Utf8(None)
+                | ScalarValue::LargeUtf8(None)
+                | ScalarValue::Utf8View(None)
+                | ScalarValue::Null => {
+                    return Ok(Arc::new(Field::new(
+                        self.name(),
+                        DataType::Decimal256(38, 18),
+                        true,
+                    )));
+                }
                 _ => internal_err!("Expected UTF-8 format string"),
-            }?
-        } else {
-            return plan_err!(
-                "`{}` function missing 1 required string positional argument (string format)",
-                SparkToNumber::NAME
-            );
+            }?,
+            Some(None) | None => {
+                return Ok(Arc::new(Field::new(
+                    self.name(),
+                    DataType::Decimal256(38, 18),
+                    true,
+                )));
+            }
         };
 
         let format_spec: RegexSpec = RegexSpec::try_from(format)?;
@@ -96,50 +140,54 @@ impl ScalarUDFImpl for SparkToNumber {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let safe = self.safe;
         let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(spark_to_number_inner, vec![])(&args)
+        make_scalar_function(move |a| spark_to_number_impl(a, safe), vec![])(&args)
     }
 }
 
-pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return internal_err!(
-            "`{}` function requires 2 arguments, got {}",
-            SparkToNumber::NAME,
-            args.len()
-        );
+fn spark_to_number_impl(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
+    let format_arr = downcast_arg!(&args[1], StringArray);
+    if format_arr.is_null(0) {
+        let values = downcast_arg!(&args[0], StringArray);
+        let nulls: Vec<ScalarValue> = (0..values.len())
+            .map(|_| ScalarValue::Decimal256(None, 38, 18))
+            .collect();
+        return ScalarValue::iter_to_array(nulls);
     }
-    // Parsing the format string
-    let format: &str = downcast_arg!(&args[1], StringArray).value(0);
+    let format: &str = format_arr.value(0);
     let format_spec: RegexSpec = RegexSpec::try_from(format)?;
     let number_components: NumberComponents = NumberComponents::try_from(&format_spec)?;
     let NumberComponents {
         precision, scale, ..
     } = number_components;
-
-    // Getting the regex expression according to the format for the value
     let value_regex: Regex = create_regex_expression(&format_spec)?;
-
-    // Parsing the values
     let values: &StringArray = downcast_arg!(&args[0], StringArray);
+
     let scalars: Result<Vec<ScalarValue>> = values
         .iter()
         .map(|value| match value {
             None => Ok(ScalarValue::Decimal256(None, precision, scale)),
             Some(value) => {
-                ParsedNumber::try_from_value(value, &format_spec, &value_regex, &number_components)
-                    .map(|parsed| {
-                        ScalarValue::Decimal256(Some(parsed.value), parsed.precision, parsed.scale)
-                    })
-                    .map_err(|e| exec_datafusion_err!("{}", e))
+                let result = ParsedNumber::try_from_value(
+                    value,
+                    &format_spec,
+                    &value_regex,
+                    &number_components,
+                )
+                .map(|parsed| {
+                    ScalarValue::Decimal256(Some(parsed.value), parsed.precision, parsed.scale)
+                });
+                if safe {
+                    Ok(result.unwrap_or(ScalarValue::Decimal256(None, precision, scale)))
+                } else {
+                    result.map_err(|e| exec_datafusion_err!("{}", e))
+                }
             }
         })
-        .collect::<Result<Vec<ScalarValue>>>();
+        .collect();
 
-    let scalar_values: Vec<ScalarValue> = scalars?;
-    let decimal_array: ArrayRef = ScalarValue::iter_to_array(scalar_values)?;
-
-    Ok(decimal_array)
+    ScalarValue::iter_to_array(scalars?)
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -382,24 +430,26 @@ impl Display for PatternExpression {
         match self {
             PatternExpression::LeftSign(only_negative) => {
                 if *only_negative {
-                    write!(f, "(?<sign_left>[-])?")
+                    // MI: minus or space (space = positive)
+                    write!(f, "(?<sign_left>[- ])?")
                 } else {
                     write!(f, "(?<sign_left>[+-])?")
                 }
             }
             PatternExpression::RightSign(only_negative) => {
                 if *only_negative {
-                    write!(f, "(?<sign_right>[-])?")
+                    write!(f, "(?<sign_right>[- ])?")
                 } else {
                     write!(f, "(?<sign_right>[+-])?")
                 }
             }
             PatternExpression::Currency(currency) => write!(f, "(?<currency>[{currency}])"),
             PatternExpression::Brackets(expr) => {
-                write!(f, "(?<angled_left>[<])?{expr}(?<angled_right>[>])?")
+                // PR format: <123> for negative, space-padded for positive
+                write!(f, "(?<angled_left>[< ])?{expr}(?<angled_right>[> ])?")
             }
-            PatternExpression::Number => write!(f, "(?<numbers>[0-9,G]+)"),
-            PatternExpression::Dot(dot) => write!(f, "(?<dot>[{dot}])?"),
+            PatternExpression::Number => write!(f, "(?<numbers>[0-9,]+)"),
+            PatternExpression::Dot(_dot) => write!(f, "(?<dot>[.])?"),
             PatternExpression::Decimal => write!(f, "(?<decimals>[0-9]+)?"),
             PatternExpression::Group(group) => {
                 write!(
@@ -493,7 +543,9 @@ fn get_grouping_positions(numbers: &str) -> HashSet<(usize, char)> {
 
 /// Computes the sign factor based on captured sign information.
 fn get_sign_factor(captures: &Captures) -> i8 {
-    let angle_factor = get_opt_capture_group!(captures, "angled_left").map_or(1, |_| -1);
+    let angle_factor =
+        get_opt_capture_group!(captures, "angled_left")
+            .map_or(1, |s| if s == "<" { -1 } else { 1 });
     let sign_left_factor =
         get_opt_capture_group!(captures, "sign_left").map_or(1, |s| if s == "-" { -1 } else { 1 });
     let sign_right_factor =
@@ -503,9 +555,9 @@ fn get_sign_factor(captures: &Captures) -> i8 {
 
 /// Validates the angled brackets in the format string
 fn match_angled_condition(value: &str) -> Result<()> {
-    let cond =
-        value.contains("<") && value.contains(">") || !value.contains("<") && !value.contains(">");
-    if !cond {
+    let has_left = value.contains('<');
+    let has_right = value.contains('>');
+    if has_left != has_right {
         return exec_err!("Angled brackets are not well formed");
     }
     Ok(())
@@ -518,18 +570,17 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
     // Get the positions of the groupings in the format
     let format_positions = get_grouping_positions(&format_numbers);
 
-    //Check if format has only ',' or 'G' characters
-    let all_character_same = [',', 'G']
-        .iter()
-        .any(|c| format_positions.iter().all(|(_, d)| *d == *c));
-
-    if !all_character_same {
-        return exec_err!("Malformed integer format related groupings: {format_numbers}. Only groupings with ',' or 'G' are allowed.");
-    };
+    // Reject formats that mix ',' and 'G' separators (e.g. "9,9G9" is invalid in Spark)
+    let has_comma = format_positions.iter().any(|(_, d)| *d == ',');
+    let has_g = format_positions.iter().any(|(_, d)| *d == 'G');
+    if has_comma && has_g {
+        return exec_err!("Malformed integer format related groupings: {format_numbers}. Cannot mix ',' and 'G' separators.");
+    }
 
     // Check if the groupings are in the correct order position
-    for (pos, sep) in &format_positions {
-        if pos < &numbers.len() && numbers.chars().rev().nth(*pos) != Some(*sep) {
+    // G in format means ',' in input
+    for (pos, _sep) in &format_positions {
+        if pos < &numbers.len() && numbers.chars().rev().nth(*pos) != Some(',') {
             return exec_err!("Malformed integer format related groupings: {format_numbers}.");
         }
     }
@@ -540,7 +591,8 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
 /// Validates a value against a regex pattern generated from a format string.
 fn create_regex_expression(format_spec: &RegexSpec) -> Result<Regex> {
     let format_pattern: PatternExpression = PatternExpression::try_from(format_spec)?;
-    let pattern_string: String = format!("^{format_pattern}$");
+    // Allow leading spaces (Spark trims input before matching)
+    let pattern_string: String = format!("^\\s*{format_pattern}$");
     // Create a Regex instance
     Regex::new(pattern_string.as_str())
         .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))

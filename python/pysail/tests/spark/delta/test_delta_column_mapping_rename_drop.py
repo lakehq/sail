@@ -145,5 +145,5 @@ class TestDeltaColumnMappingRenameDrop:
         assert id_meta_new.get("delta.columnMapping.physicalName") == phys_before
         if id_before is not None:
             assert id_meta_new.get("delta.columnMapping.id") == id_before
-        user_comment = id_meta_new.get("user.comment") or id_meta_new.get("metadata.user.comment")
+        user_comment = id_meta_new.get("SPARK::metadata::json").get("user.comment")
         assert user_comment == "keep-me"
