@@ -18,8 +18,9 @@
 
 use std::str::Utf8Error;
 
+use arrow_schema::extension::ExtensionType;
+use parquet_variant_compute::VariantType;
 use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
-use sail_common::spec::{EXTENSION_TYPE_NAME_KEY, VARIANT_EXTENSION_NAME};
 
 use super::schema::{DataType, StructField};
 
@@ -135,10 +136,7 @@ pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructFi
 /// Checks if any field (including nested) in an Arrow schema contains a Variant extension field.
 pub(crate) fn contains_variant_arrow(schema: &datafusion::arrow::datatypes::Schema) -> bool {
     fn is_variant_field(field: &datafusion::arrow::datatypes::Field) -> bool {
-        field
-            .metadata()
-            .get(EXTENSION_TYPE_NAME_KEY)
-            .is_some_and(|name| name == VARIANT_EXTENSION_NAME)
+        field.extension_type_name() == Some(VariantType::NAME)
     }
 
     fn has_variant(field: &datafusion::arrow::datatypes::Field) -> bool {

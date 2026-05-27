@@ -9289,6 +9289,9 @@
                         "nonTerminal": "Keyword(Replace)"
                       },
                       {
+                        "nonTerminal": "Option(Keyword(External))"
+                      },
+                      {
                         "nonTerminal": "Keyword(Table)"
                       },
                       {

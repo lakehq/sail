@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
@@ -79,23 +78,22 @@ class TestListTables:
         assert metadata_marker.data_type == ""
 
     @pytest.mark.catalog_integration
-    @pytest.mark.skipif(is_jvm_spark(), reason="Sail defaults persistent tables to EXTERNAL")
-    def test_persistent_table_defaults_to_external(self, spark):
-        """Persistent tables default to EXTERNAL in Sail catalog surfaces."""
+    def test_persistent_table_defaults_to_managed(self, spark):
+        """Persistent tables without an explicit location are managed."""
         table_name = "test_external_default"
         try:
             spark.sql(f"CREATE TABLE {table_name} (id INT) USING PARQUET")
 
             table = spark.catalog.getTable(table_name)
-            assert table.tableType == "EXTERNAL"
+            assert table.tableType == "MANAGED"
 
             show_rows = spark.sql(f"SHOW TABLE EXTENDED LIKE '{table_name}'").collect()
             show_row = next(row for row in show_rows if row.tableName == table_name)
-            assert "Type: EXTERNAL" in show_row.information
+            assert "Type: MANAGED" in show_row.information
 
             describe_rows = spark.sql(f"DESCRIBE EXTENDED {table_name}").collect()
             type_row = next(row for row in describe_rows if row.col_name == "Type")
-            assert type_row.data_type == "EXTERNAL"
+            assert type_row.data_type == "MANAGED"
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
