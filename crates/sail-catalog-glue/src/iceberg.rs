@@ -130,6 +130,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         replace,
         properties,
         defer_materialize: _,
+        is_external: _,
     } = options;
 
     if replace {

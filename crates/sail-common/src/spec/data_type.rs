@@ -12,12 +12,30 @@ pub const ARROW_DECIMAL128_MAX_SCALE: i8 = arrow_schema::DECIMAL128_MAX_SCALE;
 pub const ARROW_DECIMAL256_MAX_PRECISION: u8 = arrow_schema::DECIMAL256_MAX_PRECISION;
 pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
 
-/// Arrow extension type metadata key (`ARROW:extension:metadata`).
-pub use arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY;
-/// Arrow extension type name key (`ARROW:extension:name`).
-pub use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
-/// Arrow extension type name for Variant.
+/// Spark column metadata key for Arrow field metadata.
+///
+/// Spark stores the entire column metadata dictionary as a JSON-encoded object
+/// under this single key to avoid collisions with other Arrow field metadata
+/// (e.g. extension type keys).
+pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
+
+pub use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
+
+/// Sail metadata key for Spark UDT information stored in Arrow field metadata.
+///
+/// This is internal to Sail and should not be exposed as Spark column metadata.
+pub const SAIL_SPARK_UDT_METADATA_KEY: &str = "SAIL::spark::udt";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkUdtMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jvm_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serialized_python_class: Option<String>,
+}
 
 /// Field name for list type.
 pub const SAIL_LIST_FIELD_NAME: &str = "item";

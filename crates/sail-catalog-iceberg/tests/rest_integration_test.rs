@@ -596,6 +596,7 @@ async fn test_create_table() {
                 replace: false,
                 properties: vec![],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await
@@ -738,6 +739,7 @@ async fn test_create_table() {
                 replace: false,
                 properties: vec![],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await;
@@ -760,6 +762,7 @@ async fn test_create_table() {
                 replace: false,
                 properties: vec![],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await;
@@ -801,6 +804,7 @@ async fn test_create_table() {
                     ("team".to_string(), "data-eng".to_string()),
                 ],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await
@@ -994,6 +998,7 @@ async fn test_get_table() {
                     ("team".to_string(), "data-eng".to_string()),
                 ],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await
@@ -1192,6 +1197,7 @@ async fn test_list_tables() {
                 replace: false,
                 properties: vec![],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await
@@ -1214,6 +1220,7 @@ async fn test_list_tables() {
                 replace: false,
                 properties: vec![],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await
@@ -1280,6 +1287,7 @@ async fn test_drop_table() {
                 replace: false,
                 properties: vec![],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await
@@ -1344,6 +1352,7 @@ async fn test_drop_table() {
                 replace: false,
                 properties: vec![],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await
@@ -1875,6 +1884,7 @@ async fn create_partitioned_table(
                 replace: false,
                 properties: vec![],
                 defer_materialize: false,
+                is_external: true,
             },
         )
         .await

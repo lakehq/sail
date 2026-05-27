@@ -229,7 +229,9 @@ pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
         }
         None
     };
-    find("path").or_else(|| find("location"))
+    find("path")
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| find("location").filter(|v| !v.trim().is_empty()))
 }
 
 /// The kind of row-level DML command being executed.
@@ -475,7 +477,20 @@ impl TableFormatRegistry {
         formats
             .get(&name.to_lowercase())
             .cloned()
-            .ok_or_else(|| plan_datafusion_err!("No table format found for: {name}"))
+            .ok_or_else(|| missing_table_format_error(name))
+    }
+}
+
+fn missing_table_format_error(name: &str) -> datafusion::common::DataFusionError {
+    if name.eq_ignore_ascii_case("jdbc") {
+        plan_datafusion_err!(
+            "No table format found for: {name}. \
+             The JDBC data source is provided by pysail and must be registered before use: \
+             `from pysail.spark.datasource.jdbc import JdbcDataSource`; \
+             `spark.dataSource.register(JdbcDataSource)`"
+        )
+    } else {
+        plan_datafusion_err!("No table format found for: {name}")
     }
 }
 
@@ -537,4 +552,39 @@ pub fn get_partition_columns_and_file_schema(
         .collect::<Vec<_>>();
     let file_schema = Schema::new(file_schema_fields);
     Ok((partition_columns, file_schema))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_jdbc_table_format_error_includes_registration_hint(
+    ) -> std::result::Result<(), String> {
+        let registry = TableFormatRegistry::new();
+        let error = match registry.get("jdbc") {
+            Ok(_) => return Err("expected missing jdbc table format error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("No table format found for: jdbc"));
+        assert!(error.contains("from pysail.spark.datasource.jdbc import JdbcDataSource"));
+        assert!(error.contains("spark.dataSource.register(JdbcDataSource)"));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_non_jdbc_table_format_error_stays_generic() -> std::result::Result<(), String> {
+        let registry = TableFormatRegistry::new();
+        let error = match registry.get("unknown") {
+            Ok(_) => return Err("expected missing unknown table format error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(
+            error,
+            "Error during planning: No table format found for: unknown"
+        );
+        Ok(())
+    }
 }

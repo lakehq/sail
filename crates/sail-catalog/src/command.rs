@@ -1330,6 +1330,7 @@ mod tests {
             replace: false,
             properties: vec![],
             defer_materialize: false,
+            is_external: true,
         }
     }
 

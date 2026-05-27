@@ -31,6 +31,7 @@ def pytest_configure(config):
         "(deselected by default; pass -m catalog_integration to run)",
     )
     # Load all pytest-bdd step modules.
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.coalesce")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")
@@ -124,6 +125,8 @@ def configure_spark_session(session):
     # in some local time zones. This would result in `pytz.exceptions.NonExistentTimeError`
     # when converting such timestamps from the local time zone to UTC.
     session.conf.set("spark.sql.session.timeZone", "UTC")
+    # Pin ANSI mode so plan snapshots are stable across PySpark 3.x and 4.x test environments.
+    session.conf.set("spark.sql.ansi.enabled", "true")
     # Enable Arrow to avoid data type errors when creating Spark DataFrame from Pandas.
     session.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
 
@@ -204,6 +207,23 @@ DOCTEST_MARKERS = [
     DoctestMarker(
         keywords=["test_arrow_udtf.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_pandas_grouped_map_iter_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="applyInPandas iterator requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_grouped_map_iter_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="applyInArrow iterator requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_ipython_key_completions.txt"],
+        markers=[
+            pytest.mark.skipif(
+                pyspark_version() < (4,),
+                reason="_ipython_key_completions_ is not defined on the PySpark 3.x Connect DataFrame",
+            )
+        ],
     ),
 ]
 

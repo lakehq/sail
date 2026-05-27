@@ -43,6 +43,7 @@ pub struct CreateTableOptions {
     /// so that data and metadata land together at version 0.
     #[serde(default)]
     pub defer_materialize: bool,
+    pub is_external: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]

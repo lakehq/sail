@@ -168,6 +168,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             replace,
             properties,
             defer_materialize: _,
+            is_external,
         } = options;
         if !format.eq_ignore_ascii_case("iceberg")
             && partition_by.iter().any(|f| f.transform.is_some())
@@ -236,7 +237,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                 sort_by,
                 bucket_by,
                 properties,
-                is_external: true,
+                is_external,
             },
         };
         db.tables.insert(table.to_string(), status.clone());

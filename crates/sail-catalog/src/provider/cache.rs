@@ -646,6 +646,7 @@ mod tests {
             replace: false,
             properties: vec![],
             defer_materialize: false,
+            is_external: false,
         };
         provider.create_table(&ns, "t2", options).await.unwrap();
 

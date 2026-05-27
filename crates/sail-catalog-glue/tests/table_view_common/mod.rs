@@ -49,6 +49,7 @@ pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTab
         replace: false,
         properties: vec![],
         defer_materialize: false,
+        is_external: true,
     }
 }
 
