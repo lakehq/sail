@@ -9,6 +9,9 @@ use crate::listing::source::{FormatFactory, ListingTableFormat, SchemaInfer};
 use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
 use crate::options::ResolveOptions;
 
+// Some of the code in the `read` and `write` modules is adapted from the DataFusion `CsvFormat` implementation.
+// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-csv/src/file_format.rs
+
 mod options;
 mod read;
 mod write;

@@ -1,3 +1,5 @@
+// The listing table planner is adapted from the DataFusion `ListingTable` implementation,
+// specifically the `TableProvider::scan_with_args` trait method.
 // [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/catalog-listing/src/table.rs
 
 use std::sync::Arc;

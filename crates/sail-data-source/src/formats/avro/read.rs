@@ -1,5 +1,3 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-avro/src/file_format.rs
-
 use std::sync::Arc;
 
 use datafusion::catalog::Session;

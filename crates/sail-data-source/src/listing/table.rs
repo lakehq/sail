@@ -1,3 +1,4 @@
+// The listing table source is adapted from the DataFusion `ListingTable` implementation.
 // [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/catalog-listing/src/table.rs
 
 use std::any::Any;

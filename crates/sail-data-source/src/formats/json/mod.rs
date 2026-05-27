@@ -6,6 +6,9 @@ use crate::listing::source::{FormatFactory, ListingTableFormat};
 use crate::options::gen::{JsonReadOptions, JsonWriteOptions};
 use crate::options::ResolveOptions;
 
+// Some of the code in the `read` and `write` modules is adapted from the DataFusion `JsonFormat` implementation.
+// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-json/src/file_format.rs
+
 mod options;
 mod read;
 mod write;
