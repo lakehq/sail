@@ -107,7 +107,9 @@ impl Accumulator for CountMinSketchAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let states = as_binary_array(&states[0], "count_min_sketch state")?;
+        let Some(states) = as_binary_array(&states[0], "count_min_sketch state")? else {
+            return Ok(());
+        };
         for row in 0..states.len() {
             if !states.is_null(row) {
                 let other = SparkCountMinSketch::deserialize(states.value(row))?;
@@ -439,10 +441,10 @@ fn resolve_float64_literal(args: &AccumulatorArgs, index: usize, name: &str) -> 
     match value {
         ScalarValue::Float32(Some(value)) => Ok(value as f64),
         ScalarValue::Float64(Some(value)) => Ok(value),
-        value => exec_err!(
+        value => Err(DataFusionError::Plan(format!(
             "count_min_sketch requires {name} to be a non-null floating point literal, got {}",
             value.data_type()
-        ),
+        ))),
     }
 }
 
@@ -456,10 +458,10 @@ fn resolve_seed_literal(args: &AccumulatorArgs, index: usize) -> Result<i32> {
     match value {
         ScalarValue::Int32(Some(value)) => Ok(value),
         ScalarValue::Int64(Some(value)) => Ok(value as i32),
-        value => exec_err!(
+        value => Err(DataFusionError::Plan(format!(
             "count_min_sketch requires seed to be a non-null integer literal, got {}",
             value.data_type()
-        ),
+        ))),
     }
 }
 
@@ -488,11 +490,18 @@ fn read_array<const N: usize>(
     Ok(out)
 }
 
-fn as_binary_array<'a>(array: &'a ArrayRef, context: &str) -> Result<&'a BinaryArray> {
-    array.as_any().downcast_ref::<BinaryArray>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "{context} expected BinaryArray, got {}",
-            array.data_type()
-        ))
-    })
+fn as_binary_array<'a>(array: &'a ArrayRef, context: &str) -> Result<Option<&'a BinaryArray>> {
+    if matches!(array.data_type(), DataType::Null) {
+        return Ok(None);
+    }
+    array
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .map(Some)
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "{context} expected BinaryArray, got {}",
+                array.data_type()
+            ))
+        })
 }

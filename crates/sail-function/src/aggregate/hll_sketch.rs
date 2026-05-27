@@ -12,7 +12,7 @@ use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 
 use super::utils::get_scalar_value;
 use crate::hll_sketch::{
-    empty_hll_sketch_bytes, new_hll_sketch, normalize_hll_sketch_bytes, union_hll_sketches,
+    empty_hll_union_bytes, new_hll_sketch, normalize_hll_sketch_bytes, union_hll_sketches,
     update_hll_sketch_from_array, validate_lg_config_k, DEFAULT_LG_CONFIG_K,
 };
 
@@ -193,7 +193,9 @@ impl Accumulator for HllSketchAggAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let states = as_binary_array(&states[0], "hll_sketch_agg state")?;
+        let Some(states) = as_binary_array(&states[0], "hll_sketch_agg state")? else {
+            return Ok(());
+        };
         for row in 0..states.len() {
             if !states.is_null(row) {
                 self.merge_one(states.value(row))?;
@@ -231,13 +233,15 @@ impl HllUnionAggAccumulator {
     }
 
     fn evaluate_bytes(&self) -> Vec<u8> {
-        self.sketch.clone().unwrap_or_else(empty_hll_sketch_bytes)
+        self.sketch.clone().unwrap_or_else(empty_hll_union_bytes)
     }
 }
 
 impl Accumulator for HllUnionAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = as_binary_array(&values[0], "hll_union_agg")?;
+        let Some(values) = as_binary_array(&values[0], "hll_union_agg")? else {
+            return Ok(());
+        };
         for row in 0..values.len() {
             if !values.is_null(row) {
                 self.merge_one(values.value(row))?;
@@ -264,7 +268,9 @@ impl Accumulator for HllUnionAggAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let states = as_binary_array(&states[0], "hll_union_agg state")?;
+        let Some(states) = as_binary_array(&states[0], "hll_union_agg state")? else {
+            return Ok(());
+        };
         for row in 0..states.len() {
             if !states.is_null(row) {
                 self.merge_one(states.value(row))?;
@@ -372,11 +378,18 @@ fn validate_hll_binary_agg_types(function_name: &str, arg_types: &[DataType]) ->
     Ok(())
 }
 
-fn as_binary_array<'a>(array: &'a ArrayRef, context: &str) -> Result<&'a BinaryArray> {
-    array.as_any().downcast_ref::<BinaryArray>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "{context} expected BinaryArray, got {}",
-            array.data_type()
-        ))
-    })
+fn as_binary_array<'a>(array: &'a ArrayRef, context: &str) -> Result<Option<&'a BinaryArray>> {
+    if matches!(array.data_type(), DataType::Null) {
+        return Ok(None);
+    }
+    array
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .map(Some)
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "{context} expected BinaryArray, got {}",
+                array.data_type()
+            ))
+        })
 }

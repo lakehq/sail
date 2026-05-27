@@ -195,7 +195,7 @@ impl ThetaSketchAggAccumulator {
     }
 
     fn evaluate_bytes(&self) -> Result<Vec<u8>> {
-        let update_bytes = compact_update_sketch_bytes(&self.sketch, self.lg_nom_entries);
+        let update_bytes = compact_update_sketch_bytes(&self.sketch, self.lg_nom_entries)?;
         if let Some(merged) = &self.merged {
             union_sketches(
                 [merged.as_slice(), update_bytes.as_slice()],
@@ -244,7 +244,9 @@ impl Accumulator for ThetaSketchAggAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let states = as_binary_array(&states[0], "theta_sketch_agg state")?;
+        let Some(states) = as_binary_array(&states[0], "theta_sketch_agg state")? else {
+            return Ok(());
+        };
         for row in 0..states.len() {
             if !states.is_null(row) {
                 self.merge_one(states.value(row))?;
@@ -281,16 +283,19 @@ impl ThetaUnionAggAccumulator {
         Ok(())
     }
 
-    fn evaluate_bytes(&self) -> Vec<u8> {
-        self.sketch
-            .clone()
-            .unwrap_or_else(empty_compact_sketch_bytes)
+    fn evaluate_bytes(&self) -> Result<Vec<u8>> {
+        match &self.sketch {
+            Some(sketch) => Ok(sketch.clone()),
+            None => empty_compact_sketch_bytes(),
+        }
     }
 }
 
 impl Accumulator for ThetaUnionAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = as_binary_array(&values[0], "theta_union_agg")?;
+        let Some(values) = as_binary_array(&values[0], "theta_union_agg")? else {
+            return Ok(());
+        };
         for row in 0..values.len() {
             if !values.is_null(row) {
                 self.merge_one(values.value(row))?;
@@ -300,7 +305,7 @@ impl Accumulator for ThetaUnionAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Binary(Some(self.evaluate_bytes())))
+        Ok(ScalarValue::Binary(Some(self.evaluate_bytes()?)))
     }
 
     fn size(&self) -> usize {
@@ -313,11 +318,13 @@ impl Accumulator for ThetaUnionAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::Binary(Some(self.evaluate_bytes()))])
+        Ok(vec![ScalarValue::Binary(Some(self.evaluate_bytes()?))])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let states = as_binary_array(&states[0], "theta_union_agg state")?;
+        let Some(states) = as_binary_array(&states[0], "theta_union_agg state")? else {
+            return Ok(());
+        };
         for row in 0..states.len() {
             if !states.is_null(row) {
                 self.merge_one(states.value(row))?;
@@ -347,16 +354,19 @@ impl ThetaIntersectionAggAccumulator {
         Ok(())
     }
 
-    fn evaluate_bytes(&self) -> Vec<u8> {
-        self.sketch
-            .clone()
-            .unwrap_or_else(empty_compact_sketch_bytes)
+    fn evaluate_bytes(&self) -> Result<Vec<u8>> {
+        match &self.sketch {
+            Some(sketch) => Ok(sketch.clone()),
+            None => empty_compact_sketch_bytes(),
+        }
     }
 }
 
 impl Accumulator for ThetaIntersectionAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = as_binary_array(&values[0], "theta_intersection_agg")?;
+        let Some(values) = as_binary_array(&values[0], "theta_intersection_agg")? else {
+            return Ok(());
+        };
         for row in 0..values.len() {
             if !values.is_null(row) {
                 self.merge_one(values.value(row))?;
@@ -366,7 +376,7 @@ impl Accumulator for ThetaIntersectionAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Binary(Some(self.evaluate_bytes())))
+        Ok(ScalarValue::Binary(Some(self.evaluate_bytes()?)))
     }
 
     fn size(&self) -> usize {
@@ -379,11 +389,13 @@ impl Accumulator for ThetaIntersectionAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::Binary(Some(self.evaluate_bytes()))])
+        Ok(vec![ScalarValue::Binary(Some(self.evaluate_bytes()?))])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let states = as_binary_array(&states[0], "theta_intersection_agg state")?;
+        let Some(states) = as_binary_array(&states[0], "theta_intersection_agg state")? else {
+            return Ok(());
+        };
         for row in 0..states.len() {
             if !states.is_null(row) {
                 self.merge_one(states.value(row))?;
@@ -480,11 +492,18 @@ fn validate_binary_agg_types(
     Ok(())
 }
 
-fn as_binary_array<'a>(array: &'a ArrayRef, context: &str) -> Result<&'a BinaryArray> {
-    array.as_any().downcast_ref::<BinaryArray>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "{context} expected BinaryArray, got {}",
-            array.data_type()
-        ))
-    })
+fn as_binary_array<'a>(array: &'a ArrayRef, context: &str) -> Result<Option<&'a BinaryArray>> {
+    if matches!(array.data_type(), DataType::Null) {
+        return Ok(None);
+    }
+    array
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .map(Some)
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "{context} expected BinaryArray, got {}",
+                array.data_type()
+            ))
+        })
 }

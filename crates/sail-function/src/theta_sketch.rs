@@ -39,7 +39,7 @@ pub(crate) fn default_seed_hash() -> u16 {
     ThetaSketch::builder().build().seed_hash()
 }
 
-pub(crate) fn empty_compact_sketch_bytes() -> Vec<u8> {
+pub(crate) fn empty_compact_sketch_bytes() -> Result<Vec<u8>> {
     serialize_compact_sketch(vec![], MAX_THETA, default_seed_hash(), true)
 }
 
@@ -50,12 +50,12 @@ pub(crate) fn estimate_sketch(bytes: &[u8], function_name: &str) -> Result<i64> 
 
 pub(crate) fn normalize_sketch_bytes(bytes: &[u8], function_name: &str) -> Result<Vec<u8>> {
     let sketch = deserialize_sketch(bytes, function_name)?;
-    Ok(serialize_compact_sketch(
+    serialize_compact_sketch(
         sketch.iter().collect(),
         sketch.theta64(),
         sketch.seed_hash(),
         sketch.is_empty(),
-    ))
+    )
 }
 
 pub(crate) fn update_sketch_from_array(sketch: &mut ThetaSketch, values: &ArrayRef) -> Result<()> {
@@ -65,7 +65,10 @@ pub(crate) fn update_sketch_from_array(sketch: &mut ThetaSketch, values: &ArrayR
     Ok(())
 }
 
-pub(crate) fn compact_update_sketch_bytes(sketch: &ThetaSketch, lg_nom_entries: u8) -> Vec<u8> {
+pub(crate) fn compact_update_sketch_bytes(
+    sketch: &ThetaSketch,
+    lg_nom_entries: u8,
+) -> Result<Vec<u8>> {
     let compact = sketch.compact(true);
     let mut entries: Vec<u64> = compact.iter().collect();
     let mut theta = compact.theta64();
@@ -129,12 +132,12 @@ where
     }
     let entries: Vec<u64> = entries.into_iter().collect();
     let empty = !saw_non_empty && entries.is_empty() && theta == MAX_THETA;
-    Ok(serialize_compact_sketch(
+    serialize_compact_sketch(
         entries,
         theta,
         seed_hash.unwrap_or_else(default_seed_hash),
         empty,
-    ))
+    )
 }
 
 pub(crate) fn intersect_sketch_bytes(
@@ -154,12 +157,7 @@ pub(crate) fn intersect_sketch_bytes(
         .collect();
     let empty = left.is_empty() || right.is_empty() || (theta == MAX_THETA && entries.is_empty());
 
-    Ok(serialize_compact_sketch(
-        entries,
-        theta,
-        output_seed_hash(&left, &right),
-        empty,
-    ))
+    serialize_compact_sketch(entries, theta, output_seed_hash(&left, &right), empty)
 }
 
 pub(crate) fn difference_sketch_bytes(
@@ -179,12 +177,7 @@ pub(crate) fn difference_sketch_bytes(
         .collect();
     let empty = left.is_empty() || (theta == MAX_THETA && entries.is_empty());
 
-    Ok(serialize_compact_sketch(
-        entries,
-        theta,
-        output_seed_hash(&left, &right),
-        empty,
-    ))
+    serialize_compact_sketch(entries, theta, output_seed_hash(&left, &right), empty)
 }
 
 fn update_sketch_from_array_value(
@@ -448,7 +441,7 @@ fn serialize_compact_sketch(
     theta: u64,
     seed_hash: u16,
     empty: bool,
-) -> Vec<u8> {
+) -> Result<Vec<u8>> {
     entries.retain(|hash| *hash != 0 && *hash < theta);
     entries.sort_unstable();
     entries.dedup();
@@ -485,5 +478,11 @@ fn serialize_compact_sketch(
     for hash in entries {
         bytes.extend_from_slice(&hash.to_le_bytes());
     }
-    bytes
+    // The crate exposes Spark-compatible compressed serialization only on
+    // CompactThetaSketch, but does not expose a public constructor from raw
+    // retained hashes.
+    let sketch = CompactThetaSketch::deserialize(&bytes).map_err(|error| {
+        DataFusionError::Internal(format!("generated invalid theta sketch: {error}"))
+    })?;
+    Ok(sketch.serialize_compressed())
 }

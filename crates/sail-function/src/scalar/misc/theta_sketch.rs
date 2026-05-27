@@ -1,7 +1,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder, Int32Array, Int64Builder};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, BinaryArray, BinaryBuilder, Int32Array, Int64Builder,
+};
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
@@ -245,6 +247,9 @@ impl ScalarUDFImpl for ThetaDifferenceFunction {
 }
 
 fn theta_sketch_estimate_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if matches!(args[0].data_type(), DataType::Null) {
+        return Ok(new_null_array(&DataType::Int64, args[0].len()));
+    }
     let sketches = as_binary_array(&args[0], "theta_sketch_estimate")?;
     let mut builder = Int64Builder::with_capacity(sketches.len());
     for row in 0..sketches.len() {
@@ -261,6 +266,12 @@ fn theta_sketch_estimate_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn theta_union_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.data_type(), DataType::Null))
+    {
+        return Ok(new_null_array(&DataType::Binary, args[0].len()));
+    }
     let left = as_binary_array(&args[0], "theta_union")?;
     let right = as_binary_array(&args[1], "theta_union")?;
     let lg_nom_entries = as_int32_array(&args[2], "theta_union")?;
@@ -283,6 +294,12 @@ fn theta_union_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn theta_intersection_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.data_type(), DataType::Null))
+    {
+        return Ok(new_null_array(&DataType::Binary, args[0].len()));
+    }
     let left = as_binary_array(&args[0], "theta_intersection")?;
     let right = as_binary_array(&args[1], "theta_intersection")?;
     let mut builder = BinaryBuilder::new();
@@ -299,6 +316,12 @@ fn theta_intersection_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn theta_difference_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.data_type(), DataType::Null))
+    {
+        return Ok(new_null_array(&DataType::Binary, args[0].len()));
+    }
     let left = as_binary_array(&args[0], "theta_difference")?;
     let right = as_binary_array(&args[1], "theta_difference")?;
     let mut builder = BinaryBuilder::new();

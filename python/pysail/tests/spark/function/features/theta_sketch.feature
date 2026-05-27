@@ -58,16 +58,19 @@ Feature: Theta sketch functions
       When query
         """
         SELECT
-          theta_union(CAST(NULL AS BINARY), sketch, 12) IS NULL AS left_null,
-          theta_union(sketch, CAST(NULL AS BINARY), 12) IS NULL AS right_null,
-          theta_union(sketch, sketch, CAST(NULL AS INT)) IS NULL AS config_null
+          theta_sketch_estimate(NULL) AS estimate,
+          theta_union(NULL, sketch, 12) IS NULL AS left_null,
+          theta_union(sketch, NULL, 12) IS NULL AS right_null,
+          theta_union(sketch, sketch, NULL) IS NULL AS config_null,
+          theta_intersection(NULL, sketch) IS NULL AS intersection_null,
+          theta_difference(sketch, NULL) IS NULL AS difference_null
         FROM (
           SELECT theta_sketch_agg(col) AS sketch FROM VALUES (1) AS tab(col)
         ) AS sketches
         """
       Then query result
-        | left_null | right_null | config_null |
-        | true      | true       | true        |
+        | estimate | left_null | right_null | config_null | intersection_null | difference_null |
+        | NULL     | true      | true       | true        | true              | true            |
 
     Scenario: theta_intersection intersects two sketches
       When query
@@ -88,6 +91,26 @@ Feature: Theta sketch functions
       Then query result
         | result |
         | 2      |
+
+    Scenario: theta sketch outputs use Spark compressed serialization when applicable
+      When query
+        """
+        WITH sketches AS (
+          SELECT
+            theta_sketch_agg(col1) AS left_sketch,
+            theta_sketch_agg(col2) AS right_sketch
+          FROM VALUES (1, 1), (2, 2), (3, 4), (5, 4) AS tab(col1, col2)
+        )
+        SELECT
+          substr(hex(left_sketch), 3, 2) AS agg_version,
+          substr(hex(theta_union(left_sketch, right_sketch)), 3, 2) AS union_version,
+          substr(hex(theta_intersection(left_sketch, right_sketch)), 3, 2) AS intersection_version,
+          substr(hex(theta_difference(left_sketch, right_sketch)), 3, 2) AS difference_version
+        FROM sketches
+        """
+      Then query result
+        | agg_version | union_version | intersection_version | difference_version |
+        | 04          | 04            | 04                   | 04                 |
 
   Rule: theta sketch aggregate set operations combine sketch rows
 
@@ -118,6 +141,49 @@ Feature: Theta sketch functions
       Then query result
         | result |
         | 2      |
+
+    Scenario: theta sketch aggregate set operations accept untyped null sketch inputs
+      When query
+        """
+        SELECT
+          theta_sketch_estimate(theta_union_agg(NULL)) AS union_result,
+          theta_sketch_estimate(theta_intersection_agg(NULL)) AS intersection_result
+        """
+      Then query result
+        | union_result | intersection_result |
+        | 0            | 0                   |
+
+    Scenario: theta sketch aggregates work as window functions with default arguments
+      When query
+        """
+        WITH input AS (
+          SELECT * FROM VALUES (1, 1), (2, 1), (3, 2) AS tab(id, col)
+        ),
+        sketches AS (
+          SELECT 1 AS id, theta_sketch_agg(col) AS sketch FROM VALUES (1), (2) AS tab(col)
+          UNION ALL
+          SELECT 2 AS id, theta_sketch_agg(col) AS sketch FROM VALUES (2), (3) AS tab(col)
+        )
+        SELECT 'sketch' AS fn, id,
+          theta_sketch_estimate(theta_sketch_agg(col) OVER (
+            ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          )) AS result
+        FROM input
+        UNION ALL
+        SELECT 'union' AS fn, id,
+          theta_sketch_estimate(theta_union_agg(sketch) OVER (
+            ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          )) AS result
+        FROM sketches
+        ORDER BY fn, id
+        """
+      Then query result ordered
+        | fn     | id | result |
+        | sketch | 1  | 1      |
+        | sketch | 2  | 1      |
+        | sketch | 3  | 2      |
+        | union  | 1  | 2      |
+        | union  | 2  | 3      |
 
   Rule: theta sketch functions return Spark-compatible types
 

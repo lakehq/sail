@@ -34,11 +34,12 @@ use sail_function::aggregate::theta_sketch::{
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::struct_function::StructFunction;
-use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
+    count_min_sketch_args, get_arguments_and_null_treatment, get_null_treatment,
+    hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
+    theta_args_with_default_lg, AggFunction, AggFunctionInput,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -545,44 +546,6 @@ fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
-fn theta_args_with_default_lg(
-    arguments: Vec<expr::Expr>,
-    function_name: &str,
-) -> PlanResult<Vec<expr::Expr>> {
-    match arguments.len() {
-        1 => {
-            let value = arguments.one()?;
-            Ok(vec![value, lit(DEFAULT_THETA_LG_NOM_ENTRIES)])
-        }
-        2 => {
-            let (value, lg_nom_entries) = arguments.two()?;
-            Ok(vec![value, cast(lg_nom_entries, DataType::Int32)])
-        }
-        count => Err(PlanError::invalid(format!(
-            "{function_name} requires 1 or 2 arguments, got {count}"
-        ))),
-    }
-}
-
-fn hll_args_with_default_lg(
-    arguments: Vec<expr::Expr>,
-    function_name: &str,
-) -> PlanResult<Vec<expr::Expr>> {
-    match arguments.len() {
-        1 => {
-            let value = arguments.one()?;
-            Ok(vec![value, lit(DEFAULT_HLL_LG_CONFIG_K)])
-        }
-        2 => {
-            let (value, lg_config_k) = arguments.two()?;
-            Ok(vec![value, cast(lg_config_k, DataType::Int32)])
-        }
-        count => Err(PlanError::invalid(format!(
-            "{function_name} requires 1 or 2 arguments, got {count}"
-        ))),
-    }
-}
-
 fn hll_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = hll_args_with_default_lg(input.arguments, "hll_sketch_agg")?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -598,21 +561,7 @@ fn hll_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn hll_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    let args = match input.arguments.len() {
-        1 => {
-            let value = input.arguments.one()?;
-            vec![value, lit(false)]
-        }
-        2 => {
-            let (value, allow_different_lg_config_k) = input.arguments.two()?;
-            vec![value, cast(allow_different_lg_config_k, DataType::Boolean)]
-        }
-        count => {
-            return Err(PlanError::invalid(format!(
-                "hll_union_agg requires 1 or 2 arguments, got {count}"
-            )))
-        }
-    };
+    let args = hll_union_args_with_default_allow_different_lg(input.arguments)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(HllUnionAggFunction::new())),
         params: AggregateFunctionParams {
@@ -626,22 +575,7 @@ fn hll_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn count_min_sketch(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    let args = match input.arguments.len() {
-        4 => {
-            let (value, eps, confidence, seed) = input.arguments.four()?;
-            vec![
-                value,
-                cast(eps, DataType::Float64),
-                cast(confidence, DataType::Float64),
-                seed,
-            ]
-        }
-        count => {
-            return Err(PlanError::invalid(format!(
-                "count_min_sketch requires 4 arguments, got {count}"
-            )))
-        }
-    };
+    let args = count_min_sketch_args(input.arguments)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(CountMinSketchFunction::new())),
         params: AggregateFunctionParams {
