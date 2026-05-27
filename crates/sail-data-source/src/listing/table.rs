@@ -5,7 +5,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion::execution::cache::cache_manager::FileStatisticsCache;
 use datafusion::execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion::logical_expr::expr::Sort;
@@ -14,6 +13,7 @@ use datafusion_common::{Constraints, Result};
 use datafusion_datasource::TableSchema;
 
 use crate::listing::source::ReadFormat;
+use crate::listing::utils::can_be_evaluated_for_partition_pruning;
 
 #[derive(Clone, Debug)]
 pub struct ListingTableSourceConfig {
@@ -89,9 +89,7 @@ impl TableSource for ListingTableSource {
         filters
             .iter()
             .map(|filter| {
-                if !partition_column_names.is_empty()
-                    && expr_applicable_for_cols(&partition_column_names, filter)
-                {
+                if can_be_evaluated_for_partition_pruning(&partition_column_names, filter) {
                     return Ok(TableProviderFilterPushDown::Exact);
                 }
                 Ok(TableProviderFilterPushDown::Inexact)

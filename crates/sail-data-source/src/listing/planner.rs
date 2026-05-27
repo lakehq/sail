@@ -7,7 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
-use datafusion::datasource::listing::helpers::{expr_applicable_for_cols, pruned_partition_list};
+use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
@@ -26,6 +26,7 @@ use object_store::ObjectStore;
 
 use crate::listing::source::ListingScanInput;
 use crate::listing::table::ListingTableSource;
+use crate::listing::utils::can_be_evaluated_for_partition_pruning;
 
 /// Result of a file listing operation for listing table scans.
 #[derive(Debug)]
@@ -169,10 +170,6 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
 
         Ok(Some(DataSourceExec::from_data_source(config)))
     }
-}
-
-fn can_be_evaluated_for_partition_pruning(partition_column_names: &[&str], expr: &Expr) -> bool {
-    !partition_column_names.is_empty() && expr_applicable_for_cols(partition_column_names, expr)
 }
 
 fn try_create_output_ordering(
