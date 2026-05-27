@@ -55,6 +55,9 @@ Feature: Iceberg read path (driver vs metadata-as-data)
 
     @sail-only
     Scenario: EXPLAIN SELECT with metadataAsDataRead true uses manifest scan
+      Then iceberg metadata contains
+        | path       | value |
+        | properties | {}    |
       When query
         """
         EXPLAIN SELECT * FROM iceberg_read_metadata_path

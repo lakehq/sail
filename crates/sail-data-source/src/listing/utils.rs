@@ -3,28 +3,29 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::catalog::Session;
-use datafusion::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
+use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
+use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::execution::cache::TableScopedPath;
+use datafusion::logical_expr::Expr;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, plan_err, DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::ListingTableUrl;
+use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::listing::{ListingFormat, ListingTableFormat};
+use crate::listing::source::ReadFormat;
 
-pub async fn resolve_listing_schema<T: ListingFormat>(
+pub async fn resolve_listing_schema<R: ReadFormat>(
     ctx: &dyn Session,
     urls: &[ListingTableUrl],
     options: &mut ListingOptions,
     extension_with_compression: &Option<String>,
-    options_vec: Vec<OptionLayer>,
-    listing_format: &ListingTableFormat<T>,
+    read_format: &R,
 ) -> Result<Arc<Schema>> {
     let file_groups = list_sample_files(ctx, urls, extension_with_compression.as_deref()).await?;
     let empty = file_groups.iter().all(|(_, files)| files.is_empty());
@@ -38,19 +39,17 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     }
 
     apply_inferred_compression(
-        ctx,
         options,
         &file_groups,
         extension_with_compression,
-        &options_vec,
-        listing_format,
+        read_format,
     )?;
 
     let mut schemas = vec![];
     for (store, files) in file_groups.iter() {
-        let schema_inferrer = listing_format.inner().schema_inferrer();
+        let schema_inferrer = read_format.schema_inferrer();
         let schema = schema_inferrer
-            .get_schema(ctx, store, files, options, &options_vec)
+            .get_schema(ctx, store, files, options)
             .await?;
         schemas.push(schema);
     }
@@ -125,13 +124,11 @@ async fn list_sample_files(
 /// update `options.file_extension`. Compression is carried by the
 /// `FileFormat` itself (DataFusion consults `format.compression_type()`
 /// when reading bytes), which is why we re-create the format here.
-fn apply_inferred_compression<T: ListingFormat>(
-    ctx: &dyn Session,
+fn apply_inferred_compression<R: ReadFormat>(
     options: &mut ListingOptions,
     file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
     extension_with_compression: &Option<String>,
-    options_vec: &[OptionLayer],
-    listing_format: &ListingTableFormat<T>,
+    read_format: &R,
 ) -> Result<()> {
     let file_extension = if let Some(extension_with_compression) = extension_with_compression {
         resolve_listing_file_extension(
@@ -148,11 +145,7 @@ fn apply_inferred_compression<T: ListingFormat>(
                     .strip_prefix(".")
                     .unwrap_or(compression_type.as_str()),
             )?;
-            options.format = listing_format.inner().create_read_format(
-                ctx,
-                options_vec.to_vec(),
-                Some(file_compression_type),
-            )?;
+            options.format = read_format.create_read_format(Some(file_compression_type))?;
             Some(file_extension)
         } else {
             None
@@ -169,25 +162,22 @@ fn apply_inferred_compression<T: ListingFormat>(
 /// Lists a sample of files and applies any detected compression to
 /// `options`. Silently no-ops when the listing is empty so the
 /// downstream scan can surface "no files found" with full context.
-pub async fn detect_listing_compression<T: ListingFormat>(
+pub async fn detect_listing_compression<R: ReadFormat>(
     ctx: &dyn Session,
     urls: &[ListingTableUrl],
     options: &mut ListingOptions,
     extension_with_compression: &Option<String>,
-    options_vec: &[OptionLayer],
-    listing_format: &ListingTableFormat<T>,
+    read_format: &R,
 ) -> Result<()> {
     let file_groups = list_sample_files(ctx, urls, extension_with_compression.as_deref()).await?;
     if file_groups.iter().all(|(_, files)| files.is_empty()) {
         return Ok(());
     }
     apply_inferred_compression(
-        ctx,
         options,
         &file_groups,
         extension_with_compression,
-        options_vec,
-        listing_format,
+        read_format,
     )
 }
 
@@ -340,4 +330,11 @@ pub fn rewrite_listing_partitions(mut config: ListingTableConfig) -> Result<List
             }
         });
     Ok(config)
+}
+
+pub fn can_be_evaluated_for_partition_pruning(
+    partition_column_names: &[&str],
+    expr: &Expr,
+) -> bool {
+    !partition_column_names.is_empty() && expr_applicable_for_cols(partition_column_names, expr)
 }

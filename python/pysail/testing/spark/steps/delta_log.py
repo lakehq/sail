@@ -229,7 +229,7 @@ def _parse_expected_value(raw: str) -> object:
     try:
         return json.loads(s)
     except json.JSONDecodeError:
-        return raw
+        return s
 
 
 def _normalize_column_mapping_schema(schema: object, field_path: str = "") -> object:

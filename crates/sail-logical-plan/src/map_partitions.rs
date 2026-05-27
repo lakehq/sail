@@ -1,5 +1,5 @@
 use std::fmt::Formatter;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
@@ -43,8 +43,8 @@ impl MapPartitionsNode {
 
 impl PartialEq for MapPartitionsNode {
     fn eq(&self, other: &Self) -> bool {
-        // We have to manually implement `PartialEq` instead of deriving it
-        // due to `Arc<dyn ...>`.
+        // `Arc<dyn StreamUDF>` cannot derive `PartialEq`, but the trait object
+        // supports object-safe equality through `DynObject`.
         self.input == other.input
             && self.udf.as_ref() == other.udf.as_ref()
             && self.schema == other.schema
@@ -52,7 +52,7 @@ impl PartialEq for MapPartitionsNode {
 }
 
 impl Hash for MapPartitionsNode {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.input.hash(state);
         self.udf.hash(state);
         self.schema.hash(state);

@@ -39,7 +39,10 @@ use crate::kernel::checkpoints::{
 use crate::kernel::log_segment::ReplayedTableHeader;
 pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
 use crate::kernel::{DeltaSnapshotConfig, SchemaRef};
-use crate::schema::{arrow_field_physical_name, arrow_schema_reorder_partitions};
+use crate::schema::{
+    arrow_field_physical_name, arrow_schema_reorder_partitions, protocol_supports_type_widening,
+    schema_contains_type_widening_metadata, validate_type_widening_metadata,
+};
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_PATH,
     FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
@@ -47,8 +50,8 @@ use crate::spec::fields::{
 };
 use crate::spec::{
     Add, ColumnMappingMode, ColumnMetadataKey, CommitConflictError, DeltaError as DeltaTableError,
-    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, TableFeature, TableProperties,
-    Transaction, TransactionError, VersionChecksum,
+    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, StructType, TableFeature,
+    TableProperties, Transaction, TransactionError, VersionChecksum,
 };
 use crate::storage::LogStore;
 use crate::table::{
@@ -112,6 +115,36 @@ impl Clone for DeltaSnapshot {
 }
 
 impl DeltaSnapshot {
+    pub(crate) fn from_metadata_only_parts(
+        log_store: &dyn LogStore,
+        config: DeltaSnapshotConfig,
+        version: i64,
+        protocol: Protocol,
+        metadata: Metadata,
+        txns: HashMap<String, Transaction>,
+        domain_metadata: HashMap<String, DomainMetadata>,
+        commit_timestamps: BTreeMap<i64, i64>,
+    ) -> DeltaResult<Self> {
+        let arrow_schema = Arc::new(metadata.parse_schema_arrow()?);
+        let table_properties = TableProperties::from(metadata.configuration().iter());
+
+        Ok(Self {
+            version,
+            table_url: log_store.config().location.clone(),
+            config,
+            protocol,
+            metadata,
+            table_properties,
+            arrow_schema,
+            adds: Arc::new(Vec::new()),
+            removes: Arc::new(Vec::new()),
+            app_txns: Arc::new(txns),
+            domain_metadata: Arc::new(domain_metadata),
+            commit_timestamps: Arc::new(commit_timestamps),
+            files_batch: OnceCell::new(),
+        })
+    }
+
     pub(crate) async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaSnapshotConfig,
@@ -311,6 +344,14 @@ impl DeltaSnapshot {
         self.domain_metadata.as_ref()
     }
 
+    pub(crate) fn app_txns(&self) -> &HashMap<String, Transaction> {
+        self.app_txns.as_ref()
+    }
+
+    pub(crate) fn commit_timestamps(&self) -> &BTreeMap<i64, i64> {
+        self.commit_timestamps.as_ref()
+    }
+
     pub fn load_config(&self) -> &DeltaSnapshotConfig {
         &self.config
     }
@@ -370,7 +411,19 @@ impl DeltaSnapshot {
     pub fn ensure_data_read_supported(&self) -> DeltaResult<()> {
         crate::kernel::transaction::PROTOCOL
             .can_read_from_protocol(self.protocol())
-            .map_err(map_read_protocol_error)
+            .map_err(map_read_protocol_error)?;
+
+        let schema = StructType::try_from(self.schema())?;
+        let has_type_changes = schema_contains_type_widening_metadata(&schema);
+        if has_type_changes && !protocol_supports_type_widening(self.protocol()) {
+            return Err(DeltaTableError::Unsupported(
+                "Reading this Delta table requires the typeWidening reader feature".to_string(),
+            ));
+        }
+        if has_type_changes {
+            validate_type_widening_metadata(&schema)?;
+        }
+        Ok(())
     }
 
     fn has_unsupported_table_features(&self) -> bool {

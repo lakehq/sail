@@ -13,7 +13,10 @@
 - key: runtime.stack_size
   type: number
   default: "8388608"
-  description: The stack size in bytes for each thread.
+  description: |
+    The stack size in bytes for each thread.
+    The default value works well for common cases, but complex queries involving deeply nested expressions or plans
+    may require a larger stack size to avoid stack overflow during query planning.
 
 - key: runtime.memory_pool.type
   type: string
@@ -667,15 +670,6 @@
   description: |
     If non-empty, a JSON string representing a Kubernetes Pod template
     with the schema of `PodTemplateSpec` in the Kubernetes API.
-
-- key: kubernetes.worker_pod_cleanup
-  type: string
-  default: "server_termination"
-  description: |
-    When to delete Kubernetes worker pods.
-    The default value `server_termination` configures worker pods to be deleted
-    after the server pod terminates.
-    The value `session_end` deletes worker pods when the Spark session ends.
 
 - key: catalog.list
   type: array

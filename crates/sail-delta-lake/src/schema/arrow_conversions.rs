@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::extension::{
+    ExtensionType, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY,
+};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use datafusion::arrow::error::ArrowError;
 use itertools::Itertools;
+use parquet_variant_compute::VariantType;
 
 use crate::spec::schema::{
     ArrayType, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType,
@@ -25,7 +29,7 @@ impl TryFrom<&StructType> for ArrowSchema {
 impl TryFrom<&StructField> for ArrowField {
     type Error = ArrowError;
     fn try_from(f: &StructField) -> Result<Self, ArrowError> {
-        let metadata = f
+        let mut metadata = f
             .metadata()
             .iter()
             .map(|(key, val)| match val {
@@ -34,6 +38,12 @@ impl TryFrom<&StructField> for ArrowField {
             })
             .collect::<Result<HashMap<_, _>, serde_json::Error>>()
             .map_err(|err| ArrowError::JsonError(err.to_string()))?;
+        if matches!(f.data_type(), DataType::Variant(_)) {
+            metadata.insert(
+                EXTENSION_TYPE_NAME_KEY.to_string(),
+                VariantType::NAME.to_string(),
+            );
+        }
 
         Ok(ArrowField::new(
             f.name(),
@@ -154,15 +164,31 @@ impl TryFrom<ArrowSchemaRef> for StructType {
 impl TryFrom<&ArrowField> for StructField {
     type Error = ArrowError;
     fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
+        let is_variant = is_variant_arrow_field(arrow_field);
+        let data_type = if is_variant {
+            if !is_unshredded_variant_arrow_type(arrow_field.data_type()) {
+                return Err(ArrowError::SchemaError(format!(
+                    "Invalid Variant data type for Delta Lake: {}",
+                    arrow_field.data_type()
+                )));
+            }
+            DataType::unshredded_variant()
+        } else {
+            DataType::try_from(arrow_field.data_type())?
+        };
         Ok(StructField::new(
             arrow_field.name().clone(),
-            DataType::try_from(arrow_field.data_type())?,
+            data_type,
             arrow_field.is_nullable(),
         )
         .with_metadata(
             arrow_field
                 .metadata()
                 .iter()
+                .filter(|(k, _)| {
+                    !(is_variant
+                        && (*k == EXTENSION_TYPE_NAME_KEY || *k == EXTENSION_TYPE_METADATA_KEY))
+                })
                 .map(|(k, v)| (k.clone(), parse_metadata_value(v))),
         ))
     }
@@ -179,6 +205,28 @@ fn parse_metadata_value(v: &str) -> MetadataValue {
         Ok(other) => MetadataValue::Other(other),
         Err(_) => MetadataValue::String(v.to_string()),
     }
+}
+
+fn is_variant_arrow_field(field: &ArrowField) -> bool {
+    field.extension_type_name() == Some(VariantType::NAME)
+}
+
+fn is_unshredded_variant_arrow_type(data_type: &ArrowDataType) -> bool {
+    let ArrowDataType::Struct(fields) = data_type else {
+        return false;
+    };
+    fields.len() == 2
+        && ["metadata", "value"].iter().all(|name| {
+            fields.iter().any(|field| {
+                field.name() == name
+                    && matches!(
+                        field.data_type(),
+                        ArrowDataType::Binary
+                            | ArrowDataType::LargeBinary
+                            | ArrowDataType::BinaryView
+                    )
+            })
+        })
 }
 
 impl TryFrom<&ArrowDataType> for DataType {

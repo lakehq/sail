@@ -107,19 +107,6 @@ kubectl apply -f k8s/sail.yaml
 By default, the worker pod spec is created programmatically. If the `kubernetes.worker_pod_template` configuration option is provided, it is merged into
 the generated spec, allowing you to customize the worker pods.
 
-### Configuring Worker Pod Cleanup
-
-By default, Sail configures worker pods to be removed after the server pod terminates. This preserves worker pod logs
-while the server is still running. For long-running servers that host multiple concurrent Spark sessions, you can instead
-delete worker pods when each session ends by setting `kubernetes.worker_pod_cleanup` to `session_end`.
-
-For example, add the following environment variable to the server container.
-
-```yaml
-- name: SAIL_KUBERNETES__WORKER_POD_CLEANUP
-  value: session_end
-```
-
 ### Using a Custom Pod Template
 
 You can use Kustomize to declaratively define the Kubernetes resources. This approach makes it easier to manage

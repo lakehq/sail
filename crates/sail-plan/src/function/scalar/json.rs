@@ -1,7 +1,11 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, ScalarValue};
-use datafusion_expr::{cast, expr, lit, when, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, when, Expr, ScalarUDF};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
+use datafusion_spark::expr_fn::json_tuple as df_json_tuple;
+use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_function::scalar::array::spark_array::SparkArray;
+use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::json::{
     json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf, SparkFromJson,
     SparkSchemaOfJson,
@@ -56,13 +60,52 @@ fn to_json(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
 
 fn from_json(
     ScalarFunctionInput {
-        arguments,
+        mut arguments,
         function_context,
     }: ScalarFunctionInput,
 ) -> PlanResult<expr::Expr> {
     let tz = function_context.plan_config.session_timezone.clone();
+    // Try to constant-fold the schema argument (index 1) if it's not already a literal.
+    // This handles cases like `from_json(col, schema_of_json(lit(...)))` where the schema
+    // is a constant expression that can be evaluated at planning time.
+    if arguments.len() >= 2 && !matches!(&arguments[1], expr::Expr::Literal(_, _)) {
+        let evaluator = LiteralEvaluator::new();
+        if let Ok(scalar) = evaluator.evaluate(&arguments[1]) {
+            arguments[1] = expr::Expr::Literal(scalar, None);
+        }
+    }
     let udf = ScalarUDF::from(SparkFromJson::new(tz));
     Ok(udf.call(arguments))
+}
+
+fn json_tuple(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+
+    // Split into (json_expr, field_name_exprs)
+    let (_json_expr, field_names) = arguments.split_first().ok_or_else(|| {
+        PlanError::invalid(
+            "json_tuple requires at least 2 arguments (json string and at least one field name)",
+        )
+    })?;
+
+    // Validate field names are string literals
+    for expr in field_names {
+        match expr {
+            Expr::Literal(ScalarValue::Utf8(Some(_)), _) => (),
+            _ => {
+                return Err(PlanError::invalid(
+                    "json_tuple field names must be string literals",
+                ))
+            }
+        }
+    }
+
+    // Build the json_tuple call with all field names
+    let json_tuple_expr = df_json_tuple(arguments);
+
+    // Wrap in array and explode with Inline
+    let array_expr = ScalarUDF::from(SparkArray::new()).call(vec![json_tuple_expr]);
+    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![array_expr]))
 }
 
 pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -71,7 +114,7 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("get_json_object", F::binary(get_json_object)),
         ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unary(json_object_keys)),
-        ("json_tuple", F::unknown("json_tuple")),
+        ("json_tuple", F::custom(json_tuple)),
         ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
         ("to_json", F::var_arg(to_json)),
     ]

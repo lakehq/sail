@@ -318,16 +318,6 @@ pub struct KubernetesConfig {
     pub worker_pod_name_prefix: String,
     pub worker_service_account_name: String,
     pub worker_pod_template: String,
-    pub worker_pod_cleanup: KubernetesWorkerPodCleanup,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum KubernetesWorkerPodCleanup {
-    #[serde(alias = "server-termination")]
-    ServerTermination,
-    #[serde(alias = "session-end")]
-    SessionEnd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -422,6 +412,73 @@ pub enum CacheType {
     Session,
 }
 
+fn default_catalog_cache_type() -> CacheType {
+    CacheType::None
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogCacheConfig {
+    #[serde(default = "default_catalog_cache_type")]
+    pub database_cache_type: CacheType,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub database_cache_size: Option<usize>,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub database_cache_ttl_secs: Option<u64>,
+    #[serde(default = "default_catalog_cache_type")]
+    pub table_cache_type: CacheType,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub table_cache_size: Option<usize>,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub table_cache_ttl_secs: Option<u64>,
+    #[serde(default = "default_catalog_cache_type")]
+    pub view_cache_type: CacheType,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub view_cache_size: Option<usize>,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub view_cache_ttl_secs: Option<u64>,
+}
+
+impl Default for CatalogCacheConfig {
+    fn default() -> Self {
+        Self {
+            database_cache_type: CacheType::None,
+            database_cache_size: None,
+            database_cache_ttl_secs: None,
+            table_cache_type: CacheType::None,
+            table_cache_size: None,
+            table_cache_ttl_secs: None,
+            view_cache_type: CacheType::None,
+            view_cache_size: None,
+            view_cache_ttl_secs: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
@@ -462,6 +519,8 @@ pub enum CatalogType {
         warehouse: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         prefix: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        namespace_separator: Option<String>,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
@@ -472,6 +531,8 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_access_token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     Unity {
         name: String,
@@ -484,6 +545,8 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     #[serde(alias = "onelake")]
     OneLake {
@@ -494,6 +557,8 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     Glue {
         name: String,
@@ -501,6 +566,8 @@ pub enum CatalogType {
         region: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     #[serde(alias = "hms", alias = "hive-metastore")]
     HiveMetastore {
@@ -511,6 +578,8 @@ pub enum CatalogType {
         kerberos_service_principal: Option<String>,
         min_sasl_qop: Option<String>,
         connect_timeout_secs: Option<u64>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
 }
 

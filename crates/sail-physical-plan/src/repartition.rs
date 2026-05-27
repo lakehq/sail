@@ -3,9 +3,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use datafusion::arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use datafusion::arrow::array::PrimitiveArray;
 use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::UInt32Type;
+use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::Partitioning;
@@ -14,11 +15,16 @@ use datafusion::physical_plan::execution_plan::{
 };
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{internal_err, plan_err, Result, Statistics};
-use futures::channel::mpsc::{channel, Receiver, Sender};
-use futures::{SinkExt, Stream, StreamExt};
+use futures::StreamExt;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::repartition::{
+    RepartitionBufferConfig, DEFAULT_REPARTITION_BUFFER_SIZE,
+};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio_stream::wrappers::ReceiverStream;
 
 const DEFAULT_ROUND_ROBIN_BUFFER_SIZE: usize = 8;
 
@@ -247,8 +253,10 @@ impl ExplicitRepartitionExec {
 }
 
 fn round_robin_buffer_size(context: &TaskContext) -> usize {
-    let _ = context;
-    DEFAULT_ROUND_ROBIN_BUFFER_SIZE
+    context
+        .extension::<RepartitionBufferConfig>()
+        .map(|config| config.buffer_size())
+        .unwrap_or(DEFAULT_REPARTITION_BUFFER_SIZE)
 }
 
 fn partition_round_robin_batch(
@@ -285,7 +293,7 @@ async fn send_round_robin_partitions(
 ) -> bool {
     let mut active = 0;
     for (partition, batch) in partitions.into_iter().enumerate() {
-        let Some(sender) = output_senders[partition].as_mut() else {
+        let Some(sender) = output_senders[partition].as_ref().cloned() else {
             continue;
         };
         if sender.is_closed() {
@@ -313,6 +321,18 @@ async fn send_round_robin_partitions(
     active > 0
 }
 
+async fn wait_for_all_round_robin_outputs_closed(
+    output_senders: &[Option<Sender<Result<RecordBatch>>>],
+) {
+    futures::future::join_all(
+        output_senders
+            .iter()
+            .filter_map(|sender| sender.as_ref())
+            .map(|sender| sender.closed()),
+    )
+    .await;
+}
+
 async fn execute_round_robin_input_partition(
     mut input: SendableRecordBatchStream,
     output_senders: Vec<Sender<Result<RecordBatch>>>,
@@ -338,7 +358,11 @@ async fn execute_round_robin_input_partition(
     };
 
     while prune_closed_round_robin_senders(&mut output_senders) {
-        let item = input.next().await;
+        let item = tokio::select! {
+            biased;
+            _ = wait_for_all_round_robin_outputs_closed(&output_senders) => return,
+            item = input.next() => item,
+        };
         let Some(item) = item else {
             return;
         };
@@ -384,10 +408,10 @@ async fn broadcast_round_robin_error(
     message: String,
 ) {
     for sender in output_senders.iter_mut() {
-        let Some(current_sender) = sender.as_mut() else {
+        let Some(current_sender) = sender.as_ref().cloned() else {
             continue;
         };
-        let disconnected = current_sender
+        if current_sender
             .send(Err(datafusion_common::DataFusionError::Execution(
                 message.clone(),
             )))
@@ -400,12 +424,16 @@ async fn broadcast_round_robin_error(
 }
 
 impl DisplayAs for ExplicitRepartitionExec {
-    fn fmt_as(
-        &self,
-        _t: datafusion::physical_plan::DisplayFormatType,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(f, "{}", Self::static_name())
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match &self.properties.partitioning {
+            Partitioning::RoundRobinBatch(partitions) => write!(
+                f,
+                "RepartitionExec: partitioning=RoundRobinBatch({}), input_partitions={}",
+                partitions,
+                self.input.output_partitioning().partition_count(),
+            ),
+            _ => write!(f, "{}", Self::static_name()),
+        }
     }
 }
 
@@ -451,7 +479,8 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         match &self.properties.partitioning {
             Partitioning::RoundRobinBatch(output_partitions) => {
                 self.initialize_round_robin(*output_partitions, context)?;
-                let stream = self.take_round_robin_output(partition)?;
+                let receiver = self.take_round_robin_receiver(partition)?;
+                let stream = ReceiverStream::new(receiver);
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     stream,

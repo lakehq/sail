@@ -47,6 +47,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "bitmap_and_agg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "bitmap_construct_agg",
     "status": "supported"
   },

@@ -88,8 +88,8 @@ def test_explicit_repartition_plan_shape_uses_expected_physical_nodes(spark):
         spark.range(0, 8, 1, 2).select("id", (F.col("id") % 2).alias("group")).repartition(1, "group")
     )
 
-    assert "ExplicitRepartitionExec" in round_robin_plan
-    assert "ExplicitRepartitionExec" in repartition_one_plan
+    assert "RepartitionExec: partitioning=RoundRobinBatch(5)" in round_robin_plan
+    assert "RepartitionExec: partitioning=RoundRobinBatch(1)" in repartition_one_plan
     assert "RepartitionExec: partitioning=Hash([" in hash_plan
 
 
@@ -98,6 +98,22 @@ def test_explicit_coalesce(spark):
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(2)) == 2  # noqa: PLR2004
     assert partition_count(spark.range(0, 10, 1, 2).coalesce(3)) == 2  # noqa: PLR2004
     assert partition_count(spark.range(0, 10, 1, 4).coalesce(2)) == 2  # noqa: PLR2004
+
+
+def test_coalesce_hint(spark):
+    df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))
+
+    actual = df.hint("COALESCE", 2).orderBy("id").toPandas()
+    expected = df.orderBy("id").toPandas()
+
+    assert partition_count(df.hint("COALESCE", 2)) == 2  # noqa: PLR2004
+    assert partition_count(df.hint("COALESCE", 6)) == 4  # noqa: PLR2004
+    assert_frame_equal(actual, expected)
+
+
+def test_coalesce_hint_rejects_zero_partitions(spark):
+    with pytest.raises(Exception, match="COALESCE hint requires at least one partition"):
+        partition_count(spark.range(0, 10, 1, 2).hint("COALESCE", 0))
 
 
 def test_explicit_coalesce_preserves_rows(spark):

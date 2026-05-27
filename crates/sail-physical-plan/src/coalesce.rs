@@ -228,7 +228,7 @@ mod tests {
         )]))
     }
 
-    fn batch(values: &[i32]) -> RecordBatch {
+    fn test_batch(values: &[i32]) -> RecordBatch {
         RecordBatch::try_new(
             test_schema(),
             vec![Arc::new(Int32Array::from(values.to_vec()))],
@@ -236,11 +236,11 @@ mod tests {
         .unwrap()
     }
 
-    async fn collect_partition(plan: Arc<dyn ExecutionPlan>, partition: usize) -> Result<Vec<i32>> {
-        let context = Arc::new(TaskContext::default());
-        let mut stream = plan.execute(partition, context)?;
-        let mut values = Vec::new();
-        while let Some(batch) = stream.next().await {
+    fn collect_values(exec: &CoalesceExec, partition: usize) -> Result<Vec<i32>> {
+        let stream = exec.execute(partition, Arc::new(TaskContext::default()))?;
+        let batches = futures::executor::block_on(stream.collect::<Vec<_>>());
+        let mut values = vec![];
+        for batch in batches {
             let batch = batch?;
             let array = batch
                 .column(0)
@@ -297,5 +297,61 @@ mod tests {
         assert_eq!(coalesced_input_range(0, 5, 3), (0, 1));
         assert_eq!(coalesced_input_range(1, 5, 3), (1, 3));
         assert_eq!(coalesced_input_range(2, 5, 3), (3, 5));
+    }
+
+    #[test]
+    fn test_coalesce_exec_merges_even_partition_groups() -> Result<()> {
+        let input = test_plan(vec![
+            vec![test_batch(&[0, 1])],
+            vec![test_batch(&[2])],
+            vec![test_batch(&[3, 4])],
+            vec![test_batch(&[5])],
+        ]);
+        let exec = CoalesceExec::new(input, 2);
+
+        assert_eq!(collect_values(&exec, 0)?, vec![0, 1, 2]);
+        assert_eq!(collect_values(&exec, 1)?, vec![3, 4, 5]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coalesce_exec_merges_uneven_partition_groups() -> Result<()> {
+        let input = test_plan(vec![
+            vec![test_batch(&[0])],
+            vec![test_batch(&[1])],
+            vec![test_batch(&[2])],
+            vec![test_batch(&[3])],
+            vec![test_batch(&[4])],
+        ]);
+        let exec = CoalesceExec::new(input, 3);
+
+        assert_eq!(collect_values(&exec, 0)?, vec![0]);
+        assert_eq!(collect_values(&exec, 1)?, vec![1, 2]);
+        assert_eq!(collect_values(&exec, 2)?, vec![3, 4]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coalesce_exec_rejects_out_of_range_partition() {
+        let input = test_plan(vec![vec![test_batch(&[0])], vec![test_batch(&[1])]]);
+        let exec = CoalesceExec::new(input, 2);
+
+        assert!(matches!(
+            exec.execute(2, Arc::new(TaskContext::default())),
+            Err(error) if error.to_string().contains("out of range")
+        ));
+    }
+
+    #[test]
+    fn test_coalesce_exec_rejects_partition_increase() {
+        let input = test_plan(vec![vec![test_batch(&[0])], vec![test_batch(&[1])]]);
+        let exec = CoalesceExec::new(input, 3);
+
+        assert!(matches!(
+            exec.execute(0, Arc::new(TaskContext::default())),
+            Err(error) if error.to_string().contains("cannot increase partition count")
+        ));
     }
 }

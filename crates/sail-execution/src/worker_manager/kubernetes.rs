@@ -29,7 +29,6 @@ pub struct KubernetesWorkerManagerOptions {
     pub worker_pod_name_prefix: String,
     pub worker_service_account_name: String,
     pub worker_pod_template: String,
-    pub delete_worker_pods_on_stop: bool,
 }
 
 pub struct KubernetesWorkerManager {
@@ -282,16 +281,14 @@ impl WorkerManager for KubernetesWorkerManager {
     }
 
     async fn stop(&self) -> ExecutionResult<()> {
-        if self.options.delete_worker_pods_on_stop {
-            self.pods()
-                .await?
-                .delete_collection(
-                    &DeleteParams::default(),
-                    &ListParams::default()
-                        .labels(&format!("sail.lakesail.com/worker-manager={}", self.name)),
-                )
-                .await?;
-        }
+        self.pods()
+            .await?
+            .delete_collection(
+                &DeleteParams::default(),
+                &ListParams::default()
+                    .labels(&format!("sail.lakesail.com/worker-manager={}", self.name)),
+            )
+            .await?;
         Ok(())
     }
 }

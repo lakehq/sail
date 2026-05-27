@@ -13,12 +13,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::datatypes::{
     validate_decimal_precision_and_scale, DataType as ArrowDataType,
     Decimal128Type as ArrowDecimal128Type, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use parquet_variant_compute::VariantType;
 use rust_decimal::prelude::ToPrimitive;
 use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME};
 use serde_json;
@@ -79,6 +81,13 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
     let mut metadata =
         HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())]);
 
+    if is_iceberg_variant_type(&field.field_type) {
+        metadata.insert(
+            arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+            VariantType::NAME.to_string(),
+        );
+    }
+
     if let Some(doc) = &field.doc {
         metadata.insert(ICEBERG_ARROW_FIELD_DOC_KEY.to_string(), doc.clone());
     }
@@ -106,7 +115,17 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
 
 /// Convert Arrow field to Iceberg field
 pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
-    let iceberg_type = arrow_type_to_iceberg(field.data_type())?;
+    let iceberg_type = if is_variant_arrow_field(field) {
+        if !is_unshredded_variant_arrow_type(field.data_type()) {
+            return plan_err!(
+                "Invalid Variant data type for Iceberg conversion: {}",
+                field.data_type()
+            );
+        }
+        Type::Primitive(PrimitiveType::Variant)
+    } else {
+        arrow_type_to_iceberg(field.data_type())?
+    };
     let required = !field.is_nullable();
     let doc = get_field_doc(field);
     let mut nested_field = NestedField::new(
@@ -157,6 +176,32 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
     }
 
     Ok(nested_field)
+}
+
+fn is_iceberg_variant_type(iceberg_type: &Type) -> bool {
+    matches!(iceberg_type, Type::Primitive(PrimitiveType::Variant))
+}
+
+fn is_variant_arrow_field(field: &ArrowField) -> bool {
+    field.extension_type_name() == Some(VariantType::NAME)
+}
+
+fn is_unshredded_variant_arrow_type(arrow_type: &ArrowDataType) -> bool {
+    let ArrowDataType::Struct(fields) = arrow_type else {
+        return false;
+    };
+    fields.len() == 2
+        && ["metadata", "value"].iter().all(|name| {
+            fields.iter().any(|field| {
+                field.name() == name
+                    && matches!(
+                        field.data_type(),
+                        ArrowDataType::Binary
+                            | ArrowDataType::LargeBinary
+                            | ArrowDataType::BinaryView
+                    )
+            })
+        })
 }
 
 /// Convert Iceberg type to Arrow data type
@@ -232,6 +277,7 @@ pub fn arrow_type_to_iceberg(arrow_type: &ArrowDataType) -> Result<Type> {
 /// Convert Iceberg primitive type to Arrow data type
 pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowDataType> {
     let arrow_type = match primitive {
+        PrimitiveType::Unknown => ArrowDataType::Null,
         PrimitiveType::Boolean => ArrowDataType::Boolean,
         PrimitiveType::Int => ArrowDataType::Int32,
         PrimitiveType::Long => ArrowDataType::Int64,
@@ -268,6 +314,17 @@ pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowData
             .map(ArrowDataType::FixedSizeBinary)
             .unwrap_or(ArrowDataType::LargeBinary),
         PrimitiveType::Binary => ArrowDataType::LargeBinary,
+        // TODO(V3): Preserve geometry/geography logical annotations in Arrow metadata.
+        PrimitiveType::Geometry { .. } | PrimitiveType::Geography { .. } => {
+            ArrowDataType::LargeBinary
+        }
+        PrimitiveType::Variant => ArrowDataType::Struct(
+            vec![
+                ArrowField::new("metadata", ArrowDataType::Binary, false),
+                ArrowField::new("value", ArrowDataType::Binary, false),
+            ]
+            .into(),
+        ),
     };
     Ok(arrow_type)
 }
@@ -326,9 +383,9 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
         ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView => {
             PrimitiveType::Binary
         }
+        ArrowDataType::Null => PrimitiveType::Unknown,
         // Manually list types so we can keep track of them
-        ArrowDataType::Null
-        | ArrowDataType::UInt64
+        ArrowDataType::UInt64
         | ArrowDataType::Float16
         | ArrowDataType::Date64
         | ArrowDataType::Time32(TimeUnit::Second)

@@ -62,6 +62,22 @@ pub fn decode_adds_from_meta_batch(
     batch: &RecordBatch,
     partition_columns: Option<&[String]>,
 ) -> Result<Vec<Add>> {
+    let partition_value_columns = partition_columns.map(|columns| {
+        columns
+            .iter()
+            .map(|name| (name.clone(), name.clone()))
+            .collect::<Vec<_>>()
+    });
+    decode_adds_from_meta_batch_with_partition_value_columns(
+        batch,
+        partition_value_columns.as_deref(),
+    )
+}
+
+pub fn decode_adds_from_meta_batch_with_partition_value_columns(
+    batch: &RecordBatch,
+    partition_value_columns: Option<&[(String, String)]>,
+) -> Result<Vec<Add>> {
     let path_arr = batch
         .column_by_name(PATH_COLUMN)
         .and_then(|c| c.as_any().downcast_ref::<StringArray>())
@@ -104,17 +120,20 @@ pub fn decode_adds_from_meta_batch(
         .column_by_name(COL_CLUSTERING_PROVIDER)
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
 
-    let partition_columns: Vec<String> = match partition_columns {
+    let partition_value_columns: Vec<(String, String)> = match partition_value_columns {
         Some(cols) => cols.to_vec(),
-        None => infer_partition_columns_from_schema(&batch.schema()),
+        None => infer_partition_columns_from_schema(&batch.schema())
+            .into_iter()
+            .map(|name| (name.clone(), name))
+            .collect(),
     };
 
-    let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_columns
+    let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_value_columns
         .iter()
-        .filter_map(|name| {
-            batch.column_by_name(name).map(|a| {
+        .filter_map(|(input_column, partition_value_key)| {
+            batch.column_by_name(input_column).map(|a| {
                 let a = cast(a, &DataType::Utf8).unwrap_or_else(|_| Arc::clone(a));
-                (name.clone(), a)
+                (partition_value_key.clone(), a)
             })
         })
         .collect();

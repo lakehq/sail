@@ -8,16 +8,17 @@ use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral
 use sail_sql_parser::ast::operator::{Minus, Plus};
 use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
-    AlterTableOperation, AlterViewOperation, AnalyzeTableModifier, AsQueryClause, Assignment,
-    AssignmentList, ColumnAlteration, ColumnAlterationList, ColumnAlterationOption,
-    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
-    ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
-    DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
-    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
-    MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
-    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyList, PropertyKeyValue,
-    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
-    SortColumnList, Statement, UpdateTableAlias, ViewColumn,
+    AlterColumnOperation, AlterTableOperation, AlterViewOperation, AnalyzeTableModifier,
+    AsQueryClause, Assignment, AssignmentList, ColumnAlteration, ColumnAlterationList,
+    ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
+    ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
+    CreateViewClause, DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat,
+    InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
+    MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
+    PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
+    PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
+    RowFormatDelimitedClause, SetClause, SortColumn, SortColumnClause, SortColumnList, Statement,
+    UpdateTableAlias, ViewColumn,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -146,7 +147,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             create: _,
             or_replace,
             temporary: _, // TODO: handle temporary tables
-            external: _,  // TODO: handle external tables
+            external,
             table: _,
             if_not_exists,
             name,
@@ -160,6 +161,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 return Err(SqlError::todo("LIKE in CREATE TABLE"));
             }
             let definition = TableDefinition {
+                external: external.is_some(),
                 or_replace: or_replace.is_some(),
                 if_not_exists: if_not_exists.is_some(),
                 using: using.map(|(_, x)| x),
@@ -182,6 +184,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         }
         Statement::ReplaceTable {
             replace: _,
+            external,
             table: _,
             name,
             columns,
@@ -190,6 +193,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             r#as,
         } => {
             let definition = TableDefinition {
+                external: external.is_some(),
                 or_replace: true,
                 if_not_exists: false,
                 using: using.map(|(_, x)| x),
@@ -1143,6 +1147,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
 }
 
 struct TableDefinition {
+    external: bool,
     or_replace: bool,
     if_not_exists: bool,
     using: Option<Ident>,
@@ -1155,6 +1160,7 @@ fn from_ast_table_definition(
     definition: TableDefinition,
 ) -> SqlResult<(spec::TableDefinition, Option<Box<QueryPlan>>)> {
     let TableDefinition {
+        external,
         or_replace,
         if_not_exists,
         using,
@@ -1248,11 +1254,14 @@ fn from_ast_table_definition(
     let options = options.map(from_ast_property_list).transpose()?;
     let properties = properties.map(from_ast_property_list).transpose()?;
     let columns = from_ast_table_columns(columns)?;
+    let location = location.map(from_ast_string).transpose()?;
+    let options = options.into_iter().flatten().collect();
     let definition = spec::TableDefinition {
+        external,
         columns,
         comment: comment.map(from_ast_string).transpose()?,
         constraints: vec![],
-        location: location.map(from_ast_string).transpose()?,
+        location,
         file_format,
         row_format,
         partition_by,
@@ -1261,7 +1270,7 @@ fn from_ast_table_definition(
         cluster_by,
         if_not_exists,
         replace: or_replace,
-        options: options.into_iter().flatten().collect(),
+        options,
         properties: properties.into_iter().flatten().collect(),
     };
     let query = query
@@ -1570,15 +1579,16 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                     let bucket_by = CreateTableBucketBy {
                         columns: names.into_items().collect(),
                         sort_columns: sort.map(
-                            |(
-                                _,
-                                _,
-                                SortColumnList {
-                                    left: _,
-                                    columns,
-                                    right: _,
-                                },
-                            )| columns.into_items().collect(),
+                            |SortColumnClause {
+                                 sorted: _,
+                                 by: _,
+                                 columns:
+                                     SortColumnList {
+                                         left: _,
+                                         columns,
+                                         right: _,
+                                     },
+                             }| columns.into_items().collect(),
                         ),
                         buckets: n,
                     };
@@ -1766,11 +1776,7 @@ fn from_ast_sort_column(sort: SortColumn) -> SqlResult<spec::SortOrder> {
         None => spec::SortDirection::Unspecified,
     };
     Ok(spec::SortOrder {
-        child: Box::new(spec::Expr::UnresolvedAttribute {
-            name: spec::ObjectName::bare(column.value),
-            plan_id: None,
-            is_metadata_column: false,
-        }),
+        child: Box::new(from_ast_expression(column)?),
         direction,
         null_ordering: spec::NullOrdering::Unspecified,
     })
@@ -1920,16 +1926,24 @@ fn from_ast_alter_table_operation(
                 if_exists: if_exists.is_some(),
             })
         }
+        AlterTableOperation::AlterColumn {
+            name,
+            operation: AlterColumnOperation::Type(_, data_type),
+            ..
+        } => Ok(spec::AlterTableOperation::AlterColumnType {
+            name: from_ast_object_name(name)?,
+            data_type: from_ast_data_type(data_type)?,
+        }),
         AlterTableOperation::RenameTable { .. }
         | AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::DropColumns { .. }
         | AlterTableOperation::RenameColumn { .. }
-        | AlterTableOperation::AlterColumn { .. }
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
         | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
+        AlterTableOperation::AlterColumn { .. } => Ok(spec::AlterTableOperation::Unknown),
         AlterTableOperation::AddColumns { items, .. }
         | AlterTableOperation::ReplaceColumns { items, .. } => {
             // Validate column descriptors (e.g. detect duplicate COMMENT/DEFAULT/NOT NULL/POSITION

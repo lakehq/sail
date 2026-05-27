@@ -349,13 +349,11 @@
   {
     "module": "pyspark.sql.functions",
     "function": "uniform",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/pull/1074"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "width_bucket",
-    "status": "supported",
-    "ref": "https://github.com/lakehq/sail/issues/1067"
+    "status": "supported"
   }
 ]

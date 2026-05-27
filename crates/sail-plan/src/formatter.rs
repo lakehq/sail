@@ -57,6 +57,10 @@ impl PlanFormatter for SparkPlanFormatter {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok("string".to_string()),
             DataType::Date32 => Ok("date".to_string()),
             DataType::Date64 => Ok("date64".to_string()),
+            DataType::Time32(TimeUnit::Second) => Ok("time(0)".to_string()),
+            DataType::Time32(TimeUnit::Millisecond) => Ok("time(3)".to_string()),
+            DataType::Time64(TimeUnit::Microsecond) => Ok("time(6)".to_string()),
+            DataType::Time64(TimeUnit::Nanosecond) => Ok("time(9)".to_string()),
             DataType::Time32(time_unit) => Ok(format!(
                 "time32({})",
                 Self::time_unit_to_simple_string(time_unit)
@@ -424,6 +428,14 @@ impl PlanFormatter for SparkPlanFormatter {
     ) -> Result<String> {
         match name.to_lowercase().as_str() {
             "!" | "not" => Ok(format!("(NOT {})", arguments.one()?)),
+            "assert_true" => {
+                let (col, rest) = arguments.at_least_one()?;
+                if let Some(err_msg) = rest.first() {
+                    Ok(format!("assert_true({col}, {err_msg})"))
+                } else {
+                    Ok(format!("assert_true({col}, '{col}' is not true!)"))
+                }
+            }
             "~" => Ok(format!("{name}{}", arguments.one()?)),
             "+" | "-" => {
                 if arguments.len() < 2 {
@@ -494,6 +506,25 @@ impl PlanFormatter for SparkPlanFormatter {
             "first" | "last" => {
                 let name = name.to_lowercase();
                 let (arg, _) = arguments.at_least_one()?;
+                Ok(format!("{name}({arg})"))
+            }
+            "from_json" => {
+                let (arg, rest) = arguments.at_least_one()?;
+                // In Spark, from_json with a MAP schema uses "entries" as the display name.
+                if let Some(schema) = rest.first() {
+                    let s = schema.trim();
+                    let upper = s.to_uppercase();
+                    let is_map = upper.starts_with("MAP<")
+                        || upper == "MAP"
+                        || (s.starts_with('{')
+                            && serde_json::from_str::<serde_json::Value>(s)
+                                .ok()
+                                .and_then(|v| v.get("type")?.as_str().map(|t| t == "map"))
+                                .unwrap_or(false));
+                    if is_map {
+                        return Ok("entries".to_string());
+                    }
+                }
                 Ok(format!("{name}({arg})"))
             }
             "from_csv" | "any_value" | "first_value" | "last_value" => {
@@ -585,7 +616,7 @@ impl PlanFormatter for SparkPlanFormatter {
                 let sep = *list.first().unwrap_or(&"0");
                 Ok(format!("{name}({value}, {sep})"))
             }
-            "startsWith" | "endsWith" => {
+            "startswith" | "endswith" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("{}({arguments})", name.to_lowercase()))
             }
@@ -596,6 +627,10 @@ impl PlanFormatter for SparkPlanFormatter {
             "explode" | "explode_outer" => Ok("col".to_string()),
             "stack" => Ok("col0".to_string()),
             "current_database" => Ok("current_schema()".to_string()),
+            "spark_partition_id" => {
+                let arguments = arguments.join(", ");
+                Ok(format!("{}({arguments})", name.to_uppercase()))
+            }
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "exp"
             | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "rlike"
             | "signum" | "sqrt" | "cos" | "cosh" | "cot" | "degrees" | "power" | "radians"
@@ -955,19 +990,19 @@ mod tests {
 
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time32(TimeUnit::Second))?,
-            "time32(second)"
+            "time(0)"
         );
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time32(TimeUnit::Millisecond))?,
-            "time32(millisecond)"
+            "time(3)"
         );
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time64(TimeUnit::Microsecond))?,
-            "time64(microsecond)"
+            "time(6)"
         );
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time64(TimeUnit::Nanosecond))?,
-            "time64(nanosecond)"
+            "time(9)"
         );
 
         Ok(())

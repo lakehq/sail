@@ -56,9 +56,3 @@ def glue_spark(moto_endpoint: str) -> Generator[SparkSession, None, None]:
     with contextlib.suppress(Exception):
         spark.stop()
     stop_sail_server(server, saved_env)
-
-
-@pytest.fixture(scope="module")
-def spark(glue_spark: SparkSession) -> SparkSession:
-    """Alias for glue_spark, used by BDD step definitions."""
-    return glue_spark

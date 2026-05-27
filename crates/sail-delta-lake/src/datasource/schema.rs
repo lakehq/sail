@@ -25,11 +25,12 @@ use datafusion::arrow::datatypes::{
 };
 
 use crate::kernel::snapshot::DeltaSnapshot;
-use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
+use crate::spec::DeltaResult;
 
-/// The logical schema for a Deltatable is different from the protocol level schema since partition
-/// columns must appear at the end of the schema. This is to align with how partition are handled
-/// at the physical level
+/// Build the logical schema for a Delta table.
+///
+/// The base table fields preserve the Delta metadata schema order. DataFusion's file scan still
+/// uses an internal partition-last table schema; scan planning owns the conversion at that boundary.
 pub fn df_logical_schema(
     snapshot: &DeltaSnapshot,
     file_column_name: &Option<String>,
@@ -40,25 +41,10 @@ pub fn df_logical_schema(
 ) -> DeltaResult<SchemaRef> {
     let input_schema = match schema {
         Some(schema) => schema,
-        None => snapshot.input_schema()?,
+        None => Arc::new(snapshot.schema().clone()),
     };
-    let table_partition_cols = &snapshot.metadata().partition_columns();
 
-    let mut fields: Vec<Arc<Field>> = input_schema
-        .fields()
-        .iter()
-        .filter(|field| !table_partition_cols.contains(field.name()))
-        .cloned()
-        .collect();
-
-    for partition_col in table_partition_cols.iter() {
-        fields.push(Arc::new(
-            input_schema
-                .field_with_name(partition_col)
-                .map_err(|_| DeltaTableError::missing_column(partition_col))?
-                .to_owned(),
-        ));
-    }
+    let mut fields: Vec<Arc<Field>> = input_schema.fields().iter().cloned().collect();
 
     if let Some(file_column_name) = file_column_name {
         fields.push(Arc::new(Field::new(

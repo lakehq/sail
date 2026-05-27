@@ -105,6 +105,10 @@ pub enum DeltaOperation {
     UnsetTableProperties {
         properties: Vec<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    AlterColumn {
+        column: Value,
+    },
 }
 
 impl DeltaOperation {
@@ -122,6 +126,7 @@ impl DeltaOperation {
             Self::Restore { .. } => "RESTORE",
             Self::SetTableProperties { .. } => "SET TBLPROPERTIES",
             Self::UnsetTableProperties { .. } => "UNSET TBLPROPERTIES",
+            Self::AlterColumn { .. } => "CHANGE COLUMN",
         }
     }
 
@@ -202,6 +207,9 @@ impl DeltaOperation {
             }
             Self::UnsetTableProperties { properties } => {
                 insert_json(&mut parameters, "properties", properties)?;
+            }
+            Self::AlterColumn { column } => {
+                insert_json(&mut parameters, "column", column)?;
             }
         }
 

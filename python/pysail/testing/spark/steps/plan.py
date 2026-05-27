@@ -13,6 +13,12 @@ if TYPE_CHECKING:
 def normalize_plan_text(plan_text: str) -> str:
     """Normalize plan text by scrubbing non-deterministic fields."""
     text = textwrap.dedent(plan_text).strip()
+
+    # Add an explicit marker at the end of line for lines ending with whitespaces.
+    # Otherwise, PyYAML would force quoted style (instead of using multi-line style)
+    # for the text which makes the plan less readable.
+    text = re.sub(r"([ \t]+)(?=\n|$)", r"\1<eol>", text)
+
     # Make Windows paths match the regexes and snapshots early, so the
     # raw-text substitutions below also work cross-platform.
     text = text.replace("\\", "/")
