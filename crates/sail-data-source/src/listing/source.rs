@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion::datasource::listing::{
+    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::dml::InsertOp;
@@ -16,9 +18,10 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use futures::{StreamExt, TryStreamExt};
 use sail_common_datafusion::datasource::{
-    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
-    TableFormat,
+    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, PhysicalSinkMode,
+    SinkInfo, SourceInfo, TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
@@ -253,8 +256,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         };
         let SinkInfo {
             input,
-            // TODO: sink mode is ignored since the file formats only support append operation
-            mode: _,
+            mode,
             partition_by,
             bucket_by,
             sort_order,
@@ -282,6 +284,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         } else {
             return internal_err!("empty listing table path: {path}");
         };
+        prepare_listing_write(ctx, &table_paths, &mode).await?;
         // We do not need to specify the exact data type for partition columns,
         // since the type is inferred from the record batch during writing.
         // This is how DataFusion handles physical planning for `LogicalPlan::Copy`.
@@ -336,4 +339,27 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             .create_writer_physical_plan(input, ctx, conf, sort_order)
             .await
     }
+}
+
+async fn prepare_listing_write(
+    ctx: &dyn Session,
+    table_paths: &[ListingTableUrl],
+    mode: &PhysicalSinkMode,
+) -> Result<()> {
+    if !matches!(mode, PhysicalSinkMode::Overwrite) {
+        return Ok(());
+    }
+
+    for path in table_paths {
+        let store = ctx.runtime_env().object_store(path.object_store())?;
+        let locations = store
+            .list(Some(path.prefix()))
+            .map_ok(|meta| meta.location)
+            .boxed();
+        store
+            .delete_stream(locations)
+            .try_collect::<Vec<_>>()
+            .await?;
+    }
+    Ok(())
 }

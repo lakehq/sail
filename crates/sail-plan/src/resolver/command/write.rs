@@ -291,8 +291,14 @@ impl PlanResolver<'_> {
                         | WriteMode::TruncatePartitions
                 );
                 if requires_existing && info.is_none() {
-                    return Err(PlanError::invalid(format!(
-                        "table does not exist: {table:?}"
+                    let table_name = table
+                        .parts()
+                        .iter()
+                        .map(|part| part.as_ref())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    return Err(PlanError::AnalysisError(format!(
+                        "[TABLE_OR_VIEW_NOT_FOUND] The table or view `{table_name}` cannot be found."
                     )));
                 }
 
