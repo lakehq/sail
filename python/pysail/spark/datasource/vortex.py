@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import glob
 import os
+import secrets
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -34,6 +37,7 @@ except ImportError as e:
 try:
     from pyspark.sql.datasource import (
         DataSource,
+        DataSourceArrowWriter,
         DataSourceReader,
         EqualTo,
         GreaterThan,
@@ -46,6 +50,7 @@ try:
         StringContains,
         StringEndsWith,
         StringStartsWith,
+        WriterCommitMessage,
     )
 except ImportError as e:
     msg = (
@@ -62,7 +67,7 @@ if TYPE_CHECKING:
 
 
 # ============================================================================
-# File finding helpers
+# File handling helpers
 # ============================================================================
 
 
@@ -103,6 +108,15 @@ def _get_vortex_files(path: str) -> list[str]:
         raise ValueError(msg)
 
     return sorted(set(vortex_files))
+
+
+def _generate_unique_vortex_path(base_path: str) -> str:
+    """Generates a unique .vortex file path."""
+    while True:
+        file_name = secrets.token_hex(8) + ".vortex"
+        path = os.path.join(base_path, file_name)
+        if not os.path.exists(path):
+            return path
 
 
 # ============================================================================
@@ -321,6 +335,76 @@ class VortexReader(DataSourceReader):
 
 
 # ============================================================================
+# DataSourceWriter
+# ============================================================================
+
+
+@dataclass
+class VortexCommitMessage(WriterCommitMessage):
+    """Commit message returned by the VortexWriter.write"""
+
+    staged_path: str
+
+
+class VortexWriter(DataSourceArrowWriter):
+    """Writer for :class:`VortexDataSource`."""
+
+    def __init__(self, path: str, schema: pa.Schema, mode: str) -> None:
+        self.path = path
+        self.schema = schema
+        self.mode = mode
+        self._init_staging_dir()
+
+    def _init_staging_dir(self) -> None:
+        staging_name = f"._staging_{secrets.token_hex(8)}"
+        self._staging_dir = os.path.join(self.path, staging_name)
+        os.makedirs(self._staging_dir, exist_ok=True)
+
+    def write(self, iterator: Iterator[pa.RecordBatch]) -> WriterCommitMessage:
+        table = pa.Table.from_batches(iterator, self.schema)
+        if table.num_rows == 0:
+            return VortexCommitMessage("")
+
+        staged_path = _generate_unique_vortex_path(self._staging_dir)
+        vortex.io.write(table, staged_path)
+        return VortexCommitMessage(staged_path)
+
+    def commit(self, messages: list[WriterCommitMessage | None]) -> None:
+        staged_files = [m.staged_path for m in messages if m and m.staged_path]
+
+        try:
+            if not staged_files:
+                return
+            if self.mode == "overwrite" and os.path.isdir(self.path):
+                for p in Path(self.path).rglob("*.vortex"):
+                    if p.is_file() and os.path.basename(self._staging_dir) not in p.parts:
+                        p.unlink(missing_ok=True)
+
+            os.makedirs(self.path, exist_ok=True)
+
+            for src in staged_files:
+                shutil.move(src, os.path.join(self.path, os.path.basename(src)))
+        except Exception as e:
+            msg = f"Failed to commit to '{self.path}': {e}"
+            raise RuntimeError(msg) from e
+        finally:
+            shutil.rmtree(self._staging_dir, ignore_errors=True)
+
+    def abort(self, messages: list[WriterCommitMessage | None]) -> None:  # noqa: ARG002
+        shutil.rmtree(self._staging_dir, ignore_errors=True)
+
+
+class VortexIgnoreWriter(VortexWriter):
+    """Writer that no-ops when the path already exists (mode='ignore')."""
+
+    def _init_staging_dir(self) -> None:
+        self._staging_dir = ""
+
+    def write(self, iterator: Iterator[pa.RecordBatch]) -> WriterCommitMessage:  # noqa: ARG002
+        return VortexCommitMessage("")
+
+
+# ============================================================================
 # DataSource
 # ============================================================================
 
@@ -346,6 +430,12 @@ class VortexDataSource(DataSource):
             spark.read.format("vortex").option("path", "/data/**/*.vortex").load()
         )  # recursive
 
+        # Write with error mode (default)
+        df.write.format("vortex").option("path", "/data/").save()
+
+        # Write with overwrite mode
+        df.write.mode("overwrite").format("vortex").option("path", "/data/").save()
+
     Read Mode
     -------
     Path handling:
@@ -369,6 +459,31 @@ class VortexDataSource(DataSource):
     LessThan, LessThanOrEqual, In, Not.
     String predicates (StartsWith, EndsWith, Contains) and null predicates
     (IsNull, IsNotNull) are rejected and applied by Sail post-read.
+
+    Write Mode
+    ----------
+    Writes one ``.vortex`` file per Spark partition into the target directory.
+    Uses a two-phase commit: partitions write to a staging directory first,
+    the driver moves files to the final path only after all partitions succeed.
+
+    Supported Write Options:
+
+    +--------+----------+-----------------------------------------------+
+    | Option | Required | Description                                   |
+    +========+==========+===============================================+
+    | path   | Yes      | Target directory to write ``.vortex`` files   |
+    +--------+----------+-----------------------------------------------+
+    | mode   | No       | Write mode (see below). Defaults to           |
+    |        |          | ``error`` if not set.                        |
+    +--------+----------+-----------------------------------------------+
+
+    Supported write modes:
+
+    - **append**: Adds new ``.vortex`` files to the target directory.
+    - **overwrite**: Deletes existing ``.vortex`` files in the target
+      directory before writing new ones.
+    - **error**: Raises ``RuntimeError`` if the target directory already exists.
+    - **ignore**: Skips the write entirely if the target directory already exists.
     """
 
     @classmethod
@@ -390,3 +505,16 @@ class VortexDataSource(DataSource):
     def reader(self, schema: pa.Schema) -> VortexReader:  # noqa: ARG002
         path = self._validate_options()
         return VortexReader(path)
+
+    def writer(self, schema: pa.Schema, overwrite: bool) -> VortexWriter:  # noqa: FBT001
+        path = self._validate_options()
+        mode = self.options.get("mode") or ("overwrite" if overwrite else "error")
+
+        path_exists = os.path.isdir(path)
+        if mode == "error" and path_exists:
+            msg = f"Path '{path}' already exists. Use mode='overwrite' to replace or mode='append' to add to it."
+            raise RuntimeError(msg)
+        if mode == "ignore" and path_exists:
+            return VortexIgnoreWriter(path, schema, mode)
+
+        return VortexWriter(path, schema, mode)
