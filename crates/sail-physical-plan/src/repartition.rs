@@ -1,6 +1,12 @@
 use std::any::Any;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
+use datafusion::arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use datafusion::arrow::compute::take_arrays;
+use datafusion::arrow::datatypes::UInt32Type;
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::execution_plan::{
@@ -9,7 +15,115 @@ use datafusion::physical_plan::execution_plan::{
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_common::{internal_err, plan_err, Result, Statistics};
+use futures::channel::mpsc::{Receiver, Sender, channel};
+use futures::{SinkExt, Stream, StreamExt};
+
+const DEFAULT_ROUND_ROBIN_BUFFER_SIZE: usize = 8;
+
+#[derive(Debug, Clone)]
+pub struct RowRoundRobinPartitioner {
+    num_partitions: usize,
+    next_idx: usize,
+}
+
+impl RowRoundRobinPartitioner {
+    pub fn new(
+        num_partitions: usize,
+        input_partition: usize,
+        num_input_partitions: usize,
+    ) -> Result<Self> {
+        if num_partitions == 0 {
+            return internal_err!("round-robin repartition requires at least one output partition");
+        }
+        if num_input_partitions == 0 {
+            return internal_err!("round-robin repartition requires at least one input partition");
+        }
+        Ok(Self {
+            num_partitions,
+            next_idx: (input_partition * num_partitions) / num_input_partitions,
+        })
+    }
+
+    pub fn partition<F>(&mut self, batch: RecordBatch, mut f: F) -> Result<()>
+    where
+        F: FnMut(usize, RecordBatch) -> Result<()>,
+    {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        if self.num_partitions == 1 {
+            return f(0, batch);
+        }
+
+        let schema = batch.schema();
+        let mut indices = vec![Vec::new(); self.num_partitions];
+        for row_index in 0..batch.num_rows() {
+            let partition = (self.next_idx + row_index) % self.num_partitions;
+            indices[partition].push(row_index as u32);
+        }
+        self.next_idx = (self.next_idx + batch.num_rows()) % self.num_partitions;
+
+        for (partition, partition_indices) in indices.into_iter().enumerate() {
+            if partition_indices.is_empty() {
+                continue;
+            }
+            let indices_array: PrimitiveArray<UInt32Type> = partition_indices.into();
+            let columns = take_arrays(batch.columns(), &indices_array, None)?;
+            let options = RecordBatchOptions::new().with_row_count(Some(indices_array.len()));
+            let partition_batch =
+                RecordBatch::try_new_with_options(schema.clone(), columns, &options)?;
+            f(partition, partition_batch)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// A stream that holds shared references to spawned round-robin tasks.
+/// When all output streams are dropped, the `Arc` refcount reaches zero and
+/// `SpawnedTask`'s `Drop` implementation cancels the background tasks.
+struct RoundRobinReceiverStream {
+    _tasks: Arc<Vec<SpawnedTask<()>>>,
+    state: Arc<Mutex<ExplicitRepartitionState>>,
+    inner: Receiver<Result<RecordBatch>>,
+}
+
+impl Stream for RoundRobinReceiverStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+impl Drop for RoundRobinReceiverStream {
+    fn drop(&mut self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.active_streams = state.active_streams.saturating_sub(1);
+        if state.active_streams == 0 {
+            if let Some(receivers) = state.receivers.as_mut() {
+                for receiver in receivers.iter_mut() {
+                    receiver.take();
+                }
+            }
+            state.tasks.take();
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ExplicitRepartitionState {
+    receivers: Option<Vec<Option<Receiver<Result<RecordBatch>>>>>,
+    active_streams: usize,
+    /// Handle to spawned tasks, released once all receivers have been taken.
+    /// After that point only the output streams hold strong references, so
+    /// dropping all streams cancels the tasks via SpawnedTask's Drop impl.
+    tasks: Option<Arc<Vec<SpawnedTask<()>>>>,
+}
 
 /// A physical plan node for explicit repartitioning in the query.
 /// This is a placeholder node that should be rewritten during physical optimization.
@@ -17,6 +131,7 @@ use datafusion_common::{internal_err, plan_err, Result, Statistics};
 pub struct ExplicitRepartitionExec {
     input: Arc<dyn ExecutionPlan>,
     properties: Arc<PlanProperties>,
+    state: Arc<Mutex<ExplicitRepartitionState>>,
 }
 
 impl ExplicitRepartitionExec {
@@ -36,11 +151,251 @@ impl ExplicitRepartitionExec {
             .with_scheduling_type(SchedulingType::Cooperative)
             .with_evaluation_type(EvaluationType::Eager),
         );
-        Self { input, properties }
+        Self {
+            input,
+            properties,
+            state: Arc::new(Mutex::new(ExplicitRepartitionState::default())),
+        }
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    fn initialize_round_robin(
+        &self,
+        output_partitions: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<()> {
+        let mut state = self.state.lock().map_err(|_| {
+            datafusion_common::DataFusionError::Execution(
+                "round-robin repartition state lock poisoned".to_string(),
+            )
+        })?;
+        if state.receivers.is_some() {
+            return Ok(());
+        }
+
+        let buffer_size = round_robin_buffer_size(context.as_ref());
+        let input_partition_count = self.input.output_partitioning().partition_count();
+        let mut senders = Vec::with_capacity(output_partitions);
+        let mut receivers = Vec::with_capacity(output_partitions);
+        for _ in 0..output_partitions {
+            let (sender, receiver) = channel::<Result<RecordBatch>>(buffer_size);
+            senders.push(sender);
+            receivers.push(Some(receiver));
+        }
+
+        let mut tasks = Vec::with_capacity(input_partition_count);
+        for input_partition in 0..input_partition_count {
+            let input = self.input.execute(input_partition, context.clone())?;
+            let output_senders = senders.clone();
+            tasks.push(SpawnedTask::spawn(async move {
+                execute_round_robin_input_partition(
+                    input,
+                    output_senders,
+                    input_partition,
+                    input_partition_count,
+                    output_partitions,
+                )
+                .await;
+            }));
+        }
+
+        state.receivers = Some(receivers);
+        state.tasks = Some(Arc::new(tasks));
+        Ok(())
+    }
+
+    #[expect(clippy::type_complexity)]
+    fn take_round_robin_output(&self, partition: usize) -> Result<RoundRobinReceiverStream> {
+        let mut state = self.state.lock().map_err(|_| {
+            datafusion_common::DataFusionError::Execution(
+                "round-robin repartition state lock poisoned".to_string(),
+            )
+        })?;
+        let Some(tasks) = state.tasks.as_ref().map(Arc::clone) else {
+            return internal_err!("round-robin repartition tasks are not initialized");
+        };
+        let Some(receivers) = state.receivers.as_mut() else {
+            return internal_err!("round-robin repartition receivers are not initialized");
+        };
+        let Some(receiver) = receivers.get_mut(partition) else {
+            return internal_err!(
+                "round-robin repartition partition index {partition} out of range for {} output partitions",
+                receivers.len()
+            );
+        };
+        let receiver = receiver.take().ok_or_else(|| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "round-robin repartition output partition {partition} was already executed"
+            ))
+        })?;
+        let all_receivers_taken = receivers.iter().all(Option::is_none);
+        state.active_streams += 1;
+        // Release the state's strong reference once all receivers have been taken,
+        // so that tasks are cancelled when all output streams are dropped.
+        if all_receivers_taken {
+            state.tasks.take();
+        }
+        Ok(RoundRobinReceiverStream {
+            _tasks: tasks,
+            state: Arc::clone(&self.state),
+            inner: receiver,
+        })
+    }
+}
+
+fn round_robin_buffer_size(context: &TaskContext) -> usize {
+    let _ = context;
+    DEFAULT_ROUND_ROBIN_BUFFER_SIZE
+}
+
+fn partition_round_robin_batch(
+    partitioner: &mut RowRoundRobinPartitioner,
+    batch: RecordBatch,
+    output_partitions: usize,
+) -> Result<Vec<Option<RecordBatch>>> {
+    let mut partitions = vec![None; output_partitions];
+    partitioner.partition(batch, |partition, batch| {
+        partitions[partition] = Some(batch);
+        Ok(())
+    })?;
+    Ok(partitions)
+}
+
+fn prune_closed_round_robin_senders(
+    output_senders: &mut [Option<Sender<Result<RecordBatch>>>],
+) -> bool {
+    let mut active = false;
+    for sender in output_senders.iter_mut() {
+        if sender.as_ref().is_some_and(Sender::is_closed) {
+            *sender = None;
+        }
+        if sender.is_some() {
+            active = true;
+        }
+    }
+    active
+}
+
+async fn send_round_robin_partitions(
+    output_senders: &mut [Option<Sender<Result<RecordBatch>>>],
+    partitions: Vec<Option<RecordBatch>>,
+) -> bool {
+    let mut active = 0;
+    for (partition, batch) in partitions.into_iter().enumerate() {
+        let Some(sender) = output_senders[partition].as_mut() else {
+            continue;
+        };
+        if sender.is_closed() {
+            output_senders[partition] = None;
+            continue;
+        }
+        let disconnected = match batch {
+            Some(batch) => {
+                if sender.send(Ok(batch)).await.is_ok() {
+                    active += 1;
+                    false
+                } else {
+                    true
+                }
+            }
+            None => {
+                active += 1;
+                false
+            }
+        };
+        if disconnected {
+            output_senders[partition] = None;
+        }
+    }
+    active > 0
+}
+
+async fn execute_round_robin_input_partition(
+    mut input: SendableRecordBatchStream,
+    output_senders: Vec<Sender<Result<RecordBatch>>>,
+    input_partition: usize,
+    input_partition_count: usize,
+    output_partitions: usize,
+) {
+    let mut output_senders = output_senders.into_iter().map(Some).collect::<Vec<_>>();
+    let mut partitioner = match RowRoundRobinPartitioner::new(
+        output_partitions,
+        input_partition,
+        input_partition_count,
+    ) {
+        Ok(partitioner) => partitioner,
+        Err(error) => {
+            broadcast_round_robin_error(
+                &mut output_senders,
+                format!("failed to initialize round-robin repartition: {error}"),
+            )
+            .await;
+            return;
+        }
+    };
+
+    while prune_closed_round_robin_senders(&mut output_senders) {
+        let item = input.next().await;
+        let Some(item) = item else {
+            return;
+        };
+        match item {
+            Ok(batch) => {
+                let partitions = match partition_round_robin_batch(
+                    &mut partitioner,
+                    batch,
+                    output_partitions,
+                ) {
+                    Ok(partitions) => partitions,
+                    Err(error) => {
+                        broadcast_round_robin_error(
+                            &mut output_senders,
+                            format!(
+                                "round-robin repartition failed on input partition {input_partition}: {error}"
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+                if !send_round_robin_partitions(&mut output_senders, partitions).await {
+                    return;
+                }
+            }
+            Err(error) => {
+                broadcast_round_robin_error(
+                    &mut output_senders,
+                    format!(
+                        "round-robin repartition failed while reading input partition {input_partition}: {error}"
+                    ),
+                )
+                .await;
+                return;
+            }
+        }
+    }
+}
+
+async fn broadcast_round_robin_error(
+    output_senders: &mut [Option<Sender<Result<RecordBatch>>>],
+    message: String,
+) {
+    for sender in output_senders.iter_mut() {
+        let Some(current_sender) = sender.as_mut() else {
+            continue;
+        };
+        let disconnected = current_sender
+            .send(Err(datafusion_common::DataFusionError::Execution(
+                message.clone(),
+            )))
+            .await
+            .is_err();
+        if disconnected {
+            *sender = None;
+        }
     }
 }
 
@@ -90,13 +445,23 @@ impl ExecutionPlan for ExplicitRepartitionExec {
 
     fn execute(
         &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
+        partition: usize,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        internal_err!(
-            "{} should be eliminated during physical optimization",
-            self.name()
-        )
+        match &self.properties.partitioning {
+            Partitioning::RoundRobinBatch(output_partitions) => {
+                self.initialize_round_robin(*output_partitions, context)?;
+                let stream = self.take_round_robin_output(partition)?;
+                Ok(Box::pin(RecordBatchStreamAdapter::new(
+                    self.schema(),
+                    stream,
+                )))
+            }
+            _ => internal_err!(
+                "{} should be eliminated during physical optimization",
+                self.name()
+            ),
+        }
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
