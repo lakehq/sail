@@ -58,13 +58,13 @@ impl ReadFormat for ArrowReadFormat {
             .object_meta
             .location;
 
-        let table_schema = input.schema;
         let source =
-            match is_object_in_arrow_ipc_file_format(Arc::clone(&object_store), object_location)
+            if is_object_in_arrow_ipc_file_format(Arc::clone(&object_store), object_location)
                 .await?
             {
-                true => ArrowSource::new_file_source(table_schema.clone()),
-                false => ArrowSource::new_stream_file_source(table_schema),
+                ArrowSource::new_file_source(input.schema)
+            } else {
+                ArrowSource::new_stream_file_source(input.schema)
             };
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))

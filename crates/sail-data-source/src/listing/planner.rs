@@ -69,7 +69,8 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
         let limit = scan.fetch;
 
         let partition_column_names = source
-            .schema()
+            .config()
+            .schema
             .table_partition_cols()
             .iter()
             .map(|col| col.name().as_str())
@@ -94,9 +95,9 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
         )
         .await?;
 
-        let table_schema = source.table_schema();
+        let table_schema = source.config().schema.table_schema();
         if file_groups.is_empty() {
-            let projected_schema = project_schema(&table_schema, projection.as_ref())?;
+            let projected_schema = project_schema(table_schema, projection.as_ref())?;
             return Ok(Some(Arc::new(EmptyExec::new(projected_schema))));
         }
 
@@ -110,10 +111,10 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
             .then(|| {
                 output_ordering.first().map(|output_ordering| {
                     FileScanConfig::split_groups_by_statistics_with_target_partitions(
-                        &table_schema,
+                        table_schema,
                         &file_groups,
                         output_ordering,
-                        source.target_partitions(),
+                        source.config().target_partitions,
                     )
                 })
             })
@@ -121,7 +122,7 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
         {
             Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
             Some(Ok(new_groups)) => {
-                if new_groups.len() <= source.target_partitions() {
+                if new_groups.len() <= source.config().target_partitions {
                     file_groups = new_groups;
                 } else {
                     log::debug!(
@@ -135,7 +136,8 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
         // If user specified ordering, that's already handled in `try_create_output_ordering`.
         // When no ordering is specified and we derived ordering from files, keep it.
         let Some(object_store_url) = source
-            .table_paths()
+            .config()
+            .table_paths
             .first()
             .map(datafusion_datasource::ListingTableUrl::object_store)
         else {
@@ -145,21 +147,22 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
         };
 
         let config = source
-            .read_format()
+            .config()
+            .read_format
             .scan(
                 session_state,
                 ListingScanInput {
                     object_store_url,
                     file_groups,
-                    constraints: source.constraints().clone(),
+                    constraints: source.config().constraints.clone(),
                     projection,
                     limit,
                     preserve_order: false,
                     output_ordering,
                     statistics,
                     partitioned_by_file_group,
-                    schema: source.schema().clone(),
-                    compression: source.compression(),
+                    schema: source.config().schema.clone(),
+                    compression: source.config().compression,
                 },
             )
             .await?;
@@ -177,10 +180,10 @@ fn try_create_output_ordering(
     execution_props: &datafusion::logical_expr::execution_props::ExecutionProps,
     file_groups: &[FileGroup],
 ) -> datafusion_common::Result<Vec<LexOrdering>> {
-    if !source.file_sort_order().is_empty() {
+    if !source.config().file_sort_order.is_empty() {
         return create_lex_ordering(
-            &source.table_schema(),
-            source.file_sort_order(),
+            source.config().schema.table_schema(),
+            &source.config().file_sort_order,
             execution_props,
         );
     }
@@ -253,30 +256,31 @@ async fn list_files_for_scan<'a>(
     filters: &'a [Expr],
     limit: Option<usize>,
 ) -> datafusion_common::Result<ListFilesResult> {
-    let store = if let Some(url) = source.table_paths().first() {
+    let store = if let Some(url) = source.config().table_paths.first() {
         ctx.runtime_env().object_store(url)?
     } else {
         return Ok(ListFilesResult {
             file_groups: vec![],
-            statistics: Statistics::new_unknown(&source.file_schema()),
+            statistics: Statistics::new_unknown(source.config().schema.file_schema()),
             grouped_by_partition: false,
         });
     };
 
     let partition_cols: Vec<(String, DataType)> = source
-        .schema()
+        .config()
+        .schema
         .table_partition_cols()
         .iter()
         .map(|field| (field.name().clone(), field.data_type().clone()))
         .collect();
 
-    let file_list = future::try_join_all(source.table_paths().iter().map(|table_path| {
+    let file_list = future::try_join_all(source.config().table_paths.iter().map(|table_path| {
         pruned_partition_list(
             ctx,
             store.as_ref(),
             table_path,
             filters,
-            source.file_extension(),
+            &source.config().file_extension,
             &partition_cols,
         )
     }))
@@ -288,11 +292,13 @@ async fn list_files_for_scan<'a>(
     let files = file_list
         .map(|part_file| async {
             let part_file = part_file?;
-            let (statistics, ordering) = if source.collect_stat() {
+            let (statistics, ordering) = if source.config().collect_stat {
                 do_collect_statistics_and_ordering(source, ctx, &store, &part_file).await?
             } else {
                 (
-                    Arc::new(Statistics::new_unknown(&source.file_schema())),
+                    Arc::new(Statistics::new_unknown(
+                        source.config().schema.file_schema(),
+                    )),
                     None,
                 )
             };
@@ -304,29 +310,32 @@ async fn list_files_for_scan<'a>(
         .buffer_unordered(meta_fetch_concurrency);
 
     let (file_group, inexact_stats) =
-        get_files_with_limit(files, limit, source.collect_stat()).await?;
+        get_files_with_limit(files, limit, source.config().collect_stat).await?;
 
     let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
     let (file_groups, grouped_by_partition) = if threshold > 0 && !partition_cols.is_empty() {
-        let grouped = file_group.group_by_partition_values(source.target_partitions());
+        let grouped = file_group.group_by_partition_values(source.config().target_partitions);
         if grouped.len() >= threshold {
             (grouped, true)
         } else {
             let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
             (
-                FileGroup::new(all_files).split_files(source.target_partitions()),
+                FileGroup::new(all_files).split_files(source.config().target_partitions),
                 false,
             )
         }
     } else {
-        (file_group.split_files(source.target_partitions()), false)
+        (
+            file_group.split_files(source.config().target_partitions),
+            false,
+        )
     };
 
     let (file_groups, stats) = datafusion_datasource::compute_all_files_statistics(
         file_groups,
-        source.table_schema(),
-        source.collect_stat(),
+        source.config().schema.table_schema().clone(),
+        source.config().collect_stat,
         inexact_stats,
     )?;
 
@@ -356,8 +365,14 @@ async fn do_collect_statistics_and_ordering(
     }
 
     let file_meta = source
-        .read_format()
-        .infer_file_meta(ctx, store, source.file_schema(), meta)
+        .config()
+        .read_format
+        .infer_file_meta(
+            ctx,
+            store,
+            source.config().schema.file_schema().clone(),
+            meta,
+        )
         .await?;
     let statistics = Arc::new(file_meta.statistics);
 

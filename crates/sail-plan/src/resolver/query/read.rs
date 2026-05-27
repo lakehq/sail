@@ -15,7 +15,6 @@ use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_data_source::listing::table::ListingTableSource;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
@@ -517,21 +516,14 @@ impl PlanResolver<'_> {
         let table_source: Arc<dyn TableSource> = if has_duplicates {
             // Preserve existing behavior by wrapping the underlying TableProvider with renaming,
             // but only if this TableSource is DataFusion's DefaultTableSource.
-            if let Some(listing_source) = table_source.as_any().downcast_ref::<ListingTableSource>()
-            {
-                let names = state.register_fields(schema.fields());
-                Arc::new(listing_source.with_schema_field_names(names).map_err(|e| {
-                    PlanError::internal(format!("failed to rename listing table source: {e}"))
-                })?)
-            } else {
-                let provider = source_as_provider(&table_source).map_err(|e| {
-                    PlanError::unsupported(format!(
-                        "duplicate column names require DefaultTableSource-backed TableProvider: {e}"
-                    ))
-                })?;
-                let names = state.register_fields(schema.fields());
-                provider_as_source(Arc::new(RenameTableProvider::try_new(provider, names)?))
-            }
+            // TODO: support duplicate column names for other `TableSource` implementations
+            let provider = source_as_provider(&table_source).map_err(|e| {
+                PlanError::unsupported(format!(
+                    "duplicate column names require DefaultTableSource-backed TableProvider: {e}"
+                ))
+            })?;
+            let names = state.register_fields(schema.fields());
+            provider_as_source(Arc::new(RenameTableProvider::try_new(provider, names)?))
         } else {
             table_source
         };

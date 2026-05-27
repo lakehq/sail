@@ -26,6 +26,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
+use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::utils::split_parquet_compression_string;
 
 /// Trait for schema inference logic
@@ -96,10 +97,8 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     /// Get the schema inferrer for this format
     fn schema_inferrer(&self) -> Arc<dyn SchemaInfer>;
 
-    /// Infer file-level metadata needed for planning (statistics + ordering).
-    ///
-    /// This is used by Sail listing scan planning and must not rely on
-    /// DataFusion's `FileFormat::{infer_stats,infer_ordering,infer_stats_and_ordering}`.
+    /// Infer file-level metadata needed for planning.
+    /// The metadata includes statistics and ordering.
     async fn infer_file_meta(
         &self,
         ctx: &dyn Session,
@@ -114,9 +113,7 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         })
     }
 
-    /// Build a scan configuration (file source + scan config) for listing reads.
-    ///
-    /// This must not rely on DataFusion's `FileFormat::{create_physical_plan,file_source}`.
+    /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
 }
 
@@ -308,19 +305,17 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             .map(|(col, data_type)| Arc::new(Field::new(col, data_type.clone(), false)))
             .collect::<Vec<_>>();
 
-        let source = crate::listing::table::ListingTableSource::try_new(
-            crate::listing::table::ListingTableSourceConfig {
-                table_paths: config.table_paths,
-                file_extension: listing_options.file_extension,
-                schema: TableSchema::new(file_schema, partition_fields),
-                constraints,
-                file_sort_order: listing_options.file_sort_order,
-                collect_stat: listing_options.collect_stat,
-                target_partitions: listing_options.target_partitions,
-                read_format: Arc::new(read_format),
-                compression,
-            },
-        )?;
+        let source = ListingTableSource::try_new(ListingTableSourceConfig {
+            table_paths: config.table_paths,
+            file_extension: listing_options.file_extension,
+            schema: TableSchema::new(file_schema, partition_fields),
+            constraints,
+            file_sort_order: listing_options.file_sort_order,
+            collect_stat: listing_options.collect_stat,
+            target_partitions: listing_options.target_partitions,
+            read_format: Arc::new(read_format),
+            compression,
+        })?;
         Ok(Arc::new(source))
     }
 
