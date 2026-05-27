@@ -989,6 +989,11 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<TableStatus> {
         let format = options.format.trim().to_lowercase();
 
+        if format == "iceberg" {
+            return Err(CatalogError::NotSupported(
+                "Hive Metastore catalog does not support creating Iceberg tables".to_string(),
+            ));
+        }
         if options.replace {
             return Err(CatalogError::NotSupported(
                 "Hive Metastore catalog does not support REPLACE".to_string(),
@@ -1229,12 +1234,67 @@ mod tests {
 
     use std::time::Duration;
 
+    use arrow::datatypes::DataType;
     use hive_metastore::Table;
     use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
-    use sail_catalog::provider::AlterTableOptions;
+    use sail_catalog::provider::{
+        AlterTableOptions, CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
+    };
+    use sail_common::runtime::RuntimeHandle;
 
-    use super::HmsCatalogConfig;
+    use super::{HmsCatalogConfig, HmsCatalogProvider};
+
+    #[tokio::test]
+    async fn test_create_table_rejects_iceberg_format() {
+        let runtime = RuntimeHandle::new(
+            tokio::runtime::Handle::current(),
+            tokio::runtime::Handle::current(),
+        );
+        let provider = HmsCatalogProvider::new(
+            "hms".to_string(),
+            HmsCatalogConfig {
+                uris: vec!["127.0.0.1:9083".to_string()],
+                thrift_transport: None,
+                auth: None,
+                kerberos_service_principal: None,
+                min_sasl_qop: None,
+                connect_timeout_secs: None,
+            },
+            runtime,
+        )
+        .unwrap();
+
+        let error = provider
+            .create_table(
+                &Namespace::try_from(vec!["default"]).unwrap(),
+                "items",
+                CreateTableOptions {
+                    columns: vec![CreateTableColumnOptions {
+                        name: "id".to_string(),
+                        data_type: DataType::Int64,
+                        nullable: false,
+                        comment: None,
+                        default: None,
+                        generated_always_as: None,
+                    }],
+                    comment: None,
+                    constraints: vec![],
+                    location: None,
+                    format: "iceberg".to_string(),
+                    partition_by: vec![],
+                    sort_by: vec![],
+                    bucket_by: None,
+                    if_not_exists: false,
+                    replace: false,
+                    properties: vec![],
+                    is_external: true,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CatalogError::NotSupported(_)));
+    }
 
     #[test]
     fn test_build_drop_table_request_without_purge_preserves_data() {

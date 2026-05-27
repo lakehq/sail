@@ -20,10 +20,13 @@ sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
+sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+arrow-schema = { workspace = true }
+parquet-variant-compute = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }

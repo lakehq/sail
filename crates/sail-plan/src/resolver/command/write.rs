@@ -114,6 +114,7 @@ pub(super) struct WritePlanBuilder {
     cluster_by: Vec<spec::ObjectName>,
     options: Vec<Vec<(String, String)>>,
     table_properties: Vec<(String, String)>,
+    table_is_external: bool,
 }
 
 impl WritePlanBuilder {
@@ -129,6 +130,7 @@ impl WritePlanBuilder {
             cluster_by: vec![],
             options: vec![],
             table_properties: vec![],
+            table_is_external: false,
         }
     }
 
@@ -182,6 +184,11 @@ impl WritePlanBuilder {
         self.table_properties = properties;
         self
     }
+
+    pub fn with_table_is_external(mut self, is_external: bool) -> Self {
+        self.table_is_external = is_external;
+        self
+    }
 }
 
 impl PlanResolver<'_> {
@@ -202,6 +209,7 @@ impl PlanResolver<'_> {
             cluster_by,
             options,
             table_properties,
+            table_is_external,
         } = builder;
 
         let Some(mode) = mode else {
@@ -337,6 +345,8 @@ impl PlanResolver<'_> {
                         },
                     );
                 } else {
+                    let write_options_had_location =
+                        find_path_in_options(&file_write_options.options).is_some();
                     file_write_options.options.insert(
                         0,
                         OptionLayer::TablePropertyList {
@@ -436,6 +446,7 @@ impl PlanResolver<'_> {
                             if_not_exists,
                             replace,
                             properties,
+                            is_external: table_is_external || write_options_had_location,
                         },
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));

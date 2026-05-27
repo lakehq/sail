@@ -111,6 +111,7 @@ use sail_function::aggregate::product::ProductFunction;
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
@@ -120,6 +121,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
+use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -129,7 +131,7 @@ use sail_function::scalar::datetime::spark_interval::{
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
-use sail_function::scalar::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
+use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_time::SparkTime;
@@ -137,7 +139,6 @@ use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
-use sail_function::scalar::datetime::spark_try_make_timestamp_ntz::SparkTryMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -215,6 +216,7 @@ use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -229,7 +231,7 @@ use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_python_udf::config::PySparkUdfConfig;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
+use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
@@ -1031,6 +1033,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::Coalesce(gen::CoalesceExecNode {
+                input,
+                output_partitions,
+            }) => Ok(Arc::new(CoalesceExec::new(
+                self.try_decode_plan(&input, ctx)?,
+                usize::try_from(output_partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
+            ))),
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
@@ -1838,6 +1847,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: spark_partition_id.column_name().to_string(),
                 schema,
             })
+        } else if let Some(coalesce) = node.as_any().downcast_ref::<CoalesceExec>() {
+            let input = self.try_encode_plan(coalesce.input().clone())?;
+            NodeKind::Coalesce(gen::CoalesceExecNode {
+                input,
+                output_partitions: u64::try_from(coalesce.output_partitions())
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
+            })
         } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {
             let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
             let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
@@ -2158,6 +2174,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkToCsv(gen::SparkToCsvUdf { session_timezone }) => {
+                let udf = SparkToCsv::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone }) => {
                 let udf = SparkFromJson::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2174,6 +2194,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
+            UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
+                    is_try,
+                ))));
+            }
+            UdfKind::ConvertTz(gen::ConvertTzUdf { classic }) => {
+                return Ok(Arc::new(ScalarUDF::from(ConvertTz::new(classic))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -2181,9 +2209,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
+            "array_intersect" | "list_intersect" => {
+                Ok(Arc::new(ScalarUDF::from(ArrayIntersect::new())))
+            }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
-            "convert_tz" => Ok(Arc::new(ScalarUDF::from(ConvertTz::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(LeastFunc::new()))),
@@ -2284,12 +2314,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_ym_interval" | "make_ym_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
-            "spark_make_timestamp_ntz" | "make_timestamp_ntz" => {
-                Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
-            }
-            "spark_try_make_timestamp_ntz" | "try_make_timestamp_ntz" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryMakeTimestampNtz::new())))
-            }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
@@ -2354,9 +2378,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
+            || node_inner.is::<ArrayIntersect>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<BitmapCount>()
-            || node_inner.is::<ConvertTz>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
@@ -2413,8 +2437,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
             || node_inner.is::<SparkMakeInterval>()
-            || node_inner.is::<SparkMakeTimestampNtz>()
-            || node_inner.is::<SparkTryMakeTimestampNtz>()
             || node_inner.is::<SparkMakeTime>()
             || node_inner.is::<SparkTimeDiff>()
             || node_inner.is::<SparkTimeTrunc>()
@@ -2555,6 +2577,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkToCsv>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkToCsv(gen::SparkToCsvUdf { session_timezone })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkFromJson>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone })
@@ -2567,6 +2592,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
+        } else if let Some(func) = node
+            .inner()
+            .as_any()
+            .downcast_ref::<SparkMakeTimestampNtz>()
+        {
+            let is_try = func.is_try();
+            UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<ConvertTz>() {
+            let classic = func.classic();
+            UdfKind::ConvertTz(gen::ConvertTzUdf { classic })
         } else {
             return Ok(());
         };
@@ -2652,6 +2687,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_type,
                 is_pandas,
                 config,
+                is_iter,
             })) => {
                 let input_types = input_types
                     .iter()
@@ -2669,7 +2705,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_names,
                     input_types,
                     output_type,
-                    is_pandas,
+                    PySparkGroupMapMode { is_pandas, is_iter },
                     Arc::new(config),
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
@@ -2747,6 +2783,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 is_pandas: func.is_pandas(),
+                is_iter: func.is_iter(),
                 config: Some(config),
             })
         } else if let Some(func) = node

@@ -655,6 +655,7 @@ mod tests {
             if_not_exists: false,
             replace: false,
             properties: vec![],
+            is_external: false,
         };
         provider.create_table(&ns, "t2", options).await.unwrap();
 

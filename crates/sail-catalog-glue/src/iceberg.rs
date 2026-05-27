@@ -247,6 +247,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         if_not_exists,
         replace,
         properties,
+        is_external,
     } = options;
 
     if replace {
@@ -270,6 +271,11 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         ));
     }
 
+    if !is_external {
+        return Err(CatalogError::InvalidArgument(
+            "Location is required for Iceberg tables".to_string(),
+        ));
+    }
     let location = location.ok_or_else(|| {
         CatalogError::InvalidArgument("Location is required for Iceberg tables".to_string())
     })?;
@@ -388,10 +394,61 @@ fn partition_transform_to_string(field: &CatalogPartitionField) -> (String, Stri
 mod tests {
     use std::collections::HashMap;
 
+    use arrow::datatypes::DataType;
+    use sail_catalog::error::CatalogError;
+    use sail_catalog::provider::{CreateTableColumnOptions, CreateTableOptions};
+
+    fn iceberg_options(location: Option<String>, is_external: bool) -> CreateTableOptions {
+        CreateTableOptions {
+            columns: vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+            }],
+            comment: None,
+            constraints: vec![],
+            location,
+            format: "iceberg".to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            if_not_exists: false,
+            replace: false,
+            properties: vec![],
+            is_external,
+        }
+    }
+
     #[test]
     fn test_is_iceberg_parameters_detects_case_insensitive_jvm_marker() {
         let parameters = HashMap::from([("TABLE_TYPE".to_string(), "ICEBERG".to_string())]);
 
         assert!(super::is_iceberg_parameters(Some(&parameters)));
+    }
+
+    #[test]
+    fn test_validate_iceberg_options_requires_explicit_location() {
+        let result = super::validate_iceberg_options(iceberg_options(
+            Some("s3://bucket/table".into()),
+            false,
+        ));
+        let Err(error) = result else {
+            panic!("expected missing explicit location to fail");
+        };
+
+        assert!(matches!(error, CatalogError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn test_validate_iceberg_options_rejects_missing_location() {
+        let result = super::validate_iceberg_options(iceberg_options(None, true));
+        let Err(error) = result else {
+            panic!("expected missing location to fail");
+        };
+
+        assert!(matches!(error, CatalogError::InvalidArgument(_)));
     }
 }
