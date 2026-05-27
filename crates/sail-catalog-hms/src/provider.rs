@@ -989,11 +989,6 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<TableStatus> {
         let format = options.format.trim().to_lowercase();
 
-        if format == "iceberg" {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support creating Iceberg tables".to_string(),
-            ));
-        }
         if options.replace {
             return Err(CatalogError::NotSupported(
                 "Hive Metastore catalog does not support REPLACE".to_string(),
@@ -1246,7 +1241,7 @@ mod tests {
     use super::{HmsCatalogConfig, HmsCatalogProvider};
 
     #[tokio::test]
-    async fn test_create_table_rejects_iceberg_format() {
+    async fn test_create_table_allows_iceberg_format() {
         let runtime = RuntimeHandle::new(
             tokio::runtime::Handle::current(),
             tokio::runtime::Handle::current(),
@@ -1293,7 +1288,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(error, CatalogError::NotSupported(_)));
+        assert!(!matches!(error, CatalogError::NotSupported(_)));
     }
 
     #[test]

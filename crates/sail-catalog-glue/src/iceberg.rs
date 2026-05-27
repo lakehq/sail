@@ -247,7 +247,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         if_not_exists,
         replace,
         properties,
-        is_external,
+        is_external: _,
     } = options;
 
     if replace {
@@ -271,11 +271,6 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         ));
     }
 
-    if !is_external {
-        return Err(CatalogError::InvalidArgument(
-            "Location is required for Iceberg tables".to_string(),
-        ));
-    }
     let location = location.ok_or_else(|| {
         CatalogError::InvalidArgument("Location is required for Iceberg tables".to_string())
     })?;
