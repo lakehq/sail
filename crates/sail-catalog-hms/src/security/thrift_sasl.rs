@@ -7,10 +7,11 @@ use sail_catalog::error::{CatalogError, CatalogResult};
 /// Matches the negotiated max buffer from the SASL security layer exchange
 /// (`0x00FF_FFFF` cap in `select_security_layer`).
 const MAX_SASL_FRAME_SIZE: usize = 0x00FF_FFFF;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, Ready};
 use tokio::net::tcp;
 use volo::net::conn::{OwnedReadHalf, OwnedWriteHalf};
 use volo::net::dial::{DefaultMakeTransport, MakeTransport};
+use volo::net::ext::AsyncExt;
 use volo::net::Address;
 
 use super::gssapi::{GssapiFrameProtector, GssapiSession, SaslQop};
@@ -254,8 +255,8 @@ impl AsyncRead for SaslReadHalf {
     }
 }
 
-impl volo::net::ext::AsyncExt for SaslReadHalf {
-    async fn ready(&self, interest: tokio::io::Interest) -> io::Result<tokio::io::Ready> {
+impl AsyncExt for SaslReadHalf {
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
         self.inner.ready(interest).await
     }
 }
@@ -371,8 +372,8 @@ impl AsyncWrite for SaslWriteHalf {
     }
 }
 
-impl volo::net::ext::AsyncExt for SaslWriteHalf {
-    async fn ready(&self, interest: tokio::io::Interest) -> io::Result<tokio::io::Ready> {
+impl AsyncExt for SaslWriteHalf {
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
         self.inner.ready(interest).await
     }
 }
