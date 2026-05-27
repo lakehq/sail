@@ -4,4 +4,4 @@ Source: <https://raw.githubusercontent.com/apache/hive/branch-2.3/metastore/if/h
 
 Minor edits were applied to remove the dependency on `fb303`.
 
-The code generation logic is inspired by [hive_metastore_rs](https://github.com/Xuanwo/hive_metastore_rs).
+The code generation logic was inspired by [hive_metastore_rs](https://github.com/Xuanwo/hive_metastore_rs).
