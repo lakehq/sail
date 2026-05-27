@@ -349,9 +349,9 @@ fn plan_explicit_partitioning(
     match kind {
         ExplicitRepartitionKind::Coalesce => match num_partitions {
             Some(0) => internal_err!("number of explicit partitions cannot be zero"),
-            Some(num_partitions) => {
-                Ok(Partitioning::UnknownPartitioning(num_partitions.min(input_partition_count)))
-            }
+            Some(num_partitions) => Ok(Partitioning::UnknownPartitioning(
+                num_partitions.min(input_partition_count),
+            )),
             None => internal_err!("explicit coalesce requires a target partition count"),
         },
         ExplicitRepartitionKind::RoundRobin => match num_partitions {
@@ -372,8 +372,7 @@ fn plan_explicit_partitioning(
                 Some(num_partitions) => num_partitions,
                 None => input_partition_count,
             };
-            let num_partitions = num_partitions
-                .max(1);
+            let num_partitions = num_partitions.max(1);
             let expressions = expressions
                 .iter()
                 .map(|e| planner.create_physical_expr(e, schema, session_state))
@@ -541,7 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_explicit_partitioning_uses_input_partition_count_for_hash_without_explicit_count() {
+    fn test_plan_explicit_partitioning_uses_input_partition_count_for_hash_without_explicit_count()
+    {
         let schema = schema();
         let input = RepartitionExec::try_new(
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
@@ -583,9 +583,6 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(
-            partitioning,
-            Partitioning::UnknownPartitioning(2)
-        ));
+        assert!(matches!(partitioning, Partitioning::UnknownPartitioning(2)));
     }
 }

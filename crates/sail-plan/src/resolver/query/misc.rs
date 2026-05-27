@@ -8,8 +8,8 @@ use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
 use sail_common_datafusion::literal::LiteralEvaluator;
-use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 use sail_logical_plan::range::RangeNode;
+use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;

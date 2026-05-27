@@ -523,12 +523,19 @@ mod tests {
 
     #[test]
     fn test_job_graph_uses_rescale_input_for_coalesce_exec() {
-        let input = UnionExec::try_new(vec![empty_plan(), empty_plan(), empty_plan(), empty_plan()])
-            .unwrap();
+        let input =
+            UnionExec::try_new(vec![empty_plan(), empty_plan(), empty_plan(), empty_plan()])
+                .unwrap();
         let graph = JobGraph::try_new(Arc::new(CoalesceExec::new(input, 2))).unwrap();
 
         assert_eq!(graph.stages().len(), 2);
-        assert_eq!(graph.stages()[1].plan.output_partitioning().partition_count(), 2);
+        assert_eq!(
+            graph.stages()[1]
+                .plan
+                .output_partitioning()
+                .partition_count(),
+            2
+        );
         assert!(matches!(
             graph.stages()[1].inputs.as_slice(),
             [StageInput {

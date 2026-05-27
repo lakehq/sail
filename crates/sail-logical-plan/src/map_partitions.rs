@@ -1,4 +1,5 @@
 use std::fmt::Formatter;
+use std::hash::Hash;
 use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
@@ -8,8 +9,7 @@ use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-#[expect(clippy::derived_hash_with_manual_eq)]
-#[derive(Clone, Debug, Eq, Hash, Educe)]
+#[derive(Clone, Debug, Eq, Educe)]
 #[educe(PartialOrd)]
 pub struct MapPartitionsNode {
     input: Arc<LogicalPlan>,
@@ -48,6 +48,14 @@ impl PartialEq for MapPartitionsNode {
         self.input == other.input
             && self.udf.as_ref() == other.udf.as_ref()
             && self.schema == other.schema
+    }
+}
+
+impl Hash for MapPartitionsNode {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.input.hash(state);
+        self.udf.hash(state);
+        self.schema.hash(state);
     }
 }
 

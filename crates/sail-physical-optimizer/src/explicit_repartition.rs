@@ -46,9 +46,9 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
                     Partitioning::UnknownPartitioning(n) if n >= input_partition_count => {
                         Ok(Transformed::yes(input))
                     }
-                    Partitioning::UnknownPartitioning(1) => {
-                        Ok(Transformed::yes(Arc::new(CoalescePartitionsExec::new(input))))
-                    }
+                    Partitioning::UnknownPartitioning(1) => Ok(Transformed::yes(Arc::new(
+                        CoalescePartitionsExec::new(input),
+                    ))),
                     Partitioning::UnknownPartitioning(n) => {
                         Ok(Transformed::yes(Arc::new(CoalesceExec::new(input, n))))
                     }

@@ -12,12 +12,12 @@ use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_common::{internal_err, plan_err, Result, Statistics};
-use futures::channel::mpsc::{Receiver, Sender, channel};
+use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::{SinkExt, Stream, StreamExt};
 
 const DEFAULT_ROUND_ROBIN_BUFFER_SIZE: usize = 8;

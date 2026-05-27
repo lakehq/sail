@@ -22,10 +22,7 @@ def input_partition_groups(df):
         yield pd.DataFrame({"input_pids": [",".join(str(pid) for pid in sorted(input_pids))]})
 
     rows = df.mapInPandas(counter, schema="input_pids: string").collect()
-    return [
-        set() if row["input_pids"] == "" else {int(pid) for pid in row["input_pids"].split(",")}
-        for row in rows
-    ]
+    return [set() if row["input_pids"] == "" else {int(pid) for pid in row["input_pids"].split(",")} for row in rows]
 
 
 def normalized_plan(df):
@@ -35,11 +32,8 @@ def normalized_plan(df):
 def test_explicit_repartition(spark):
     assert partition_count(spark.range(0, 10, 1, 2)) == 2  # noqa: PLR2004
     assert (
-        partition_count(
-            spark.range(0, 10, 1, 3).select("id", F.lit("foo").alias("a")).repartition("a")
-        )
-        == 3
-    )  # noqa: PLR2004
+        partition_count(spark.range(0, 10, 1, 3).select("id", F.lit("foo").alias("a")).repartition("a")) == 3  # noqa: PLR2004
+    )
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(5)) == 5  # noqa: PLR2004
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(6, "b", "a")) == 6  # noqa: PLR2004
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition("a")) == 1

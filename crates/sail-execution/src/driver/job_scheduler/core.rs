@@ -788,8 +788,7 @@ fn build_task_input_keys(
             for output_partition in 0..output_partitions {
                 let start = output_partition * input_partitions / output_partitions;
                 let end = (output_partition + 1) * input_partitions / output_partitions;
-                let mut group =
-                    Vec::with_capacity((end.saturating_sub(start)) * input_channels);
+                let mut group = Vec::with_capacity((end.saturating_sub(start)) * input_channels);
                 for partition in start..end {
                     let attempt = latest_attempt(partition)?;
                     for channel in 0..input_channels {

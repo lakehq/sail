@@ -221,7 +221,11 @@ mod tests {
     }
 
     fn test_schema() -> SchemaRef {
-        Arc::new(Schema::new(vec![Field::new("value", DataType::Int32, false)]))
+        Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]))
     }
 
     fn batch(values: &[i32]) -> RecordBatch {
@@ -259,7 +263,10 @@ mod tests {
             ]);
             let plan = Arc::new(CoalesceExec::new(input, 2)) as Arc<dyn ExecutionPlan>;
 
-            assert_eq!(collect_partition(Arc::clone(&plan), 0).await.unwrap(), vec![0, 1, 2, 3]);
+            assert_eq!(
+                collect_partition(Arc::clone(&plan), 0).await.unwrap(),
+                vec![0, 1, 2, 3]
+            );
             assert_eq!(collect_partition(plan, 1).await.unwrap(), vec![4, 5, 6, 7]);
         });
     }
