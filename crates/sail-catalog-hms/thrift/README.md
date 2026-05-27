@@ -1,5 +1,7 @@
 # Thrift IDL
 
-Copied from https://raw.githubusercontent.com/apache/hive/branch-2.3/metastore/if/hive_metastore.thrift
+Source: <https://raw.githubusercontent.com/apache/hive/branch-2.3/metastore/if/hive_metastore.thrift>
 
-`fb303` removed.
+Minor edits were applied to remove the dependency on `fb303`.
+
+The code generation logic for the Hive Metastore Rust client is inspired by [hive_metastore_rs](https://github.com/Xuanwo/hive_metastore_rs).

@@ -3,11 +3,13 @@ mod data_type;
 mod provider;
 mod security;
 
-#[expect(clippy::allow_attributes)]
 pub mod hms {
-    include!(concat!(env!("OUT_DIR"), "/volo_gen.rs"));
+    #[expect(clippy::allow_attributes)]
+    mod internal {
+        include!(concat!(env!("OUT_DIR"), "/volo_gen.rs"));
+    }
 
-    pub use self::volo_gen::hms::*;
+    pub use internal::volo_gen::hive_metastore::*;
 }
 
 pub use provider::{HmsCatalogConfig, HmsCatalogProvider};

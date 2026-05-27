@@ -1,15 +1,11 @@
-use std::path::PathBuf;
-
 fn build_hms_thrift() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=thrift/hms.thrift");
 
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
-
+    // We use the default output directory and filename for volo build.
     volo_build::Builder::thrift()
-        .add_service("thrift/hms.thrift")
-        .out_dir(out_dir)
-        .split_generated_files(false)
+        .add_service("thrift/hive_metastore.thrift")
+        .split_generated_files(true)
         .write()?;
 
     Ok(())
