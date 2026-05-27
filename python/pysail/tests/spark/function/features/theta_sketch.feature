@@ -54,6 +54,21 @@ Feature: Theta sketch functions
         | result |
         | 6      |
 
+    Scenario: theta_union accepts null arguments in three-argument form
+      When query
+        """
+        SELECT
+          theta_union(CAST(NULL AS BINARY), sketch, 12) IS NULL AS left_null,
+          theta_union(sketch, CAST(NULL AS BINARY), 12) IS NULL AS right_null,
+          theta_union(sketch, sketch, CAST(NULL AS INT)) IS NULL AS config_null
+        FROM (
+          SELECT theta_sketch_agg(col) AS sketch FROM VALUES (1) AS tab(col)
+        ) AS sketches
+        """
+      Then query result
+        | left_null | right_null | config_null |
+        | true      | true       | true        |
+
     Scenario: theta_intersection intersects two sketches
       When query
         """

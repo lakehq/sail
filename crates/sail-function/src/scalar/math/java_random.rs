@@ -22,17 +22,19 @@ impl JavaRandom {
     }
 
     /// Returns the next random `i32` in `[0, bound)`, matching `Random.nextInt(bound)`.
-    pub fn next_i32_bound(&mut self, bound: i32) -> i32 {
-        assert!(bound > 0, "bound must be positive");
+    pub fn next_i32_bound(&mut self, bound: i32) -> Option<i32> {
+        if bound <= 0 {
+            return None;
+        }
         let mask = bound - 1;
         if bound & mask == 0 {
-            return (((bound as i64) * (self.next_bits(31) as i64)) >> 31) as i32;
+            return Some((((bound as i64) * (self.next_bits(31) as i64)) >> 31) as i32);
         }
         loop {
             let bits = self.next_bits(31);
             let value = bits % bound;
             if bits.wrapping_sub(value).wrapping_add(mask) >= 0 {
-                return value;
+                return Some(value);
             }
         }
     }
@@ -148,5 +150,12 @@ mod tests {
                 actual
             );
         }
+    }
+
+    #[test]
+    fn test_java_random_invalid_bound() {
+        let mut rng = JavaRandom::new(0);
+        assert_eq!(rng.next_i32_bound(0), None);
+        assert_eq!(rng.next_i32_bound(-1), None);
     }
 }

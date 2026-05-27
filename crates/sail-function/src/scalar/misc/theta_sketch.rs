@@ -94,13 +94,7 @@ impl ThetaUnionFunction {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![DataType::Binary, DataType::Binary]),
-                    TypeSignature::Exact(vec![DataType::Binary, DataType::Binary, DataType::Int32]),
-                    TypeSignature::Exact(vec![DataType::Null, DataType::Binary]),
-                    TypeSignature::Exact(vec![DataType::Binary, DataType::Null]),
-                    TypeSignature::Exact(vec![DataType::Null, DataType::Null]),
-                ],
+                vec![TypeSignature::Any(2), TypeSignature::Any(3)],
                 Volatility::Immutable,
             ),
         }

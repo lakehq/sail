@@ -145,8 +145,16 @@ impl SparkCountMinSketch {
         })?;
         let mut rng = JavaRandom::new(seed as i64 as u64);
         let hash_a = (0..depth)
-            .map(|_| rng.next_i32_bound(i32::MAX) as i64)
-            .collect();
+            .map(|_| {
+                rng.next_i32_bound(i32::MAX)
+                    .map(|value| value as i64)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "count_min_sketch random hash bound must be positive".to_string(),
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             depth,
             width,

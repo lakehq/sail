@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use arrow::array::{
     Array, ArrayRef, BinaryArray, Float32Array, Float64Array, Int32Array, Int64Array,
@@ -90,7 +90,9 @@ pub(crate) fn union_sketches<'a, I>(
 where
     I: IntoIterator<Item = &'a [u8]>,
 {
-    let mut entries = HashSet::new();
+    let nominal_entries = 1usize << lg_nom_entries;
+    let max_retained_entries = nominal_entries + 1;
+    let mut entries = BTreeSet::new();
     let mut theta = MAX_THETA;
     let mut seed_hash = None;
     let mut saw_non_empty = false;
@@ -99,14 +101,33 @@ where
         let sketch = deserialize_sketch(bytes, function_name)?;
         update_seed_hash(&mut seed_hash, &sketch, function_name)?;
         saw_non_empty |= !sketch.is_empty();
-        theta = theta.min(sketch.theta64());
+        let next_theta = theta.min(sketch.theta64());
+        if next_theta < theta {
+            let _ = entries.split_off(&next_theta);
+            theta = next_theta;
+        }
         for hash in sketch.iter() {
+            if hash == 0 || hash >= theta {
+                continue;
+            }
+            if entries.len() >= max_retained_entries
+                && entries.last().is_some_and(|largest| hash >= *largest)
+            {
+                continue;
+            }
             entries.insert(hash);
+            if entries.len() > max_retained_entries {
+                entries.pop_last();
+            }
         }
     }
 
-    let mut entries: Vec<u64> = entries.into_iter().filter(|hash| *hash < theta).collect();
-    trim_entries(&mut entries, &mut theta, lg_nom_entries);
+    if entries.len() > nominal_entries {
+        if let Some(next_theta) = entries.pop_last() {
+            theta = theta.min(next_theta);
+        }
+    }
+    let entries: Vec<u64> = entries.into_iter().collect();
     let empty = !saw_non_empty && entries.is_empty() && theta == MAX_THETA;
     Ok(serialize_compact_sketch(
         entries,
