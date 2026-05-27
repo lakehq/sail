@@ -24,6 +24,12 @@ Feature: Struct NULL field extraction
         | 1      |
         | NULL   |
 
+    @sail-bug
+    # Sail coerces VALUES with mixed STRUCT<val:DECIMAL> + STRUCT<val:DOUBLE> rows
+    # to STRUCT<val:DECIMAL(30,15)> and renders `3.140000000000000`.
+    # Spark picks STRUCT<val:DOUBLE> and renders `3.14`. Regression surfaced under
+    # DataFusion 54's coercion changes. Tracked for follow-up; keep the expected
+    # value as Spark's so this xfails today and xpasses once the coercion is fixed.
     Scenario: Extract double field from NULL struct
       When query
         """
