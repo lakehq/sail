@@ -34,10 +34,9 @@ use url::Url;
 use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::datasource::PATH_COLUMN;
-use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
-    DeltaWriterExecOptions,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriteContext,
+    DeltaWriterExec, DeltaWriterExecOptions,
 };
 use crate::table::DeltaSnapshot;
 
@@ -63,8 +62,8 @@ pub fn assemble_commit_plan(
     partition_columns: Vec<String>,
     table_exists: bool,
     table_schema: SchemaRef,
-    operation: Option<DeltaOperation>,
     user_metadata: Option<String>,
+    write_context: DeltaWriteContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -75,7 +74,7 @@ pub fn assemble_commit_plan(
         PhysicalSinkMode::Append,
         table_exists,
         table_schema.clone(),
-        operation,
+        write_context.clone(),
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> = if let Some(remove_src) = remove_source {
@@ -96,6 +95,7 @@ pub fn assemble_commit_plan(
         table_schema,
         PhysicalSinkMode::Append,
         user_metadata,
+        write_context.commit_context.clone(),
     )))
 }
 

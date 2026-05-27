@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::DataType as ArrowDataType;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
@@ -33,7 +33,10 @@ use crate::spec::{
     canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
     DataType as DeltaDataType, DeltaOperation, Protocol, StructField, StructType, TableFeature,
 };
-use crate::table::{open_table_with_object_store, open_table_with_object_store_and_table_config};
+use crate::table::{
+    infer_delta_logical_schema, open_table_with_object_store,
+    open_table_with_object_store_and_table_config,
+};
 use crate::{create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
@@ -71,6 +74,22 @@ impl TableFormat for DeltaTableFormat {
         let options = DeltaReadOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         create_delta_source(ctx, table_url, schema, options).await
+    }
+
+    async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
+        let SourceInfo {
+            paths,
+            schema,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
+            options,
+        } = info;
+        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let options = DeltaReadOptions::resolve(ctx, options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        infer_delta_logical_schema(ctx, table_url, schema, options).await
     }
 
     async fn create_writer(
@@ -134,6 +153,15 @@ impl TableFormat for DeltaTableFormat {
             Err(err) => return Err(DataFusionError::External(Box::new(err))),
         };
         let table_exists = table.is_some();
+        let table_snapshot = table
+            .as_ref()
+            .map(|table| {
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))
+                    .cloned()
+            })
+            .transpose()?;
         let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -156,18 +184,9 @@ impl TableFormat for DeltaTableFormat {
         let table_schema_for_cond = None;
 
         // Get existing partition columns from table metadata if available
-        let existing_partition_columns = if let Some(table) = &table {
-            Some(
-                table
-                    .snapshot()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .metadata()
-                    .partition_columns()
-                    .clone(),
-            )
-        } else {
-            None
-        };
+        let existing_partition_columns = table_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.metadata().partition_columns().clone());
 
         // Validate partition column mismatch for append/overwrite operations
         if let Some(existing_partitions) = &existing_partition_columns {
@@ -228,7 +247,8 @@ impl TableFormat for DeltaTableFormat {
             table_schema_for_cond,
             table_exists,
         )
-        .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()));
+        .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
+        .with_table_snapshot(table_snapshot);
         let planner_ctx = PlannerContext::new(ctx, table_config);
         let planner = DeltaPhysicalPlanner::new(planner_ctx);
         let sink_exec = planner.create_plan(input, unified_mode, sort_order).await?;

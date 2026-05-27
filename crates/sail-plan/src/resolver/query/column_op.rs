@@ -181,6 +181,11 @@ impl PlanResolver<'_> {
         aliases: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        // `AliasEntry` is `(resolved_expr, seen, explicit_metadata)` where `explicit_metadata` is
+        // `Some(meta)` when the user explicitly provided metadata via `withMetadata` (even empty),
+        // and `None` when no metadata was specified on the alias.
+        type AliasEntry = (Expr, bool, Option<Vec<(String, String)>>);
+
         let input = self.resolve_query_plan(input, state).await?;
         // If the input is a SubqueryAlias, save the alias and re-apply it after building the
         // projection. A Projection node strips qualifiers from its output schema, so without
@@ -191,7 +196,7 @@ impl PlanResolver<'_> {
         };
         let schema = input.schema();
         // We use `IndexMap` to ensure the result schema has a deterministic column order.
-        let mut aliases: IndexMap<String, (Expr, bool, Vec<_>)> = async {
+        let mut aliases: IndexMap<String, AliasEntry> = async {
             let mut results = IndexMap::new();
             for alias in aliases {
                 let (name, expr, metadata) = match alias {
@@ -203,7 +208,7 @@ impl PlanResolver<'_> {
                         let name = name
                             .one()
                             .map_err(|_| PlanError::invalid("multi-alias for column"))?;
-                        (name, *expr, metadata.unwrap_or(Vec::new()))
+                        (name, *expr, metadata)
                     }
                     _ => return Err(PlanError::invalid("alias expression expected for column")),
                 };
@@ -221,11 +226,12 @@ impl PlanResolver<'_> {
                 match aliases.get_mut(name) {
                     Some((e, exists, metadata)) => {
                         *exists = true;
-                        if !metadata.is_empty() {
-                            Ok(NamedExpr::new(vec![name.to_string()], e.clone())
-                                .with_metadata(metadata.clone()))
-                        } else {
-                            Ok(NamedExpr::new(vec![name.to_string()], e.clone()))
+                        match metadata {
+                            Some(m) if !m.is_empty() => {
+                                Ok(NamedExpr::new(vec![name.to_string()], e.clone())
+                                    .with_metadata(m.clone()))
+                            }
+                            _ => Ok(NamedExpr::new(vec![name.to_string()], e.clone())),
                         }
                     }
                     None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
@@ -234,13 +240,15 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         for (name, (e, exists, metadata)) in &aliases {
             if !exists {
-                if !metadata.is_empty() {
-                    expr.push(
-                        NamedExpr::new(vec![name.clone()], e.clone())
-                            .with_metadata(metadata.clone()),
-                    );
-                } else {
-                    expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
+                match metadata {
+                    Some(m) if !m.is_empty() => {
+                        expr.push(
+                            NamedExpr::new(vec![name.clone()], e.clone()).with_metadata(m.clone()),
+                        );
+                    }
+                    _ => {
+                        expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
+                    }
                 }
             }
         }

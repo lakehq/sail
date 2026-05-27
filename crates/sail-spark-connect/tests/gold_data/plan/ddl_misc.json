@@ -117,7 +117,19 @@
     {
       "input": "COMMENT ON NAMESPACE a.b.c IS ''",
       "output": {
-        "failure": "invalid argument: found NAMESPACE at 11:20 expected 'CATALOG', 'DATABASE', 'SCHEMA', 'TABLE', or 'COLUMN'"
+        "success": {
+          "command": {
+            "commentOnDatabase": {
+              "database": [
+                "a",
+                "b",
+                "c"
+              ],
+              "value": ""
+            },
+            "planId": null
+          }
+        }
       }
     },
     {

@@ -97,6 +97,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 properties,
+                is_external: _,
             } => {
                 let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
                 let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;

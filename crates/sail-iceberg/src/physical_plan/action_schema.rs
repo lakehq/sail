@@ -35,6 +35,7 @@ pub struct CommitMeta {
     pub row_count: u64,
     pub operation: Operation,
     pub requirements: Vec<TableRequirement>,
+    pub table_properties: Vec<(String, String)>,
     pub schema: Option<IcebergSchema>,
     pub partition_spec: Option<PartitionSpec>,
 }
@@ -46,6 +47,8 @@ pub struct CommitMetaAction {
     pub operation: String,
     /// Requirements are relatively small but hard to trace into Arrow schema; keep as JSON.
     pub requirements_json: String,
+    /// Table properties are applied only when bootstrapping new table metadata.
+    pub table_properties_json: String,
     /// Optional Iceberg Schema JSON (rare) to avoid huge Arrow schema.
     pub schema_json: Option<String>,
     /// Optional PartitionSpec JSON (rare) to avoid huge Arrow schema.
@@ -383,6 +386,8 @@ pub fn encode_add_data_files(data_files: Vec<DataFile>) -> Result<RecordBatch> {
 pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
     let requirements_json = serde_json::to_string(&meta.requirements)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let table_properties_json = serde_json::to_string(&meta.table_properties)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let schema_json = meta
         .schema
         .as_ref()
@@ -402,6 +407,7 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
             row_count: meta.row_count,
             operation: meta.operation.as_str().to_string(),
             requirements_json,
+            table_properties_json,
             schema_json,
             partition_spec_json,
         }),
@@ -432,6 +438,9 @@ pub fn decode_actions_and_meta_from_batch(
                 let requirements: Vec<TableRequirement> =
                     serde_json::from_str(&m.requirements_json)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let table_properties: Vec<(String, String)> =
+                    serde_json::from_str(&m.table_properties_json)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let schema: Option<IcebergSchema> = m
                     .schema_json
                     .as_deref()
@@ -449,6 +458,7 @@ pub fn decode_actions_and_meta_from_batch(
                     row_count: m.row_count,
                     operation: parse_operation(&m.operation)?,
                     requirements,
+                    table_properties,
                     schema,
                     partition_spec,
                 });
@@ -499,6 +509,7 @@ mod tests {
             row_count: 10,
             operation: Operation::Append,
             requirements: vec![TableRequirement::NotExist],
+            table_properties: vec![],
             schema: None,
             partition_spec: None,
         };

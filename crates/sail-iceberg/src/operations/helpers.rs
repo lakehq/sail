@@ -22,7 +22,7 @@ pub(crate) fn format_version_for_schema(schema: &Schema) -> FormatVersion {
     }) {
         FormatVersion::V3
     } else {
-        FormatVersion::V2
+        FormatVersion::V1
     }
 }
 
