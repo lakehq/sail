@@ -125,11 +125,11 @@ tempfile = "3.27.0"
 readonly = "0.2.13"
 toml = "0.8"
 bitflags = "2.10.0"
-hive_metastore = "0.2.0"
 libloading = "0.8.9"
-pilota = "0.11.10"
-volo = "0.10.6"
-volo-thrift = "0.10.8"
+pilota = "0.13.1"
+volo = "0.12.3"
+volo-build = "0.12.3"
+volo-thrift = "0.12.4"
 
 ######
 # The versions of the following dependencies are managed manually.
