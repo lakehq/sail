@@ -32,7 +32,6 @@ mod reconstructor;
 pub struct JoinReorderOptions {
     pub max_relations: usize,
     pub emit_threshold: usize,
-    pub enable_non_inner: bool,
     pub enable_fact_anchor_heuristic: bool,
     pub fact_anchor_min_relations: usize,
     pub fact_anchor_relative_threshold: f64,
@@ -48,7 +47,6 @@ impl Default for JoinReorderOptions {
         Self {
             max_relations: 12,
             emit_threshold: 10_000,
-            enable_non_inner: false,
             enable_fact_anchor_heuristic: true,
             fact_anchor_min_relations: 5,
             fact_anchor_relative_threshold: 0.25,

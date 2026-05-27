@@ -105,10 +105,7 @@ impl GraphBuilder {
 
         // TODO: Extend to support `SortMergeJoinExec`.
         if let Some(join_plan) = any_plan.downcast_ref::<HashJoinExec>() {
-            if join_plan.join_type() == &JoinType::Inner
-                || (self.options.enable_non_inner
-                    && Self::is_supported_non_inner_join_type(*join_plan.join_type()))
-            {
+            if join_plan.join_type() == &JoinType::Inner {
                 trace!(
                     "Visiting hash join ({:?}): {}",
                     join_plan.join_type(),
@@ -116,6 +113,8 @@ impl GraphBuilder {
                 );
                 return self.visit_hash_join(join_plan);
             }
+            // Non-inner joins preserve null/row semantics through input orientation, so keep
+            // them as reorder boundaries until their reorder correctness is revalidated.
             trace!(
                 "Skipping non-inner join ({:?}): {}",
                 join_plan.join_type(),
@@ -309,19 +308,6 @@ impl GraphBuilder {
             output_map = projected;
         }
         Ok(output_map)
-    }
-
-    fn is_supported_non_inner_join_type(join_type: JoinType) -> bool {
-        matches!(
-            join_type,
-            JoinType::Left
-                | JoinType::Right
-                | JoinType::Full
-                | JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::LeftAnti
-                | JoinType::RightAnti
-        )
     }
 
     fn join_output_map_for_type(
@@ -1094,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn test_non_inner_join_requires_option_and_uses_full_endpoints() -> Result<()> {
+    fn test_non_inner_join_is_region_boundary() -> Result<()> {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
@@ -1120,25 +1106,8 @@ mod tests {
         let mut disabled = GraphBuilder::default();
         assert!(
             disabled.build(join_plan.clone())?.is_none(),
-            "non-inner joins remain boundaries unless explicitly enabled"
+            "non-inner joins remain reorder boundaries"
         );
-
-        let mut enabled = GraphBuilder::new(JoinReorderOptions {
-            enable_non_inner: true,
-            ..Default::default()
-        });
-        let Some((graph, output_map)) = enabled.build(join_plan)? else {
-            return Err(DataFusionError::Internal(
-                "expected left join graph when non-inner support is enabled".to_string(),
-            ));
-        };
-
-        assert_eq!(graph.relation_count(), 2);
-        assert_eq!(graph.edges.len(), 1);
-        assert_eq!(graph.edges[0].join_type, JoinType::Left);
-        assert_eq!(graph.edges[0].left_endpoint, JoinSet::new_singleton(0)?);
-        assert_eq!(graph.edges[0].right_endpoint, JoinSet::new_singleton(1)?);
-        assert_eq!(output_map.len(), 2);
         Ok(())
     }
 
