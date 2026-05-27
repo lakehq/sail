@@ -247,7 +247,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         if_not_exists,
         replace,
         properties,
-        is_external: _,
+        is_external,
     } = options;
 
     if replace {
@@ -268,6 +268,12 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
     if bucket_by.is_some() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support BUCKET BY".to_string(),
+        ));
+    }
+
+    if !is_external {
+        return Err(CatalogError::InvalidArgument(
+            "Location is required for Iceberg tables".to_string(),
         ));
     }
 
