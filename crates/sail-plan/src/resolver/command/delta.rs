@@ -815,7 +815,7 @@ fn delta_check_constraints_from_option_layers(
             _ => {}
         }
     }
-    constraints.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    constraints.sort_by_key(|a| a.name.to_lowercase());
     constraints
 }
 
@@ -824,7 +824,7 @@ fn delta_check_constraints_from_properties(
 ) -> Vec<DeltaCheckConstraint> {
     let mut constraints = Vec::new();
     upsert_delta_check_constraints(&mut constraints, properties);
-    constraints.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    constraints.sort_by_key(|a| a.name.to_lowercase());
     constraints
 }
 
@@ -854,7 +854,7 @@ fn delta_constraints_from_schema_and_properties<'a>(
             });
         }
     }
-    constraints.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    constraints.sort_by_key(|a| a.name.to_lowercase());
     constraints
 }
 

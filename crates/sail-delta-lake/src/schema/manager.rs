@@ -176,13 +176,6 @@ pub fn protocol_for_create(
         }
     }
 
-    if has_check_constraints
-        && !writer_features.is_empty()
-        && !writer_features.contains(&TableFeature::CheckConstraints)
-    {
-        writer_features.push(TableFeature::CheckConstraints);
-    }
-
     // `delta.enableDeletionVectors = "true"` implicitly activates DeletionVectors.
     // Setting the metadata property is sufficient—`delta.feature.deletionVectors` is
     // not also required.
@@ -223,6 +216,13 @@ pub fn protocol_for_create(
         if !writer_features.contains(&TableFeature::V2Checkpoint) {
             writer_features.push(TableFeature::V2Checkpoint);
         }
+    }
+
+    if has_check_constraints
+        && !writer_features.is_empty()
+        && !writer_features.contains(&TableFeature::CheckConstraints)
+    {
+        writer_features.push(TableFeature::CheckConstraints);
     }
 
     if reader_features.is_empty() && writer_features.is_empty() {
@@ -313,8 +313,25 @@ mod tests {
         );
         let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 1);
-        assert_eq!(protocol.min_writer_version(), 7);
+        assert_eq!(protocol.min_writer_version(), 3);
         assert_eq!(protocol.reader_features(), None);
+        assert_eq!(protocol.writer_features(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_adds_check_constraints_to_writer_features() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.constraints.positive_id".to_string(),
+            "id > 0".to_string(),
+        );
+        config.insert("delta.checkpointPolicy".to_string(), "v2".to_string());
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
         assert!(protocol.has_writer_feature(&TableFeature::CheckConstraints));
         Ok(())
     }
