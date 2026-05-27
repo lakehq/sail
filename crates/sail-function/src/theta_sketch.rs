@@ -11,7 +11,7 @@ use datasketches::theta::{CompactThetaSketch, ThetaSketch};
 
 pub(crate) const MIN_LG_NOM_ENTRIES: i32 = 4;
 pub(crate) const MAX_LG_NOM_ENTRIES: i32 = 26;
-pub(crate) const DEFAULT_LG_NOM_ENTRIES: i32 = 12;
+pub const DEFAULT_LG_NOM_ENTRIES: i32 = 12;
 
 const MAX_THETA: u64 = i64::MAX as u64;
 const COMPACT_FAMILY_ID: u8 = 3;

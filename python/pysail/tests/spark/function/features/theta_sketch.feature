@@ -32,6 +32,16 @@ Feature: Theta sketch functions
         | result |
         | 2      |
 
+    Scenario: theta_sketch_agg follows Spark array null-element hashing
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_sketch_agg(col)) AS result
+        FROM VALUES (array(CAST(NULL AS INT))), (array(0)) AS tab(col)
+        """
+      Then query result
+        | result |
+        | 1      |
+
   Rule: theta sketch set operations combine sketches
 
     Scenario: theta_union merges two sketches

@@ -48,6 +48,18 @@ Feature: DataSketches functions
         | result                                                                                                                       |
         | 0000000100000000000000030000000100000004000000005D8D6AB90000000000000000000000000000000200000000000000010000000000000000 |
 
+    Scenario: count_min_sketch truncates bigint seeds like Spark
+      When query
+        """
+        SELECT
+          hex(count_min_sketch(col, 0.5d, 0.5d, CAST(2147483648 AS BIGINT))) =
+          hex(count_min_sketch(col, 0.5d, 0.5d, CAST(-2147483648 AS BIGINT))) AS result
+        FROM VALUES (1), (2), (1) AS tab(col)
+        """
+      Then query result
+        | result |
+        | true   |
+
   Rule: DataSketches functions return Spark-compatible types
 
     Scenario: HLL and count-min sketch functions return binary and bigint values

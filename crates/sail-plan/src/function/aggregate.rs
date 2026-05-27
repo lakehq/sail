@@ -34,15 +34,13 @@ use sail_function::aggregate::theta_sketch::{
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::struct_function::StructFunction;
+use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
 };
 use crate::function::transform_count_star_wildcard_expr;
-
-const DEFAULT_THETA_LG_NOM_ENTRIES: i32 = 12;
-const DEFAULT_HLL_LG_CONFIG_K: i32 = 12;
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =

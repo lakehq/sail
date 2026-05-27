@@ -9,7 +9,7 @@ use datasketches::hll::{HllSketch, HllType, HllUnion};
 
 pub(crate) const MIN_LG_CONFIG_K: i32 = 4;
 pub(crate) const MAX_LG_CONFIG_K: i32 = 21;
-pub(crate) const DEFAULT_LG_CONFIG_K: i32 = 12;
+pub const DEFAULT_LG_CONFIG_K: i32 = 12;
 
 pub(crate) fn validate_lg_config_k(value: i32, function_name: &str) -> Result<u8> {
     if !(MIN_LG_CONFIG_K..=MAX_LG_CONFIG_K).contains(&value) {

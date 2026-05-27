@@ -22,11 +22,10 @@ use sail_function::scalar::misc::theta_sketch::{
     ThetaUnionFunction,
 };
 use sail_function::scalar::misc::version::SparkVersion;
+use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-
-const DEFAULT_THETA_LG_NOM_ENTRIES: i32 = 12;
 
 fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
