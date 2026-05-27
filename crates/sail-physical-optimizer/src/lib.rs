@@ -25,6 +25,7 @@ use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
+pub use crate::join_reorder::JoinReorderOptions;
 
 mod barrier;
 mod collect_left;
@@ -34,6 +35,7 @@ mod join_reorder;
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
+    pub join_reorder: JoinReorderOptions,
 }
 
 pub fn get_physical_optimizers(
@@ -44,7 +46,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
     rules.push(Arc::new(AggregateStatistics::new()));
     if options.enable_join_reorder {
-        rules.push(Arc::new(JoinReorder::new()));
+        rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
