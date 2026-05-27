@@ -20,6 +20,7 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
+use sail_data_source::listing::planner::ListingTablePhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
@@ -74,6 +75,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         }
         let mut extension_planners = new_lakehouse_extension_planners();
         extension_planners.push(Arc::new(SystemTablePhysicalPlanner));
+        extension_planners.push(Arc::new(ListingTablePhysicalPlanner));
         extension_planners.push(Arc::new(ExtensionPhysicalPlanner));
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         planner
