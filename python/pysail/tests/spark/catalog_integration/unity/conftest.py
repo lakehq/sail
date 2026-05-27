@@ -234,7 +234,7 @@ def _unity_table_info(unity_rest_url: str, table_name: str) -> dict:
 
 def _unity_table_parts(table_name: str) -> tuple[str, str, str]:
     full_name = _qualified_table_name(table_name)
-    catalog_name, schema_name, name = full_name.split(".", maxsplit=2)
+    catalog_name, schema_name, name = full_name.split(".", 2)
     return catalog_name, schema_name, name
 
 

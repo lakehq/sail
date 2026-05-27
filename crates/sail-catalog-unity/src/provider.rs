@@ -892,9 +892,13 @@ impl CatalogProvider for UnityCatalogProvider {
             .text()
             .await
             .unwrap_or_else(|e| format!("failed to read Unity Catalog error response body: {e}"));
-        if status.as_u16() == 400 || status.as_u16() == 409 {
+        if status.as_u16() == 409 {
             Err(CatalogError::Conflict(format!(
                 "Unity Catalog Delta commit conflict: HTTP {status}: {body}"
+            )))
+        } else if status.as_u16() == 400 {
+            Err(CatalogError::InvalidArgument(format!(
+                "Unity Catalog Delta commit invalid argument: HTTP {status}: {body}"
             )))
         } else if status.as_u16() == 501 {
             Err(CatalogError::NotSupported(
