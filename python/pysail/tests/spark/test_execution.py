@@ -234,3 +234,73 @@ class TestLocalClusterExecution:
         coalesced_sum = coalesced.agg(F.sum("value")).collect()[0][0]
         assert coalesced_count == 1000  # noqa: PLR2004
         assert coalesced_sum == original_sum
+
+    def test_coalesce_spark_parity_in_cluster_mode(self, spark):
+        row_count = 48
+        input_partition_count = 4
+        increased_partition_count = 6
+        output_partition_count = 2
+
+        def input_partition_groups(df):
+            def counter(iterator):
+                input_pids = set()
+                for pdf in iterator:
+                    input_pids.update(pdf["input_pid"].tolist())
+                yield pd.DataFrame({"input_pids": [",".join(str(pid) for pid in sorted(input_pids))]})
+
+            rows = df.mapInPandas(counter, schema="input_pids: string").collect()
+            return [
+                set() if row["input_pids"] == "" else {int(pid) for pid in row["input_pids"].split(",")} for row in rows
+            ]
+
+        increased_rows = (
+            spark.range(0, row_count, 1, input_partition_count)
+            .coalesce(increased_partition_count)
+            .selectExpr("spark_partition_id() AS pid")
+            .distinct()
+            .collect()
+        )
+        assert {row["pid"] for row in increased_rows} == set(range(input_partition_count))
+
+        groups = input_partition_groups(
+            spark.range(0, row_count, 1, input_partition_count)
+            .selectExpr("spark_partition_id() AS input_pid")
+            .coalesce(output_partition_count)
+        )
+
+        assert len(groups) == output_partition_count
+        assert all(group for group in groups)
+        assert {pid for group in groups for pid in group} == set(range(input_partition_count))
+        assert sum(len(group) for group in groups) == input_partition_count
+
+    def test_coalesce_preserves_data_in_cluster_mode(self, spark):
+        row_count = 48
+        input_partition_count = 4
+
+        df = spark.range(0, row_count, 1, input_partition_count).select(
+            "id",
+            (F.col("id") % 3).alias("group"),
+        )
+
+        actual = df.coalesce(2).orderBy("id").toPandas()
+        expected = df.orderBy("id").toPandas()
+
+        assert_frame_equal(actual, expected)
+
+    def test_coalesce_to_one_partition_in_cluster_mode(self, spark):
+        df = spark.range(0, 20, 1, 4)
+        coalesced = df.coalesce(1)
+
+        actual_ids = sorted(row["id"] for row in coalesced.collect())
+        assert actual_ids == list(range(20))
+
+    def test_coalesce_hint_in_cluster_mode(self, spark):
+        row_count = 48
+        input_partition_count = 4
+
+        df = spark.range(0, row_count, 1, input_partition_count)
+
+        actual = df.hint("COALESCE", 2).orderBy("id").toPandas()
+        expected = df.orderBy("id").toPandas()
+
+        assert_frame_equal(actual, expected)

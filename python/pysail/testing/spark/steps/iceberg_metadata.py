@@ -10,9 +10,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from pyiceberg.avro.file import AvroFile
-from pyiceberg.io.pyarrow import PyArrowFileIO
+from pyiceberg.io.pyarrow import PyArrowFile, PyArrowFileIO
 from pyiceberg.manifest import MANIFEST_LIST_FILE_SCHEMAS, ManifestContent, PartitionFieldSummary
 from pyspark.sql import Row
 from pytest_bdd import given, parsers, then
@@ -135,6 +137,14 @@ def _current_snapshot(metadata: dict) -> dict:
     raise AssertionError(msg)
 
 
+def _pyarrow_input_file(io: PyArrowFileIO, location: str) -> PyArrowFile:
+    parsed = urlparse(location)
+    if parsed.scheme != "file":
+        return io.new_input(location)
+    path = url2pathname(f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path)
+    return PyArrowFile(location=location, path=path, fs=io.fs_by_scheme("file", ""))
+
+
 def _current_manifest_list(metadata: dict) -> dict:
     snapshot = _current_snapshot(metadata)
     manifest_list = snapshot.get("manifest-list")
@@ -144,7 +154,7 @@ def _current_manifest_list(metadata: dict) -> dict:
 
     io = PyArrowFileIO()
     with AvroFile(
-        io.new_input(manifest_list),
+        _pyarrow_input_file(io, manifest_list),
         MANIFEST_LIST_FILE_SCHEMAS[format_version],
         read_types={508: PartitionFieldSummary},
         read_enums={517: ManifestContent},
