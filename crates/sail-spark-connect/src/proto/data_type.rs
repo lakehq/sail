@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use sail_common::spec;
@@ -57,17 +56,15 @@ impl TryFrom<sdt::StructField> for spec::FieldRef {
         } = field;
         let data_type = data_type.required("data type")?;
         let data_type = spec::DataType::try_from(data_type)?;
-        let metadata: HashMap<String, String> = metadata
+        let metadata = metadata
             .filter(|m| !m.trim().is_empty())
-            .map(|m| -> SparkResult<_> { Ok(serde_json::from_str(m.as_str())?) })
-            .transpose()?
+            .map(|m| vec![(spec::SPARK_METADATA_JSON_KEY.to_string(), m)])
             .unwrap_or_default();
         Ok(Arc::new(spec::Field {
             name,
             data_type,
             nullable,
-            // TODO: preserve metadata order in serde
-            metadata: metadata.into_iter().collect(),
+            metadata,
         }))
     }
 }

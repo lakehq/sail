@@ -24,6 +24,8 @@ sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+arrow-schema = { workspace = true }
+parquet-variant-compute = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }

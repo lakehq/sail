@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, LargeListArray, ListArray, MapArray, RecordBatch, RecordBatchOptions,
-    StructArray,
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray, RecordBatch,
+    RecordBatchOptions, StructArray,
 };
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef, Fields, Schema};
@@ -427,6 +427,9 @@ fn normalize_array_for_pandas(
         (ArrowDataType::LargeList(_), ArrowDataType::LargeList(field)) => {
             normalize_large_list_array_for_pandas(column, field)
         }
+        (ArrowDataType::FixedSizeList(_, _), ArrowDataType::FixedSizeList(field, size)) => {
+            normalize_fixed_size_list_array_for_pandas(column, field, *size)
+        }
         (ArrowDataType::Map(_, _), ArrowDataType::Map(field, sorted)) => {
             normalize_map_array_for_pandas(column, field, *sorted)
         }
@@ -478,6 +481,24 @@ fn normalize_large_list_array_for_pandas(
     Ok(Arc::new(LargeListArray::try_new(
         field.clone(),
         list_array.offsets().clone(),
+        values,
+        list_array.nulls().cloned(),
+    )?))
+}
+
+fn normalize_fixed_size_list_array_for_pandas(
+    column: &ArrayRef,
+    field: &FieldRef,
+    size: i32,
+) -> SparkResult<ArrayRef> {
+    let list_array = column
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| SparkError::internal("expected fixed-size list array"))?;
+    let values = normalize_array_for_pandas(list_array.values(), field.data_type())?;
+    Ok(Arc::new(FixedSizeListArray::try_new(
+        field.clone(),
+        size,
         values,
         list_array.nulls().cloned(),
     )?))

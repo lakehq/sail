@@ -224,7 +224,6 @@ pub(crate) enum SparkThrowable {
     UnsupportedOperationException(String),
     #[expect(dead_code)]
     ArrayIndexOutOfBoundsException(String),
-    #[expect(dead_code)]
     DateTimeException(String),
     SparkRuntimeException(String),
     #[expect(dead_code)]
@@ -399,12 +398,20 @@ impl From<CommonErrorCause> for SparkThrowable {
             | CommonErrorCause::Plan(x)
             | CommonErrorCause::Configuration(x) => SparkThrowable::AnalysisException(x),
             CommonErrorCause::Execution(x) => {
-                // TODO: handle situations where a different exception type is more appropriate.
-                SparkThrowable::AnalysisException(x)
+                if is_timestamp_parse_error(&x) {
+                    SparkThrowable::DateTimeException(x)
+                } else {
+                    // TODO: handle situations where a different exception type is more appropriate.
+                    SparkThrowable::AnalysisException(x)
+                }
             }
             CommonErrorCause::DeltaTable(x) => SparkThrowable::QueryExecutionException(x),
         }
     }
+}
+
+fn is_timestamp_parse_error(message: &str) -> bool {
+    message.starts_with("Error parsing timestamp")
 }
 
 impl From<SparkError> for Status {
@@ -454,5 +461,15 @@ mod tests {
         assert!(truncated.starts_with("python traceback start\n"));
         assert!(truncated.contains(TRUNCATED_MARKER));
         assert!(truncated.ends_with("[UDTF_ARROW_TYPE_CONVERSION_ERROR]\n"));
+    }
+
+    #[test]
+    fn execution_timestamp_parse_error_maps_to_datetime_exception() {
+        let throwable = SparkThrowable::from(CommonErrorCause::Execution(
+            "Error parsing timestamp from '2023-01-01' using format '%d-%m-%Y': input contains invalid characters".to_string(),
+        ));
+
+        assert!(matches!(&throwable, SparkThrowable::DateTimeException(_)));
+        assert_eq!(throwable.class_name(), "java.time.DateTimeException");
     }
 }

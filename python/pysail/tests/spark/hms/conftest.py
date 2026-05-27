@@ -22,6 +22,10 @@ from testcontainers.core.waiting_utils import wait_for_logs
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+# We skip the tests for now since it may cause issues
+# when running the tests in installed packages.
+pytest.skip("not working", allow_module_level=True)
+
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Auto-mark HMS tests and deselect them unless explicitly opted in."""

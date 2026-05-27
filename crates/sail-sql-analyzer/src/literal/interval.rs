@@ -4,6 +4,9 @@ use std::str::FromStr;
 use chrono::{self, TimeDelta};
 use lazy_static::lazy_static;
 use regex::Regex;
+use sail_common::spark::extension::{
+    SparkDayTimeIntervalType, SparkIntervalMetadata, SparkYearMonthIntervalType,
+};
 use sail_common::spec;
 use sail_sql_parser::ast::data_type::{IntervalDayTimeUnit, IntervalYearMonthUnit};
 use sail_sql_parser::ast::expression::{
@@ -60,31 +63,22 @@ fn expr_with_interval_metadata(
 }
 
 fn interval_metadata(kind: StandardIntervalKind) -> Option<Vec<(String, String)>> {
-    let (prefix, start, end) = match kind {
-        StandardIntervalKind::Year => ("yearMonth", 0, 0),
-        StandardIntervalKind::YearToMonth => ("yearMonth", 0, 1),
-        StandardIntervalKind::Month => ("yearMonth", 1, 1),
-        StandardIntervalKind::Day => ("dayTime", 0, 0),
-        StandardIntervalKind::DayToHour => ("dayTime", 0, 1),
-        StandardIntervalKind::DayToMinute => ("dayTime", 0, 2),
-        StandardIntervalKind::DayToSecond => ("dayTime", 0, 3),
-        StandardIntervalKind::Hour => ("dayTime", 1, 1),
-        StandardIntervalKind::HourToMinute => ("dayTime", 1, 2),
-        StandardIntervalKind::HourToSecond => ("dayTime", 1, 3),
-        StandardIntervalKind::Minute => ("dayTime", 2, 2),
-        StandardIntervalKind::MinuteToSecond => ("dayTime", 2, 3),
-        StandardIntervalKind::Second => ("dayTime", 3, 3),
+    let (extension_type_name, start, end) = match kind {
+        StandardIntervalKind::Year => (SparkYearMonthIntervalType::NAME, 0, 0),
+        StandardIntervalKind::YearToMonth => (SparkYearMonthIntervalType::NAME, 0, 1),
+        StandardIntervalKind::Month => (SparkYearMonthIntervalType::NAME, 1, 1),
+        StandardIntervalKind::Day => (SparkDayTimeIntervalType::NAME, 0, 0),
+        StandardIntervalKind::DayToHour => (SparkDayTimeIntervalType::NAME, 0, 1),
+        StandardIntervalKind::DayToMinute => (SparkDayTimeIntervalType::NAME, 0, 2),
+        StandardIntervalKind::DayToSecond => (SparkDayTimeIntervalType::NAME, 0, 3),
+        StandardIntervalKind::Hour => (SparkDayTimeIntervalType::NAME, 1, 1),
+        StandardIntervalKind::HourToMinute => (SparkDayTimeIntervalType::NAME, 1, 2),
+        StandardIntervalKind::HourToSecond => (SparkDayTimeIntervalType::NAME, 1, 3),
+        StandardIntervalKind::Minute => (SparkDayTimeIntervalType::NAME, 2, 2),
+        StandardIntervalKind::MinuteToSecond => (SparkDayTimeIntervalType::NAME, 2, 3),
+        StandardIntervalKind::Second => (SparkDayTimeIntervalType::NAME, 3, 3),
     };
-    Some(vec![
-        (
-            format!("sail.spark.{prefix}.interval.startField"),
-            start.to_string(),
-        ),
-        (
-            format!("sail.spark.{prefix}.interval.endField"),
-            end.to_string(),
-        ),
-    ])
+    Some(SparkIntervalMetadata::new(Some(start), Some(end)).arrow_metadata(extension_type_name))
 }
 
 lazy_static! {
