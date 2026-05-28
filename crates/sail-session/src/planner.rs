@@ -389,7 +389,7 @@ pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::panic, clippy::panic)]
+#[expect(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use std::sync::Arc;
 
