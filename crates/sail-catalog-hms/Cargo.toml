@@ -6,6 +6,9 @@ edition = { workspace = true }
 [lints]
 workspace = true
 
+[build-dependencies]
+volo-build = { workspace = true }
+
 [dependencies]
 sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
@@ -17,7 +20,6 @@ bitflags = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
-hive_metastore = { workspace = true }
 log = { workspace = true }
 libloading = { workspace = true }
 pilota = { workspace = true }
