@@ -24,12 +24,6 @@ pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
 /// This is internal to Sail and should not be exposed as Spark column metadata.
 pub const SAIL_SPARK_UDT_METADATA_KEY: &str = "SAIL::spark::udt";
 
-/// Sail metadata key for Spark interval qualifier information stored in Arrow field metadata.
-///
-/// Arrow only distinguishes year-month intervals from day-time intervals. Spark also tracks the
-/// interval start/end fields, so Sail stores that qualifier information here for schema round trips.
-pub const SAIL_SPARK_INTERVAL_METADATA_KEY: &str = "SAIL::spark::interval";
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkUdtMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -38,14 +32,6 @@ pub struct SparkUdtMetadata {
     pub python_class: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serialized_python_class: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SparkIntervalMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub start_field: Option<IntervalFieldType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub end_field: Option<IntervalFieldType>,
 }
 
 /// Field name for list type.

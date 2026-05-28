@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -218,7 +219,8 @@ fn spark_metadata(
     [
         spec::SPARK_METADATA_JSON_KEY,
         spec::SAIL_SPARK_UDT_METADATA_KEY,
-        spec::SAIL_SPARK_INTERVAL_METADATA_KEY,
+        EXTENSION_TYPE_NAME_KEY,
+        EXTENSION_TYPE_METADATA_KEY,
     ]
     .into_iter()
     .filter_map(|key| {

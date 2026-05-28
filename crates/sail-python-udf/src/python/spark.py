@@ -401,7 +401,7 @@ def _to_string(data: Any) -> str | None:
         return data
     if isinstance(data, bool):
         return "true" if data else "false"
-    if isinstance(data, list | tuple):
+    if isinstance(data, (list, tuple)):
         items = ", ".join(_to_string(x) for x in data)
         return f"[{items}]"
     if isinstance(data, dict):
@@ -527,7 +527,7 @@ class ArrayConverter(Converter):
         end = 0
         for x in data:
             _raise_for_row(x)
-            if x is None or not isinstance(x, list | tuple):
+            if x is None or not isinstance(x, (list, tuple)):
                 offsets.append(None)
             else:
                 offsets.append(end)
@@ -620,21 +620,22 @@ class StructConverter(Converter):
                     columns[i].append(None)
             else:
                 mask.append(False)
-                if isinstance(x, dict):
-                    values = [x.get(f.name) for f in self._fields]
-                elif isinstance(x, (list, tuple)):
-                    values = x
-                elif hasattr(x, "__dict__"):
-                    values = [x.__dict__.get(f.name) for f in self._fields]
-                else:
-                    values = self._spark_data_type.toInternal(x)
-                for i, v in enumerate(values):
+                for i, v in enumerate(self._field_values(x)):
                     columns[i].append(v)
         return pa.StructArray.from_arrays(
             [c.from_pyspark(col) for col, c in zip(columns, self._field_converters, strict=True)],
             fields=self._fields,
             mask=pa.array(mask, type=pa.bool_()),
         )
+
+    def _field_values(self, data: Any) -> Sequence[Any]:
+        if isinstance(data, dict):
+            return [data.get(f.name) for f in self._fields]
+        if isinstance(data, (list, tuple)):
+            return data
+        if hasattr(data, "__dict__"):
+            return [data.__dict__.get(f.name) for f in self._fields]
+        return self._spark_data_type.toInternal(data)
 
 
 if pyspark.__version__.startswith(("3.", "4.0.")):
@@ -653,7 +654,11 @@ def _pandas_to_arrow_array(
     serializer: ArrowStreamPandasUDFSerializer,
     spark_type=None,
 ) -> pa.Array:
-    if serializer._struct_in_pandas == "dict" and pa.types.is_struct(data_type):  # noqa: SLF001
+    if (
+        serializer._struct_in_pandas == "dict"  # noqa: SLF001
+        and pa.types.is_struct(data_type)
+        and not _field_is_variant(data_type)
+    ):
         return serializer._create_struct_array(data, data_type)  # noqa: SLF001
     return serializer._create_array(data, data_type, spark_type=spark_type, arrow_cast=serializer._arrow_cast)  # noqa: SLF001
 

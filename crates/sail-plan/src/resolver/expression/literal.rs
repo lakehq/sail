@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use arrow::array::timezone::Tz;
@@ -6,6 +5,7 @@ use arrow::datatypes::Date32Type;
 use chrono::{NaiveTime, Timelike};
 use datafusion_expr::expr;
 use datafusion_expr::expr::FieldMetadata;
+use sail_common::spark::extension::{SparkIntervalMetadata, SparkYearMonthIntervalType};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -13,10 +13,34 @@ use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+
+fn year_month_interval_field_number(field: spec::IntervalFieldType) -> PlanResult<i32> {
+    match field {
+        spec::IntervalFieldType::Year => Ok(0),
+        spec::IntervalFieldType::Month => Ok(1),
+        field => Err(PlanError::invalid(format!(
+            "{field:?} is not valid for a year-month interval"
+        ))),
+    }
+}
+
+fn year_month_interval_metadata(
+    start_field: Option<spec::IntervalFieldType>,
+    end_field: Option<spec::IntervalFieldType>,
+) -> PlanResult<SparkIntervalMetadata> {
+    Ok(SparkIntervalMetadata::new(
+        start_field
+            .map(year_month_interval_field_number)
+            .transpose()?,
+        end_field
+            .map(year_month_interval_field_number)
+            .transpose()?,
+    ))
+}
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_expression_literal(
@@ -57,20 +81,11 @@ impl PlanResolver<'_> {
         else {
             return Ok(None);
         };
-        if start_field.is_none() && end_field.is_none() {
-            return Ok(None);
-        }
-        let interval = spec::SparkIntervalMetadata {
-            start_field: *start_field,
-            end_field: *end_field,
-        };
-        let value = serde_json::to_string(&interval).map_err(|e| {
-            crate::error::PlanError::internal(format!("failed to serialize interval metadata: {e}"))
-        })?;
-        Ok(Some(FieldMetadata::new(BTreeMap::from([(
-            spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-            value,
-        )]))))
+        let metadata = year_month_interval_metadata(*start_field, *end_field)?
+            .arrow_metadata(SparkYearMonthIntervalType::NAME)
+            .into_iter()
+            .collect();
+        Ok(Some(FieldMetadata::new(metadata)))
     }
 
     pub(super) fn resolve_expression_timestamp(
