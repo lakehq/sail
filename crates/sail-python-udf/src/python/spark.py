@@ -195,7 +195,7 @@ def _spark_type_from_field(field_or_type: pa.Field | pa.DataType):
         except AttributeError:
             fields = [data_type.field(i) for i in range(data_type.num_fields)]
         return StructType([StructField(f.name, _spark_type_from_field(f), f.nullable) for f in fields])
-    return from_arrow_type(data_type)
+    return from_arrow_type(data_type, prefer_timestamp_ntz=True)
 
 
 def _field_has_udt(field_or_type: pa.Field | pa.DataType) -> bool:
@@ -620,7 +620,15 @@ class StructConverter(Converter):
                     columns[i].append(None)
             else:
                 mask.append(False)
-                for i, v in enumerate(self._spark_data_type.toInternal(x)):
+                if isinstance(x, dict):
+                    values = [x.get(f.name) for f in self._fields]
+                elif isinstance(x, (list, tuple)):
+                    values = x
+                elif hasattr(x, "__dict__"):
+                    values = [x.__dict__.get(f.name) for f in self._fields]
+                else:
+                    values = self._spark_data_type.toInternal(x)
+                for i, v in enumerate(values):
                     columns[i].append(v)
         return pa.StructArray.from_arrays(
             [c.from_pyspark(col) for col, c in zip(columns, self._field_converters, strict=True)],
@@ -1004,11 +1012,14 @@ class PySparkGroupMapUdf:
         udf: Callable[..., Any],
         input_names: Sequence[str],
         is_pandas: bool,  # noqa: FBT001
+        is_iter: bool,  # noqa: FBT001
         config,
     ):
         self._udf = udf
         self._input_names = input_names
         self.is_pandas = is_pandas
+        self.is_iter = is_iter
+        self._max_records_per_batch = config.arrow_max_records_per_batch
         self._serializer = ArrowStreamPandasUDFSerializer(
             timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
@@ -1020,13 +1031,41 @@ class PySparkGroupMapUdf:
         )
 
     def __call__(self, args: list[pa.Array]) -> pa.Array:
+        m = self._max_records_per_batch
         if self.is_pandas:
             inputs = _named_arrays_to_pandas(args, self._input_names, self._serializer)
+            if self.is_iter:
+                # For iter pandas (eval_type 216), split inputs into multiple batches
+                # of at most max_records_per_batch rows, providing them as an iterator.
+                # Each batch is a list of Series (one per column).
+                n = len(inputs[0]) if inputs else 0
+
+                def pandas_batch_iter():
+                    if n == 0:
+                        yield [s.iloc[0:0] for s in inputs]
+                    else:
+                        for start in range(0, n, m):
+                            yield [s.iloc[start : start + m] for s in inputs]
+
+                [(output, output_type)] = list(self._udf(None, (pandas_batch_iter(),)))
+                # output is a generator of pandas DataFrames - convert each and concatenate
+                struct_arrays = [_pandas_to_arrow_array(df, output_type, self._serializer) for df in output]
+                if not struct_arrays:
+                    return pa.array([], type=output_type)
+                return pa.concat_arrays(struct_arrays)
             [[(output, output_type)]] = list(self._udf(None, (inputs,)))
             return _pandas_to_arrow_array(output, output_type, self._serializer)
 
-        inputs = [pa.RecordBatch.from_arrays(args, self._input_names)]
-        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        # Arrow paths (eval_type 209 non-iter and 215 iter)
+        rb = pa.RecordBatch.from_arrays(args, self._input_names)
+        if self.is_iter:
+            # For iter arrow (eval_type 215), split RecordBatch into multiple batches
+            # of at most max_records_per_batch rows.
+            n = len(rb)
+            batches = [rb] if n == 0 else [rb.slice(i, min(m, n - i)) for i in range(0, n, m)]
+        else:
+            batches = [rb]
+        [(output, output_type)] = list(self._udf(None, (batches,)))
         return _arrow_array_to_output_type(output, output_type)
 
 

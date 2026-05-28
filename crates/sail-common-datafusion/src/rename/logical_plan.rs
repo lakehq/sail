@@ -21,7 +21,6 @@ pub fn rename_logical_plan(
         .fields()
         .iter()
         .zip(plan.schema().columns())
-        .into_iter()
         .zip(names.iter())
         .map(|((field, column), name)| {
             let relation = column.relation.clone();
