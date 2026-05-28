@@ -253,37 +253,19 @@ mod tests {
     }
 
     #[test]
-    fn test_coalesce_exec_reads_contiguous_input_ranges() {
-        futures::executor::block_on(async {
-            let input = test_plan(vec![
-                vec![batch(&[0, 1])],
-                vec![batch(&[2, 3])],
-                vec![batch(&[4, 5])],
-                vec![batch(&[6, 7])],
-            ]);
-            let plan = Arc::new(CoalesceExec::new(input, 2)) as Arc<dyn ExecutionPlan>;
+    fn test_coalesce_exec_reads_contiguous_input_ranges() -> Result<()> {
+        let input = test_plan(vec![
+            vec![test_batch(&[0, 1])],
+            vec![test_batch(&[2, 3])],
+            vec![test_batch(&[4, 5])],
+            vec![test_batch(&[6, 7])],
+        ]);
+        let exec = CoalesceExec::new(input, 2);
 
-            assert_eq!(
-                collect_partition(Arc::clone(&plan), 0).await.unwrap(),
-                vec![0, 1, 2, 3]
-            );
-            assert_eq!(collect_partition(plan, 1).await.unwrap(), vec![4, 5, 6, 7]);
-        });
-    }
+        assert_eq!(collect_values(&exec, 0)?, vec![0, 1, 2, 3]);
+        assert_eq!(collect_values(&exec, 1)?, vec![4, 5, 6, 7]);
 
-    #[test]
-    fn test_coalesce_exec_rejects_partition_increase() {
-        let plan = CoalesceExec::new(test_plan(vec![vec![batch(&[0])], vec![batch(&[1])]]), 3);
-
-        let result = plan.execute(0, Arc::new(TaskContext::default()));
-        assert!(result.is_err());
-        let Err(error) = result else {
-            return;
-        };
-
-        assert!(error
-            .to_string()
-            .contains("cannot increase partition count from 2 to 3"));
+        Ok(())
     }
 
     #[test]

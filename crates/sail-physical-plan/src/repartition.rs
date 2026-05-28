@@ -18,13 +18,12 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{internal_err, plan_err, Result, Statistics};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::repartition::{
     RepartitionBufferConfig, DEFAULT_REPARTITION_BUFFER_SIZE,
 };
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio_stream::wrappers::ReceiverStream;
 
 const DEFAULT_ROUND_ROBIN_BUFFER_SIZE: usize = 8;
 
@@ -100,7 +99,7 @@ impl Stream for RoundRobinReceiverStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
+        Pin::new(&mut self.inner).poll_recv(cx)
     }
 }
 
@@ -411,7 +410,7 @@ async fn broadcast_round_robin_error(
         let Some(current_sender) = sender.as_ref().cloned() else {
             continue;
         };
-        if current_sender
+        let disconnected = current_sender
             .send(Err(datafusion_common::DataFusionError::Execution(
                 message.clone(),
             )))
@@ -479,8 +478,7 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         match &self.properties.partitioning {
             Partitioning::RoundRobinBatch(output_partitions) => {
                 self.initialize_round_robin(*output_partitions, context)?;
-                let receiver = self.take_round_robin_receiver(partition)?;
-                let stream = ReceiverStream::new(receiver);
+                let stream = self.take_round_robin_output(partition)?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
                     stream,
