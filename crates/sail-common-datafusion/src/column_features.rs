@@ -22,6 +22,11 @@ use std::collections::HashMap;
 
 use datafusion::arrow::datatypes::Field;
 
+/// Sail-private field metadata used while planning writes. It records the target
+/// catalog field nullability so table formats can preserve it even if expression
+/// simplification proves the current write value itself is non-null.
+pub const SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY: &str = "__sail.writeTargetNullable";
+
 /// Keys identifying column features carried on arrow field metadata.
 ///
 /// This enum is `#[non_exhaustive]` so additional features (identity, default
@@ -31,12 +36,15 @@ use datafusion::arrow::datatypes::Field;
 pub enum ColumnFeatureKey {
     /// SQL expression that deterministically produces the column's value.
     GenerationExpression,
+    /// SQL expression used when a write explicitly or implicitly requests the column default.
+    CurrentDefault,
 }
 
 impl ColumnFeatureKey {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::GenerationExpression => "delta.generationExpression",
+            Self::CurrentDefault => "CURRENT_DEFAULT",
         }
     }
 }
@@ -79,6 +87,13 @@ impl<'a> ColumnFeatures<'a> {
             .map(|v| serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone()))
     }
 
+    /// Returns the current default expression SQL text, if this column has one.
+    pub fn current_default(&self) -> Option<String> {
+        self.metadata
+            .get(ColumnFeatureKey::CurrentDefault.as_str())
+            .map(|v| serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone()))
+    }
+
     /// Returns the raw stored value for a feature key, bypassing decoding.
     pub fn raw(&self, key: ColumnFeatureKey) -> Option<&str> {
         self.metadata.get(key.as_str()).map(String::as_str)
@@ -102,6 +117,14 @@ impl ColumnFeaturesBuilder {
     pub fn with_generation_expression(mut self, expr: impl Into<String>) -> Self {
         self.entries.insert(
             ColumnFeatureKey::GenerationExpression.as_str().to_string(),
+            expr.into(),
+        );
+        self
+    }
+
+    pub fn with_current_default(mut self, expr: impl Into<String>) -> Self {
+        self.entries.insert(
+            ColumnFeatureKey::CurrentDefault.as_str().to_string(),
             expr.into(),
         );
         self

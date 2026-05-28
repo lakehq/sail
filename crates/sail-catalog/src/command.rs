@@ -445,6 +445,17 @@ impl CatalogCommand {
                                 .await
                                 .map_err(|e| CatalogError::External(e.to_string()))?;
                         }
+                        AlterTableOptions::AlterColumnDefault { name, default } => {
+                            table_format
+                                .alter_table_column_default(
+                                    runtime,
+                                    &location,
+                                    name.clone(),
+                                    default.clone(),
+                                )
+                                .await
+                                .map_err(|e| CatalogError::External(e.to_string()))?;
+                        }
                     };
 
                     // Storage is the source of truth for lakehouse ALTER TABLE

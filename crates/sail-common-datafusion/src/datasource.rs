@@ -374,6 +374,21 @@ pub trait TableFormat: Send + Sync {
             self.name()
         )
     }
+
+    /// Alters the default expression of a table column.
+    async fn alter_table_column_default(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        default: Option<String>,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, column_path, default);
+        not_impl_err!(
+            "Column default alteration not supported for {} format",
+            self.name()
+        )
+    }
 }
 
 /// Thread-safe registry of available `TableFormat` implementations.

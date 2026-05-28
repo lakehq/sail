@@ -440,6 +440,12 @@ impl PlanResolver<'_> {
                     data_type: self.resolve_data_type(&data_type, state)?,
                 }
             }
+            spec::AlterTableOperation::AlterColumnDefault { name, default } => {
+                AlterTableOptions::AlterColumnDefault {
+                    name: name.into(),
+                    default,
+                }
+            }
             spec::AlterTableOperation::Unknown => {
                 return Err(PlanError::todo("unsupported ALTER TABLE operation"));
             }
