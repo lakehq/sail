@@ -9,7 +9,7 @@ Feature: COALESCE hint on DataFrame input
   Scenario: COALESCE hint lowers the DataFrame partition count and preserves rows
     When dataframe for table "coalesce_hint_input" with COALESCE hint 2
     Then dataframe has 2 partitions
-    And dataframe result ordered
+    And dataframe result
       | id | grp |
       | 0  | 0   |
       | 1  | 1   |

@@ -9,7 +9,7 @@ use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{
     cast_record_batch_positionally, read_record_batches,
 };
-use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
@@ -194,43 +194,6 @@ impl PlanResolver<'_> {
             )));
         }
         Ok(value)
-    }
-
-    async fn resolve_query_coalesce_hint_partition_count(
-        &self,
-        parameters: Vec<spec::Expr>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<usize> {
-        if parameters.len() != 1 {
-            return Err(PlanError::invalid(format!(
-                "COALESCE hint requires exactly one partition count, got {}",
-                parameters.len()
-            )));
-        }
-
-        let schema = Arc::new(DFSchema::empty());
-        let parameter = parameters.into_iter().next().ok_or_else(|| {
-            PlanError::invalid("COALESCE hint requires exactly one partition count")
-        })?;
-        let expr = self.resolve_expression(parameter, &schema, state).await?;
-        let scalar = LiteralEvaluator::new().evaluate(&expr).map_err(|e| {
-            PlanError::invalid(format!(
-                "COALESCE hint requires an integer literal partition count: {e}"
-            ))
-        })?;
-        let num_partitions = LiteralValue(&scalar).try_to_usize().map_err(|e| {
-            PlanError::invalid(format!(
-                "COALESCE hint requires an integer literal partition count: {e}"
-            ))
-        })?;
-
-        if num_partitions == 0 {
-            return Err(PlanError::invalid(
-                "COALESCE hint requires at least one partition",
-            ));
-        }
-
-        Ok(num_partitions)
     }
 
     pub(super) async fn resolve_query_collect_metrics(

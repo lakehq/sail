@@ -25,8 +25,6 @@ use sail_common_datafusion::session::repartition::{
 };
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-const DEFAULT_ROUND_ROBIN_BUFFER_SIZE: usize = 8;
-
 #[derive(Debug, Clone)]
 pub struct RowRoundRobinPartitioner {
     num_partitions: usize,
@@ -212,7 +210,6 @@ impl ExplicitRepartitionExec {
         Ok(())
     }
 
-    #[expect(clippy::type_complexity)]
     fn take_round_robin_output(&self, partition: usize) -> Result<RoundRobinReceiverStream> {
         let mut state = self.state.lock().map_err(|_| {
             datafusion_common::DataFusionError::Execution(
