@@ -129,6 +129,13 @@ impl ScalarUDFImpl for SparkConcat {
         }
         let mut args = args;
         let arg = args.remove(0);
+        // `FixedSizeList` and `LargeList` are intentionally omitted: `return_type`
+        // does not recognize them as array inputs (it falls through to `Utf8`),
+        // so the invoke path coerces them to strings. Returning the argument
+        // unchanged here would break the type contract advertised by
+        // `return_type`. Numeric, timestamp, and other non-string scalars are
+        // also excluded so the invoke path can apply Spark-specific coercions
+        // (e.g. timestamp formatting via `spark_format_timestamp_str`).
         if matches!(
             info.get_data_type(&arg)?,
             DataType::Utf8
@@ -186,6 +193,10 @@ impl ScalarUDFImpl for SparkConcat {
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
+            // Cast arrays with Null element type to the return type for proper
+            // concatenation. This handles cases like `concat(array(), array(1, 2, 3))`
+            // where the first array has type `List(Null)` and needs to be cast to
+            // `List(Int32)` so `ArrayConcat` can merge them.
             let casted_args = cast_list_columnar_values(args.args, return_type)?;
             let casted_scalar_args = ScalarFunctionArgs {
                 args: casted_args,

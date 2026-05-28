@@ -49,6 +49,19 @@ Feature: concat() — simplify hook (single-argument identity)
         | result |
         | NULL   |
 
+    # Regression coverage: `concat(array())` has arg type `List(Null)` which the
+    # simplify hook matches. `return_type` for `[List(Null)]` is also `List(Null)`,
+    # so simplify is type-preserving here — both the simplify and invoke paths
+    # produce an empty list.
+    Scenario: concat of single empty array literal returns empty array
+      When query
+        """
+        SELECT concat(array()) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
     Scenario: concat of single binary column is identity
       When query
         """
@@ -98,6 +111,20 @@ Feature: concat() — simplify hook (single-argument identity)
         | NULL   |
         | 1      |
         | 2      |
+
+    # Regression coverage: timestamps must NOT be matched by the simplify hook
+    # because `invoke_with_args` applies Spark-specific timestamp formatting
+    # (`spark_format_timestamp_str`) that returns `YYYY-MM-DD HH:MM:SS` without
+    # the Arrow `T` separator or timezone suffix. Simplifying `concat(ts)` to
+    # `ts` would leak Arrow's ISO 8601 rendering instead.
+    Scenario: concat of single timestamp coerces to Spark-formatted string
+      When query
+        """
+        SELECT concat(CAST('2024-01-15 12:00:00' AS TIMESTAMP)) AS result
+        """
+      Then query result
+        | result              |
+        | 2024-01-15 12:00:00 |
 
   Rule: Plan snapshots — simplify removes UDF call only for single-argument identity cases (string/array/binary), and keeps it for coercion or multi-arg array concat
 
