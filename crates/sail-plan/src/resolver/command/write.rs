@@ -749,9 +749,12 @@ impl PlanResolver<'_> {
                                 "column not found for INSERT: {name}"
                             )))
                         } else {
-                            matches.one().map_err(|_| {
-                                PlanError::invalid(format!("ambiguous column: {name}"))
-                            })
+                            matches
+                                .one()
+                                .map_err(|_| {
+                                    PlanError::invalid(format!("ambiguous column: {name}"))
+                                })
+                                .map(|expr| expr.alias(name))
                         }
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
