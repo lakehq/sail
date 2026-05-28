@@ -266,17 +266,35 @@ pub async fn infer_delta_logical_schema(
     schema: Option<Schema>,
     options: DeltaReadOptions,
 ) -> Result<SchemaRef> {
+    let (schema, _) = infer_delta_logical_metadata(ctx, table_url, schema, options).await?;
+    Ok(schema)
+}
+
+/// Infers the Delta logical schema and table configuration for planning.
+pub async fn infer_delta_logical_metadata(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: DeltaReadOptions,
+) -> Result<(SchemaRef, Vec<(String, String)>)> {
     let (snapshot, _log_store, scan_config) =
         load_delta_read_state(ctx, table_url, schema, options, true).await?;
 
-    Ok(df_logical_schema(
+    let schema = df_logical_schema(
         snapshot.as_ref(),
         &scan_config.file_column_name,
         &scan_config.row_index_column_name,
         &scan_config.commit_version_column_name,
         &scan_config.commit_timestamp_column_name,
         scan_config.schema,
-    )?)
+    )?;
+    let properties = snapshot
+        .metadata()
+        .configuration()
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    Ok((schema, properties))
 }
 
 async fn load_delta_read_state(

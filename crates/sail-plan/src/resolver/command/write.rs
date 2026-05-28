@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Field, Schema};
+use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::expr::{FieldMetadata, Sort};
@@ -249,20 +249,16 @@ impl PlanResolver<'_> {
                 if file_write_options.format.is_empty() {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
-                let should_rewrite_existing_delta_generated_columns =
+                let should_rewrite_existing_delta_table_features =
                     !(matches!(&mode, WriteMode::ErrorIfExists | WriteMode::IgnoreIfExists)
                         || matches!(&mode, WriteMode::Replace { .. })
                             && Self::has_truthy_option(
                                 &file_write_options.options,
                                 &["overwriteSchema", "overwrite_schema"],
                             ));
-                if should_rewrite_existing_delta_generated_columns {
+                if should_rewrite_existing_delta_table_features {
                     input = self
-                        .rewrite_data_source_delta_generated_columns(
-                            input,
-                            &file_write_options,
-                            state,
-                        )
+                        .rewrite_data_source_delta_table_features(input, &file_write_options, state)
                         .await?;
                 }
                 let schema_for_cond =
@@ -539,7 +535,7 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                properties,
+                mut properties,
                 is_external: _,
             } => {
                 // When a table is created without column definitions
@@ -568,38 +564,20 @@ impl PlanResolver<'_> {
                             items: properties.to_vec(),
                         }],
                     };
-                    let schema = table_format
-                        .infer_schema(&self.ctx.state(), info)
+                    let metadata = table_format
+                        .infer_metadata(&self.ctx.state(), info)
                         .await
                         .map_err(|e| {
                             PlanError::invalid(format!(
-                                "failed to infer schema for table `{table:?}` from format `{format}`: {e}",
+                                "failed to infer metadata for table `{table:?}` from format `{format}`: {e}",
                             ))
                         })?;
-                    columns = schema
-                        .fields()
-                        .iter()
-                        .map(|f| {
-                            // Read the Delta generation expression from Arrow field metadata.
-                            // `ColumnFeatures` transparently JSON-unwraps the value if the
-                            // table was created externally and the expression was stored as
-                            // a JSON-encoded string.
-                            let generated_always_as =
-                                ColumnFeatures::from_field(f).generation_expression();
-                            let default = ColumnFeatures::from_field(f).current_default();
-                            TableColumnStatus {
-                                name: f.name().clone(),
-                                data_type: f.data_type().clone(),
-                                nullable: f.is_nullable(),
-                                comment: None,
-                                default,
-                                generated_always_as,
-                                is_partition: false,
-                                is_bucket: false,
-                                is_cluster: false,
-                            }
-                        })
-                        .collect();
+                    columns = Self::table_columns_from_format_schema(&metadata.schema);
+                    if !metadata.properties.is_empty() {
+                        let mut merged_properties = metadata.properties;
+                        merged_properties.extend(properties);
+                        properties = merged_properties;
+                    }
                 }
                 Ok(Some(TableInfo {
                     columns,
@@ -615,7 +593,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    async fn rewrite_data_source_delta_generated_columns(
+    async fn rewrite_data_source_delta_table_features(
         &self,
         input: LogicalPlan,
         options: &FileWriteOptions,
@@ -648,31 +626,17 @@ impl PlanResolver<'_> {
             sort_order: vec![],
             options: vec![],
         };
-        let schema = match table_format.infer_schema(&self.ctx.state(), info).await {
-            Ok(schema) => schema,
+        let metadata = match table_format.infer_metadata(&self.ctx.state(), info).await {
+            Ok(metadata) => metadata,
             Err(e) => {
                 log::debug!(
-                    "skipping Delta column expression rewrite for path `{path}` because existing table schema could not be loaded: {e}"
+                    "skipping Delta table feature rewrite for path `{path}` because existing table metadata could not be loaded: {e}"
                 );
                 return Ok(input);
             }
         };
 
-        let columns = schema
-            .fields()
-            .iter()
-            .map(|field| TableColumnStatus {
-                name: field.name().clone(),
-                data_type: field.data_type().clone(),
-                nullable: field.is_nullable(),
-                comment: None,
-                default: ColumnFeatures::from_field(field).current_default(),
-                generated_always_as: ColumnFeatures::from_field(field).generation_expression(),
-                is_partition: false,
-                is_bucket: false,
-                is_cluster: false,
-            })
-            .collect::<Vec<_>>();
+        let columns = Self::table_columns_from_format_schema(&metadata.schema);
         if !columns
             .iter()
             .any(|column| column.generated_always_as.is_some() || column.default.is_some())
@@ -688,10 +652,31 @@ impl PlanResolver<'_> {
             partition_by: vec![],
             sort_by: vec![],
             bucket_by: None,
-            properties: vec![],
+            properties: metadata.properties,
         };
         self.rewrite_write_input(input, WriteColumnMatch::ByName, &info, state)
             .await
+    }
+
+    fn table_columns_from_format_schema(schema: &SchemaRef) -> Vec<TableColumnStatus> {
+        schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let features = ColumnFeatures::from_field(field);
+                TableColumnStatus {
+                    name: field.name().clone(),
+                    data_type: field.data_type().clone(),
+                    nullable: field.is_nullable(),
+                    comment: None,
+                    default: features.current_default(),
+                    generated_always_as: features.generation_expression(),
+                    is_partition: false,
+                    is_bucket: false,
+                    is_cluster: false,
+                }
+            })
+            .collect()
     }
 
     async fn rewrite_write_input(
@@ -756,7 +741,7 @@ impl PlanResolver<'_> {
                             .map(|f| {
                                 let expr =
                                     col(f.name()).cast_to(field.data_type(), input.schema())?;
-                                Ok(Self::make_nullable_if_needed(expr, field, input.schema())?)
+                                Self::make_nullable_if_needed(expr, field, input.schema())
                             })
                             .collect::<PlanResult<Vec<_>>>()?;
                         if matches.is_empty() {

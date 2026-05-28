@@ -13,7 +13,7 @@ use sail_common_datafusion::column_features::{
 };
 use sail_common_datafusion::datasource::{
     find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
-    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatMetadata, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::gen::{DeltaReadOptions, DeltaWriteOptions};
@@ -37,7 +37,7 @@ use crate::spec::{
     StructType, TableFeature,
 };
 use crate::table::{
-    infer_delta_logical_schema, open_table_with_object_store,
+    infer_delta_logical_metadata, infer_delta_logical_schema, open_table_with_object_store,
     open_table_with_object_store_and_table_config,
 };
 use crate::{create_delta_source, DeltaTableError};
@@ -93,6 +93,28 @@ impl TableFormat for DeltaTableFormat {
         let options = DeltaReadOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         infer_delta_logical_schema(ctx, table_url, schema, options).await
+    }
+
+    async fn infer_metadata(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<TableFormatMetadata> {
+        let SourceInfo {
+            paths,
+            schema,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
+            options,
+        } = info;
+        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let options = DeltaReadOptions::resolve(ctx, options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let (schema, properties) =
+            infer_delta_logical_metadata(ctx, table_url, schema, options).await?;
+        Ok(TableFormatMetadata { schema, properties })
     }
 
     async fn create_writer(
