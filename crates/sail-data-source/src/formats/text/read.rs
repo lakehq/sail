@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -9,7 +10,7 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 
 use crate::formats::text::file_format::TextFileFormat;
 use crate::formats::text::source::TextSource;
-use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+use crate::listing::source::{ListingScanInput, ReadFormat};
 use crate::options::gen::TextReadOptions;
 
 #[derive(Debug, Clone)]
@@ -34,8 +35,18 @@ impl ReadFormat for TextReadFormat {
         Ok(Arc::new(TextFileFormat::new(options)))
     }
 
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(crate::listing::source::DefaultSchemaInfer)
+    async fn infer_schema(
+        &self,
+        _ctx: &dyn Session,
+        _store: &Arc<dyn object_store::ObjectStore>,
+        _files: &[object_store::ObjectMeta],
+        _compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef> {
+        Ok(Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Utf8,
+            true,
+        )])))
     }
 
     async fn scan(
