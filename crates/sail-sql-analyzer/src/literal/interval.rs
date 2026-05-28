@@ -61,6 +61,8 @@ lazy_static! {
 pub enum IntervalValue {
     YearMonth {
         months: i32,
+        start_field: Option<spec::IntervalFieldType>,
+        end_field: Option<spec::IntervalFieldType>,
     },
     Microsecond {
         microseconds: i64,
@@ -75,8 +77,14 @@ pub enum IntervalValue {
 impl From<IntervalValue> for spec::Literal {
     fn from(value: IntervalValue) -> Self {
         match value {
-            IntervalValue::YearMonth { months } => spec::Literal::IntervalYearMonth {
+            IntervalValue::YearMonth {
+                months,
+                start_field,
+                end_field,
+            } => spec::Literal::IntervalYearMonth {
                 months: Some(months),
+                start_field,
+                end_field,
             },
             IntervalValue::Microsecond { microseconds } => spec::Literal::DurationMicrosecond {
                 microseconds: Some(microseconds),
@@ -178,6 +186,8 @@ fn parse_interval_year_month_string(
     s: &str,
     negated: bool,
     interval_regex: &Regex,
+    start_field: Option<spec::IntervalFieldType>,
+    end_field: Option<spec::IntervalFieldType>,
 ) -> SqlResult<IntervalValue> {
     let error = || SqlError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;
@@ -194,7 +204,11 @@ fn parse_interval_year_month_string(
     } else {
         n
     };
-    Ok(IntervalValue::YearMonth { months: n })
+    Ok(IntervalValue::YearMonth {
+        months: n,
+        start_field,
+        end_field,
+    })
 }
 
 fn parse_interval_day_time_string(
@@ -306,15 +320,27 @@ fn from_ast_standard_interval(
     let negated = signed.is_negative() ^ negated;
     let value = signed.into_inner();
     match kind {
-        StandardIntervalKind::Year => {
-            parse_interval_year_month_string(&value, negated, &INTERVAL_YEAR_REGEX)
-        }
-        StandardIntervalKind::YearToMonth => {
-            parse_interval_year_month_string(&value, negated, &INTERVAL_YEAR_TO_MONTH_REGEX)
-        }
-        StandardIntervalKind::Month => {
-            parse_interval_year_month_string(&value, negated, &INTERVAL_MONTH_REGEX)
-        }
+        StandardIntervalKind::Year => parse_interval_year_month_string(
+            &value,
+            negated,
+            &INTERVAL_YEAR_REGEX,
+            Some(spec::IntervalFieldType::Year),
+            Some(spec::IntervalFieldType::Year),
+        ),
+        StandardIntervalKind::YearToMonth => parse_interval_year_month_string(
+            &value,
+            negated,
+            &INTERVAL_YEAR_TO_MONTH_REGEX,
+            Some(spec::IntervalFieldType::Year),
+            Some(spec::IntervalFieldType::Month),
+        ),
+        StandardIntervalKind::Month => parse_interval_year_month_string(
+            &value,
+            negated,
+            &INTERVAL_MONTH_REGEX,
+            Some(spec::IntervalFieldType::Month),
+            Some(spec::IntervalFieldType::Month),
+        ),
         StandardIntervalKind::Day => {
             parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_REGEX)
         }
@@ -420,7 +446,11 @@ fn from_ast_multi_unit_interval(
             } else {
                 months
             };
-            Ok(IntervalValue::YearMonth { months: n })
+            Ok(IntervalValue::YearMonth {
+                months: n,
+                start_field: None,
+                end_field: None,
+            })
         }
         (true, true) => {
             let days = delta.num_days();
@@ -515,10 +545,15 @@ mod tests {
             parse("'-2-1' year to month", false)?,
             parse("-'2-1' year to month", false)?
         );
-        assert_eq!(
-            parse("'-2-1' year to month", false)?,
-            parse("-2 year -1 month", false)?
-        );
+        let left = parse("'-2-1' year to month", false)?;
+        let right = parse("-2 year -1 month", false)?;
+        assert!(matches!(
+            (left, right),
+            (
+                IntervalValue::YearMonth { months: left, .. },
+                IntervalValue::YearMonth { months: right, .. }
+            ) if left == right
+        ));
 
         assert!(parse("106751991 day 14454775807 microsecond", false).is_ok());
         assert!(parse("106751991 day 14454775807 microsecond", true).is_ok());

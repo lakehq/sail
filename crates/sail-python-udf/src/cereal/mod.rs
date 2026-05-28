@@ -1,5 +1,5 @@
 use arrow_pyarrow::ToPyArrow;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::Field;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::{PyList, PyModule};
 use pyo3::{intern, PyResult, Python};
@@ -141,7 +141,7 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
 /// Builds a JSON string representing a PySpark StructType schema from Arrow input types.
 /// This is used by PySpark 4.x's `read_udfs` to deserialize input type information
 /// for `SQL_ARROW_BATCHED_UDF`.
-fn build_input_types_json(input_types: &[DataType]) -> PyUdfResult<String> {
+fn build_input_types_json(input_fields: &[Field]) -> PyUdfResult<String> {
     Python::attach(|py| -> PyResult<String> {
         let types_module = PyModule::import(py, intern!(py, "pyspark.sql.types"))?;
         let struct_type_cls = types_module.getattr(intern!(py, "StructType"))?;
@@ -149,13 +149,13 @@ fn build_input_types_json(input_types: &[DataType]) -> PyUdfResult<String> {
         let from_arrow_type = PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
             .getattr(intern!(py, "from_arrow_type"))?;
 
-        let fields: Vec<_> = input_types
+        let fields: Vec<_> = input_fields
             .iter()
             .enumerate()
             .map(|(i, dt)| -> PyResult<_> {
-                let arrow_type = dt.to_pyarrow(py)?;
+                let arrow_type = dt.data_type().to_pyarrow(py)?;
                 let spark_type = from_arrow_type.call1((arrow_type,))?;
-                struct_field_cls.call1((format!("_{i}"), spark_type, true))
+                struct_field_cls.call1((format!("_{i}"), spark_type, dt.is_nullable()))
             })
             .collect::<PyResult<_>>()?;
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, DataFusionError};
 use datafusion_expr::expr::AggregateFunctionParams;
@@ -89,6 +89,12 @@ impl PlanResolver<'_> {
             .resolve_expressions_and_names(positional_args, schema, state)
             .await?;
         let function = self.resolve_python_udf(function, state)?;
+        let output_metadata = function
+            .output_field
+            .metadata()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<Vec<_>>();
         let func = self.resolve_python_udf_expr(
             function,
             &function_name,
@@ -106,7 +112,7 @@ impl PlanResolver<'_> {
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
-        Ok(NamedExpr::new(vec![name], func))
+        Ok(NamedExpr::new(vec![name], func).with_metadata(output_metadata))
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -129,17 +135,23 @@ impl PlanResolver<'_> {
         let state = scope.state();
         state.config_mut().arrow_allow_large_var_types = true;
 
-        let input_types: Vec<DataType> =
-            arguments
-                .iter()
-                .map(|arg| arg.get_type(schema))
-                .collect::<datafusion_common::Result<Vec<DataType>, DataFusionError>>()?;
+        let input_fields: Vec<Field> = arguments
+            .iter()
+            .map(|arg| {
+                arg.to_field(schema)
+                    .map(|(_, field)| field.as_ref().clone())
+            })
+            .collect::<datafusion_common::Result<Vec<Field>, DataFusionError>>()?;
+        let input_types: Vec<DataType> = input_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect();
         let payload = PySparkUdfPayload::build(
             &function.python_version,
             &function.command,
             function.eval_type,
             &((0..arguments.len()).collect::<Vec<_>>()),
-            &input_types,
+            &input_fields,
             kwarg_names,
             &self.config.pyspark_udf_config,
         )?;
@@ -174,7 +186,9 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
+                    input_fields,
                     function.output_type,
+                    function.output_field,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -189,7 +203,9 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
+                    input_fields,
                     function.output_type,
+                    function.output_field,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -204,7 +220,9 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
+                    input_fields,
                     function.output_type,
+                    function.output_field,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -219,7 +237,9 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
+                    input_fields,
                     function.output_type,
+                    function.output_field,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -283,7 +303,9 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
+                    input_fields,
                     function.output_type,
+                    function.output_field,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -299,7 +321,9 @@ impl PlanResolver<'_> {
                     payload,
                     deterministic,
                     input_types,
+                    input_fields,
                     function.output_type,
+                    function.output_field,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {

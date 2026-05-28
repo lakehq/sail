@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import decimal
 import itertools
+import json
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -13,9 +14,19 @@ import pyarrow as pa
 import pyspark
 from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import from_arrow_type
-from pyspark.sql.types import Row
+from pyspark.sql.types import ArrayType, MapType, Row, StructField, StructType, UserDefinedType
+
+try:
+    from pyspark.sql.types import VariantType, VariantVal
+except ImportError:
+    VariantType = None
+    VariantVal = None
 
 _PYARROW_HAS_VIEW_TYPES = all(hasattr(pa, x) for x in ("list_view", "large_list_view", "string_view", "binary_view"))
+_ARROW_EXTENSION_NAME_KEY = b"ARROW:extension:name"
+_ARROW_PARQUET_VARIANT_EXTENSION_NAME = "arrow.parquet.variant"
+_PYSPARK_VARIANT_METADATA_KEY = b"variant"
+_SAIL_SPARK_UDT_METADATA_KEY = b"SAIL::spark::udt"
 
 if _PYARROW_HAS_VIEW_TYPES:
     _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType)
@@ -86,7 +97,171 @@ class Converter:
         raise NotImplementedError
 
 
-def _get_converter(t: pa.DataType) -> Converter:
+def _metadata_value(metadata: dict | None, key: bytes) -> bytes | None:
+    if metadata is None:
+        return None
+    return metadata.get(key) or metadata.get(key.decode("utf-8"))
+
+
+def _field_metadata(field: pa.Field | None) -> dict | None:
+    return None if field is None else field.metadata
+
+
+def _field_type(field_or_type: pa.Field | pa.DataType) -> tuple[pa.Field | None, pa.DataType]:
+    if isinstance(field_or_type, pa.Field):
+        return field_or_type, field_or_type.type
+    return None, field_or_type
+
+
+def _field_is_variant(field_or_type: pa.Field | pa.DataType) -> bool:
+    if VariantType is None or VariantVal is None:
+        return False
+    field, data_type = _field_type(field_or_type)
+    extension_name = _metadata_value(_field_metadata(field), _ARROW_EXTENSION_NAME_KEY)
+    if isinstance(extension_name, bytes):
+        extension_name = extension_name.decode("utf-8")
+    if extension_name == _ARROW_PARQUET_VARIANT_EXTENSION_NAME:
+        return True
+    if not isinstance(data_type, pa.StructType):
+        return False
+    try:
+        fields = data_type.fields
+    except AttributeError:
+        fields = [data_type.field(i) for i in range(data_type.num_fields)]
+    return any(
+        f.name == "metadata" and _metadata_value(f.metadata, _PYSPARK_VARIANT_METADATA_KEY) in (b"true", "true")
+        for f in fields
+    ) and any(f.name == "value" for f in fields)
+
+
+def _list_value_field(data_type: _PyArrowListType) -> pa.Field:
+    field = getattr(data_type, "value_field", None)
+    if field is not None:
+        return field
+    return pa.field("element", data_type.value_type, nullable=True)
+
+
+def _map_key_field(data_type: pa.MapType) -> pa.Field:
+    field = getattr(data_type, "key_field", None)
+    if field is not None:
+        return field
+    return pa.field("key", data_type.key_type, nullable=False)
+
+
+def _map_item_field(data_type: pa.MapType) -> pa.Field:
+    field = getattr(data_type, "item_field", None)
+    if field is not None:
+        return field
+    return pa.field("value", data_type.item_type, nullable=True)
+
+
+def _spark_type_from_field(field_or_type: pa.Field | pa.DataType):
+    field, data_type = _field_type(field_or_type)
+    metadata = _metadata_value(_field_metadata(field), _SAIL_SPARK_UDT_METADATA_KEY)
+    if metadata is not None:
+        if isinstance(metadata, bytes):
+            metadata = metadata.decode("utf-8")
+        udt = json.loads(metadata)
+        py_class = udt.get("python_class")
+        if py_class is None:
+            msg = f"UDT metadata is missing python_class: {udt}"
+            raise ValueError(msg)
+        value = {
+            "type": "udt",
+            "pyClass": py_class,
+            "sqlType": _spark_type_from_field(data_type).jsonValue(),
+        }
+        if udt.get("jvm_class") is not None:
+            value["class"] = udt["jvm_class"]
+        if udt.get("serialized_python_class") is not None:
+            value["serializedClass"] = udt["serialized_python_class"]
+        return UserDefinedType.fromJson(value)
+
+    if _field_is_variant(field_or_type):
+        return VariantType()
+    if isinstance(data_type, _PYARROW_LIST_TYPES):
+        value_field = _list_value_field(data_type)
+        return ArrayType(_spark_type_from_field(value_field), value_field.nullable)
+    if isinstance(data_type, pa.MapType):
+        value_field = _map_item_field(data_type)
+        return MapType(
+            _spark_type_from_field(_map_key_field(data_type)),
+            _spark_type_from_field(value_field),
+            value_field.nullable,
+        )
+    if isinstance(data_type, pa.StructType):
+        try:
+            fields = data_type.fields
+        except AttributeError:
+            fields = [data_type.field(i) for i in range(data_type.num_fields)]
+        return StructType([StructField(f.name, _spark_type_from_field(f), f.nullable) for f in fields])
+    return from_arrow_type(data_type, prefer_timestamp_ntz=True)
+
+
+def _field_has_udt(field_or_type: pa.Field | pa.DataType) -> bool:
+    field, data_type = _field_type(field_or_type)
+    if _metadata_value(_field_metadata(field), _SAIL_SPARK_UDT_METADATA_KEY) is not None:
+        return True
+    if isinstance(data_type, _PYARROW_LIST_TYPES):
+        return _field_has_udt(_list_value_field(data_type))
+    if isinstance(data_type, pa.MapType):
+        return _field_has_udt(_map_key_field(data_type)) or _field_has_udt(_map_item_field(data_type))
+    if isinstance(data_type, pa.StructType):
+        try:
+            fields = data_type.fields
+        except AttributeError:
+            fields = [data_type.field(i) for i in range(data_type.num_fields)]
+        return any(_field_has_udt(f) for f in fields)
+    return False
+
+
+def _strip_udt_metadata_from_field(field: pa.Field) -> pa.Field:
+    metadata = field.metadata
+    if metadata is not None:
+        metadata = {k: v for k, v in metadata.items() if k != _SAIL_SPARK_UDT_METADATA_KEY}
+        if not metadata:
+            metadata = None
+    return pa.field(
+        field.name,
+        _strip_udt_metadata_from_type(field.type),
+        nullable=field.nullable,
+        metadata=metadata,
+    )
+
+
+def _strip_udt_metadata_from_type(data_type: pa.DataType) -> pa.DataType:
+    if isinstance(data_type, _PYARROW_LIST_TYPES):
+        value_field = _strip_udt_metadata_from_field(_list_value_field(data_type))
+        if isinstance(data_type, pa.LargeListType):
+            return pa.large_list(value_field)
+        if isinstance(data_type, pa.FixedSizeListType):
+            return pa.list_(value_field, data_type.list_size)
+        if _PYARROW_HAS_VIEW_TYPES and isinstance(data_type, pa.LargeListViewType):
+            return pa.large_list_view(value_field)
+        if _PYARROW_HAS_VIEW_TYPES and isinstance(data_type, pa.ListViewType):
+            return pa.list_view(value_field)
+        return pa.list_(value_field)
+    if isinstance(data_type, pa.MapType):
+        return pa.map_(
+            _strip_udt_metadata_from_field(_map_key_field(data_type)),
+            _strip_udt_metadata_from_field(_map_item_field(data_type)),
+            keys_sorted=data_type.keys_sorted,
+        )
+    if isinstance(data_type, pa.StructType):
+        try:
+            fields = data_type.fields
+        except AttributeError:
+            fields = [data_type.field(i) for i in range(data_type.num_fields)]
+        return pa.struct([_strip_udt_metadata_from_field(f) for f in fields])
+    return data_type
+
+
+def _get_converter(t: pa.Field | pa.DataType) -> Converter:
+    field, t = _field_type(t)
+    if _metadata_value(_field_metadata(field), _SAIL_SPARK_UDT_METADATA_KEY) is not None:
+        return UdtConverter(field)
+    if _field_is_variant(field or t):
+        return VariantConverter(field or t)
     if pa.types.is_null(t):
         return NullConverter(t)
     if pa.types.is_boolean(t):
@@ -118,11 +293,11 @@ def _get_converter(t: pa.DataType) -> Converter:
     if _pyarrow_is_binary(t):
         return BinaryConverter(t)
     if isinstance(t, _PYARROW_LIST_TYPES):
-        return ArrayConverter(t)
+        return ArrayConverter(field or t)
     if isinstance(t, pa.MapType):
-        return MapConverter(t)
+        return MapConverter(field or t)
     if isinstance(t, pa.StructType):
-        return StructConverter(t)
+        return StructConverter(field or t)
     msg = f"unsupported data type: {t}"
     raise ValueError(msg)
 
@@ -226,7 +401,7 @@ def _to_string(data: Any) -> str | None:
         return data
     if isinstance(data, bool):
         return "true" if data else "false"
-    if isinstance(data, list | tuple):
+    if isinstance(data, (list, tuple)):
         items = ", ".join(_to_string(x) for x in data)
         return f"[{items}]"
     if isinstance(data, dict):
@@ -264,10 +439,72 @@ class BinaryConverter(ScalarConverter):
         return _to_bytes(data)
 
 
-class ArrayConverter(Converter):
-    def __init__(self, data_type: _PyArrowListType):
+class UdtConverter(Converter):
+    def __init__(self, field: pa.Field):
+        super().__init__(field.type)
+        self._spark_data_type = _spark_type_from_field(field)
+        self._sql_converter = _get_converter(field.type)
+
+    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
+        values = self._sql_converter.to_pyspark(array)
+        return [None if x is None else self._spark_data_type.fromInternal(x) for x in values]
+
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
+        values = [None if x is None else self._spark_data_type.toInternal(x) for x in data]
+        return self._sql_converter.from_pyspark(values)
+
+
+class VariantConverter(Converter):
+    def __init__(self, field_or_type: pa.Field | pa.StructType):
+        _, data_type = _field_type(field_or_type)
         super().__init__(data_type)
-        self._value_converter = _get_converter(data_type.value_type)
+        try:
+            self._fields = data_type.fields
+        except AttributeError:
+            self._fields = [data_type.field(i) for i in range(data_type.num_fields)]
+        self._field_converters = {f.name: _get_converter(f) for f in self._fields}
+        if set(self._field_converters) != {"metadata", "value"}:
+            msg = f"invalid Variant Arrow type: {data_type}"
+            raise ValueError(msg)
+        self._spark_data_type = VariantType()
+
+    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
+        if not isinstance(array, pa.StructArray):
+            msg = f"invalid data type for variant: {type(array)}"
+            raise TypeError(msg)
+        metadata = self._field_converters["metadata"].to_pyspark(array.field("metadata"))
+        values = self._field_converters["value"].to_pyspark(array.field("value"))
+        valid = array.is_valid().to_pylist()
+        return [None if not valid[i] else VariantVal(bytes(values[i]), bytes(metadata[i])) for i in range(len(array))]
+
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
+        columns_by_name = {f.name: [] for f in self._fields}
+        mask = []
+        for x in data:
+            if isinstance(x, dict) and all(k in x and isinstance(x[k], bytes) for k in ("metadata", "value")):
+                value = x
+            else:
+                value = self._spark_data_type.toInternal(x)
+            if value is None:
+                mask.append(True)
+                for values in columns_by_name.values():
+                    values.append(None)
+            else:
+                mask.append(False)
+                columns_by_name["metadata"].append(value["metadata"])
+                columns_by_name["value"].append(value["value"])
+        return pa.StructArray.from_arrays(
+            [self._field_converters[f.name].from_pyspark(columns_by_name[f.name]) for f in self._fields],
+            fields=self._fields,
+            mask=pa.array(mask, type=pa.bool_()),
+        )
+
+
+class ArrayConverter(Converter):
+    def __init__(self, field_or_type: pa.Field | _PyArrowListType):
+        _, data_type = _field_type(field_or_type)
+        super().__init__(data_type)
+        self._value_converter = _get_converter(_list_value_field(data_type))
 
     def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         if not isinstance(array, _PYARROW_LIST_ARRAY_TYPES):
@@ -290,21 +527,26 @@ class ArrayConverter(Converter):
         end = 0
         for x in data:
             _raise_for_row(x)
-            if x is None or not isinstance(x, list | tuple):
+            if x is None or not isinstance(x, (list, tuple)):
                 offsets.append(None)
             else:
                 offsets.append(end)
                 values.extend(x)
                 end += len(x)
         offsets.append(end)
-        return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), self._value_converter.from_pyspark(values))
+        return pa.ListArray.from_arrays(
+            pa.array(offsets, type=pa.int32()),
+            self._value_converter.from_pyspark(values),
+            type=self._data_type,
+        )
 
 
 class MapConverter(Converter):
-    def __init__(self, data_type: pa.MapType):
+    def __init__(self, field_or_type: pa.Field | pa.MapType):
+        _, data_type = _field_type(field_or_type)
         super().__init__(data_type)
-        self._key_converter = _get_converter(data_type.key_type)
-        self._value_converter = _get_converter(data_type.item_type)
+        self._key_converter = _get_converter(_map_key_field(data_type))
+        self._value_converter = _get_converter(_map_item_field(data_type))
 
     def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         if not isinstance(array, pa.MapArray):
@@ -340,25 +582,32 @@ class MapConverter(Converter):
             pa.array(offsets, type=pa.int32()),
             self._key_converter.from_pyspark(keys),
             self._value_converter.from_pyspark(values),
+            type=self._data_type,
         )
 
 
 class StructConverter(Converter):
-    def __init__(self, data_type: pa.StructType):
+    def __init__(self, field_or_type: pa.Field | pa.StructType):
+        field, data_type = _field_type(field_or_type)
         super().__init__(data_type)
         try:
             self._fields = data_type.fields
         except AttributeError:
             self._fields = [data_type.field(i) for i in range(data_type.num_fields)]
-        self._field_converters = [_get_converter(f.type) for f in self._fields]
-        self._spark_data_type = from_arrow_type(data_type)
+        self._field_converters = [_get_converter(f) for f in self._fields]
+        self._spark_data_type = _spark_type_from_field(field or data_type)
 
     def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         if not isinstance(array, pa.StructArray):
             msg = f"invalid data type for struct: {type(array)}"
             raise TypeError(msg)
         columns = [c.to_pyspark(col) for col, c in zip(array.flatten(), self._field_converters, strict=True)]
-        return [self._spark_data_type.fromInternal(x) for x in zip(*columns, strict=True)]
+        valid = array.is_valid().to_pylist()
+        names = [f.name for f in self._fields]
+        return [
+            None if not valid[i] else Row(**dict(zip(names, values, strict=True)))
+            for i, values in enumerate(zip(*columns, strict=True))
+        ]
 
     def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         n = len(self._fields)
@@ -371,13 +620,22 @@ class StructConverter(Converter):
                     columns[i].append(None)
             else:
                 mask.append(False)
-                for i, v in enumerate(self._spark_data_type.toInternal(x)):
+                for i, v in enumerate(self._field_values(x)):
                     columns[i].append(v)
         return pa.StructArray.from_arrays(
             [c.from_pyspark(col) for col, c in zip(columns, self._field_converters, strict=True)],
             fields=self._fields,
             mask=pa.array(mask, type=pa.bool_()),
         )
+
+    def _field_values(self, data: Any) -> Sequence[Any]:
+        if isinstance(data, dict):
+            return [data.get(f.name) for f in self._fields]
+        if isinstance(data, (list, tuple)):
+            return data
+        if hasattr(data, "__dict__"):
+            return [data.__dict__.get(f.name) for f in self._fields]
+        return self._spark_data_type.toInternal(data)
 
 
 if pyspark.__version__.startswith(("3.", "4.0.")):
@@ -390,26 +648,45 @@ else:
         return serializer.arrow_to_pandas(column, 0)
 
 
-def _pandas_to_arrow_array(data, data_type: pa.DataType, serializer: ArrowStreamPandasUDFSerializer) -> pa.Array:
-    if serializer._struct_in_pandas == "dict" and pa.types.is_struct(data_type):  # noqa: SLF001
+def _pandas_to_arrow_array(
+    data,
+    data_type: pa.DataType,
+    serializer: ArrowStreamPandasUDFSerializer,
+    spark_type=None,
+) -> pa.Array:
+    if (
+        serializer._struct_in_pandas == "dict"  # noqa: SLF001
+        and pa.types.is_struct(data_type)
+        and not _field_is_variant(data_type)
+    ):
         return serializer._create_struct_array(data, data_type)  # noqa: SLF001
-    return serializer._create_array(data, data_type, arrow_cast=serializer._arrow_cast)  # noqa: SLF001
+    return serializer._create_array(data, data_type, spark_type=spark_type, arrow_cast=serializer._arrow_cast)  # noqa: SLF001
 
 
-def _arrow_columns_to_python(args: list[pa.Array], *, binary_as_bytes: bool = True) -> tuple:
+def _arrow_columns_to_python(
+    args: list[pa.Array],
+    input_fields: Sequence[pa.Field] | None = None,
+    *,
+    binary_as_bytes: bool = True,
+) -> tuple:
     """Convert Arrow arrays to Python lists with proper type conversion,
     matching PySpark's ArrowBatchUDFSerializer.load_stream.
     Uses ArrowTableToRowsConversion to convert Arrow-native representations
     to Python-native types (e.g. map arrays become dicts, not list-of-tuples)."""
     # `none_on_identity=True` returns None when no conversion is needed for the type,
     # so we can skip the per-element loop and pass the list directly.
+    spark_input_types = (
+        [_spark_type_from_field(f) for f in input_fields]
+        if input_fields is not None
+        else [from_arrow_type(a.type) for a in args]
+    )
     converters = [
         _ArrowTableToRowsConversion._create_converter(  # noqa: SLF001
-            from_arrow_type(a.type),
+            spark_type,
             none_on_identity=True,
             binary_as_bytes=binary_as_bytes,
         )
-        for a in args
+        for spark_type in spark_input_types
     ]
     return tuple(
         [conv(v) for v in a.to_pylist()] if conv is not None else a.to_pylist()
@@ -456,7 +733,7 @@ def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
             raise ValueError(error)
 
         arrays = []
-        names = []
+        fields = []
 
         for i, target_field in enumerate(data_type.fields):
             target_name = target_field.name
@@ -468,9 +745,9 @@ def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
                 source_array = source_array.cast(target_type)
 
             arrays.append(source_array)
-            names.append(target_name)
+            fields.append(target_field)
 
-        struct_arrays.append(pa.StructArray.from_arrays(arrays, names=names))
+        struct_arrays.append(pa.StructArray.from_arrays(arrays, fields=fields))
 
     return pa.concat_arrays(struct_arrays)
 
@@ -485,10 +762,10 @@ def _named_arrays_to_pandas(
 
 
 class PySparkBatchUdf:
-    def __init__(self, udf: Callable[..., Any], input_types: Sequence[pa.DataType], output_type: pa.DataType):
+    def __init__(self, udf: Callable[..., Any], input_fields: Sequence[pa.Field], output_field: pa.Field):
         self._udf = udf
-        self._input_converters = [_get_converter(t) for t in input_types]
-        self._output_converter = _get_converter(output_type)
+        self._input_converters = [_get_converter(f) for f in input_fields]
+        self._output_converter = _get_converter(_strip_udt_metadata_from_field(output_field))
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
         if len(args) > 0:
@@ -500,8 +777,18 @@ class PySparkBatchUdf:
 
 
 class PySparkArrowBatchUdf:
-    def __init__(self, udf: Callable[..., Any], config):
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        input_fields: Sequence[pa.Field],
+        output_field: pa.Field,
+        config,
+    ):
         self._udf = udf
+        self._input_fields = input_fields
+        self._input_converters = [_get_converter(f) for f in input_fields]
+        self._input_has_udt = [_field_has_udt(f) for f in input_fields]
+        self._output_spark_type = _spark_type_from_field(output_field)
         self._use_legacy = config.python_udf_pandas_conversion_enabled or pyspark.__version__.startswith(("3.", "4.0."))
         if self._use_legacy:
             self._serializer = ArrowStreamPandasUDFSerializer(
@@ -527,10 +814,16 @@ class PySparkArrowBatchUdf:
         if len(args) == 0:
             inputs = tuple(pd.Series([pyspark._NoValue]).repeat(num_rows) for _ in range(1))  # noqa: SLF001
         else:
-            inputs = tuple(_arrow_column_to_pandas(a, self._serializer) for a in args)
+            inputs = []
+            for array, converter, has_udt in zip(args, self._input_converters, self._input_has_udt, strict=True):
+                if has_udt:
+                    inputs.append(pd.Series(converter.to_pyspark(array)))
+                else:
+                    inputs.append(_arrow_column_to_pandas(array, self._serializer))
+            inputs = tuple(inputs)
         [result] = list(self._udf(None, (inputs,)))
         output, output_type = result[0], result[1]
-        return _pandas_to_arrow_array(output, output_type, self._serializer)
+        return _pandas_to_arrow_array(output, output_type, self._serializer, self._output_spark_type)
 
     def _call_arrow(self, args: list[pa.Array], num_rows: int) -> pa.Array:
         # Convert Arrow arrays to Python lists with proper type conversion,
@@ -540,10 +833,15 @@ class PySparkArrowBatchUdf:
         inputs = (
             ([pyspark._NoValue] * num_rows,)  # noqa: SLF001
             if len(args) == 0
-            else _arrow_columns_to_python(args, binary_as_bytes=self._binary_as_bytes)
+            else _arrow_columns_to_python(
+                args,
+                self._input_fields,
+                binary_as_bytes=self._binary_as_bytes,
+            )
         )
         [result] = list(self._udf(None, (inputs,)))
         output, output_type, spark_return_type = result[0], result[1], result[2]
+        spark_return_type = self._output_spark_type or spark_return_type
         if isinstance(output, pa.ChunkedArray):
             output = output.combine_chunks()
         if not isinstance(output, pa.Array):

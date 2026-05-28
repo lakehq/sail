@@ -25,6 +25,7 @@ impl PlanResolver<'_> {
             }
             let _nan_column_indices = Self::resolve_values_nan_types(&mut results, &schema)?;
             let _map_column_indices = Self::resolve_values_map_types(&mut results, &schema)?;
+            Self::resolve_values_null_metadata(&mut results, &schema)?;
             Ok(results) as PlanResult<_>
         }
         .await?;
@@ -145,5 +146,56 @@ impl PlanResolver<'_> {
         }
 
         Ok(map_positions)
+    }
+
+    fn resolve_values_null_metadata(
+        values: &mut [Vec<Expr>],
+        schema: &DFSchemaRef,
+    ) -> PlanResult<()> {
+        let Some(first_row) = values.first() else {
+            return Ok(());
+        };
+        for idx in 0..first_row.len() {
+            let metadata = values
+                .iter()
+                .find_map(|row| match row[idx].metadata(schema) {
+                    Ok(metadata) if !metadata.is_empty() => Some(Ok(metadata)),
+                    Ok(_) => None,
+                    Err(e) => Some(Err(e)),
+                });
+            let Some(metadata) = metadata.transpose()? else {
+                continue;
+            };
+            let mut has_empty_metadata = false;
+            for row in values.iter_mut() {
+                has_empty_metadata |= row[idx].metadata(schema)?.is_empty();
+                if let Expr::Literal(scalar, literal_metadata) = &mut row[idx] {
+                    if scalar.is_null() && literal_metadata.as_ref().is_none_or(|m| m.is_empty()) {
+                        *literal_metadata = Some(metadata.clone());
+                    }
+                }
+            }
+            if has_empty_metadata
+                && values
+                    .iter()
+                    .any(|row| row[idx].metadata(schema).is_ok_and(|m| m.is_empty()))
+            {
+                for row in values.iter_mut() {
+                    Self::clear_values_expr_metadata(&mut row[idx]);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn clear_values_expr_metadata(expr: &mut Expr) {
+        match expr {
+            Expr::Literal(_, metadata) => *metadata = None,
+            Expr::Alias(alias) => {
+                alias.metadata = None;
+                Self::clear_values_expr_metadata(alias.expr.as_mut());
+            }
+            _ => {}
+        }
     }
 }

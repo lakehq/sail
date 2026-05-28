@@ -4,6 +4,8 @@ use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
 use chrono::{NaiveTime, Timelike};
 use datafusion_expr::expr;
+use datafusion_expr::expr::FieldMetadata;
+use sail_common::spark::extension::{SparkIntervalMetadata, SparkYearMonthIntervalType};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -11,10 +13,34 @@ use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+
+fn year_month_interval_field_number(field: spec::IntervalFieldType) -> PlanResult<i32> {
+    match field {
+        spec::IntervalFieldType::Year => Ok(0),
+        spec::IntervalFieldType::Month => Ok(1),
+        field => Err(PlanError::invalid(format!(
+            "{field:?} is not valid for a year-month interval"
+        ))),
+    }
+}
+
+fn year_month_interval_metadata(
+    start_field: Option<spec::IntervalFieldType>,
+    end_field: Option<spec::IntervalFieldType>,
+) -> PlanResult<SparkIntervalMetadata> {
+    Ok(SparkIntervalMetadata::new(
+        start_field
+            .map(year_month_interval_field_number)
+            .transpose()?,
+        end_field
+            .map(year_month_interval_field_number)
+            .transpose()?,
+    ))
+}
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_expression_literal(
@@ -22,6 +48,7 @@ impl PlanResolver<'_> {
         literal: spec::Literal,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let metadata = Self::literal_field_metadata(&literal)?;
         let literal = self.resolve_literal(literal, state)?;
         let service = self.ctx.extension::<PlanService>()?;
         let name = service
@@ -29,7 +56,7 @@ impl PlanResolver<'_> {
             .literal_to_string(&literal, &self.config.session_timezone)?;
         Ok(NamedExpr::new(
             vec![name],
-            expr::Expr::Literal(literal, None),
+            expr::Expr::Literal(literal, metadata),
         ))
     }
 
@@ -43,6 +70,22 @@ impl PlanResolver<'_> {
             days: Some(Date32Type::from_naive_date(date.try_into()?)),
         };
         self.resolve_expression_literal(literal, state)
+    }
+
+    fn literal_field_metadata(literal: &spec::Literal) -> PlanResult<Option<FieldMetadata>> {
+        let spec::Literal::IntervalYearMonth {
+            start_field,
+            end_field,
+            ..
+        } = literal
+        else {
+            return Ok(None);
+        };
+        let metadata = year_month_interval_metadata(*start_field, *end_field)?
+            .arrow_metadata(SparkYearMonthIntervalType::NAME)
+            .into_iter()
+            .collect();
+        Ok(Some(FieldMetadata::new(metadata)))
     }
 
     pub(super) fn resolve_expression_timestamp(

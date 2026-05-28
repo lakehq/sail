@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
-    approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, grouping, median, min_max, regr, stddev, sum, variance,
+    approx_distinct, approx_percentile_cont, average, bit_and_or_xor, bool_and_or, correlation,
+    count, covariance, grouping, median, min_max, regr, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -21,6 +21,7 @@ use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::array_agg::SparkArrayAgg;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -310,7 +311,9 @@ fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     let arg = arguments.one()?;
     let null_filter = Some(Box::new(arg.clone().is_not_null()));
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(array_agg::array_agg_udaf()),
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
+            SparkArrayAgg::new(),
+        ))),
         params: WindowFunctionParams {
             args: vec![arg],
             partition_by,
@@ -334,7 +337,9 @@ fn array_agg_compacted(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(array_agg::array_agg_udaf()),
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
+            SparkArrayAgg::new(),
+        ))),
         params: WindowFunctionParams {
             args: arguments,
             partition_by,
@@ -365,7 +370,9 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     let delim = other_args.first().cloned().unwrap_or_else(|| lit(""));
 
     let agg = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(array_agg::array_agg_udaf()),
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
+            SparkArrayAgg::new(),
+        ))),
         params: WindowFunctionParams {
             args: vec![agg_col.clone()],
             partition_by,
@@ -530,7 +537,10 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ),
         ("bool_and", F::aggregate(bool_and_or::bool_and_udaf)),
         ("bool_or", F::aggregate(bool_and_or::bool_or_udaf)),
-        ("collect_list", F::aggregate(array_agg::array_agg_udaf)),
+        (
+            "collect_list",
+            F::aggregate(|| Arc::new(AggregateUDF::from(SparkArrayAgg::new()))),
+        ),
         ("collect_set", F::custom(collect_set)),
         ("corr", F::aggregate(correlation::corr_udaf)),
         ("count", F::custom(count)),
