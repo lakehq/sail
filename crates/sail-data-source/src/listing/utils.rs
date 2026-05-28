@@ -3,9 +3,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::execution::cache::TableScopedPath;
+use datafusion::logical_expr::Expr;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, plan_err, DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -328,4 +330,11 @@ pub fn rewrite_listing_partitions(mut config: ListingTableConfig) -> Result<List
             }
         });
     Ok(config)
+}
+
+pub fn can_be_evaluated_for_partition_pruning(
+    partition_column_names: &[&str],
+    expr: &Expr,
+) -> bool {
+    !partition_column_names.is_empty() && expr_applicable_for_cols(partition_column_names, expr)
 }
