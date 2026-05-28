@@ -920,6 +920,13 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Default)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Interval)"
                       },
                       {
