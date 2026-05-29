@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::{Column, DFSchema};
@@ -578,30 +578,7 @@ impl PlanResolver<'_> {
                                 "failed to infer schema for table `{table:?}` from format `{format}`: {e}",
                             ))
                         })?;
-                    columns = schema
-                        .fields()
-                        .iter()
-                        .map(|f| {
-                            // Read the Delta generation expression from Arrow field metadata.
-                            // `ColumnFeatures` transparently JSON-unwraps the value if the
-                            // table was created externally and the expression was stored as
-                            // a JSON-encoded string.
-                            let generated_always_as =
-                                ColumnFeatures::from_field(f).generation_expression();
-                            TableColumnStatus {
-                                name: f.name().clone(),
-                                data_type: f.data_type().clone(),
-                                nullable: f.is_nullable(),
-                                comment: None,
-                                default: None,
-                                generated_always_as,
-                                identity: ColumnFeatures::from_field(f).identity(),
-                                is_partition: false,
-                                is_bucket: false,
-                                is_cluster: false,
-                            }
-                        })
-                        .collect();
+                    columns = Self::delta_log_columns_from_schema(schema.as_ref());
                 } else if format.eq_ignore_ascii_case("delta") && location.is_some() {
                     let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
                         PlanError::invalid(format!(
@@ -626,25 +603,7 @@ impl PlanResolver<'_> {
                     };
                     match table_format.infer_schema(&self.ctx.state(), info).await {
                         Ok(schema) => {
-                            columns = schema
-                                .fields()
-                                .iter()
-                                .map(|f| {
-                                    let features = ColumnFeatures::from_field(f);
-                                    TableColumnStatus {
-                                        name: f.name().clone(),
-                                        data_type: f.data_type().clone(),
-                                        nullable: f.is_nullable(),
-                                        comment: None,
-                                        default: None,
-                                        generated_always_as: features.generation_expression(),
-                                        identity: features.identity(),
-                                        is_partition: false,
-                                        is_bucket: false,
-                                        is_cluster: false,
-                                    }
-                                })
-                                .collect();
+                            Self::merge_delta_log_columns(&mut columns, schema.as_ref());
                         }
                         Err(e) => {
                             log::debug!(
@@ -665,6 +624,64 @@ impl PlanResolver<'_> {
             }
             _ => Ok(None),
         }
+    }
+
+    fn delta_log_columns_from_schema(schema: &Schema) -> Vec<TableColumnStatus> {
+        schema
+            .fields()
+            .iter()
+            .map(|field| Self::delta_log_column_from_field(field.as_ref()))
+            .collect()
+    }
+
+    fn delta_log_column_from_field(field: &Field) -> TableColumnStatus {
+        // Read Delta column features from Arrow field metadata. `ColumnFeatures`
+        // transparently JSON-unwraps generation expressions when external
+        // writers store them as JSON-encoded strings.
+        let features = ColumnFeatures::from_field(field);
+        TableColumnStatus {
+            name: field.name().clone(),
+            data_type: field.data_type().clone(),
+            nullable: field.is_nullable(),
+            comment: None,
+            default: None,
+            generated_always_as: features.generation_expression(),
+            identity: features.identity(),
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        }
+    }
+
+    fn merge_delta_log_columns(columns: &mut Vec<TableColumnStatus>, schema: &Schema) {
+        let fields_by_name = schema
+            .fields()
+            .iter()
+            .map(|field| (field.name().to_lowercase(), field.as_ref()))
+            .collect::<HashMap<_, _>>();
+        let existing_names = columns
+            .iter()
+            .map(|column| column.name.to_lowercase())
+            .collect::<HashSet<_>>();
+
+        for column in columns.iter_mut() {
+            let Some(field) = fields_by_name.get(&column.name.to_lowercase()) else {
+                continue;
+            };
+            let features = ColumnFeatures::from_field(field);
+            column.data_type = field.data_type().clone();
+            column.nullable = field.is_nullable();
+            column.generated_always_as = features.generation_expression();
+            column.identity = features.identity();
+        }
+
+        columns.extend(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !existing_names.contains(&field.name().to_lowercase()))
+                .map(|field| Self::delta_log_column_from_field(field.as_ref())),
+        );
     }
 
     async fn rewrite_data_source_delta_generated_columns(
