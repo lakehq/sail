@@ -258,7 +258,7 @@ def _cast_view_types(table: pa.Table) -> pa.Table:
 
 
 def _read_schema(path: str) -> pa.Schema:
-    """Read the Arrow schema from first Vortex file without loading all data."""
+    """Read the Arrow schema from the first Vortex file without loading all data."""
     vortex_files = _get_vortex_files(path)
     vf_path = vortex_files[0]
     try:
