@@ -545,7 +545,7 @@ impl JobScheduler {
             .collect::<ExecutionResult<Vec<_>>>()?;
         let output = self.get_task_output(job, key, stage, local)?;
         let definition = TaskDefinition {
-            plan: Arc::from(plan),
+            plan,
             inputs,
             output,
         };
@@ -686,10 +686,12 @@ impl JobScheduler {
     ) -> ExecutionResult<TaskOutput> {
         let replicas = job.graph.replicas(key.stage);
         let distribution = match &stage.distribution {
-            OutputDistribution::Hash { keys, channels } if local => TaskOutputDistribution::LocalHash {
-                keys: keys.clone(),
-                channels: *channels,
-            },
+            OutputDistribution::Hash { keys, channels } if local => {
+                TaskOutputDistribution::LocalHash {
+                    keys: keys.clone(),
+                    channels: *channels,
+                }
+            }
             OutputDistribution::Hash { keys, channels } => {
                 let keys = keys
                     .iter()

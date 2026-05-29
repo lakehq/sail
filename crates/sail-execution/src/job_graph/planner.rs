@@ -27,6 +27,7 @@ use crate::job_graph::{
 use crate::plan::{ShuffleConsumption, StageInputExec};
 
 impl JobGraph {
+    #[cfg(test)]
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
         Self::try_new_with_task_placement(plan, TaskPlacement::Worker)
     }
@@ -41,7 +42,12 @@ impl JobGraph {
             stages: vec![],
             schema: plan.schema(),
         };
-        let last = build_job_graph(plan, PartitionUsage::Once, default_task_placement, &mut graph)?;
+        let last = build_job_graph(
+            plan,
+            PartitionUsage::Once,
+            default_task_placement,
+            &mut graph,
+        )?;
         let (last, inputs) = rewrite_inputs(last)?;
         graph.stages.push(Stage {
             inputs,
@@ -195,7 +201,12 @@ fn build_job_graph(
             }
             PartitionMode::CollectLeft => {
                 vec![
-                    build_job_graph(left.clone(), PartitionUsage::Shared, default_task_placement, graph)?,
+                    build_job_graph(
+                        left.clone(),
+                        PartitionUsage::Shared,
+                        default_task_placement,
+                        graph,
+                    )?,
                     build_job_graph(right.clone(), usage, default_task_placement, graph)?,
                 ]
             }
@@ -211,7 +222,12 @@ fn build_job_graph(
     {
         let (left, right) = plan.children().two()?;
         vec![
-            build_job_graph(left.clone(), PartitionUsage::Shared, default_task_placement, graph)?,
+            build_job_graph(
+                left.clone(),
+                PartitionUsage::Shared,
+                default_task_placement,
+                graph,
+            )?,
             build_job_graph(right.clone(), usage, default_task_placement, graph)?,
         ]
     } else if plan.as_any().is::<RepartitionExec>()
@@ -223,7 +239,12 @@ fn build_job_graph(
         let child = plan.children().one()?;
         // At the stage boundary, we only expect to use the child partition once
         // since the shuffle writer can materialize the data for multiple consumption.
-        vec![build_job_graph(child.clone(), PartitionUsage::Once, default_task_placement, graph)?]
+        vec![build_job_graph(
+            child.clone(),
+            PartitionUsage::Once,
+            default_task_placement,
+            graph,
+        )?]
     } else {
         plan.children()
             .into_iter()
@@ -256,19 +277,34 @@ fn build_job_graph(
                         .clone()
                         .with_partitioning(Partitioning::RoundRobinBatch(n)),
                 );
-                create_shuffle(child, graph, properties, consumption, default_task_placement)?
+                create_shuffle(
+                    child,
+                    graph,
+                    properties,
+                    consumption,
+                    default_task_placement,
+                )?
             }
-            Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
-                create_shuffle(child, graph, properties, consumption, default_task_placement)?
-            }
+            Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => create_shuffle(
+                child,
+                graph,
+                properties,
+                consumption,
+                default_task_placement,
+            )?,
         }
     } else if let Some(repartition) = plan.as_any().downcast_ref::<ExplicitRepartitionExec>() {
         let properties = repartition.properties().clone();
         let child = plan.children().one()?;
         match &properties.partitioning {
-            Partitioning::RoundRobinBatch(channels) => {
-                create_row_shuffle(child, *channels, graph, properties, consumption, default_task_placement)?
-            }
+            Partitioning::RoundRobinBatch(channels) => create_row_shuffle(
+                child,
+                *channels,
+                graph,
+                properties,
+                consumption,
+                default_task_placement,
+            )?,
             other => {
                 return Err(ExecutionError::DataFusionError(plan_datafusion_err!(
                     "unexpected explicit repartition partitioning in distributed planning: {other:?}"
@@ -279,7 +315,13 @@ fn build_job_graph(
         let properties = coalesce.properties().clone();
         let child = plan.children().one()?;
         let fetch = coalesce.fetch();
-        let shuffled = create_shuffle(child, graph, properties, consumption, default_task_placement)?;
+        let shuffled = create_shuffle(
+            child,
+            graph,
+            properties,
+            consumption,
+            default_task_placement,
+        )?;
         if let Some(f) = fetch {
             Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
         } else {
@@ -287,11 +329,19 @@ fn build_job_graph(
         }
     } else if plan.as_any().is::<SortPreservingMergeExec>() {
         let child = plan.children().one()?;
-        plan.clone()
-            .with_new_children(vec![create_merge_input(child, graph, default_task_placement)?])?
+        plan.clone().with_new_children(vec![create_merge_input(
+            child,
+            graph,
+            default_task_placement,
+        )?])?
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalesceExec>() {
         let child = plan.children().one()?;
-        create_rescale_input(child, coalesce.output_partitions(), graph, default_task_placement)?
+        create_rescale_input(
+            child,
+            coalesce.output_partitions(),
+            graph,
+            default_task_placement,
+        )?
     } else if plan.as_any().is::<SystemTableExec>() || plan.as_any().is::<CatalogCommandExec>() {
         plan.children().zero()?;
         create_driver_stage(&plan, graph)?
