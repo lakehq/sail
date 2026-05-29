@@ -156,7 +156,7 @@ data:
           delta.columnMapping.id: 2
           delta.columnMapping.physicalName: <physical_name_1>
         name: user
-        nullable: true
+        nullable: false
         type:
           fields:
           - metadata:

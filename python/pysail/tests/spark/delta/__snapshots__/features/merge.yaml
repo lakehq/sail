@@ -2317,6 +2317,22 @@ data:
                         Values: (Int32(1), Utf8("s1")), (Int32(1), Utf8("s2"))
   
     == Analyzed Logical Plan ==
+    MergeInto: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_cardinality_skip"], format: "DELTA", location: "<tmp>/merge_cardinality_skip", partition_by: [], options: [TablePropertyList { items: [] }] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#2", data_type: Int32 }, Field { name: "#3", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [FunctionalDependence { source_indices: [0], target_indices: [0, 1], nullable: false, mode: Single }] } }, resolved_target_field_names: ["id", "value"], resolved_source_field_names: ["id", "value"], on_condition: ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), op: Eq, right: Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }) }), source: Some("t . id = s . id ") }, matched_clauses: [MergeMatchedClause { condition: None, action: UpdateSet([MergeAssignment { column: "#1", value: Column(Column { relation: Some(Bare { table: "s" }), name: "#3" }) }]) }], not_matched_by_source_clauses: [], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertAll }], join_key_pairs: [(Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }))], residual_predicates: [], target_only_predicates: [], generated_column_exprs: [] }
+      SubqueryAlias: t
+        Projection: delta_merge_cardinality_skip.id AS #0, delta_merge_cardinality_skip.value AS #1
+          TableScan: delta_merge_cardinality_skip
+      SubqueryAlias: s
+        Projection: src_merge_cardinality_skip.id AS #2, src_merge_cardinality_skip.value AS #3
+          Projection: src_merge_cardinality_skip.#4 AS id, src_merge_cardinality_skip.#5 AS value
+            SubqueryAlias: src_merge_cardinality_skip
+              Projection: src.#2 AS #4, max(src.#3) AS value AS #5
+                Aggregate: groupBy=[[src.#2]], aggr=[[max(src.#3)]]
+                  SubqueryAlias: src
+                    Projection: #0 AS #2, #1 AS #3
+                      Projection: column1 AS #0, column2 AS #1
+                        Values: (Int32(1), Utf8("s1")), (Int32(1), Utf8("s2"))
+  
+    == Optimized Logical Plan ==
     RowLevelWrite: command=Merge, target=delta_merge_cardinality_skip, format=DELTA, matched=1, not_matched=1, not_matched_by_source=0
       Union
         Projection: CASE WHEN __common_expr_1 THEN __sail_src_id ELSE id END AS id, CASE WHEN __common_expr_2 THEN __sail_src_value WHEN __common_expr_1 THEN __sail_src_value ELSE value END AS value, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_3 THEN Int32(3) WHEN __common_expr_2 THEN Int32(6) ELSE Int32(0) END AS __sail_operation_type, UInt64(NULL) AS __sail_merge_source_metric
@@ -2484,6 +2500,21 @@ data:
                       Values: (Int32(2), Utf8("ignored")), (Int32(3), Utf8("inserted"))
   
     == Analyzed Logical Plan ==
+    MergeInto: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_insert_only"], format: "DELTA", location: "<tmp>/merge_insert_only", partition_by: [], options: [TablePropertyList { items: [] }] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#2", data_type: Int32 }, Field { name: "#3", data_type: Utf8 }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_target_field_names: ["id", "value"], resolved_source_field_names: ["id", "value"], on_condition: ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), op: Eq, right: Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }) }), source: Some("t . id = s . id ") }, matched_clauses: [], not_matched_by_source_clauses: [], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertAll }], join_key_pairs: [(Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }))], residual_predicates: [], target_only_predicates: [], generated_column_exprs: [] }
+      SubqueryAlias: t
+        Projection: delta_merge_insert_only.id AS #0, delta_merge_insert_only.value AS #1
+          TableScan: delta_merge_insert_only
+      SubqueryAlias: s
+        Projection: src_merge_insert_only.id AS #2, src_merge_insert_only.value AS #3
+          Projection: src_merge_insert_only.#4 AS id, src_merge_insert_only.#5 AS value
+            SubqueryAlias: src_merge_insert_only
+              Projection: src.#2 AS #4, src.#3 AS #5
+                SubqueryAlias: src
+                  Projection: #0 AS #2, #1 AS #3
+                    Projection: column1 AS #0, column2 AS #1
+                      Values: (Int32(2), Utf8("ignored")), (Int32(3), Utf8("inserted"))
+  
+    == Optimized Logical Plan ==
     RowLevelWrite: command=Merge, target=delta_merge_insert_only, format=DELTA, matched=0, not_matched=1, not_matched_by_source=0
       Union
         Projection: __sail_src_id AS id, __sail_src_value AS value, Int32(3) AS __sail_operation_type
