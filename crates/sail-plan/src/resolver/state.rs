@@ -82,9 +82,18 @@ pub(super) struct PlanResolverState {
     /// Set when resolving a `WithParameters` query node so that IDENTIFIER expressions
     /// can substitute placeholders before constant-folding them.
     param_values: HashMap<String, ScalarValue>,
+    /// Display names for named parameter values.
+    param_display_names: HashMap<String, String>,
     /// Positional parameter values available for IDENTIFIER clause evaluation.
     /// Set alongside `param_values` when resolving a `WithParameters` query node.
     positional_param_values: Vec<ScalarValue>,
+    /// Display names for positional parameter values.
+    positional_param_display_names: Vec<String>,
+    /// Mapping from parser-generated positional placeholder ids to 0-based argument indices.
+    positional_param_indices: HashMap<String, usize>,
+    /// The next 0-based positional SQL parameter placeholder index.
+    /// Reset when resolving a `WithParameters` query node.
+    next_positional_param_index: usize,
 }
 
 impl Default for PlanResolverState {
@@ -104,7 +113,11 @@ impl PlanResolverState {
             subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
             param_values: HashMap::new(),
+            param_display_names: HashMap::new(),
             positional_param_values: Vec::new(),
+            positional_param_display_names: Vec::new(),
+            positional_param_indices: HashMap::new(),
+            next_positional_param_index: 0,
         }
     }
 
@@ -268,9 +281,33 @@ impl PlanResolverState {
         self.param_values.get(name)
     }
 
+    /// Returns the named parameter display name for the given name, if any.
+    pub fn get_param_display_name(&self, name: &str) -> Option<&str> {
+        self.param_display_names.get(name).map(String::as_str)
+    }
+
     /// Returns the positional parameter value at the given 0-based index, if any.
     pub fn get_positional_param_value(&self, index: usize) -> Option<&ScalarValue> {
         self.positional_param_values.get(index)
+    }
+
+    /// Returns the positional parameter display name at the given 0-based index, if any.
+    pub fn get_positional_param_display_name(&self, index: usize) -> Option<&str> {
+        self.positional_param_display_names
+            .get(index)
+            .map(String::as_str)
+    }
+
+    /// Returns the 0-based argument index for a parser-generated positional placeholder id.
+    pub fn get_positional_param_index(&self, placeholder: &str) -> Option<usize> {
+        self.positional_param_indices.get(placeholder).copied()
+    }
+
+    /// Returns the next 1-based positional placeholder id for `?` SQL parameters.
+    pub fn next_positional_param_id(&mut self) -> usize {
+        let index = self.next_positional_param_index;
+        self.next_positional_param_index += 1;
+        index + 1
     }
 
     /// Enters a scope where named and positional parameter values are set.
@@ -278,9 +315,19 @@ impl PlanResolverState {
     pub fn enter_param_values_scope(
         &mut self,
         named: HashMap<String, ScalarValue>,
+        named_display_names: HashMap<String, String>,
         positional: Vec<ScalarValue>,
+        positional_display_names: Vec<String>,
+        positional_indices: HashMap<String, usize>,
     ) -> ParamValuesScope<'_> {
-        ParamValuesScope::new(self, named, positional)
+        ParamValuesScope::new(
+            self,
+            named,
+            named_display_names,
+            positional,
+            positional_display_names,
+            positional_indices,
+        )
     }
 }
 
@@ -288,22 +335,43 @@ impl PlanResolverState {
 pub(crate) struct ParamValuesScope<'a> {
     state: &'a mut PlanResolverState,
     previous_param_values: HashMap<String, ScalarValue>,
+    previous_param_display_names: HashMap<String, String>,
     previous_positional_param_values: Vec<ScalarValue>,
+    previous_positional_param_display_names: Vec<String>,
+    previous_positional_param_indices: HashMap<String, usize>,
+    previous_next_positional_param_index: usize,
 }
 
 impl<'a> ParamValuesScope<'a> {
     fn new(
         state: &'a mut PlanResolverState,
         named: HashMap<String, ScalarValue>,
+        named_display_names: HashMap<String, String>,
         positional: Vec<ScalarValue>,
+        positional_display_names: Vec<String>,
+        positional_indices: HashMap<String, usize>,
     ) -> Self {
         let previous_param_values = std::mem::replace(&mut state.param_values, named);
+        let previous_param_display_names =
+            std::mem::replace(&mut state.param_display_names, named_display_names);
         let previous_positional_param_values =
             std::mem::replace(&mut state.positional_param_values, positional);
+        let previous_positional_param_display_names = std::mem::replace(
+            &mut state.positional_param_display_names,
+            positional_display_names,
+        );
+        let previous_positional_param_indices =
+            std::mem::replace(&mut state.positional_param_indices, positional_indices);
+        let previous_next_positional_param_index =
+            std::mem::replace(&mut state.next_positional_param_index, 0);
         Self {
             state,
             previous_param_values,
+            previous_param_display_names,
             previous_positional_param_values,
+            previous_positional_param_display_names,
+            previous_positional_param_indices,
+            previous_next_positional_param_index,
         }
     }
 
@@ -315,8 +383,14 @@ impl<'a> ParamValuesScope<'a> {
 impl Drop for ParamValuesScope<'_> {
     fn drop(&mut self) {
         self.state.param_values = std::mem::take(&mut self.previous_param_values);
+        self.state.param_display_names = std::mem::take(&mut self.previous_param_display_names);
         self.state.positional_param_values =
             std::mem::take(&mut self.previous_positional_param_values);
+        self.state.positional_param_display_names =
+            std::mem::take(&mut self.previous_positional_param_display_names);
+        self.state.positional_param_indices =
+            std::mem::take(&mut self.previous_positional_param_indices);
+        self.state.next_positional_param_index = self.previous_next_positional_param_index;
     }
 }
 

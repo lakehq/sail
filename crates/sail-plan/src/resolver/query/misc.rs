@@ -10,7 +10,9 @@ use sail_common_datafusion::array::record_batch::{
     cast_record_batch_positionally, read_record_batches,
 };
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::range::RangeNode;
+use serde_json::Value;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -63,33 +65,44 @@ impl PlanResolver<'_> {
         // Evaluate named arguments eagerly so that IDENTIFIER(:col) expressions
         // inside the query body can substitute their placeholder values at plan-resolution
         // time (before `with_param_values` is applied to the resolved plan).
-        let named_params = {
+        let (named_params, named_param_display_names) = {
             let mut params = HashMap::new();
+            let mut display_names = HashMap::new();
             for (name, arg) in named {
-                let expr = self.resolve_expression(arg, &schema, state).await?;
+                let named_expr = self.resolve_named_expression(arg, &schema, state).await?;
+                let display_name = named_expr.name.clone().one()?;
                 let param = evaluator
-                    .evaluate(&expr)
+                    .evaluate(&named_expr.expr)
                     .map_err(|e| PlanError::invalid(e.to_string()))?;
+                display_names.insert(name.clone(), display_name);
                 params.insert(name, param);
             }
-            params
+            (params, display_names)
         };
         // Evaluate positional arguments eagerly for the same reason.
-        let positional_params = {
+        let (positional_params, positional_param_display_names) = {
             let mut params = vec![];
+            let mut display_names = vec![];
             for arg in positional {
-                let expr = self.resolve_expression(arg, &schema, state).await?;
+                let named_expr = self.resolve_named_expression(arg, &schema, state).await?;
+                display_names.push(named_expr.name.clone().one()?);
                 let param = evaluator
-                    .evaluate(&expr)
+                    .evaluate(&named_expr.expr)
                     .map_err(|e| PlanError::invalid(e.to_string()))?;
                 params.push(param);
             }
-            params
+            (params, display_names)
         };
         // Enter a scope that makes both named and positional parameter values
         // available for IDENTIFIER clause evaluation inside the query body.
-        let mut scope =
-            state.enter_param_values_scope(named_params.clone(), positional_params.clone());
+        let positional_param_indices = Self::collect_positional_param_indices(&input)?;
+        let mut scope = state.enter_param_values_scope(
+            named_params.clone(),
+            named_param_display_names,
+            positional_params.clone(),
+            positional_param_display_names,
+            positional_param_indices,
+        );
         let state = scope.state();
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
@@ -104,6 +117,43 @@ impl PlanResolver<'_> {
         } else {
             Ok(input)
         }
+    }
+
+    fn collect_positional_param_indices(
+        plan: &spec::QueryPlan,
+    ) -> PlanResult<HashMap<String, usize>> {
+        fn visit(value: &Value, placeholders: &mut Vec<String>) {
+            match value {
+                Value::Object(map) => {
+                    if let Some(Value::String(placeholder)) = map.get("placeholder") {
+                        if placeholder.starts_with('?') && placeholder.len() > 1 {
+                            placeholders.push(placeholder.clone());
+                        }
+                    }
+                    for value in map.values() {
+                        visit(value, placeholders);
+                    }
+                }
+                Value::Array(values) => {
+                    for value in values {
+                        visit(value, placeholders);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let plan = serde_json::to_value(plan).map_err(|e| PlanError::internal(e.to_string()))?;
+        let mut placeholders = vec![];
+        visit(&plan, &mut placeholders);
+        placeholders
+            .sort_by_key(|placeholder| placeholder[1..].parse::<usize>().unwrap_or(usize::MAX));
+        placeholders.dedup();
+        Ok(placeholders
+            .into_iter()
+            .enumerate()
+            .map(|(index, placeholder)| (placeholder, index))
+            .collect())
     }
 
     pub(super) async fn resolve_query_local_relation(

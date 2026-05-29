@@ -954,7 +954,14 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::Interval(_, value) => {
             from_ast_signed_interval_expression(Signed::Positive(*value))
         }
-        AtomExpr::Placeholder(variable) => Ok(spec::Expr::Placeholder(variable.value)),
+        AtomExpr::Placeholder(variable) => {
+            let placeholder = if variable.value == "?" {
+                format!("?{}", variable.span.start)
+            } else {
+                variable.value
+            };
+            Ok(spec::Expr::Placeholder(placeholder))
+        }
         AtomExpr::Identifier(x) => Ok(spec::Expr::UnresolvedAttribute {
             name: spec::ObjectName::bare(x.value),
             plan_id: None,

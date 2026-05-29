@@ -62,9 +62,52 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_placeholder(
         &self,
         placeholder: String,
+        state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let name = placeholder.clone();
-        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, None));
+        let (placeholder, value, display_name) = if placeholder.starts_with('?') {
+            let index = state
+                .get_positional_param_index(&placeholder)
+                .map(|index| index + 1)
+                .unwrap_or_else(|| state.next_positional_param_id());
+            (
+                format!("${index}"),
+                state.get_positional_param_value(index - 1).cloned(),
+                state
+                    .get_positional_param_display_name(index - 1)
+                    .map(str::to_string),
+            )
+        } else {
+            let key = placeholder
+                .strip_prefix(':')
+                .or_else(|| placeholder.strip_prefix('$'))
+                .unwrap_or(&placeholder);
+            let value = state.get_param_value(key).cloned().or_else(|| {
+                key.parse::<usize>()
+                    .ok()
+                    .and_then(|index| index.checked_sub(1))
+                    .and_then(|index| state.get_positional_param_value(index).cloned())
+            });
+            let display_name = state.get_param_display_name(key).map(str::to_string);
+            (format!("${key}"), value, display_name)
+        };
+        let (name, expr) = match value {
+            Some(value) => {
+                let name = match display_name {
+                    Some(name) => name,
+                    None => {
+                        let service = self.ctx.extension::<PlanService>()?;
+                        service
+                            .plan_formatter()
+                            .literal_to_string(&value, &self.config.session_timezone)?
+                    }
+                };
+                (name, expr::Expr::Literal(value, None))
+            }
+            None => (
+                placeholder.clone(),
+                expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, None)),
+            ),
+        };
         Ok(NamedExpr::new(vec![name], expr))
     }
 
