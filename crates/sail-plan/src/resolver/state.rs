@@ -138,6 +138,14 @@ impl PlanResolverState {
         self.register_field_info(name, true)
     }
 
+    /// Sets the display name of an already-registered field. Used to give a
+    /// materialized column (e.g. an unnested `window` column) a referenceable name.
+    pub fn set_field_name(&mut self, field_id: &str, name: impl Into<String>) {
+        if let Some(info) = self.fields.get_mut(field_id) {
+            info.name = name.into();
+        }
+    }
+
     pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {
         self.register_field_info(field.as_ref().name(), false)
     }

@@ -39,7 +39,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"session_window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
+        "failure": "not implemented: function: session_window"
       }
     },
     {
@@ -82,7 +82,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"session_window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
+        "failure": "not implemented: function: session_window"
       }
     },
     {
@@ -174,7 +174,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
+        "success": "ok"
       }
     },
     {
@@ -216,7 +216,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
+        "success": "ok"
       }
     },
     {
@@ -4060,6 +4060,156 @@
               "name": "year(2016-07-30)",
               "nullable": true,
               "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT window.start, window.end, count(*) AS cnt FROM VALUES (TIMESTAMP '2021-01-01 00:00:00'), (TIMESTAMP '2021-01-01 00:03:00') AS t(b) GROUP BY window(b, '5 minutes', '5 minutes', '2 minutes') ORDER BY window.start",
+        "result": [
+          "2020-12-31 23:57:00\t2021-01-01 00:02:00\t1",
+          "2021-01-01 00:02:00\t2021-01-01 00:07:00\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "start",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            },
+            {
+              "name": "end",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            },
+            {
+              "name": "cnt",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT window.start, window.end, count(*) AS cnt FROM VALUES (TIMESTAMP '2021-01-01 00:02:00') AS t(b) GROUP BY window(b, '10 minutes', '4 minutes') ORDER BY window.start",
+        "result": [
+          "2020-12-31 23:56:00\t2021-01-01 00:06:00\t1",
+          "2021-01-01 00:00:00\t2021-01-01 00:10:00\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "start",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            },
+            {
+              "name": "end",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            },
+            {
+              "name": "cnt",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT window.start, count(*) AS cnt FROM VALUES (TIMESTAMP '2021-01-01 00:00:00'), (CAST(NULL AS TIMESTAMP)) AS t(b) GROUP BY window(b, '5 minutes') ORDER BY window.start",
+        "result": [
+          "2021-01-01 00:00:00\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "start",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            },
+            {
+              "name": "cnt",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT window(b, '5 minutes').start AS s FROM VALUES (TIMESTAMP '2021-01-01 00:03:00'), (TIMESTAMP '2021-01-01 00:07:00') AS t(b) ORDER BY s",
+        "result": [
+          "2021-01-01 00:00:00",
+          "2021-01-01 00:05:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "s",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT window(b, '5 minutes').start AS s, count(*) AS cnt FROM VALUES (TIMESTAMP '2021-01-01 00:00:00'), (TIMESTAMP '2021-01-01 00:07:00') AS t(b) GROUP BY window(b, '5 minutes') ORDER BY s",
+        "result": [
+          "2021-01-01 00:00:00\t1",
+          "2021-01-01 00:05:00\t1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "s",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            },
+            {
+              "name": "cnt",
+              "nullable": false,
+              "type": "long",
               "metadata": {}
             }
           ]
