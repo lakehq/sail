@@ -3,7 +3,6 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::avro::AvroFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::AvroSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;
@@ -18,11 +17,13 @@ pub struct AvroReadFormat;
 
 #[async_trait::async_trait]
 impl ReadFormat for AvroReadFormat {
-    fn create_read_format(
+    async fn infer_compression(
         &self,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(AvroFormat))
+        _ctx: &dyn Session,
+        _store: &Arc<dyn object_store::ObjectStore>,
+        _objects: &[object_store::ObjectMeta],
+    ) -> Result<CompressionTypeVariant> {
+        Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
 
     async fn infer_schema(

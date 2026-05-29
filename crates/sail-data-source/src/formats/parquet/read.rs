@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::parquet::metadata::{
     ordering_from_parquet_metadata, DFParquetMetadata,
 };
@@ -35,16 +33,13 @@ fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
 
 #[async_trait::async_trait]
 impl ReadFormat for ParquetReadFormat {
-    fn create_read_format(
+    async fn infer_compression(
         &self,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let options = self.options.clone().into_table_options();
-        Ok(Arc::new(ParquetFormat::default().with_options(options)))
-    }
-
-    fn file_extension_override(&self) -> Result<Option<String>> {
-        Ok(Some(self.options.extension.clone()))
+        _ctx: &dyn Session,
+        _store: &Arc<dyn object_store::ObjectStore>,
+        _objects: &[object_store::ObjectMeta],
+    ) -> Result<CompressionTypeVariant> {
+        Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
 
     async fn infer_schema(

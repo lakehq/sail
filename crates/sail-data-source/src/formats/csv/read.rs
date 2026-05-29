@@ -4,7 +4,6 @@ use bytes::Bytes;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
@@ -15,6 +14,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::ObjectStoreExt;
 
 use crate::listing::source::{ListingScanInput, ReadFormat};
+use crate::listing::utils::infer_listing_compression;
 use crate::options::gen::CsvReadOptions;
 
 #[derive(Debug, Clone)]
@@ -24,19 +24,21 @@ pub struct CsvReadFormat {
 
 #[async_trait::async_trait]
 impl ReadFormat for CsvReadFormat {
-    fn create_read_format(
+    async fn infer_compression(
         &self,
-        compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let mut options = self
+        _ctx: &dyn Session,
+        _store: &Arc<dyn object_store::ObjectStore>,
+        objects: &[object_store::ObjectMeta],
+    ) -> Result<CompressionTypeVariant> {
+        let options = self
             .options
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        if let Some(compression) = compression {
-            options.compression = compression;
+        if options.compression != CompressionTypeVariant::UNCOMPRESSED {
+            return Ok(options.compression);
         }
-        Ok(Arc::new(CsvFormat::default().with_options(options)))
+        infer_listing_compression(objects)
     }
 
     async fn infer_schema(

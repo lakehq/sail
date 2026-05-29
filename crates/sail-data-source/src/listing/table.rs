@@ -16,7 +16,6 @@ use crate::listing::utils::can_be_evaluated_for_partition_pruning;
 #[derive(Clone, Debug)]
 pub struct ListingTableSourceConfig {
     pub table_paths: Vec<datafusion_datasource::ListingTableUrl>,
-    pub file_extension: String,
     pub schema: TableSchema,
     pub constraints: Constraints,
     pub file_sort_order: Vec<Vec<Sort>>,

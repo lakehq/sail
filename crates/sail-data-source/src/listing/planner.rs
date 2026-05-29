@@ -279,7 +279,7 @@ async fn list_files_for_scan<'a>(
             store.as_ref(),
             table_path,
             filters,
-            &source.config().file_extension,
+            "",
             &partition_cols,
         )
     }))

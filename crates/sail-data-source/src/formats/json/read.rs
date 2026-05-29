@@ -6,7 +6,6 @@ use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::json::JsonFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::JsonSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
@@ -16,6 +15,7 @@ use datafusion_datasource_json::utils::JsonArrayToNdjsonReader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingScanInput, ReadFormat};
+use crate::listing::utils::infer_listing_compression;
 use crate::options::gen::JsonReadOptions;
 
 #[derive(Debug, Clone)]
@@ -25,19 +25,21 @@ pub struct JsonReadFormat {
 
 #[async_trait::async_trait]
 impl ReadFormat for JsonReadFormat {
-    fn create_read_format(
+    async fn infer_compression(
         &self,
-        compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let mut options = self
+        _ctx: &dyn Session,
+        _store: &Arc<dyn object_store::ObjectStore>,
+        objects: &[object_store::ObjectMeta],
+    ) -> Result<CompressionTypeVariant> {
+        let options = self
             .options
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        if let Some(compression) = compression {
-            options.compression = compression;
+        if options.compression != CompressionTypeVariant::UNCOMPRESSED {
+            return Ok(options.compression);
         }
-        Ok(Arc::new(JsonFormat::default().with_options(options)))
+        infer_listing_compression(objects)
     }
 
     async fn infer_schema(

@@ -7,8 +7,6 @@ use datafusion::arrow::ipc::convert::fb_to_schema;
 use datafusion::arrow::ipc::reader::{FileReader, StreamReader};
 use datafusion::arrow::ipc::root_as_message;
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::arrow::ArrowFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_datafusion_err, Result};
@@ -44,11 +42,13 @@ async fn is_object_in_arrow_ipc_file_format(
 
 #[async_trait::async_trait]
 impl ReadFormat for ArrowReadFormat {
-    fn create_read_format(
+    async fn infer_compression(
         &self,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(ArrowFormat))
+        _ctx: &dyn Session,
+        _store: &Arc<dyn ObjectStore>,
+        _objects: &[object_store::ObjectMeta],
+    ) -> Result<CompressionTypeVariant> {
+        Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
 
     async fn infer_schema(
