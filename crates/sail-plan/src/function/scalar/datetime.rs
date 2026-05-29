@@ -14,6 +14,7 @@ use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
@@ -81,17 +82,18 @@ fn trunc(date: Expr, part: Expr) -> Expr {
 
 fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (part, timestamp) = input.arguments.two()?;
-    let truncated = expr_fn::date_trunc(trunc_part_conversion(part), timestamp);
-    match truncated.get_type(input.function_context.schema)? {
-        DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(truncated),
-        DataType::Timestamp(_, tz) => Ok(cast(
-            truncated,
-            DataType::Timestamp(TimeUnit::Microsecond, tz),
-        )),
+    let truncated =
+        ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), timestamp]);
+    let truncated = match truncated.get_type(input.function_context.schema)? {
+        DataType::Timestamp(TimeUnit::Microsecond, _) => truncated,
+        DataType::Timestamp(_, tz) => {
+            cast(truncated, DataType::Timestamp(TimeUnit::Microsecond, tz))
+        }
         other => Err(PlanError::InternalError(format!(
             "date_trunc expected a timestamp result, got {other:?}"
-        ))),
-    }
+        )))?,
+    };
+    Ok(truncated)
 }
 
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {

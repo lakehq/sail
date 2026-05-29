@@ -79,13 +79,28 @@ impl ScalarUDFImpl for SparkArray {
             .map(|f| f.data_type())
             .cloned()
             .collect::<Vec<_>>();
-        let return_type = self.return_type(&data_types)?;
+        let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
+        let return_type = match self.return_type(&data_types)? {
+            DataType::List(field) => DataType::List(Arc::new(
+                field.as_ref().clone().with_nullable(contains_null),
+            )),
+            data_type => data_type,
+        };
         Ok(Arc::new(Field::new(self.name(), return_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(make_array_inner)(args.as_slice())
+        let ScalarFunctionArgs {
+            args, return_field, ..
+        } = args;
+        let value_nullable = match return_field.data_type() {
+            DataType::List(field) | DataType::LargeList(field) => field.is_nullable(),
+            _ => true,
+        };
+        let func = make_scalar_function(move |arrays| {
+            make_array_inner_with_nullable(arrays, value_nullable)
+        });
+        func(args.as_slice())
     }
 
     fn aliases(&self) -> &[String] {
@@ -134,6 +149,10 @@ pub(crate) fn empty_array_type() -> DataType {
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
+    make_array_inner_with_nullable(arrays, true)
+}
+
+fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> Result<ArrayRef> {
     if arrays.is_empty() {
         let array = new_empty_array(&DataType::Null);
         return Ok(Arc::new(
@@ -157,12 +176,12 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             let array = new_null_array(&DataType::Null, length);
             Ok(Arc::new(
                 SingleRowListArrayBuilder::new(array)
-                    .with_nullable(true)
+                    .with_nullable(value_nullable)
                     .build_list_array(),
             ))
         }
-        DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
-        _ => array_array::<i32>(arrays, data_type),
+        DataType::LargeList(..) => array_array::<i64>(arrays, data_type, value_nullable),
+        _ => array_array::<i32>(arrays, data_type, value_nullable),
     }
 }
 
@@ -206,7 +225,11 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
-fn array_array<O: OffsetSizeTrait>(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
+fn array_array<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    data_type: DataType,
+    value_nullable: bool,
+) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return plan_err!("Array requires at least one argument");
@@ -245,7 +268,7 @@ fn array_array<O: OffsetSizeTrait>(args: &[ArrayRef], data_type: DataType) -> Re
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, true)),
+        Arc::new(Field::new_list_field(data_type, value_nullable)),
         OffsetBuffer::new(offsets.into()),
         make_array(data),
         None,

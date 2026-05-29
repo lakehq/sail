@@ -22,7 +22,10 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, NullBufferBuilder, StringArray, StructArray};
-use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use datafusion::arrow::datatypes::{
+    DataType as ArrowDataType, Field as ArrowField, Fields as ArrowFields, Schema as ArrowSchema,
+    SchemaRef as ArrowSchemaRef,
+};
 use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
@@ -544,6 +547,7 @@ pub(crate) fn parse_stats_json_array(
     json: &StringArray,
     target_schema: &ArrowSchemaRef,
 ) -> DeltaResult<StructArray> {
+    let target_schema = make_nullable_arrow_schema(target_schema);
     let num_rows = json.len();
     let estimated = json
         .iter()
@@ -566,13 +570,13 @@ pub(crate) fn parse_stats_json_array(
         json_lines.push('\n');
     }
 
-    let mut reader = JsonReaderBuilder::new(Arc::clone(target_schema))
+    let mut reader = JsonReaderBuilder::new(Arc::clone(&target_schema))
         .with_batch_size(num_rows.max(1))
         .build(Cursor::new(json_lines))
         .map_err(DeltaTableError::generic_err)?;
     let parsed = match reader.next() {
         Some(batch) => batch.map_err(DeltaTableError::generic_err)?,
-        None => RecordBatch::new_empty(Arc::clone(target_schema)),
+        None => RecordBatch::new_empty(Arc::clone(&target_schema)),
     };
     let parsed: StructArray = parsed.into();
     Ok(StructArray::try_new(
@@ -580,6 +584,48 @@ pub(crate) fn parse_stats_json_array(
         parsed.columns().to_vec(),
         validity.finish(),
     )?)
+}
+
+fn make_nullable_arrow_schema(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
+    Arc::new(ArrowSchema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .map(|field| Arc::new(make_nullable_arrow_field(field)))
+            .collect::<ArrowFields>(),
+        schema.metadata().clone(),
+    ))
+}
+
+fn make_nullable_arrow_field(field: &ArrowField) -> ArrowField {
+    field
+        .clone()
+        .with_nullable(true)
+        .with_data_type(make_nullable_arrow_data_type(field.data_type()))
+}
+
+fn make_nullable_arrow_data_type(data_type: &ArrowDataType) -> ArrowDataType {
+    match data_type {
+        ArrowDataType::Struct(fields) => ArrowDataType::Struct(
+            fields
+                .iter()
+                .map(|field| Arc::new(make_nullable_arrow_field(field)))
+                .collect::<ArrowFields>(),
+        ),
+        ArrowDataType::List(field) => {
+            ArrowDataType::List(Arc::new(make_nullable_arrow_field(field)))
+        }
+        ArrowDataType::LargeList(field) => {
+            ArrowDataType::LargeList(Arc::new(make_nullable_arrow_field(field)))
+        }
+        ArrowDataType::FixedSizeList(field, size) => {
+            ArrowDataType::FixedSizeList(Arc::new(make_nullable_arrow_field(field)), *size)
+        }
+        ArrowDataType::Map(field, sorted) => {
+            ArrowDataType::Map(Arc::new(make_nullable_arrow_field(field)), *sorted)
+        }
+        _ => data_type.clone(),
+    }
 }
 
 #[cfg(test)]

@@ -335,7 +335,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             bucket_by,
             sort_order,
             options,
-            logical_schema: _,
+            logical_schema,
         } = info;
         if is_flow_event_schema(&input.schema()) {
             return plan_err!("cannot write streaming data to listing table");
@@ -396,12 +396,16 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 ext
             }
         };
+        let output_schema = logical_schema
+            .as_ref()
+            .map(|schema| schema.inner().clone())
+            .unwrap_or_else(|| input.schema());
         let conf = FileSinkConfig {
             original_url: path,
             object_store_url,
             file_group: Default::default(),
             table_paths,
-            output_schema: input.schema(),
+            output_schema,
             table_partition_cols,
             insert_op: InsertOp::Append,
             keep_partition_by_columns: false,

@@ -98,6 +98,10 @@ pub enum Literal {
     },
     IntervalYearMonth {
         months: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_field: Option<spec::IntervalFieldType>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_field: Option<spec::IntervalFieldType>,
     },
     IntervalDayTime {
         value: Option<IntervalDayTime>,
@@ -278,10 +282,14 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         },
         spec::DataType::Interval {
             interval_unit,
-            start_field: _,
-            end_field: _,
+            start_field,
+            end_field,
         } => match interval_unit {
-            spec::IntervalUnit::YearMonth => Ok(Literal::IntervalYearMonth { months: None }),
+            spec::IntervalUnit::YearMonth => Ok(Literal::IntervalYearMonth {
+                months: None,
+                start_field,
+                end_field,
+            }),
             spec::IntervalUnit::DayTime => Ok(Literal::IntervalDayTime { value: None }),
             spec::IntervalUnit::MonthDayNano => Ok(Literal::IntervalMonthDayNano { value: None }),
         },

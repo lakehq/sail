@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::Result;
 use datafusion_common::internal_err;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -16,6 +16,7 @@ pub struct PySparkUnresolvedUDF {
     /// The output type of the UDF. `None` for UDTFs that use an `analyze` static method
     /// to determine the return type dynamically at query analysis time.
     output_type: Option<DataType>,
+    output_field: Option<Field>,
     deterministic: bool,
 }
 
@@ -26,6 +27,7 @@ impl PySparkUnresolvedUDF {
         eval_type: spec::PySparkUdfType,
         command: Vec<u8>,
         output_type: Option<DataType>,
+        output_field: Option<Field>,
         deterministic: bool,
     ) -> Self {
         Self {
@@ -38,6 +40,7 @@ impl PySparkUnresolvedUDF {
             eval_type,
             command,
             output_type,
+            output_field,
             deterministic,
         }
     }
@@ -56,6 +59,10 @@ impl PySparkUnresolvedUDF {
 
     pub fn output_type(&self) -> Option<&DataType> {
         self.output_type.as_ref()
+    }
+
+    pub fn output_field(&self) -> Option<&Field> {
+        self.output_field.as_ref()
     }
 
     pub fn deterministic(&self) -> bool {
@@ -81,6 +88,20 @@ impl ScalarUDFImpl for PySparkUnresolvedUDF {
             Some(t) => Ok(t.clone()),
             None => internal_err!(
                 "unresolved UDF {} has no scalar return type; \
+                 dynamic-return UDTFs must be resolved during query analysis before scalar use",
+                self.name()
+            ),
+        }
+    }
+
+    fn return_field_from_args(
+        &self,
+        _args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<std::sync::Arc<Field>> {
+        match &self.output_field {
+            Some(field) => Ok(std::sync::Arc::new(field.clone())),
+            None => internal_err!(
+                "unresolved UDF {} has no scalar return field; \
                  dynamic-return UDTFs must be resolved during query analysis before scalar use",
                 self.name()
             ),

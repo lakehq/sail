@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection};
 use sail_common::spec;
@@ -17,7 +17,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let schema = Arc::new(DFSchema::empty());
-        let values = async {
+        let values: Vec<Vec<Expr>> = async {
             let mut results: Vec<Vec<Expr>> = Vec::with_capacity(values.len());
             for value in values {
                 let value = self.resolve_expressions(value, &schema, state).await?;
@@ -25,10 +25,25 @@ impl PlanResolver<'_> {
             }
             let _nan_column_indices = Self::resolve_values_nan_types(&mut results, &schema)?;
             let _map_column_indices = Self::resolve_values_map_types(&mut results, &schema)?;
+            Self::resolve_values_null_metadata(&mut results, &schema)?;
             Ok(results) as PlanResult<_>
         }
         .await?;
-        let plan = LogicalPlanBuilder::values(values)?.build()?;
+        let nullable = Self::resolve_values_nullability(&values, &schema)?;
+        let inferred_plan = LogicalPlanBuilder::values(values.clone())?.build()?;
+        let fields = inferred_plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(nullable)
+            .map(|(field, nullable)| Arc::new(field.as_ref().clone().with_nullable(nullable)))
+            .collect::<Vec<_>>()
+            .into();
+        let schema = DFSchemaRef::new(DFSchema::from_unqualified_fields(
+            fields,
+            inferred_plan.schema().metadata().clone(),
+        )?);
+        let plan = LogicalPlanBuilder::values_with_schema(values, &schema)?.build()?;
         let expr = plan
             .schema()
             .columns()
@@ -42,6 +57,48 @@ impl PlanResolver<'_> {
             expr,
             Arc::new(plan),
         )?))
+    }
+
+    fn resolve_values_nullability(
+        values: &[Vec<Expr>],
+        schema: &DFSchemaRef,
+    ) -> PlanResult<Vec<bool>> {
+        let n_cols = values.first().map(|x| x.len()).unwrap_or_default();
+        (0..n_cols)
+            .map(|idx| {
+                values.iter().try_fold(false, |nullable, row| {
+                    Ok(nullable || Self::is_spark_nullable_values_expr(&row[idx], schema)?)
+                })
+            })
+            .collect()
+    }
+
+    fn is_spark_nullable_values_expr(expr: &Expr, schema: &DFSchemaRef) -> PlanResult<bool> {
+        if expr.nullable(schema.as_ref())? {
+            return Ok(true);
+        }
+        Ok(Self::is_spark_nullable_cast(expr))
+    }
+
+    fn is_spark_nullable_cast(expr: &Expr) -> bool {
+        match expr {
+            Expr::Alias(alias) => Self::is_spark_nullable_cast(alias.expr.as_ref()),
+            Expr::Cast(cast) => {
+                matches!(
+                    &cast.data_type,
+                    DataType::Date32
+                        | DataType::Timestamp(
+                            TimeUnit::Second
+                                | TimeUnit::Millisecond
+                                | TimeUnit::Microsecond
+                                | TimeUnit::Nanosecond,
+                            _
+                        )
+                )
+            }
+            Expr::TryCast(_) => true,
+            _ => false,
+        }
     }
 
     fn resolve_values_nan_types(
@@ -137,7 +194,11 @@ impl PlanResolver<'_> {
                 })
                 .collect::<Result<Vec<_>, PlanError>>()?;
 
-            if let Some(target_type) = override_types.into_iter().find_map(|data_type| data_type) {
+            if let Some(target_type) = override_types
+                .into_iter()
+                .flatten()
+                .reduce(merge_map_value_nullability)
+            {
                 for value in &mut *values {
                     value[idx] = cast(value[idx].clone(), target_type.clone());
                 }
@@ -146,4 +207,92 @@ impl PlanResolver<'_> {
 
         Ok(map_positions)
     }
+
+    fn resolve_values_null_metadata(
+        values: &mut [Vec<Expr>],
+        schema: &DFSchemaRef,
+    ) -> PlanResult<()> {
+        let Some(first_row) = values.first() else {
+            return Ok(());
+        };
+        for idx in 0..first_row.len() {
+            let metadata = values
+                .iter()
+                .find_map(|row| match row[idx].metadata(schema) {
+                    Ok(metadata) if !metadata.is_empty() => Some(Ok(metadata)),
+                    Ok(_) => None,
+                    Err(e) => Some(Err(e)),
+                });
+            let Some(metadata) = metadata.transpose()? else {
+                continue;
+            };
+            let mut has_empty_metadata = false;
+            for row in values.iter_mut() {
+                has_empty_metadata |= row[idx].metadata(schema)?.is_empty();
+                if let Expr::Literal(scalar, literal_metadata) = &mut row[idx] {
+                    if scalar.is_null() && literal_metadata.as_ref().is_none_or(|m| m.is_empty()) {
+                        *literal_metadata = Some(metadata.clone());
+                    }
+                }
+            }
+            if has_empty_metadata
+                && values
+                    .iter()
+                    .any(|row| row[idx].metadata(schema).is_ok_and(|m| m.is_empty()))
+            {
+                for row in values.iter_mut() {
+                    Self::clear_values_expr_metadata(&mut row[idx]);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn clear_values_expr_metadata(expr: &mut Expr) {
+        match expr {
+            Expr::Literal(_, metadata) => *metadata = None,
+            Expr::Alias(alias) => {
+                alias.metadata = None;
+                Self::clear_values_expr_metadata(alias.expr.as_mut());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn merge_map_value_nullability(left: DataType, right: DataType) -> DataType {
+    let (DataType::Map(left_entries, left_sorted), DataType::Map(right_entries, _)) =
+        (&left, &right)
+    else {
+        return left;
+    };
+    let (DataType::Struct(left_fields), DataType::Struct(right_fields)) =
+        (left_entries.data_type(), right_entries.data_type())
+    else {
+        return left;
+    };
+    let (Some(left_value), Some(right_value)) = (left_fields.get(1), right_fields.get(1)) else {
+        return left;
+    };
+    let value_nullable = left_value.is_nullable() || right_value.is_nullable();
+    if value_nullable == left_value.is_nullable() {
+        return left;
+    }
+    let Some(left_key) = left_fields.first() else {
+        return left;
+    };
+    let fields = vec![
+        left_key.clone(),
+        Arc::new(left_value.as_ref().clone().with_nullable(value_nullable)),
+    ]
+    .into();
+    DataType::Map(
+        Arc::new(
+            left_entries
+                .as_ref()
+                .clone()
+                .with_data_type(DataType::Struct(fields)),
+        ),
+        *left_sorted,
+    )
 }

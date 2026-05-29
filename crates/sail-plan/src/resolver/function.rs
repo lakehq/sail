@@ -1,4 +1,4 @@
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::plan_err;
 use sail_common::spec;
 
@@ -11,6 +11,7 @@ pub(super) struct PythonUdf {
     pub eval_type: spec::PySparkUdfType,
     pub command: Vec<u8>,
     pub output_type: DataType,
+    pub output_field: Field,
 }
 
 pub(super) struct PythonUdtf {
@@ -47,12 +48,22 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
-        let output_type = self.resolve_data_type(&output_type, state)?;
+        let output_field = self.resolve_field(
+            &spec::Field {
+                name: "result".to_string(),
+                data_type: output_type,
+                nullable: true,
+                metadata: vec![],
+            },
+            state,
+        )?;
+        let output_type = output_field.data_type().clone();
         Ok(PythonUdf {
             python_version,
             eval_type,
             command,
             output_type,
+            output_field,
         })
     }
 

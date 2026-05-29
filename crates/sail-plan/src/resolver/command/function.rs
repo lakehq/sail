@@ -34,7 +34,8 @@ impl PlanResolver<'_> {
             function.python_version,
             function.eval_type,
             function.command,
-            Some(function.output_type),
+            Some(function.output_type.clone()),
+            Some(function.output_field),
             deterministic,
         );
 
@@ -67,6 +68,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             function.command,
             function.return_type,
+            None,
             deterministic,
         );
         // PySpark UDTF is registered as a scalar UDF since it will be used as a stream UDF

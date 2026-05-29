@@ -1,4 +1,4 @@
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::Field;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
@@ -43,7 +43,7 @@ impl PySparkUdfPayload {
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         arg_offsets: &[usize],
-        input_types: &[DataType],
+        input_fields: &[Field],
         // Per-argument kwarg name: None for positional, Some(key) for keyword
         kwarg_names: &[Option<String>],
         config: &PySparkUdfConfig,
@@ -70,7 +70,7 @@ impl PySparkUdfPayload {
         if matches!(pyspark_version, PySparkVersion::V4_1)
             && matches!(eval_type, spec::PySparkUdfType::ArrowBatched)
         {
-            let schema_json = build_input_types_json(input_types)?;
+            let schema_json = build_input_types_json(input_fields)?;
             data.extend((schema_json.len() as i32).to_be_bytes());
             data.extend(schema_json.as_bytes());
         }

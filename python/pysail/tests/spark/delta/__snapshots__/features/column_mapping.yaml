@@ -21,19 +21,19 @@ data:
           delta.columnMapping.id: 1
           delta.columnMapping.physicalName: <physical_name_0>
         name: id
-        nullable: true
+        nullable: false
         type: integer
       - metadata:
           delta.columnMapping.id: 2
           delta.columnMapping.physicalName: <physical_name_1>
         name: data
-        nullable: true
+        nullable: false
         type: string
       - metadata:
           delta.columnMapping.id: 3
           delta.columnMapping.physicalName: <physical_name_2>
         name: region
-        nullable: true
+        nullable: false
         type: string
       type: struct
   protocol:
@@ -64,19 +64,19 @@ data:
           delta.columnMapping.id: 1
           delta.columnMapping.physicalName: <physical_name_0>
         name: id
-        nullable: true
+        nullable: false
         type: integer
       - metadata:
           delta.columnMapping.id: 2
           delta.columnMapping.physicalName: <physical_name_1>
         name: name
-        nullable: true
+        nullable: false
         type: string
       - metadata:
           delta.columnMapping.id: 3
           delta.columnMapping.physicalName: <physical_name_2>
         name: value
-        nullable: true
+        nullable: false
         type: double
       type: struct
   protocol:
@@ -107,19 +107,19 @@ data:
           delta.columnMapping.id: 1
           delta.columnMapping.physicalName: <physical_name_0>
         name: id
-        nullable: true
+        nullable: false
         type: integer
       - metadata:
           delta.columnMapping.id: 2
           delta.columnMapping.physicalName: <physical_name_1>
         name: name
-        nullable: true
+        nullable: false
         type: string
       - metadata:
           delta.columnMapping.id: 3
           delta.columnMapping.physicalName: <physical_name_2>
         name: value
-        nullable: true
+        nullable: false
         type: double
       type: struct
   protocol:
@@ -150,7 +150,7 @@ data:
           delta.columnMapping.id: 1
           delta.columnMapping.physicalName: <physical_name_0>
         name: id
-        nullable: true
+        nullable: false
         type: integer
       - metadata:
           delta.columnMapping.id: 2
@@ -176,7 +176,7 @@ data:
           delta.columnMapping.id: 5
           delta.columnMapping.physicalName: <physical_name_2>
         name: tags
-        nullable: true
+        nullable: false
         type:
           containsNull: true
           elementType: string

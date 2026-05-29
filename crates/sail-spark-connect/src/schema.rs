@@ -1,7 +1,11 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
+use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::{
+    DataType as ArrowDataType, FieldRef, Fields, Schema, SchemaRef,
+};
 use sail_common::string::escape_meta_characters;
 
 use crate::error::{SparkError, SparkResult};
@@ -9,7 +13,88 @@ use crate::spark::connect as sc;
 use crate::spark::connect::data_type::Kind;
 
 pub(crate) fn to_spark_schema(schema: SchemaRef) -> SparkResult<sc::DataType> {
-    DataType::Struct(schema.fields().clone()).try_into()
+    ArrowDataType::Struct(schema.fields().clone()).try_into()
+}
+
+pub(crate) fn normalize_schema_for_pandas(schema: SchemaRef) -> SchemaRef {
+    Arc::new(Schema::new_with_metadata(
+        normalize_schema_fields_for_pandas(schema.fields(), false),
+        schema.metadata().clone(),
+    ))
+}
+
+fn normalize_schema_fields_for_pandas(fields: &Fields, deduplicate: bool) -> Fields {
+    let names = if deduplicate {
+        deduplicate_field_names(fields)
+    } else {
+        fields
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>()
+    };
+    fields
+        .iter()
+        .zip(names)
+        .map(|(field, name)| normalize_schema_field_for_pandas(field, name))
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn normalize_schema_field_for_pandas(field: &FieldRef, name: String) -> FieldRef {
+    Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_name(name)
+            .with_data_type(normalize_schema_data_type_for_pandas(field.data_type())),
+    )
+}
+
+fn normalize_schema_data_type_for_pandas(data_type: &ArrowDataType) -> ArrowDataType {
+    match data_type {
+        ArrowDataType::Struct(fields) => {
+            ArrowDataType::Struct(normalize_schema_fields_for_pandas(fields, true))
+        }
+        ArrowDataType::List(field) => ArrowDataType::List(normalize_schema_field_for_pandas(
+            field,
+            field.name().clone(),
+        )),
+        ArrowDataType::LargeList(field) => ArrowDataType::LargeList(
+            normalize_schema_field_for_pandas(field, field.name().clone()),
+        ),
+        ArrowDataType::FixedSizeList(field, size) => ArrowDataType::FixedSizeList(
+            normalize_schema_field_for_pandas(field, field.name().clone()),
+            *size,
+        ),
+        ArrowDataType::Map(field, sorted) => ArrowDataType::Map(
+            normalize_schema_field_for_pandas(field, field.name().clone()),
+            *sorted,
+        ),
+        _ => data_type.clone(),
+    }
+}
+
+pub(crate) fn deduplicate_field_names(fields: &Fields) -> Vec<String> {
+    let mut counts = HashMap::<&str, usize>::new();
+    for field in fields {
+        *counts.entry(field.name().as_str()).or_default() += 1;
+    }
+
+    let mut next_indices = HashMap::<&str, usize>::new();
+    fields
+        .iter()
+        .map(|field| {
+            let name = field.name().as_str();
+            if counts[name] > 1 {
+                let index = next_indices.entry(name).or_default();
+                let deduped = format!("{name}_{index}");
+                *index += 1;
+                deduped
+            } else {
+                name.to_string()
+            }
+        })
+        .collect()
 }
 
 // Since we cannot construct formatter errors when the data type is invalid,

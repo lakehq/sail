@@ -83,6 +83,53 @@ define_to_string_udf!(
     value_to_string_view,
 );
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkUdtToUtf8 {
+    signature: Signature,
+    options: FormatOptions<'static>,
+}
+
+impl Default for SparkUdtToUtf8 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkUdtToUtf8 {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+            options: FormatOptions::default(),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkUdtToUtf8 {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "spark_udt_to_utf8"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let args = ColumnarValue::values_to_arrays(&args)?;
+        let arg = args.one()?;
+        let array = udt_value_to_string(arg.as_ref(), &self.options)?;
+        Ok(ColumnarValue::Array(array))
+    }
+}
+
 // [Credit]: <https://github.com/apache/arrow-rs/blob/main/arrow-cast/src/cast/string.rs>
 
 fn value_to_string<O: OffsetSizeTrait>(
@@ -120,6 +167,28 @@ fn value_to_string_view(array: &dyn Array, options: &FormatOptions<'static>) -> 
                 buffer.clear();
                 formatter.value(i).write(&mut buffer)?;
                 builder.append_value(&buffer)
+            }
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+fn udt_value_to_string(array: &dyn Array, options: &FormatOptions<'static>) -> Result<ArrayRef> {
+    let mut builder = GenericStringBuilder::<i32>::new();
+    let formatter = ArrayFormatter::try_new(array, options)?;
+    let nulls = array.nulls();
+    let mut buffer = String::new();
+    for i in 0..array.len() {
+        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+            true => builder.append_null(),
+            false => {
+                buffer.clear();
+                formatter.value(i).write(&mut buffer)?;
+                if buffer.starts_with('[') && buffer.ends_with(']') {
+                    buffer.replace_range(..1, "(");
+                    buffer.replace_range(buffer.len() - 1.., ")");
+                }
+                builder.append_value(&buffer);
             }
         }
     }

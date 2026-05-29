@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
@@ -98,6 +98,7 @@ use sail_delta_lake::physical_plan::{
     DeltaWriteContext, DeltaWriterExec, RelaxedTzCastExec,
 };
 use sail_delta_lake::spec::{Action, ColumnMappingMode, DeltaOperation, StructType};
+use sail_function::aggregate::array_agg::SparkArrayAgg;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -126,6 +127,7 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
@@ -176,7 +178,9 @@ use sail_function::scalar::misc::spark_aes::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
-use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::spark_to_string::{
+    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View, SparkUdtToUtf8,
+};
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
@@ -2066,6 +2070,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|x| self.try_decode_data_type(x))
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
+                let input_fields = input_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, data_type)| Field::new(format!("arg_{i}"), data_type.clone(), true))
+                    .collect::<Vec<_>>();
+                let output_field = Field::new("result", output_type.clone(), true);
                 let config = match config {
                     Some(config) => self.try_decode_pyspark_udf_config(config)?,
                     None => return plan_err!("missing config for PySparkUDF"),
@@ -2076,7 +2086,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     payload,
                     deterministic,
                     input_types,
+                    input_fields,
                     output_type,
+                    output_field,
                     Arc::new(config),
                 );
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2315,6 +2327,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
+            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
@@ -2345,6 +2358,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
+            "spark_udt_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkUdtToUtf8::new()))),
             "spark_try_add" | "try_add" => Ok(Arc::new(ScalarUDF::from(SparkTryAdd::new()))),
             "spark_try_divide" | "try_divide" => Ok(Arc::new(ScalarUDF::from(SparkTryDiv::new()))),
             "spark_try_mod" | "try_mod" => Ok(Arc::new(ScalarUDF::from(SparkTryMod::new()))),
@@ -2418,6 +2432,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
+            || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -2460,6 +2475,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkToLargeUtf8>()
             || node_inner.is::<SparkToUtf8>()
             || node_inner.is::<SparkToUtf8View>()
+            || node_inner.is::<SparkUdtToUtf8>()
             || node_inner.is::<SparkTryAdd>()
             || node_inner.is::<SparkTryAESDecrypt>()
             || node_inner.is::<SparkTryAESEncrypt>()
@@ -2619,6 +2635,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         match udaf_kind {
             Some(UdafKind::Standard(gen::StandardUdaf {})) => match name {
                 "bitmap_and_agg" => Ok(Arc::new(AggregateUDF::from(BitmapAndAggFunction::new()))),
+                "array_agg" => Ok(Arc::new(AggregateUDF::from(SparkArrayAgg::new()))),
                 "bitmap_construct_agg" => Ok(Arc::new(AggregateUDF::from(
                     BitmapConstructAggFunction::new(),
                 ))),
@@ -2727,6 +2744,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         let udaf_kind = if node.inner().as_any().is::<BitmapAndAggFunction>()
+            || node.inner().as_any().is::<SparkArrayAgg>()
             || node.inner().as_any().is::<BitmapConstructAggFunction>()
             || node.inner().as_any().is::<BitmapOrAggFunction>()
             || node.inner().as_any().is::<HistogramNumericFunction>()

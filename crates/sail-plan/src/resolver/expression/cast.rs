@@ -14,8 +14,12 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::spark_to_string::{
+    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View, SparkUdtToUtf8,
+};
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
+use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
+use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -46,6 +50,11 @@ impl PlanResolver<'_> {
             let expr = ScalarUDF::new_from_impl(SparkCastToVariant::new()).call(vec![expr]);
             return Ok(NamedExpr::new(name, expr));
         }
+        if matches!(cast_to_type, spec::DataType::UserDefined { .. }) {
+            return Err(PlanError::AnalysisError(
+                "cannot cast to a user-defined type".to_string(),
+            ));
+        }
 
         // Extract the DayTimeInterval field unit before resolving to Arrow type,
         // since it determines the multiplier for numeric-to-interval casts.
@@ -63,6 +72,13 @@ impl PlanResolver<'_> {
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
+        let expr_field = expr.to_field(schema)?.1;
+        let expr_udt_metadata = expr_field
+            .metadata()
+            .get(spec::SAIL_SPARK_UDT_METADATA_KEY)
+            .map(|value| serde_json::from_str::<spec::SparkUdtMetadata>(value))
+            .transpose()
+            .map_err(|e| PlanError::internal(format!("failed to deserialize UDT metadata: {e}")))?;
         let expr_type = expr.get_type(schema)?;
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
@@ -96,6 +112,24 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            (from, DataType::Utf8, _) if is_variant_storage_type(&from) => cast(
+                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
+                DataType::Utf8,
+            ),
+            (from, DataType::LargeUtf8, _) if is_variant_storage_type(&from) => cast(
+                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
+                DataType::LargeUtf8,
+            ),
+            (from, DataType::Utf8View, _) if is_variant_storage_type(&from) => {
+                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr])
+            }
+            (from, to, is_try) if is_variant_storage_type(&from) => {
+                ScalarUDF::new_from_impl(SparkVariantGet::new(is_try)).call(vec![
+                    expr,
+                    lit("$"),
+                    lit(to.to_string()),
+                ])
+            }
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
                 if from.is_numeric() =>
             {
@@ -144,7 +178,15 @@ impl PlanResolver<'_> {
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
+                if expr_udt_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.jvm_class.as_ref())
+                    .is_some()
+                {
+                    ScalarUDF::new_from_impl(SparkUdtToUtf8::new()).call(vec![expr])
+                } else {
+                    ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
+                }
             }
             (_, DataType::LargeUtf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
@@ -165,6 +207,27 @@ impl PlanResolver<'_> {
         };
         Ok(NamedExpr::new(name, expr))
     }
+}
+
+fn is_variant_storage_type(data_type: &DataType) -> bool {
+    let DataType::Struct(fields) = data_type else {
+        return false;
+    };
+    let metadata = fields.iter().find(|field| field.name() == "metadata");
+    let value = fields.iter().find(|field| field.name() == "value");
+    fields.len() == 2
+        && metadata.is_some_and(|field| {
+            matches!(
+                field.data_type(),
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+            )
+        })
+        && value.is_some_and(|field| {
+            matches!(
+                field.data_type(),
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+            )
+        })
 }
 
 fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {
