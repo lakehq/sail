@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 import pandas as pd
 import pyarrow as pa
 import pyspark
-from pyspark.sql import types as spark_types
 from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import from_arrow_type
 from pyspark.sql.types import ArrayType, MapType, Row, StructField, StructType, UserDefinedType

@@ -94,9 +94,7 @@ class TestColRegex:
     def test_select_qualified_table_column_with_newline(self, spark):
         """Select table-backed qualified columns using regex."""
         view_name = "test_col_regex_qualified"
-        spark.createDataFrame([(1, "a"), (2, "b")], ["id", "test\n_column"]).createOrReplaceTempView(
-            view_name
-        )
+        spark.createDataFrame([(1, "a"), (2, "b")], ["id", "test\n_column"]).createOrReplaceTempView(view_name)
         try:
             df = spark.table(view_name)
             result = df.select(df.colRegex("`tes.*\n.*mn`"))

@@ -249,9 +249,11 @@ def test_dataframe_storage_level_state(spark):
 
 def test_dataframe_stat_approx_quantile_shape(spark):
     df = spark.createDataFrame([(1, 2), (2, 4), (3, 6)], ["a", "b"])
+    expected_columns = 2
+    expected_quantiles = 3
 
     result = df.stat.approxQuantile(["a", "b"], [0.1, 0.5, 0.9], 0.1)
 
-    assert len(result) == 2
-    assert len(result[0]) == 3
-    assert len(result[1]) == 3
+    assert len(result) == expected_columns
+    assert len(result[0]) == expected_quantiles
+    assert len(result[1]) == expected_quantiles
