@@ -1,7 +1,8 @@
 """Vortex data source for Sail, backed by the ``vortex-data`` Python library.
 
 Supports ``spark.read.format("vortex")`` with filter pushdown and
-zero-copy Arrow RecordBatch yield.
+zero-copy Arrow RecordBatch yield, and ``spark.write.format("vortex")``
+with append, overwrite, error, and ignore modes.
 
 Install the optional dependency before use::
 
@@ -12,7 +13,24 @@ Usage::
     from pysail.spark.datasource.vortex import VortexDataSource
 
     spark.dataSource.register(VortexDataSource)
+
+    # Read a single file
     df = spark.read.format("vortex").option("path", "/data/file.vortex").load()
+
+    # Read a directory recursively
+    df = spark.read.format("vortex").option("path", "/data/").load()
+
+    # Read with a glob pattern
+    df = spark.read.format("vortex").option("path", "/data/*.vortex").load()
+    df = (
+        spark.read.format("vortex").option("path", "/data/**/*.vortex").load()
+    )  # recursive
+
+    # Write with error mode (default)
+    df.write.format("vortex").option("path", "/data/").save()
+
+    # Write with overwrite mode
+    df.write.mode("overwrite").format("vortex").option("path", "/data/").save()
 """
 
 from __future__ import annotations
