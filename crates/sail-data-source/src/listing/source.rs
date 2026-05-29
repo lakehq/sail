@@ -139,7 +139,9 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         let read_format = T::read(ctx, options)?;
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
         let sampled_file_groups = crate::listing::utils::sample_listing_files(ctx, &urls).await?;
-        let sampled_empty = sampled_file_groups.iter().all(|(_, files)| files.is_empty());
+        let sampled_empty = sampled_file_groups
+            .iter()
+            .all(|(_, files)| files.is_empty());
 
         let inferred_compression = if sampled_empty {
             None

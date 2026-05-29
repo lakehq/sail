@@ -5,7 +5,6 @@ use bytes::Buf;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::physical_plan::JsonSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};

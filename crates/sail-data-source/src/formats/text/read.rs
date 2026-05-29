@@ -7,7 +7,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 
-use crate::formats::text::file_format::TextFileFormat;
 use crate::formats::text::source::TextSource;
 use crate::listing::source::{ListingScanInput, ReadFormat};
 use crate::listing::utils::infer_listing_compression;

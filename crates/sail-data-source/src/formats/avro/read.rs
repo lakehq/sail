@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::avro::AvroFormat;
 use datafusion::datasource::physical_plan::AvroSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;

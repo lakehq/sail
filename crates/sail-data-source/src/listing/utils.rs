@@ -6,7 +6,7 @@ use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::logical_expr::Expr;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{plan_err, DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_session::Session;
@@ -64,7 +64,7 @@ pub fn infer_listing_compression(objects: &[ObjectMeta]) -> Result<CompressionTy
         .into_iter()
         .find(|variant| {
             let ext = FileCompressionType::from(*variant).get_ext();
-            ends_with_ignore_ascii_case(path, ext)
+            ends_with_ignore_ascii_case(path, &ext)
         })
         .unwrap_or(CompressionTypeVariant::UNCOMPRESSED);
 
