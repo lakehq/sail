@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
@@ -28,42 +28,6 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::utils::split_parquet_compression_string;
-
-/// Trait for schema inference logic
-#[async_trait::async_trait]
-pub trait SchemaInfer: Debug + Send + Sync + 'static {
-    /// Get schema based on options. Each implementation can handle its own
-    /// special cases like inferSchema=false.
-    async fn get_schema(
-        &self,
-        ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
-        list_options: &ListingOptions,
-    ) -> Result<Schema>;
-}
-
-/// Default schema inferrer that uses DataFusion's built-in inference
-#[derive(Debug)]
-pub struct DefaultSchemaInfer;
-
-#[async_trait::async_trait]
-impl SchemaInfer for DefaultSchemaInfer {
-    async fn get_schema(
-        &self,
-        ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
-        list_options: &ListingOptions,
-    ) -> Result<Schema> {
-        Ok(list_options
-            .format
-            .infer_schema(ctx, store, files)
-            .await?
-            .as_ref()
-            .clone())
-    }
-}
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -94,8 +58,14 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         Ok(None)
     }
 
-    /// Get the schema inferrer for this format
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer>;
+    /// Infer the file schema from the given files.
+    async fn infer_schema(
+        &self,
+        ctx: &dyn Session,
+        store: &Arc<dyn object_store::ObjectStore>,
+        objects: &[object_store::ObjectMeta],
+        compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef>;
 
     /// Infer file-level metadata needed for planning.
     /// The metadata includes statistics and ordering.
@@ -103,10 +73,11 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
-        file_schema: datafusion::arrow::datatypes::SchemaRef,
+        file_schema: SchemaRef,
         object: &object_store::ObjectMeta,
+        compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
-        let _ = (ctx, store, object);
+        let _ = (ctx, store, object, compression);
         Ok(ListingFileMeta {
             statistics: Statistics::new_unknown(&file_schema),
             ordering: None,
