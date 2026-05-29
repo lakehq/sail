@@ -82,6 +82,7 @@ pub struct ExplainString {
 
 struct CollectedPlan {
     initial_logical: LogicalPlan,
+    analyzed_logical: LogicalPlan,
     optimized_logical: LogicalPlan,
     physical_plan: Option<Arc<dyn ExecutionPlan>>,
     physical_error: Option<String>,
@@ -184,6 +185,7 @@ async fn collect_plan_with(
     )?;
     stringified.push(analyzed_logical.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
 
+    let final_analyzed_logical = analyzed_logical.clone();
     let optimized_logical = session_state.optimizer().optimize(
         analyzed_logical,
         &session_state,
@@ -306,6 +308,7 @@ async fn collect_plan_with(
 
     Ok(CollectedPlan {
         initial_logical,
+        analyzed_logical: final_analyzed_logical,
         optimized_logical,
         physical_plan,
         physical_error,
@@ -390,6 +393,10 @@ async fn explain_from_collected(
 
     let logical_simple =
         collected.logical_string(&collected.initial_logical, PlanType::InitialLogicalPlan);
+    let logical_analyzed = collected.logical_string(
+        &collected.analyzed_logical,
+        PlanType::FinalAnalyzedLogicalPlan,
+    );
     let logical_optimized =
         collected.logical_string(&collected.optimized_logical, PlanType::FinalLogicalPlan);
 
@@ -417,9 +424,8 @@ async fn explain_from_collected(
         }
         ExplainKind::Extended => [
             render_section("Parsed Logical Plan", &logical_simple),
-            // TODO: Spark expects distinct analyzed vs optimized plans
-            // Avoid duplicating the same plan until we can separate.
-            render_section("Analyzed Logical Plan", &logical_optimized),
+            render_section("Analyzed Logical Plan", &logical_analyzed),
+            render_section("Optimized Logical Plan", &logical_optimized),
             render_section(
                 "Physical Plan",
                 if options.analyze {
@@ -451,7 +457,8 @@ async fn explain_from_collected(
         .join("\n\n"),
         ExplainKind::Cost => [
             render_section("Parsed Logical Plan", &logical_simple),
-            render_section("Analyzed Logical Plan", &logical_optimized),
+            render_section("Analyzed Logical Plan", &logical_analyzed),
+            render_section("Optimized Logical Plan", &logical_optimized),
             // TODO: Spark COST mode shows logical plan + stats; we currently return physical +
             // stats
             render_section(

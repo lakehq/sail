@@ -128,3 +128,12 @@ def test_dataframe_semantic_analysis(spark):
     assert not df1.withColumn("col1", df1.id * 2).sameSemantics(df2.withColumn("col1", df2.id + 2))
     assert df1.withColumn("col1", df1.id * 2).sameSemantics(df2.withColumn("col0", df2.id * 2))
     assert df1.selectExpr("id as col0").semanticHash() == df2.selectExpr("id as col1").semanticHash()
+
+
+def test_dataframe_extended_explain_sections(spark):
+    explain = spark.sql("SELECT 1")._explain_string(extended=True)  # noqa: SLF001
+
+    assert "Parsed Logical Plan" in explain
+    assert "Analyzed Logical Plan" in explain
+    assert "Optimized Logical Plan" in explain
+    assert "Physical Plan" in explain
