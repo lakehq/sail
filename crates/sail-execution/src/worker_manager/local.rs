@@ -40,7 +40,9 @@ impl WorkerManager for NoopWorkerManager {
         _options: WorkerLaunchOptions,
     ) -> ExecutionResult<()> {
         Err(ExecutionError::InternalError(
-            "local execution does not launch worker processes".to_string(),
+            "unexpected call to launch_worker in local execution mode; local execution does not \
+             launch worker processes"
+                .to_string(),
         ))
     }
 

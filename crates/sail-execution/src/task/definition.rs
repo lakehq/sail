@@ -97,7 +97,9 @@ impl TaskDefinition {
         } = self;
         let TaskPlan::Remote(plan) = plan else {
             return Err(ExecutionError::InternalError(
-                "local task plans cannot be sent to a remote worker".to_string(),
+                "unexpected local task plan for remote worker request; local execution must assign \
+                 these tasks to the driver"
+                    .to_string(),
             ));
         };
         Ok(gen::TaskDefinition {
@@ -437,7 +439,9 @@ impl TaskOutputDistribution {
             }
             TaskOutputDistribution::LocalHash { .. } => {
                 return Err(ExecutionError::InternalError(
-                    "local hash distributions cannot be sent to a remote worker".to_string(),
+                    "unexpected local hash output distribution for remote worker request; use a \
+                     serialized hash distribution for worker tasks"
+                        .to_string(),
                 ));
             }
             TaskOutputDistribution::RoundRobin { channels } => {
