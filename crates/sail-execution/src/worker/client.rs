@@ -48,7 +48,7 @@ impl WorkerClient {
         definition: TaskDefinition,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
-        let definition = crate::task::gen::TaskDefinition::from(definition).encode_to_vec();
+        let definition = definition.into_remote()?.encode_to_vec();
         let request = RunTaskRequest {
             job_id: key.job_id.into(),
             stage: key.stage as u64,

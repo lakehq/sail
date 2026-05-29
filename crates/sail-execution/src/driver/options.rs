@@ -9,6 +9,7 @@ use crate::worker_manager::WorkerManager;
 
 #[readonly::make]
 pub struct DriverOptions {
+    pub local_execution: bool,
     pub enable_tls: bool,
     pub driver_listen_host: String,
     pub driver_listen_port: u16,
@@ -37,6 +38,7 @@ impl DriverOptions {
         worker_manager: Arc<dyn WorkerManager>,
     ) -> Self {
         Self {
+            local_execution: false,
             enable_tls: config.cluster.enable_tls,
             driver_listen_host: config.cluster.driver_listen_host.clone(),
             driver_listen_port: config.cluster.driver_listen_port,
@@ -63,5 +65,17 @@ impl DriverOptions {
             runtime,
             worker_manager,
         }
+    }
+
+    pub fn new_local(
+        config: &AppConfig,
+        runtime: RuntimeHandle,
+        worker_manager: Arc<dyn WorkerManager>,
+    ) -> Self {
+        let mut options = Self::new(config, runtime, worker_manager);
+        options.local_execution = true;
+        options.worker_initial_count = 0;
+        options.worker_max_count = 0;
+        options
     }
 }

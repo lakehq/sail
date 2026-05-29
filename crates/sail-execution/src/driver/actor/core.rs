@@ -45,6 +45,10 @@ impl Actor for DriverActor {
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        if self.options.local_execution {
+            info!("driver actor started in local execution mode");
+            return;
+        }
         let addr = (
             self.options.driver_listen_host.clone(),
             self.options.driver_listen_port,

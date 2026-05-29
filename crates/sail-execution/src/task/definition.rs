@@ -3,6 +3,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::PhysicalExpr;
 use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_proto::protobuf::PhysicalExprNode;
@@ -16,9 +18,15 @@ use crate::task::gen;
 
 #[derive(Debug, Clone)]
 pub struct TaskDefinition {
-    pub plan: Arc<[u8]>,
+    pub plan: TaskPlan,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
+}
+
+#[derive(Debug, Clone)]
+pub enum TaskPlan {
+    Remote(Arc<[u8]>),
+    Local(Arc<dyn ExecutionPlan>),
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +70,10 @@ pub enum TaskOutputDistribution {
         keys: Vec<Arc<[u8]>>,
         channels: usize,
     },
+    LocalHash {
+        keys: Vec<Arc<dyn PhysicalExpr>>,
+        channels: usize,
+    },
     RoundRobin {
         channels: usize,
     },
@@ -76,18 +88,23 @@ pub enum TaskOutputLocator {
     Remote { uri: String },
 }
 
-impl From<TaskDefinition> for gen::TaskDefinition {
-    fn from(value: TaskDefinition) -> Self {
+impl TaskDefinition {
+    pub fn into_remote(self) -> ExecutionResult<gen::TaskDefinition> {
         let TaskDefinition {
             plan,
             inputs,
             output,
-        } = value;
-        gen::TaskDefinition {
+        } = self;
+        let TaskPlan::Remote(plan) = plan else {
+            return Err(ExecutionError::InternalError(
+                "local task plans cannot be sent to a remote worker".to_string(),
+            ));
+        };
+        Ok(gen::TaskDefinition {
             plan: plan.to_vec(),
             inputs: inputs.into_iter().map(|x| x.into()).collect(),
             output: Some(output.into()),
-        }
+        })
     }
 }
 
@@ -109,7 +126,7 @@ impl TryFrom<gen::TaskDefinition> for TaskDefinition {
             }
         };
         Ok(TaskDefinition {
-            plan: Arc::from(value.plan),
+            plan: TaskPlan::Remote(Arc::from(value.plan)),
             inputs,
             output,
         })
@@ -418,6 +435,9 @@ impl From<TaskOutputDistribution> for gen::TaskOutputDistribution {
                     channels: channels as u64,
                 })
             }
+            TaskOutputDistribution::LocalHash { .. } => {
+                panic!("local hash distributions cannot be sent to a remote worker")
+            }
             TaskOutputDistribution::RoundRobin { channels } => {
                 gen::task_output_distribution::Kind::RoundRobin(
                     gen::TaskOutputRoundRobinDistribution {
@@ -562,7 +582,8 @@ impl TaskInput {
 impl TaskOutput {
     pub fn channels(&self) -> usize {
         match self.distribution {
-            TaskOutputDistribution::Hash { channels, .. } => channels,
+            TaskOutputDistribution::Hash { channels, .. }
+            | TaskOutputDistribution::LocalHash { channels, .. } => channels,
             TaskOutputDistribution::RoundRobin { channels, .. } => channels,
             TaskOutputDistribution::RoundRobinRow { channels, .. } => channels,
         }
@@ -621,6 +642,9 @@ impl TaskOutput {
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(Partitioning::Hash(keys, *channels))
+            }
+            TaskOutputDistribution::LocalHash { keys, channels } => {
+                Ok(Partitioning::Hash(keys.clone(), *channels))
             }
             TaskOutputDistribution::RoundRobin { channels }
             | TaskOutputDistribution::RoundRobinRow { channels } => {

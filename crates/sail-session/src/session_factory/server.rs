@@ -20,7 +20,7 @@ use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
-    KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
+    KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager, NoopWorkerManager,
 };
 use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
 use sail_server::actor::{ActorHandle, ActorSystem};
@@ -157,7 +157,16 @@ impl ServerSessionFactory {
 
     fn create_job_runner(&mut self) -> Result<Box<dyn JobRunner>> {
         let job_runner: Box<dyn JobRunner> = match self.config.mode {
-            ExecutionMode::Local => Box::new(LocalJobRunner::new()),
+            ExecutionMode::Local => {
+                let worker_manager = Arc::new(NoopWorkerManager);
+                let options =
+                    DriverOptions::new_local(&self.config, self.runtime.clone(), worker_manager);
+                let mut system = self
+                    .system
+                    .lock()
+                    .map_err(|e| internal_datafusion_err!("{e}"))?;
+                Box::new(LocalJobRunner::new(system.deref_mut(), options))
+            }
             ExecutionMode::LocalCluster => {
                 let worker_manager = Arc::new(LocalWorkerManager::new(
                     self.runtime.clone(),

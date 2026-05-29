@@ -29,7 +29,7 @@ use crate::job_graph::{
 };
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
-    TaskOutputLocator,
+    TaskOutputLocator, TaskPlan,
 };
 use crate::task::scheduling::{
     TaskAssignment, TaskAssignmentGetter, TaskOutputKind, TaskRegion, TaskSet, TaskSetEntry,
@@ -52,7 +52,8 @@ impl JobScheduler {
             "job {job_id} execution plan\n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
-        let graph = JobGraph::try_new(plan)?;
+        let graph =
+            JobGraph::try_new_with_task_placement(plan, self.options.default_task_placement())?;
         debug!("job {job_id} job graph \n{graph}");
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
@@ -528,15 +529,21 @@ impl JobScheduler {
             )));
         };
 
-        let plan =
-            PhysicalPlanNode::try_from_physical_plan(stage.plan.clone(), self.codec.as_ref())?
-                .encode_to_vec();
+        let local = matches!(assignments.get(key), Some(TaskAssignment::Driver));
+        let plan = if local {
+            TaskPlan::Local(stage.plan.clone())
+        } else {
+            TaskPlan::Remote(Arc::from(
+                PhysicalPlanNode::try_from_physical_plan(stage.plan.clone(), self.codec.as_ref())?
+                    .encode_to_vec(),
+            ))
+        };
         let inputs = stage
             .inputs
             .iter()
             .map(|input| self.get_task_input(job, key, input, assignments))
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let output = self.get_task_output(job, key, stage)?;
+        let output = self.get_task_output(job, key, stage, local)?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
             inputs,
@@ -675,9 +682,14 @@ impl JobScheduler {
         job: &JobDescriptor,
         key: &TaskKey,
         stage: &Stage,
+        local: bool,
     ) -> ExecutionResult<TaskOutput> {
         let replicas = job.graph.replicas(key.stage);
         let distribution = match &stage.distribution {
+            OutputDistribution::Hash { keys, channels } if local => TaskOutputDistribution::LocalHash {
+                keys: keys.clone(),
+                channels: *channels,
+            },
             OutputDistribution::Hash { keys, channels } => {
                 let keys = keys
                     .iter()

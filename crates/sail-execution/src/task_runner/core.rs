@@ -26,7 +26,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
-use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
+use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput, TaskPlan};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunner, TaskRunnerMessage};
 
@@ -84,8 +84,13 @@ impl TaskRunner {
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
-        let plan = plan.try_into_physical_plan(&context, self.codec.as_ref())?;
+        let plan = match definition.plan {
+            TaskPlan::Remote(plan) => {
+                let plan = PhysicalPlanNode::decode(plan.as_ref())?;
+                plan.try_into_physical_plan(&context, self.codec.as_ref())?
+            }
+            TaskPlan::Local(plan) => plan,
+        };
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(
             ctx,

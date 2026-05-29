@@ -5,7 +5,7 @@ use sail_common::runtime::RuntimeHandle;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::Mutex;
 
-use crate::error::ExecutionResult;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
 use crate::worker::{WorkerActor, WorkerOptions};
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
@@ -28,6 +28,25 @@ pub struct LocalWorkerManager {
     state: Mutex<LocalWorkerManagerState>,
     runtime: RuntimeHandle,
     session: SessionContext,
+}
+
+pub struct NoopWorkerManager;
+
+#[tonic::async_trait]
+impl WorkerManager for NoopWorkerManager {
+    async fn launch_worker(
+        &self,
+        _id: WorkerId,
+        _options: WorkerLaunchOptions,
+    ) -> ExecutionResult<()> {
+        Err(ExecutionError::InternalError(
+            "local execution does not launch worker processes".to_string(),
+        ))
+    }
+
+    async fn stop(&self) -> ExecutionResult<()> {
+        Ok(())
+    }
 }
 
 impl LocalWorkerManager {

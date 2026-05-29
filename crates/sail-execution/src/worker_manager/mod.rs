@@ -28,4 +28,4 @@ pub trait WorkerManager: Send + Sync + 'static {
 }
 
 pub use kubernetes::{KubernetesWorkerManager, KubernetesWorkerManagerOptions};
-pub use local::LocalWorkerManager;
+pub use local::{LocalWorkerManager, NoopWorkerManager};
