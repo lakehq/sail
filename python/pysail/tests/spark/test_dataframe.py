@@ -60,7 +60,6 @@ def test_dataframe_drop(spark):
             {"a.b.c": "int32"}
         ),
     )
-
     assert_frame_equal(
         df4.drop("a.b.c").sort("age").toPandas(),
         pd.DataFrame({"age": [14, 16, 23], "name": ["Tom", "Bob", "Alice"]}),
@@ -72,6 +71,14 @@ def test_dataframe_drop(spark):
             {"a.b.c": "int32"}
         ),
     )
+
+
+def test_repartition_hint_invalid_column(spark):
+    with pytest.raises(Exception, match="id\\+1"):
+        spark.range(1).hint("REPARTITION", "id+1").collect()
+
+    with pytest.raises(Exception, match="first parameter"):
+        spark.range(1).hint("REPARTITION", "id", 3).collect()
 
 
 def test_dataframe_with_column_alias(spark):

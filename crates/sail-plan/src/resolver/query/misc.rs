@@ -206,9 +206,116 @@ impl PlanResolver<'_> {
                 .await;
         }
 
+        if name.eq_ignore_ascii_case("REPARTITION") {
+            let (num_partitions, parameters) =
+                Self::resolve_repartition_hint_parameters(parameters)?;
+            return if parameters.is_empty() {
+                self.resolve_query_repartition(
+                    input,
+                    num_partitions.ok_or_else(|| {
+                        PlanError::AnalysisError(
+                            "REPARTITION hint requires partition count or columns".to_string(),
+                        )
+                    })?,
+                    true,
+                    state,
+                )
+                .await
+            } else {
+                self.resolve_query_repartition_by_expression(
+                    input,
+                    parameters,
+                    num_partitions,
+                    state,
+                )
+                .await
+            };
+        }
+
         warn!("Hint operation '{name}' is not yet supported and is a no-op");
         self.resolve_query_plan_with_hidden_fields(input, state)
             .await
+    }
+
+    fn resolve_repartition_hint_parameters(
+        parameters: Vec<spec::Expr>,
+    ) -> PlanResult<(Option<usize>, Vec<spec::Expr>)> {
+        let mut parameters = parameters.into_iter();
+        let first = parameters.next();
+        let mut partition_expressions = vec![];
+        let num_partitions = match first {
+            Some(parameter) => match Self::literal_to_partition_count(&parameter)? {
+                Some(num_partitions) => Some(num_partitions),
+                None => {
+                    partition_expressions.push(Self::convert_repartition_hint_parameter(parameter));
+                    None
+                }
+            },
+            None => None,
+        };
+
+        for parameter in parameters {
+            if Self::literal_to_partition_count(&parameter)?.is_some() {
+                return Err(PlanError::AnalysisError(
+                    "REPARTITION hint partition count must be the first parameter".to_string(),
+                ));
+            }
+            partition_expressions.push(Self::convert_repartition_hint_parameter(parameter));
+        }
+
+        Ok((num_partitions, partition_expressions))
+    }
+
+    fn literal_to_partition_count(parameter: &spec::Expr) -> PlanResult<Option<usize>> {
+        macro_rules! convert_signed {
+            ($value:expr) => {
+                match $value {
+                    Some(value) if *value > 0 => Ok(Some(*value as usize)),
+                    Some(value) => Err(PlanError::AnalysisError(format!(
+                        "REPARTITION hint requires a positive partition count, got {value}"
+                    ))),
+                    None => Ok(None),
+                }
+            };
+        }
+        macro_rules! convert_unsigned {
+            ($value:expr) => {
+                match $value {
+                    Some(value) if *value > 0 => Ok(Some(*value as usize)),
+                    Some(value) => Err(PlanError::AnalysisError(format!(
+                        "REPARTITION hint requires a positive partition count, got {value}"
+                    ))),
+                    None => Ok(None),
+                }
+            };
+        }
+
+        match parameter {
+            spec::Expr::Literal(spec::Literal::Int8 { value }) => convert_signed!(value),
+            spec::Expr::Literal(spec::Literal::Int16 { value }) => convert_signed!(value),
+            spec::Expr::Literal(spec::Literal::Int32 { value }) => convert_signed!(value),
+            spec::Expr::Literal(spec::Literal::Int64 { value }) => convert_signed!(value),
+            spec::Expr::Literal(spec::Literal::UInt8 { value }) => convert_unsigned!(value),
+            spec::Expr::Literal(spec::Literal::UInt16 { value }) => convert_unsigned!(value),
+            spec::Expr::Literal(spec::Literal::UInt32 { value }) => convert_unsigned!(value),
+            spec::Expr::Literal(spec::Literal::UInt64 { value }) => convert_unsigned!(value),
+            _ => Ok(None),
+        }
+    }
+
+    fn convert_repartition_hint_parameter(parameter: spec::Expr) -> spec::Expr {
+        match parameter {
+            spec::Expr::Literal(spec::Literal::Utf8 { value: Some(name) })
+            | spec::Expr::Literal(spec::Literal::LargeUtf8 { value: Some(name) })
+            | spec::Expr::Literal(spec::Literal::Utf8View { value: Some(name) }) => {
+                spec::Expr::UnresolvedAttribute {
+                    name: spec::ObjectName::bare(name),
+                    plan_id: None,
+                    is_metadata_column: false,
+                }
+            }
+            parameter => parameter,
+        }
     }
 
     async fn resolve_query_coalesce_hint_partition_count(
