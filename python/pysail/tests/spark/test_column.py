@@ -1,3 +1,5 @@
+import decimal
+
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyspark.sql.connect.column import Column
@@ -127,3 +129,10 @@ def test_update_fields_names(spark):
     assert df.select(df.x.dropFields("a", "b", "z")).columns == [
         "update_fields(x, dropfield(), dropfield(), dropfield())"
     ]
+
+
+def test_decimal_literal_names(spark):
+    df = spark.sql("SELECT * FROM VALUES (1), (2), (3) AS tab(b)")
+
+    assert df.select(df.b < decimal.Decimal("2.5")).columns == ["(b < 3)"]
+    assert df.select(df.b < decimal.Decimal("-2.5")).columns == ["(b < -2)"]
