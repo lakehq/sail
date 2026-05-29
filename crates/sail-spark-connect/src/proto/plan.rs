@@ -8,6 +8,7 @@ use sail_sql_analyzer::statement::from_ast_statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
+use crate::proto::spark_functions::{is_show_functions_query, show_functions_query_node};
 use crate::spark::connect as sc;
 use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
@@ -503,6 +504,16 @@ impl TryFrom<RelType> for RelationNode {
                     named_arguments,
                     pos_arguments,
                 } = sql;
+                if is_show_functions_query(&query) {
+                    if !pos_args.is_empty()
+                        || !args.is_empty()
+                        || !named_arguments.is_empty()
+                        || !pos_arguments.is_empty()
+                    {
+                        return Err(SparkError::invalid("SHOW FUNCTIONS with parameters"));
+                    }
+                    return Ok(RelationNode::Query(show_functions_query_node()?));
+                }
                 match from_ast_statement(parse_one_statement(query.as_str())?)? {
                     spec::Plan::Query(input) => {
                         let positional_arguments =

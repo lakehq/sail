@@ -1,5 +1,5 @@
 import pytest
-from pyspark.sql import functions as F
+from pyspark.sql import functions
 from pyspark.sql.types import IntegerType, MapType, StringType, StructField, StructType
 
 
@@ -54,12 +54,22 @@ def test_auto_generated_alias_metadata(spark):
 def test_sql_parameter_args(spark):
     positional = spark.sql(
         "SELECT *, element_at(?, 1) FROM range(10) WHERE id > ?",
-        args=[F.array(F.lit(1)), 7],
+        args=[functions.array(functions.lit(1)), 7],
     ).collect()
     named = spark.sql(
         "SELECT *, element_at(:m, 'a') FROM range(10) WHERE id > :minId",
-        args={"m": F.create_map(F.lit("a"), F.lit(1)), "minId": 7},
+        args={"m": functions.create_map(functions.lit("a"), functions.lit(1)), "minId": 7},
     ).collect()
 
     assert [tuple(row) for row in positional] == [(8, 1), (9, 1)]
     assert [tuple(row) for row in named] == [(8, 1), (9, 1)]
+
+
+def test_show_functions(spark):
+    df = spark.sql("show functions")
+
+    assert df.schema == StructType([StructField("function", StringType(), False)])
+    rows = [tuple(row) for row in df.collect()]
+    assert rows[0] == ("!",)
+    assert ("abs",) in rows
+    assert rows[-1] == ("~",)

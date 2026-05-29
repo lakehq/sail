@@ -7,3 +7,4 @@ pub(crate) mod expression;
 pub(crate) mod function;
 pub(crate) mod literal;
 pub(crate) mod plan;
+pub(crate) mod spark_functions;
