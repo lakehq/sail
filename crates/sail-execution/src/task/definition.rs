@@ -103,7 +103,7 @@ impl TaskDefinition {
         Ok(gen::TaskDefinition {
             plan: plan.to_vec(),
             inputs: inputs.into_iter().map(|x| x.into()).collect(),
-            output: Some(output.into()),
+            output: Some(output.into_remote_proto()?),
         })
     }
 }
@@ -386,16 +386,16 @@ impl TryFrom<gen::TaskInputRemoteKeyList> for Vec<TaskInputKey> {
     }
 }
 
-impl From<TaskOutput> for gen::TaskOutput {
-    fn from(value: TaskOutput) -> Self {
+impl TaskOutput {
+    fn into_remote_proto(self) -> ExecutionResult<gen::TaskOutput> {
         let TaskOutput {
             distribution,
             locator,
-        } = value;
-        gen::TaskOutput {
-            distribution: Some(distribution.into()),
+        } = self;
+        Ok(gen::TaskOutput {
+            distribution: Some(distribution.into_remote_proto()?),
             locator: Some(locator.into()),
-        }
+        })
     }
 }
 
@@ -426,9 +426,9 @@ impl TryFrom<gen::TaskOutput> for TaskOutput {
     }
 }
 
-impl From<TaskOutputDistribution> for gen::TaskOutputDistribution {
-    fn from(value: TaskOutputDistribution) -> Self {
-        let kind = match value {
+impl TaskOutputDistribution {
+    fn into_remote_proto(self) -> ExecutionResult<gen::TaskOutputDistribution> {
+        let kind = match self {
             TaskOutputDistribution::Hash { keys, channels } => {
                 gen::task_output_distribution::Kind::Hash(gen::TaskOutputHashDistribution {
                     keys: keys.into_iter().map(|k| k.to_vec()).collect(),
@@ -436,7 +436,9 @@ impl From<TaskOutputDistribution> for gen::TaskOutputDistribution {
                 })
             }
             TaskOutputDistribution::LocalHash { .. } => {
-                panic!("local hash distributions cannot be sent to a remote worker")
+                return Err(ExecutionError::InternalError(
+                    "local hash distributions cannot be sent to a remote worker".to_string(),
+                ));
             }
             TaskOutputDistribution::RoundRobin { channels } => {
                 gen::task_output_distribution::Kind::RoundRobin(
@@ -453,7 +455,7 @@ impl From<TaskOutputDistribution> for gen::TaskOutputDistribution {
                 )
             }
         };
-        gen::TaskOutputDistribution { kind: Some(kind) }
+        Ok(gen::TaskOutputDistribution { kind: Some(kind) })
     }
 }
 
