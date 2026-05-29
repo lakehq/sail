@@ -87,5 +87,6 @@ pub mod percentile_disc_groups;
 pub mod product;
 pub mod schema_of_variant_agg;
 pub mod skewness;
+pub mod spark_stat;
 pub mod try_avg;
 pub mod utils;

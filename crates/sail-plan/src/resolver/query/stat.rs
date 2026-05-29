@@ -8,16 +8,17 @@ use datafusion::functions_aggregate::approx_percentile_cont::approx_percentile_c
 use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
-use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
-    and, col, expr, lit, or, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+    and, cast, col, expr, lit, or, try_cast, when, AggregateUDF, Expr, ExprSchemable, LogicalPlan,
+    LogicalPlanBuilder, ScalarUDF,
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::spark_stat::{SparkCovarianceSamp, SparkStddevSamp};
 use sail_function::scalar::math::random::Random;
 
 use crate::error::{PlanError, PlanResult};
@@ -140,12 +141,22 @@ impl PlanResolver<'_> {
             }
 
             if let Ok(field) = input.schema().field_from_column(column) {
-                if field.data_type().is_numeric() {
+                let numeric_column = if field.data_type().is_numeric() {
+                    Some(Expr::Column(column.clone()))
+                } else if matches!(
+                    field.data_type(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) {
+                    Some(try_cast(Expr::Column(column.clone()), DataType::Float64))
+                } else {
+                    None
+                };
+                if let Some(numeric_column) = numeric_column {
                     if statistics.contains("mean") {
                         let mean = Expr::AggregateFunction(expr::AggregateFunction {
                             func: avg_udaf(),
                             params: AggregateFunctionParams {
-                                args: vec![Expr::Column(column.clone())],
+                                args: vec![numeric_column.clone()],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -157,9 +168,9 @@ impl PlanResolver<'_> {
                     }
                     if statistics.contains("stddev") {
                         let stddev = Expr::AggregateFunction(expr::AggregateFunction {
-                            func: stddev_udaf(),
+                            func: Arc::new(AggregateUDF::from(SparkStddevSamp::new())),
                             params: AggregateFunctionParams {
-                                args: vec![Expr::Column(column.clone())],
+                                args: vec![numeric_column.clone()],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -174,7 +185,7 @@ impl PlanResolver<'_> {
                             func: approx_percentile_cont_udaf(),
                             params: AggregateFunctionParams {
                                 args: vec![
-                                    Expr::Column(column.clone()),
+                                    numeric_column.clone(),
                                     Expr::Literal(ScalarValue::Float64(Some(0.25_f64)), None),
                                 ],
                                 distinct: false,
@@ -190,7 +201,7 @@ impl PlanResolver<'_> {
                         let percentile_50 = Expr::AggregateFunction(expr::AggregateFunction {
                             func: approx_median_udaf(),
                             params: AggregateFunctionParams {
-                                args: vec![Expr::Column(column.clone())],
+                                args: vec![numeric_column.clone()],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -205,7 +216,7 @@ impl PlanResolver<'_> {
                             func: approx_percentile_cont_udaf(),
                             params: AggregateFunctionParams {
                                 args: vec![
-                                    Expr::Column(column.clone()),
+                                    numeric_column.clone(),
                                     Expr::Literal(ScalarValue::Float64(Some(0.75_f64)), None),
                                 ],
                                 distinct: false,
@@ -330,18 +341,17 @@ impl PlanResolver<'_> {
                     _ => None,
                 };
 
-                if let Some(expr) = stat_expr {
-                    stats_by_column.push((column_name, expr));
-                }
+                stats_by_column.push((
+                    column_name,
+                    stat_expr.unwrap_or(Expr::Literal(ScalarValue::Utf8(None), None)),
+                ));
             }
 
-            if !stats_by_column.is_empty() {
-                let stat_row = create_stat_row(stat_type, stats_by_column)?;
-                union_plan = Some(match union_plan {
-                    Some(plan) => LogicalPlanBuilder::from(plan).union(stat_row)?.build()?,
-                    None => stat_row,
-                });
-            }
+            let stat_row = create_stat_row(stat_type, stats_by_column)?;
+            union_plan = Some(match union_plan {
+                Some(plan) => LogicalPlanBuilder::from(plan).union(stat_row)?.build()?,
+                None => stat_row,
+            });
         }
         union_plan.ok_or_else(|| PlanError::internal("No describe statistics generated"))
     }
@@ -488,21 +498,16 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
+        let left_column = self.resolve_one_column(input.schema(), left_column.as_ref(), state)?;
+        let right_column = self.resolve_one_column(input.schema(), right_column.as_ref(), state)?;
+        let left = when(Expr::Column(left_column.clone()).is_null(), lit(0.0))
+            .otherwise(cast(Expr::Column(left_column), DataType::Float64))?;
+        let right = when(Expr::Column(right_column.clone()).is_null(), lit(0.0))
+            .otherwise(cast(Expr::Column(right_column), DataType::Float64))?;
         let covar_samp = Expr::AggregateFunction(expr::AggregateFunction {
-            func: datafusion::functions_aggregate::covariance::covar_samp_udaf(),
+            func: Arc::new(AggregateUDF::from(SparkCovarianceSamp::new())),
             params: AggregateFunctionParams {
-                args: vec![
-                    Expr::Column(self.resolve_one_column(
-                        input.schema(),
-                        left_column.as_ref(),
-                        state,
-                    )?),
-                    Expr::Column(self.resolve_one_column(
-                        input.schema(),
-                        right_column.as_ref(),
-                        state,
-                    )?),
-                ],
+                args: vec![left, right],
                 distinct: false,
                 filter: None,
                 order_by: vec![],
@@ -510,9 +515,14 @@ impl PlanResolver<'_> {
             },
         })
         .alias(state.register_field_name("cov"));
-        Ok(LogicalPlanBuilder::from(input)
+        let plan = LogicalPlanBuilder::from(input)
             .aggregate(Vec::<Expr>::new(), vec![covar_samp])?
-            .build()?)
+            .build()?;
+        let cov = Expr::Column(self.resolve_one_column(plan.schema(), "cov", state)?);
+        let cov = when(cov.clone().is_null(), lit(0.0))
+            .otherwise(cov)?
+            .alias(state.register_field_name("cov"));
+        Ok(LogicalPlanBuilder::from(plan).project(vec![cov])?.build()?)
     }
 
     pub(super) async fn resolve_query_stat_corr(

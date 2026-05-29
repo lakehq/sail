@@ -111,6 +111,7 @@ use sail_function::aggregate::percentile_disc::PercentileDisc;
 use sail_function::aggregate::product::ProductFunction;
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::spark_stat::{SparkCovarianceSamp, SparkStddevSamp};
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
@@ -2654,6 +2655,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     SchemaOfVariantAggFunction::new(),
                 ))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
+                "spark_covar_samp" => Ok(Arc::new(AggregateUDF::from(SparkCovarianceSamp::new()))),
+                "spark_stddev_samp" => Ok(Arc::new(AggregateUDF::from(SparkStddevSamp::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
@@ -2757,6 +2760,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ProductFunction>()
             || node.inner().as_any().is::<SchemaOfVariantAggFunction>()
             || node.inner().as_any().is::<SkewnessFunc>()
+            || node.inner().as_any().is::<SparkCovarianceSamp>()
+            || node.inner().as_any().is::<SparkStddevSamp>()
             || node.inner().as_any().is::<TryAvgFunction>()
             || node.inner().as_any().is::<SparkTrySum>()
         {

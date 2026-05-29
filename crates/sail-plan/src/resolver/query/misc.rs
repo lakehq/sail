@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::MemTable;
 use datafusion_common::{DFSchema, DFSchemaRef, ParamValues};
 use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
@@ -179,7 +180,9 @@ impl PlanResolver<'_> {
         } else {
             return Err(PlanError::invalid("missing schema for local relation"));
         };
-        let table_provider = Arc::new(MemTable::try_new(schema, vec![batches])?);
+        let target_partitions = self.ctx.copied_config().target_partitions().max(1);
+        let partitions = Self::split_record_batches(batches, target_partitions);
+        let table_provider = Arc::new(MemTable::try_new(schema, partitions)?);
         self.resolve_table_provider_with_rename(
             table_provider,
             UNNAMED_TABLE,
@@ -301,6 +304,38 @@ impl PlanResolver<'_> {
             spec::Expr::Literal(spec::Literal::UInt64 { value }) => convert_unsigned!(value),
             _ => Ok(None),
         }
+    }
+
+    fn split_record_batches(
+        batches: Vec<RecordBatch>,
+        target_partitions: usize,
+    ) -> Vec<Vec<RecordBatch>> {
+        let total_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        if target_partitions <= 1 || total_rows <= 1 {
+            return vec![batches];
+        }
+
+        let partition_count = target_partitions.min(total_rows);
+        let mut partitions = Vec::with_capacity(partition_count);
+        for partition in 0..partition_count {
+            let start = partition * total_rows / partition_count;
+            let end = (partition + 1) * total_rows / partition_count;
+            let mut offset = 0;
+            let mut partition_batches = vec![];
+            for batch in &batches {
+                let batch_start = offset;
+                let batch_end = offset + batch.num_rows();
+                let slice_start = start.max(batch_start);
+                let slice_end = end.min(batch_end);
+                if slice_start < slice_end {
+                    partition_batches
+                        .push(batch.slice(slice_start - batch_start, slice_end - slice_start));
+                }
+                offset = batch_end;
+            }
+            partitions.push(partition_batches);
+        }
+        partitions
     }
 
     fn convert_repartition_hint_parameter(parameter: spec::Expr) -> spec::Expr {
