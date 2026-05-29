@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark import StorageLevel
 from pyspark.sql import Row
 from pyspark.sql.functions import col, lit
 
@@ -145,3 +146,20 @@ def test_dataframe_drop_duplicates_within_watermark_batch_error(spark):
         match="dropDuplicatesWithinWatermark is not supported with batch DataFrames/DataSets",
     ):
         spark.range(1).dropDuplicatesWithinWatermark(["id"]).collect()
+
+
+def test_dataframe_storage_level_state(spark):
+    df = spark.range(1)
+    try:
+        assert df.storageLevel == StorageLevel.NONE
+
+        df.cache()
+        assert df.storageLevel == StorageLevel.MEMORY_AND_DISK_DESER
+
+        df.unpersist()
+        assert df.storageLevel == StorageLevel.NONE
+
+        df.persist(StorageLevel.DISK_ONLY)
+        assert df.storageLevel == StorageLevel.DISK_ONLY
+    finally:
+        df.unpersist()

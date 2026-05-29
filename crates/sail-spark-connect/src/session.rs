@@ -13,6 +13,7 @@ use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult, SparkThrowable};
 use crate::executor::Executor;
 use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
+use crate::spark::connect::StorageLevel;
 use crate::streaming::{
     StreamingQuery, StreamingQueryAwaitHandle, StreamingQueryAwaitHandleSet, StreamingQueryId,
     StreamingQueryManager, StreamingQueryStatus,
@@ -183,6 +184,31 @@ impl SparkSession {
         Ok(out)
     }
 
+    pub(crate) fn persist_relation(
+        &self,
+        relation_key: String,
+        storage_level: StorageLevel,
+    ) -> SparkResult<()> {
+        let mut state = self.state.lock()?;
+        state.storage_levels.insert(relation_key, storage_level);
+        Ok(())
+    }
+
+    pub(crate) fn unpersist_relation(&self, relation_key: &str) -> SparkResult<()> {
+        let mut state = self.state.lock()?;
+        state.storage_levels.remove(relation_key);
+        Ok(())
+    }
+
+    pub(crate) fn get_storage_level(&self, relation_key: &str) -> SparkResult<StorageLevel> {
+        let state = self.state.lock()?;
+        Ok(state
+            .storage_levels
+            .get(relation_key)
+            .copied()
+            .unwrap_or_else(none_storage_level))
+    }
+
     pub(crate) fn remove_executors_by_tag(&self, tag: &str) -> SparkResult<Vec<Arc<Executor>>> {
         let mut state = self.state.lock()?;
         let tag = tag.to_string();
@@ -293,6 +319,7 @@ impl SparkSession {
 struct SparkSessionState {
     config: SparkRuntimeConfig,
     executors: HashMap<String, Arc<Executor>>,
+    storage_levels: HashMap<String, StorageLevel>,
     streaming_queries: StreamingQueryManager,
 }
 
@@ -301,7 +328,18 @@ impl SparkSessionState {
         Self {
             config: SparkRuntimeConfig::new(),
             executors: HashMap::new(),
+            storage_levels: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
         }
+    }
+}
+
+fn none_storage_level() -> StorageLevel {
+    StorageLevel {
+        use_disk: false,
+        use_memory: false,
+        use_off_heap: false,
+        deserialized: false,
+        replication: 1,
     }
 }

@@ -176,35 +176,44 @@ pub(crate) async fn handle_analyze_semantic_hash(
 }
 
 pub(crate) async fn handle_analyze_persist(
-    _ctx: &SessionContext,
-    _request: PersistRequest,
+    ctx: &SessionContext,
+    request: PersistRequest,
 ) -> SparkResult<PersistResponse> {
-    // TODO: Implement
-    warn!("Persist operation is not yet supported and is a no-op");
+    let spark = ctx.extension::<SparkSession>()?;
+    let PersistRequest {
+        relation,
+        storage_level,
+    } = request;
+    let relation = relation.required("persist relation")?;
+    let relation_key = relation_semantic_key(relation)?;
+    let storage_level = storage_level.unwrap_or_else(default_storage_level);
+    spark.persist_relation(relation_key, storage_level)?;
+    warn!("Persist operation does not cache data yet; only storage level state is tracked");
     Ok(PersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_unpersist(
-    _ctx: &SessionContext,
-    _request: UnpersistRequest,
+    ctx: &SessionContext,
+    request: UnpersistRequest,
 ) -> SparkResult<UnpersistResponse> {
-    // TODO: Implement
-    warn!("Unpersist operation is not yet supported and is a no-op");
+    let spark = ctx.extension::<SparkSession>()?;
+    let UnpersistRequest { relation, .. } = request;
+    let relation = relation.required("unpersist relation")?;
+    let relation_key = relation_semantic_key(relation)?;
+    spark.unpersist_relation(&relation_key)?;
     Ok(UnpersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_get_storage_level(
-    _ctx: &SessionContext,
-    _request: GetStorageLevelRequest,
+    ctx: &SessionContext,
+    request: GetStorageLevelRequest,
 ) -> SparkResult<GetStorageLevelResponse> {
+    let spark = ctx.extension::<SparkSession>()?;
+    let GetStorageLevelRequest { relation } = request;
+    let relation = relation.required("storage level relation")?;
+    let relation_key = relation_semantic_key(relation)?;
     Ok(GetStorageLevelResponse {
-        storage_level: Some(StorageLevel {
-            use_disk: false,
-            use_memory: true,
-            use_off_heap: true,
-            deserialized: false,
-            replication: 1,
-        }),
+        storage_level: Some(spark.get_storage_level(&relation_key)?),
     })
 }
 
@@ -241,16 +250,30 @@ fn analyze_is_local(plan: sc::Plan) -> SparkResult<bool> {
 
 fn semantic_plan_key(plan: sc::Plan) -> SparkResult<String> {
     let sc::Plan { op_type: op } = plan;
-    let plan = match op.required("plan op")? {
+    match op.required("plan op")? {
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
-        plan::OpType::Root(relation) => spec::Plan::try_from(relation)?,
+        plan::OpType::Root(relation) => relation_semantic_key(relation),
         plan::OpType::CompressedOperation(_) => {
             return Err(SparkError::unsupported("compressed operation"))
         }
-    };
+    }
+}
+
+fn relation_semantic_key(relation: sc::Relation) -> SparkResult<String> {
+    let plan = spec::Plan::try_from(relation)?;
     let mut value = serde_json::to_value(plan)?;
     normalize_semantic_value(&mut value);
     Ok(value.to_string())
+}
+
+fn default_storage_level() -> StorageLevel {
+    StorageLevel {
+        use_disk: true,
+        use_memory: true,
+        use_off_heap: false,
+        deserialized: true,
+        replication: 1,
+    }
 }
 
 fn normalize_semantic_value(value: &mut serde_json::Value) {
