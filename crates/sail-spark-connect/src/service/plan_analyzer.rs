@@ -1,3 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use datafusion::prelude::SessionContext;
 use log::warn;
 use sail_common::spec;
@@ -143,16 +146,33 @@ pub(crate) async fn handle_analyze_ddl_parse(
 
 pub(crate) async fn handle_analyze_same_semantics(
     _ctx: &SessionContext,
-    _request: SameSemanticsRequest,
+    request: SameSemanticsRequest,
 ) -> SparkResult<SameSemanticsResponse> {
-    Err(SparkError::todo("handle analyze same semantics"))
+    let SameSemanticsRequest {
+        target_plan,
+        other_plan,
+    } = request;
+    let target_plan = target_plan.required("target plan")?;
+    let other_plan = other_plan.required("other plan")?;
+    let target = semantic_plan_key(target_plan)?;
+    let other = semantic_plan_key(other_plan)?;
+    Ok(SameSemanticsResponse {
+        result: target == other,
+    })
 }
 
 pub(crate) async fn handle_analyze_semantic_hash(
     _ctx: &SessionContext,
-    _request: SemanticHashRequest,
+    request: SemanticHashRequest,
 ) -> SparkResult<SemanticHashResponse> {
-    Err(SparkError::todo("handle analyze semantic hash"))
+    let SemanticHashRequest { plan } = request;
+    let plan = plan.required("plan")?;
+    let key = semantic_plan_key(plan)?;
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    Ok(SemanticHashResponse {
+        result: (hasher.finish() & 0xffff_ffff) as u32 as i32,
+    })
 }
 
 pub(crate) async fn handle_analyze_persist(
@@ -216,6 +236,43 @@ fn analyze_is_local(plan: sc::Plan) -> SparkResult<bool> {
         plan::OpType::CompressedOperation(_) => {
             Err(SparkError::unsupported("compressed operation"))
         }
+    }
+}
+
+fn semantic_plan_key(plan: sc::Plan) -> SparkResult<String> {
+    let sc::Plan { op_type: op } = plan;
+    let plan = match op.required("plan op")? {
+        plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
+        plan::OpType::Root(relation) => spec::Plan::try_from(relation)?,
+        plan::OpType::CompressedOperation(_) => {
+            return Err(SparkError::unsupported("compressed operation"))
+        }
+    };
+    let mut value = serde_json::to_value(plan)?;
+    normalize_semantic_value(&mut value);
+    Ok(value.to_string())
+}
+
+fn normalize_semantic_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("planId");
+            if let Some(serde_json::Value::Object(alias)) = map.get_mut("alias") {
+                if alias.contains_key("expr") && alias.contains_key("name") {
+                    alias.insert("name".to_string(), serde_json::Value::Array(vec![]));
+                    alias.remove("metadata");
+                }
+            }
+            for value in map.values_mut() {
+                normalize_semantic_value(value);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                normalize_semantic_value(value);
+            }
+        }
+        _ => {}
     }
 }
 

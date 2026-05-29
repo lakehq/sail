@@ -118,3 +118,13 @@ def test_with_metadata(spark):
     assert df.withMetadata("a", {"m": "x"}).schema["a"].metadata == {"m": "x"}
     assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {"n": "y"}).schema["a"].metadata == {"n": "y"}
     assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {}).schema["a"].metadata == {}
+
+
+def test_dataframe_semantic_analysis(spark):
+    df1 = spark.range(10)
+    df2 = spark.range(10)
+
+    assert df1.withColumn("col1", df1.id * 2).sameSemantics(df2.withColumn("col1", df2.id * 2))
+    assert not df1.withColumn("col1", df1.id * 2).sameSemantics(df2.withColumn("col1", df2.id + 2))
+    assert df1.withColumn("col1", df1.id * 2).sameSemantics(df2.withColumn("col0", df2.id * 2))
+    assert df1.selectExpr("id as col0").semanticHash() == df2.selectExpr("id as col1").semanticHash()
