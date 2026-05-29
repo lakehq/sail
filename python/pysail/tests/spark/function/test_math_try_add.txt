@@ -1,9 +1,9 @@
 >>> from pyspark.sql.types import StructType, StructField, IntegerType
 >>> import pyspark.sql.functions as sf
 
->>> schema = StructType([StructField("birth", IntegerType(), True),StructField("age", IntegerType(), True),])
->>> df = spark.createDataFrame([(1982, 15),(1990, 2),(None, 10),(2147483647, 1),(-2147483648,-1),],schema=schema)
->>> df.select("*", sf.try_add("birth", "age").alias("birth_plus_age")).show()
+>>> schema = StructType([StructField("id", IntegerType(), True),StructField("birth", IntegerType(), True),StructField("age", IntegerType(), True),])
+>>> df = spark.createDataFrame([(0, 1982, 15),(1, 1990, 2),(2, None, 10),(3, 2147483647, 1),(4, -2147483648,-1),],schema=schema)
+>>> df.select("id", "birth", "age", sf.try_add("birth", "age").alias("birth_plus_age")).orderBy("id").drop("id").show()
 +-----------+---+--------------+
 |      birth|age|birth_plus_age|
 +-----------+---+--------------+

@@ -1,7 +1,7 @@
 >>> from pyspark.sql import functions as sf
 
->>> df = spark.createDataFrame([(6000, 15), (1990, 2)], ["a", "b"])
->>> df.select(sf.try_divide(df.a, df.b).alias('r')).show()
+>>> df = spark.createDataFrame([(0, 6000, 15), (1, 1990, 2)], ["id", "a", "b"])
+>>> df.select("id", sf.try_divide(df.a, df.b).alias('r')).orderBy("id").drop("id").show()
 +-----+
 |    r|
 +-----+

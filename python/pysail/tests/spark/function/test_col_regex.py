@@ -13,7 +13,7 @@ class TestColRegex:
         result = df.select(df.colRegex("`Col[^1]`"))
 
         assert result.columns == ["Col2"]
-        assert result.collect() == [(1,), (2,), (3,)]
+        assert result.sort("Col2").collect() == [(1,), (2,), (3,)]
 
     def test_select_columns_starting_with_col(self, spark):
         """Select columns starting with 'col' pattern."""
@@ -35,7 +35,7 @@ class TestColRegex:
         result = df.select(df.colRegex("`.*name$`"))
 
         assert result.columns == ["firstname", "lastname"]
-        rows = result.collect()
+        rows = result.sort("firstname").collect()
         assert rows[0] == ("Alice", "Smith")
         assert rows[1] == ("Bob", "Jones")
 
@@ -100,6 +100,6 @@ class TestColRegex:
             result = df.select(df.colRegex("`tes.*\n.*mn`"))
 
             assert result.columns == ["test\n_column"]
-            assert result.collect() == [("a",), ("b",)]
+            assert sorted(result.collect(), key=lambda row: row[0]) == [("a",), ("b",)]
         finally:
             spark.catalog.dropTempView(view_name)

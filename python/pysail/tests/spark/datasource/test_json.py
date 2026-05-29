@@ -37,12 +37,14 @@ def test_json_write_compression(spark, sample_df, tmp_path):
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
-def test_json_read_options(spark, sample_df, tmp_path):
-    path = str(tmp_path / "json_read_options")
-    sample_df.write.json(path, mode="overwrite")
+def test_json_read_options(spark, tmp_path):
+    path = tmp_path / "json_read_options"
+    path.mkdir()
+    (path / "part-0.json").write_text('{"col1":"a","col2":1}\n{"col1":"b","col2":2}\n')
+    expected = [Row(col1="a", col2=1), Row(col1="b", col2=2)]
+    path = str(path)
     read_df = spark.read.option("schemaInferMaxRecords", 1).json(path).select("col1", "col2")
-    assert read_df.count() == sample_df.count()
-    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+    assert sorted(read_df.collect(), key=safe_sort_key) == expected
 
 
 def test_json_format_path(spark, tmp_path):

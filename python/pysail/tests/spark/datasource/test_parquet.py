@@ -240,6 +240,13 @@ def _rename_part_files(src, dst, ext):
         f.rename(dst / f"part-{i}.{ext}")
 
 
+def _first_non_empty_parquet_file(spark, src):
+    for file in sorted(src.glob("*.parquet")):
+        if spark.read.parquet(str(file)).count() > 0:
+            return file
+    pytest.fail("expected at least one non-empty parquet file")
+
+
 @pytest.mark.parametrize("ext", ["PARQUET", "Parquet", "ParQuet", "parqueT"])
 def test_parquet_read_uppercase_extension_file(spark, sample_df, tmp_path, ext):
     src = tmp_path / "src"
@@ -257,13 +264,13 @@ def test_parquet_read_uppercase_extension_with_schema_struct_file(spark, sample_
     src = tmp_path / "src"
     sample_df.write.parquet(str(src), mode="overwrite")
     dst = tmp_path / "dst"
-    _rename_part_files(src, dst, ext)
-    files = list(dst.glob(f"*.{ext}"))
-    # `sample_df` is tiny (4 rows) so a single output file is expected.
-    assert len(files) == 1
-    df = spark.read.schema(sample_df.schema).parquet(str(files[0]))
-    assert df.count() == sample_df.count()
-    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+    dst.mkdir()
+    source = _first_non_empty_parquet_file(spark, src)
+    expected = spark.read.schema(sample_df.schema).parquet(str(source)).collect()
+    target = dst / f"part-0.{ext}"
+    source.rename(target)
+    df = spark.read.schema(sample_df.schema).parquet(str(target))
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(expected, key=safe_sort_key)
 
 
 @pytest.mark.parametrize("ext", ["PARQUET", "Parquet"])
@@ -613,10 +620,9 @@ def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_pa
     # the same way.
     src = tmp_path / "src"
     sample_df.write.parquet(str(src), mode="overwrite")
-    files = list(src.glob("*.parquet"))
-    assert len(files) == 1
-    upper = files[0].with_suffix(".PARQUET")
-    files[0].rename(upper)
+    source = _first_non_empty_parquet_file(spark, src)
+    expected = spark.read.schema(sample_df.schema).parquet(str(source)).collect()
+    upper = source.with_suffix(".PARQUET")
+    source.rename(upper)
     df = spark.read.schema(sample_df.schema).parquet(str(upper))
-    assert df.count() == sample_df.count()
-    assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(expected, key=safe_sort_key)

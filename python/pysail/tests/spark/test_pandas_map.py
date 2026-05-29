@@ -11,6 +11,6 @@ def test_map_in_pandas(spark):
             pdf["name"] = pdf["name"].str.upper()
             yield pdf
 
-    actual = df.mapInPandas(f, "id long, name string").toPandas()
+    actual = df.mapInPandas(f, "id long, name string").toPandas().sort_values("id").reset_index(drop=True)
     expected = pd.DataFrame({"id": [2, 3], "name": ["ALICE", "BOB"]})
     assert_frame_equal(actual, expected)
