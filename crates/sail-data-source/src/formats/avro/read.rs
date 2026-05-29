@@ -29,11 +29,11 @@ impl ReadFormat for AvroReadFormat {
         &self,
         _ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
+        objects: &[object_store::ObjectMeta],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
-        for object in files {
+        for object in objects {
             let r = store.as_ref().get(&object.location).await?;
             let schema = match r.payload {
                 #[cfg(not(target_arch = "wasm32"))]

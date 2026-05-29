@@ -11,7 +11,6 @@ use datafusion::datasource::physical_plan::JsonSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource_json::utils::JsonArrayToNdjsonReader;
 use object_store::{GetResultPayload, ObjectStoreExt};
@@ -45,33 +44,20 @@ impl ReadFormat for JsonReadFormat {
         &self,
         _ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
+        objects: &[object_store::ObjectMeta],
         compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
-        let mut options = self
-            .options
-            .clone()
-            .into_table_options()
-            .map_err(DataFusionError::from)?;
-        options.compression = compression;
-
         let mut schemas: Vec<Schema> = vec![];
-        let mut records_to_read = options
-            .schema_infer_max_rec
-            .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
-        let file_compression_type = FileCompressionType::from(options.compression);
-        let newline_delimited = options.newline_delimited;
+        let mut records_to_read = self.options.schema_infer_max_records;
+        let file_compression_type = FileCompressionType::from(compression);
+        let newline_delimited = true;
 
-        for object in files {
+        for object in objects {
             if records_to_read == 0 {
                 break;
             }
 
-            let r = store
-                .as_ref()
-                .get(&object.location)
-                .await
-                .map_err(DataFusionError::from)?;
+            let r = store.as_ref().get(&object.location).await?;
 
             let (schema, records_consumed) = match r.payload {
                 #[cfg(not(target_arch = "wasm32"))]

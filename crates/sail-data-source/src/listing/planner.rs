@@ -368,12 +368,12 @@ async fn do_collect_statistics_and_ordering(
         .infer_file_meta(
             ctx,
             store,
+            source.config().schema.file_schema().clone(),
+            meta,
             source
                 .config()
                 .compression
                 .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
-            source.config().schema.file_schema().clone(),
-            meta,
         )
         .await?;
     let statistics = Arc::new(file_meta.statistics);

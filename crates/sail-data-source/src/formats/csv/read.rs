@@ -9,7 +9,6 @@ use datafusion::datasource::physical_plan::CsvSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -44,28 +43,19 @@ impl ReadFormat for CsvReadFormat {
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
+        objects: &[object_store::ObjectMeta],
         compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
-        let mut options = self
-            .options
-            .clone()
-            .into_table_options()
-            .map_err(DataFusionError::from)?;
+        let mut options = self.options.clone().into_table_options()?;
         options.compression = compression;
 
         let csv_format = CsvFormat::default().with_options(options.clone());
 
         let mut schemas: Vec<Schema> = vec![];
-        let mut records_to_read = options
-            .schema_infer_max_rec
-            .unwrap_or(DEFAULT_SCHEMA_INFER_MAX_RECORD);
+        let mut records_to_read = self.options.schema_infer_max_records;
 
-        for object in files {
-            let stream = store
-                .get(&object.location)
-                .await
-                .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))?;
+        for object in objects {
+            let stream = store.get(&object.location).await?;
             let stream: BoxStream<'static, Result<Bytes>> = stream
                 .into_stream()
                 .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))

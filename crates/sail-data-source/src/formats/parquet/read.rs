@@ -23,16 +23,13 @@ pub struct ParquetReadFormat {
     pub(super) options: ParquetReadOptions,
 }
 
-fn set_source_encryption_factory(
-    options: &TableParquetOptions,
-    source: ParquetSource,
-) -> Result<ParquetSource> {
-    if let Some(encryption_factory_id) = &options.crypto.factory_id {
+fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
+    if let Some(x) = &options.crypto.factory_id {
         Err(DataFusionError::Configuration(format!(
-            "Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled"
+            "Parquet encryption factory ID is set to '{x}' but parquet encryption is unsupported"
         )))
     } else {
-        Ok(source)
+        Ok(())
     }
 }
 
@@ -54,15 +51,11 @@ impl ReadFormat for ParquetReadFormat {
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
+        objects: &[object_store::ObjectMeta],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         let options = self.options.clone().into_table_options();
-        if let Some(encryption_factory_id) = &options.crypto.factory_id {
-            return Err(DataFusionError::Configuration(format!(
-                "Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled"
-            )));
-        }
+        fail_for_encryption_factory(&options)?;
 
         let coerce_int96 = options
             .global
@@ -71,15 +64,15 @@ impl ReadFormat for ParquetReadFormat {
             .map(parse_coerce_int96_string)
             .transpose()?;
 
-        let file_metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata_size_hint = options.global.metadata_size_hint;
-        let meta_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
+        let metadata_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
 
-        let mut schemas: Vec<(object_store::path::Path, Schema)> = futures::stream::iter(files)
+        let mut schemas: Vec<(object_store::path::Path, Schema)> = futures::stream::iter(objects)
             .map(|object| async {
                 let schema = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(metadata_size_hint)
-                    .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+                    .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
                     .with_coerce_int96(coerce_int96)
                     .fetch_schema()
                     .await?;
@@ -87,7 +80,7 @@ impl ReadFormat for ParquetReadFormat {
             })
             .boxed() // Workaround for https://github.com/rust-lang/rust/issues/64552
             // fetch schemas concurrently
-            .buffer_unordered(meta_fetch_concurrency)
+            .buffer_unordered(metadata_fetch_concurrency)
             .try_collect()
             .await?;
 
@@ -121,15 +114,15 @@ impl ReadFormat for ParquetReadFormat {
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
-        _compression: CompressionTypeVariant,
         file_schema: SchemaRef,
         object: &object_store::ObjectMeta,
+        _compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
         let options = self.options.clone().into_table_options();
-        let file_metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata = DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(options.global.metadata_size_hint)
-            .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_file_metadata_cache(Some(metadata_cache))
             .fetch_metadata()
             .await?;
         let statistics =
@@ -143,10 +136,11 @@ impl ReadFormat for ParquetReadFormat {
 
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let options = self.options.clone().into_table_options();
+        fail_for_encryption_factory(&options)?;
+
         let mut source =
             ParquetSource::new(input.schema).with_table_parquet_options(options.clone());
 
-        // Use the CachedParquetFileReaderFactory
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let store = ctx
             .runtime_env()
@@ -158,8 +152,6 @@ impl ReadFormat for ParquetReadFormat {
         if let Some(metadata_size_hint) = options.global.metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
-
-        source = set_source_encryption_factory(&options, source)?;
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
             .with_file_groups(input.file_groups)
@@ -191,15 +183,14 @@ fn clear_metadata(schema: Schema) -> Schema {
 /// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
 ///
 /// This is adapted from DataFusion's parquet datasource implementation.
-fn parse_coerce_int96_string(str_setting: &str) -> Result<TimeUnit> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-    match str_setting_lower {
+fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
+    match setting.to_lowercase().as_str() {
         "ns" => Ok(TimeUnit::Nanosecond),
         "us" => Ok(TimeUnit::Microsecond),
         "ms" => Ok(TimeUnit::Millisecond),
         "s" => Ok(TimeUnit::Second),
         _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet coerce_int96: {str_setting}. Valid values are: ns, us, ms, and s."
+            "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
         ))),
     }
 }

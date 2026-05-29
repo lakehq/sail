@@ -58,11 +58,12 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         Ok(None)
     }
 
+    /// Infer the file schema from the given files.
     async fn infer_schema(
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
+        objects: &[object_store::ObjectMeta],
         compression: CompressionTypeVariant,
     ) -> Result<SchemaRef>;
 
@@ -72,11 +73,11 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
-        compression: CompressionTypeVariant,
-        file_schema: datafusion::arrow::datatypes::SchemaRef,
+        file_schema: SchemaRef,
         object: &object_store::ObjectMeta,
+        compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
-        let _ = (ctx, store, compression, object);
+        let _ = (ctx, store, object, compression);
         Ok(ListingFileMeta {
             statistics: Statistics::new_unknown(&file_schema),
             ordering: None,

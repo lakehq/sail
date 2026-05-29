@@ -17,8 +17,8 @@ futures = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true }
-datafusion-datasource-avro = { version = "53.1.0" }
-datafusion-datasource-json = { version = "53.1.0" }
+datafusion-datasource-avro = { workspace = true }
+datafusion-datasource-json = { workspace = true }
 datafusion-session = { workspace = true }
 object_store = { workspace = true }
 chumsky = { workspace = true }

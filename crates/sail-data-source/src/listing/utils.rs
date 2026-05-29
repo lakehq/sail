@@ -46,16 +46,16 @@ pub async fn resolve_listing_schema<R: ReadFormat>(
     )?;
 
     let mut schemas = vec![];
-    let inferred_compression = options
+    let compression = options
         .format
         .compression_type()
         .map(|c| *c.get_variant())
         .unwrap_or(CompressionTypeVariant::UNCOMPRESSED);
     for (store, files) in file_groups.iter() {
         let schema = read_format
-            .infer_schema(ctx, store, files, inferred_compression)
+            .infer_schema(ctx, store, files, compression)
             .await?;
-        schemas.push(schema.as_ref().clone());
+        schemas.push(Arc::unwrap_or_clone(schema));
     }
     let schema = Schema::try_merge(schemas)?;
 

@@ -54,12 +54,12 @@ impl ReadFormat for ArrowReadFormat {
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
+        store: &Arc<dyn ObjectStore>,
+        objects: &[object_store::ObjectMeta],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
-        for object in files {
+        for object in objects {
             let r = store.as_ref().get(&object.location).await?;
             let schema = match r.payload {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -123,7 +123,7 @@ impl ReadFormat for ArrowReadFormat {
 }
 
 // Custom implementation of inferring schema from Arrow IPC stream payload.
-// Adapted from DataFusion's arrow datasource implementation.
+// Adapted from DataFusion's Arrow data source implementation.
 async fn infer_stream_schema(
     mut stream: BoxStream<'static, object_store::Result<bytes::Bytes>>,
 ) -> Result<SchemaRef> {

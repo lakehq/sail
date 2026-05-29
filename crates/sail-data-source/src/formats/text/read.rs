@@ -39,7 +39,7 @@ impl ReadFormat for TextReadFormat {
         &self,
         _ctx: &dyn Session,
         _store: &Arc<dyn object_store::ObjectStore>,
-        _files: &[object_store::ObjectMeta],
+        _objects: &[object_store::ObjectMeta],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         Ok(Arc::new(Schema::new(vec![Field::new(
