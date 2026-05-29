@@ -381,6 +381,10 @@ class VortexWriter(DataSourceArrowWriter):
         self._staging_dir = os.path.join(self.path, staging_name)
         os.makedirs(self._staging_dir, exist_ok=True)
 
+    def _remove_staging_dir(self) -> None:
+        if self._staging_dir:
+            shutil.rmtree(self._staging_dir, ignore_errors=True)
+
     def write(self, iterator: Iterator[pa.RecordBatch]) -> WriterCommitMessage:
         table = pa.Table.from_batches(iterator, self.schema)
         if table.num_rows == 0:
@@ -409,12 +413,10 @@ class VortexWriter(DataSourceArrowWriter):
             msg = f"Failed to commit to '{self.path}': {e}"
             raise RuntimeError(msg) from e
         finally:
-            shutil.rmtree(self._staging_dir, ignore_errors=True)
+            self._remove_staging_dir()
 
     def abort(self, messages: list[WriterCommitMessage | None]) -> None:  # noqa: ARG002
-        shutil.rmtree(self._staging_dir, ignore_errors=True)
-        if os.path.isdir(self.path) and not os.listdir(self.path):
-            shutil.rmtree(self.path, ignore_errors=True)
+        self._remove_staging_dir()
 
 
 class VortexIgnoreWriter(VortexWriter):
