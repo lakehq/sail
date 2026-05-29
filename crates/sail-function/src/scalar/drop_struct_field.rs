@@ -56,7 +56,11 @@ impl DropStructField {
                 }
 
                 if !field_found {
-                    plan_err!("Field `{current_field}` not found")
+                    if field_names.len() == 1 {
+                        Ok(data_type.clone())
+                    } else {
+                        plan_err!("Field `{current_field}` not found")
+                    }
                 } else {
                     Ok(DataType::Struct(new_fields.into()))
                 }

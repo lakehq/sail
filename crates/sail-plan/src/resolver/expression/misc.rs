@@ -23,6 +23,17 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
+fn format_update_fields_name(name: String, operation: String) -> String {
+    const PREFIX: &str = "update_fields(";
+    match name
+        .strip_prefix(PREFIX)
+        .and_then(|name| name.strip_suffix(')'))
+    {
+        Some(name) => format!("{PREFIX}{name}, {operation})"),
+        None => format!("{PREFIX}{name}, {operation})"),
+    }
+}
+
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_alias(
         &self,
@@ -394,14 +405,33 @@ impl PlanResolver<'_> {
             )));
         };
 
-        let new_expr = if let Some(value_expression) = value_expression {
-            let value_expr = self
-                .resolve_expression(value_expression, schema, state)
+        let (display_operation, new_expr) = if let Some(value_expression) = value_expression {
+            let NamedExpr {
+                name: value_name,
+                expr: value_expr,
+                ..
+            } = self
+                .resolve_named_expression(value_expression, schema, state)
                 .await?;
-            ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr])
+            let value_name = if value_name.len() == 1 {
+                value_name.one()?
+            } else {
+                let names = format!("({})", value_name.join(", "));
+                return Err(PlanError::invalid(format!(
+                    "one name expected for expression, got: {names}"
+                )));
+            };
+            (
+                format!("WithField({value_name})"),
+                ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr]),
+            )
         } else {
-            ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr])
+            (
+                "dropfield()".to_string(),
+                ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr]),
+            )
         };
+        let name = format_update_fields_name(name, display_operation);
         Ok(NamedExpr::new(vec![name], new_expr))
     }
 

@@ -111,3 +111,19 @@ def test_distributed_sequence_id(spark):
     assert df.select(Column(DistributedSequenceID()).alias("index"), "*").collect() == [
         Row(index=i, id=i) for i in range(10)
     ]
+
+
+def test_update_fields_names(spark):
+    df = spark.sql(
+        """
+        SELECT STRUCT(a, b, c, d) AS x, e FROM VALUES
+        (float(1.0), double(1.0), '2022', 1, 0)
+        AS tab(a, b, c, d, e)
+        """
+    )
+
+    assert df.select(df.x.withField("z", df.e)).columns == ["update_fields(x, WithField(e))"]
+    assert df.select(df.x.withField("z", F.lit("xyz"))).columns == ["update_fields(x, WithField(xyz))"]
+    assert df.select(df.x.dropFields("a", "b", "z")).columns == [
+        "update_fields(x, dropfield(), dropfield(), dropfield())"
+    ]
