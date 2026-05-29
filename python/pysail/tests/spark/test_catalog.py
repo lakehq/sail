@@ -122,6 +122,38 @@ class TestListTables:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+class TestCatalogCache:
+    """Test Spark Catalog cache APIs maintain session cache state."""
+
+    @pytest.fixture(autouse=True)
+    def setup_view(self, spark):
+        view_name = "test_catalog_cache_view"
+        spark.sql("SELECT 1 AS col").createOrReplaceTempView(view_name)
+        yield view_name
+        spark.catalog.clearCache()
+        spark.catalog.dropTempView(view_name)
+
+    def test_cache_table_state(self, spark, setup_view):
+        view_name = setup_view
+
+        assert spark.catalog.isCached(view_name) is False
+
+        spark.catalog.cacheTable(view_name)
+        assert spark.catalog.isCached(view_name) is True
+
+        spark.catalog.uncacheTable(view_name)
+        assert spark.catalog.isCached(view_name) is False
+
+    def test_clear_cache(self, spark, setup_view):
+        view_name = setup_view
+
+        spark.catalog.cacheTable(view_name)
+        assert spark.catalog.isCached(view_name) is True
+
+        spark.catalog.clearCache()
+        assert spark.catalog.isCached(view_name) is False
+
+
 class TestListDatabases:
     """Test spark.catalog.listDatabases() returns correct field names."""
 

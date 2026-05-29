@@ -118,6 +118,17 @@ pub enum CatalogCommand {
         view: Vec<String>,
         options: DropViewOptions,
     },
+    IsCached {
+        table: Vec<String>,
+    },
+    CacheTable {
+        table: Vec<String>,
+    },
+    UncacheTable {
+        table: Vec<String>,
+        if_exists: bool,
+    },
+    ClearCache,
     CreateTemporaryView {
         view: String,
         is_global: bool,
@@ -174,6 +185,10 @@ impl CatalogCommand {
             CatalogCommand::DropFunction { .. } => "DropFunction",
             CatalogCommand::DropTemporaryView { .. } => "DropTemporaryView",
             CatalogCommand::DropView { .. } => "DropView",
+            CatalogCommand::IsCached { .. } => "IsCached",
+            CatalogCommand::CacheTable { .. } => "CacheTable",
+            CatalogCommand::UncacheTable { .. } => "UncacheTable",
+            CatalogCommand::ClearCache => "ClearCache",
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
@@ -205,7 +220,10 @@ impl CatalogCommand {
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
             | CatalogCommand::RegisterFunction { .. }
-            | CatalogCommand::RegisterTableFunction { .. } => display.empty().schema()?,
+            | CatalogCommand::RegisterTableFunction { .. }
+            | CatalogCommand::CacheTable { .. }
+            | CatalogCommand::UncacheTable { .. }
+            | CatalogCommand::ClearCache => display.empty().schema()?,
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
                 display.strings().schema()?
             }
@@ -217,6 +235,7 @@ impl CatalogCommand {
             }
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
+            | CatalogCommand::IsCached { .. }
             | CatalogCommand::FunctionExists { .. }
             | CatalogCommand::CreateDatabase { .. }
             | CatalogCommand::CreateTable { .. }
@@ -569,6 +588,28 @@ impl CatalogCommand {
             CatalogCommand::DropView { view, options } => {
                 manager.drop_maybe_temporary_view(&view, options).await?;
                 display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::IsCached { table } => {
+                manager.get_table_or_view(&table).await?;
+                let value = manager.is_table_cached(&table)?;
+                display.bools().to_record_batch(vec![value])?
+            }
+            CatalogCommand::CacheTable { table } => {
+                manager.get_table_or_view(&table).await?;
+                manager.cache_table(&table)?;
+                display.empty().to_record_batch(vec![])?
+            }
+            CatalogCommand::UncacheTable { table, if_exists } => {
+                match manager.get_table_or_view(&table).await {
+                    Ok(_) => manager.uncache_table(&table)?,
+                    Err(CatalogError::NotFound(_, _)) if if_exists => {}
+                    Err(e) => return Err(e),
+                }
+                display.empty().to_record_batch(vec![])?
+            }
+            CatalogCommand::ClearCache => {
+                manager.clear_cache()?;
+                display.empty().to_record_batch(vec![])?
             }
             CatalogCommand::CreateTemporaryView {
                 view,

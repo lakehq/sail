@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use datafusion_expr::{LogicalPlan, ScalarUDF};
@@ -9,6 +9,7 @@ use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogOb
 use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
+pub mod cache;
 pub mod catalog;
 pub mod database;
 pub mod function;
@@ -27,9 +28,17 @@ pub struct CatalogManager {
 pub(super) struct CatalogManagerState {
     pub(super) catalogs: HashMap<Arc<str>, Arc<dyn CatalogProvider>>,
     pub(super) functions: HashMap<Arc<str>, datafusion_expr::ScalarUDF>,
+    pub(super) cached_tables: HashSet<CachedTableKey>,
     pub(super) default_catalog: Arc<str>,
     pub(super) default_database: Namespace,
     pub(super) global_temporary_database: Namespace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+pub(super) struct CachedTableKey {
+    catalog: Arc<str>,
+    database: Namespace,
+    table: Arc<str>,
 }
 
 pub struct CatalogManagerOptions {
@@ -58,6 +67,7 @@ impl CatalogManager {
         let state = CatalogManagerState {
             catalogs,
             functions: HashMap::new(),
+            cached_tables: HashSet::new(),
             default_catalog: options.default_catalog.into(),
             default_database: options.default_database.try_into()?,
             global_temporary_database: options.global_temporary_database.try_into()?,
@@ -212,6 +222,18 @@ impl CatalogManagerState {
                 Ok((catalog, database, table))
             }
         }
+    }
+
+    pub(super) fn resolve_cached_table_key<T: AsRef<str>>(
+        &self,
+        reference: &[T],
+    ) -> CatalogResult<CachedTableKey> {
+        let (catalog, database, table) = self.resolve_object_reference(reference)?;
+        Ok(CachedTableKey {
+            catalog,
+            database,
+            table,
+        })
     }
 
     pub fn is_global_temporary_view_database<T: AsRef<str>>(&self, reference: &[T]) -> bool {
