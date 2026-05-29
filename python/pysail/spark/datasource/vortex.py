@@ -395,6 +395,8 @@ class VortexWriter(DataSourceArrowWriter):
 
     def abort(self, messages: list[WriterCommitMessage | None]) -> None:  # noqa: ARG002
         shutil.rmtree(self._staging_dir, ignore_errors=True)
+        if os.path.isdir(self.path) and not os.listdir(self.path):
+            shutil.rmtree(self.path, ignore_errors=True)
 
 
 class VortexIgnoreWriter(VortexWriter):
