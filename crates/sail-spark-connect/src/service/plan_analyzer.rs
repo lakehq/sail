@@ -1,5 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 
 use datafusion::prelude::SessionContext;
 use log::warn;
@@ -119,9 +121,16 @@ pub(crate) async fn handle_analyze_is_streaming(
 
 pub(crate) async fn handle_analyze_input_files(
     _ctx: &SessionContext,
-    _request: InputFilesRequest,
+    request: InputFilesRequest,
 ) -> SparkResult<InputFilesResponse> {
-    Err(SparkError::todo("handle analyze input files"))
+    let InputFilesRequest { plan } = request;
+    let plan = plan.required("input files plan")?;
+    let plan: spec::QueryPlan = plan.try_into()?;
+    let mut files = BTreeSet::new();
+    collect_input_files_query_plan(&plan, &mut files)?;
+    Ok(InputFilesResponse {
+        files: files.into_iter().collect(),
+    })
 }
 
 pub(crate) async fn handle_analyze_spark_version(
@@ -327,6 +336,179 @@ fn analyze_is_streaming(plan: sc::Plan) -> SparkResult<bool> {
             Err(SparkError::internal("nested compressed operation"))
         }
     }
+}
+
+fn collect_input_files_query_plan(
+    plan: &spec::QueryPlan,
+    files: &mut BTreeSet<String>,
+) -> SparkResult<()> {
+    collect_input_files_query_node(&plan.node, files)
+}
+
+fn collect_input_files_query_node(
+    node: &spec::QueryNode,
+    files: &mut BTreeSet<String>,
+) -> SparkResult<()> {
+    match node {
+        spec::QueryNode::Read { read_type, .. } => {
+            if let spec::ReadType::DataSource(source) = read_type {
+                for path in &source.paths {
+                    collect_input_files_path(path, files)?;
+                }
+                for (key, value) in &source.options {
+                    if key.eq_ignore_ascii_case("path") {
+                        collect_input_files_path(value, files)?;
+                    }
+                }
+            }
+        }
+        // leaf nodes with no query plan inputs
+        spec::QueryNode::LocalRelation { .. }
+        | spec::QueryNode::CachedLocalRelation { .. }
+        | spec::QueryNode::CachedRemoteRelation { .. }
+        | spec::QueryNode::Range(_)
+        | spec::QueryNode::Empty { .. }
+        | spec::QueryNode::Values(_)
+        | spec::QueryNode::CommonInlineUserDefinedTableFunction(_) => {}
+        // single required input
+        spec::QueryNode::Filter { input, .. }
+        | spec::QueryNode::Sort { input, .. }
+        | spec::QueryNode::Limit { input, .. }
+        | spec::QueryNode::SubqueryAlias { input, .. }
+        | spec::QueryNode::Repartition { input, .. }
+        | spec::QueryNode::ToDf { input, .. }
+        | spec::QueryNode::WithColumnsRenamed { input, .. }
+        | spec::QueryNode::Drop { input, .. }
+        | spec::QueryNode::Tail { input, .. }
+        | spec::QueryNode::WithColumns { input, .. }
+        | spec::QueryNode::Hint { input, .. }
+        | spec::QueryNode::ToSchema { input, .. }
+        | spec::QueryNode::RepartitionByExpression { input, .. }
+        | spec::QueryNode::MapPartitions { input, .. }
+        | spec::QueryNode::CollectMetrics { input, .. }
+        | spec::QueryNode::FillNa { input, .. }
+        | spec::QueryNode::DropNa { input, .. }
+        | spec::QueryNode::Replace { input, .. }
+        | spec::QueryNode::StatSummary { input, .. }
+        | spec::QueryNode::StatDescribe { input, .. }
+        | spec::QueryNode::StatCrosstab { input, .. }
+        | spec::QueryNode::StatCov { input, .. }
+        | spec::QueryNode::StatCorr { input, .. }
+        | spec::QueryNode::StatApproxQuantile { input, .. }
+        | spec::QueryNode::StatFreqItems { input, .. }
+        | spec::QueryNode::StatSampleBy { input, .. }
+        | spec::QueryNode::WithParameters { input, .. }
+        | spec::QueryNode::TableAlias { input, .. }
+        | spec::QueryNode::TableSample { input, .. } => {
+            collect_input_files_query_plan(input, files)?;
+        }
+        // single optional input - None input means no source
+        spec::QueryNode::Project { input, .. } | spec::QueryNode::LateralView { input, .. } => {
+            if let Some(input) = input {
+                collect_input_files_query_plan(input, files)?;
+            }
+        }
+        // nested struct with single input
+        spec::QueryNode::Aggregate(agg) => collect_input_files_query_plan(&agg.input, files)?,
+        spec::QueryNode::Sample(s) => collect_input_files_query_plan(&s.input, files)?,
+        spec::QueryNode::Deduplicate(d) => collect_input_files_query_plan(&d.input, files)?,
+        spec::QueryNode::Pivot(p) => collect_input_files_query_plan(&p.input, files)?,
+        spec::QueryNode::Unpivot(u) => collect_input_files_query_plan(&u.input, files)?,
+        spec::QueryNode::Parse(p) => collect_input_files_query_plan(&p.input, files)?,
+        spec::QueryNode::WithWatermark(w) => collect_input_files_query_plan(&w.input, files)?,
+        spec::QueryNode::ApplyInPandasWithState(a) => {
+            collect_input_files_query_plan(&a.input, files)?;
+        }
+        // multiple inputs
+        spec::QueryNode::Join(j) => {
+            collect_input_files_query_plan(&j.left, files)?;
+            collect_input_files_query_plan(&j.right, files)?;
+        }
+        spec::QueryNode::SetOperation(s) => {
+            collect_input_files_query_plan(&s.left, files)?;
+            collect_input_files_query_plan(&s.right, files)?;
+        }
+        spec::QueryNode::CoGroupMap(c) => {
+            collect_input_files_query_plan(&c.input, files)?;
+            collect_input_files_query_plan(&c.other, files)?;
+        }
+        spec::QueryNode::GroupMap(g) => {
+            collect_input_files_query_plan(&g.input, files)?;
+            if let Some(input) = &g.initial_input {
+                collect_input_files_query_plan(input, files)?;
+            }
+        }
+        spec::QueryNode::WithCtes { input, ctes, .. } => {
+            collect_input_files_query_plan(input, files)?;
+            for (_name, plan) in ctes {
+                collect_input_files_query_plan(plan, files)?;
+            }
+        }
+        spec::QueryNode::WithRelations { root, references } => {
+            collect_input_files_query_plan(root, files)?;
+            for plan in references {
+                collect_input_files_query_plan(plan, files)?;
+            }
+        }
+        spec::QueryNode::LateralJoin { left, right, .. } => {
+            collect_input_files_query_plan(left, files)?;
+            collect_input_files_query_plan(right, files)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_input_files_path(path: &str, files: &mut BTreeSet<String>) -> SparkResult<()> {
+    let Some(path) = local_input_path(path) else {
+        files.insert(path.to_string());
+        return Ok(());
+    };
+    collect_local_input_files(&path, files)
+}
+
+fn local_input_path(path: &str) -> Option<PathBuf> {
+    if let Some(path) = path.strip_prefix("file://") {
+        Some(PathBuf::from(path))
+    } else if path.contains("://") {
+        None
+    } else {
+        Some(PathBuf::from(path))
+    }
+}
+
+fn collect_local_input_files(path: &Path, files: &mut BTreeSet<String>) -> SparkResult<()> {
+    let metadata = std::fs::metadata(path)?;
+    if metadata.is_file() {
+        if is_data_file(path) {
+            files.insert(local_file_uri(path));
+        }
+    } else if metadata.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if is_data_file(&path) {
+                collect_local_input_files(&path, files)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_data_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_none_or(|name| !name.starts_with('_') && !name.starts_with('.'))
+}
+
+fn local_file_uri(path: &Path) -> String {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    format!("file://{}", path.display())
 }
 
 fn is_streaming_query_plan(plan: &spec::QueryPlan) -> bool {

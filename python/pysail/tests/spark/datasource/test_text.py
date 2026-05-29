@@ -23,6 +23,15 @@ def test_text_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_text_input_files(spark, sample_df, tmp_path):
+    path = tmp_path / "text_input_files"
+    sample_df.select("col1").write.text(str(path))
+
+    input_files = spark.read.format("text").schema("value STRING").load(path=str(path)).inputFiles()
+
+    assert input_files == [f"file://{file}" for file in sorted(path.glob("*.txt"))]
+
+
 def test_text_read_write_compressed(spark, sample_df, tmp_path):
     path = str(tmp_path / "text_compressed_gzip")
     sample_df = sample_df.select("col1")
