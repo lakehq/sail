@@ -35,23 +35,15 @@ pub struct ListingTableSourceConfig {
 #[derive(Clone, Debug)]
 pub struct ListingTableSource {
     config: ListingTableSourceConfig,
-    collected_statistics: Arc<dyn FileStatisticsCache>,
 }
 
 impl ListingTableSource {
     pub fn try_new(config: ListingTableSourceConfig) -> Result<Self> {
-        Ok(Self {
-            config,
-            collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
-        })
+        Ok(Self { config })
     }
 
     pub fn config(&self) -> &ListingTableSourceConfig {
         &self.config
-    }
-
-    pub fn collected_statistics(&self) -> Arc<dyn FileStatisticsCache> {
-        Arc::clone(&self.collected_statistics)
     }
 }
 

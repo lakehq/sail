@@ -166,6 +166,7 @@ async fn infer_stream_schema(
         );
     }
 
+    // TODO: prevent excessive memory usage due to malicious metadata length
     let bytes = extend_bytes_to_n_length_from_stream(
         bytes,
         preamble_len + 4 + (meta_len as usize),

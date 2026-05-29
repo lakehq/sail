@@ -52,7 +52,10 @@ impl ReadFormat for CsvReadFormat {
         let csv_format = CsvFormat::default().with_options(options.clone());
 
         let mut schemas: Vec<Schema> = vec![];
-        let mut records_to_read = self.options.schema_infer_max_records;
+        let Some(mut records_to_read) = options.schema_infer_max_rec else {
+            // `into_table_options` always sets `schema_infer_max_records` to `Some`
+            unreachable!();
+        };
 
         for object in objects {
             let stream = store.get(&object.location).await?;
