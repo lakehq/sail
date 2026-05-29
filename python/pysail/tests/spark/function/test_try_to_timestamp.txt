@@ -6,12 +6,12 @@
 >>>
 >>> df = spark.createDataFrame(
 ...     [
-...         (0, datetime(2023, 1, 1, 10, tzinfo=ZoneInfo("Europe/Amsterdam"))),
-...         (1, datetime(2023, 1, 1, 10, tzinfo=ZoneInfo("Asia/Shanghai"))),
+...         (datetime(2023, 1, 1, 10, tzinfo=ZoneInfo("Europe/Amsterdam")),),
+...         (datetime(2023, 1, 1, 10, tzinfo=ZoneInfo("Asia/Shanghai")),)
 ...     ],
-...     T.StructType([T.StructField("id", T.IntegerType(), True), T.StructField("ts", T.TimestampType(), True)]),
+...     T.StructType([T.StructField("ts", T.TimestampType(), True)]),
 ... )
->>> df.orderBy("id").drop("id").show()
+>>> df.show()
 +-------------------+
 |                 ts|
 +-------------------+
@@ -21,7 +21,7 @@
 
 >>> spark.conf.set("spark.sql.timestampType", "TIMESTAMP_LTZ")
 >>>
->>> df.select("id", F.try_to_timestamp("ts")).orderBy("id").drop("id").show()
+>>> df.select(F.try_to_timestamp("ts")).show()
 +--------------------+
 |try_to_timestamp(ts)|
 +--------------------+
@@ -35,7 +35,7 @@ root
 
 >>> spark.conf.set("spark.sql.timestampType", "TIMESTAMP_NTZ")
 >>>
->>> df.select("id", F.try_to_timestamp("ts")).orderBy("id").drop("id").show()
+>>> df.select(F.try_to_timestamp("ts")).show()
 +--------------------+
 |try_to_timestamp(ts)|
 +--------------------+

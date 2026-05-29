@@ -84,11 +84,10 @@ def test_range(spark):
 
 def test_create_data_frame(spark):
     assert_frame_equal(
-        spark.createDataFrame([1, 2, 3], schema="long").sort("value").toPandas(),
-        pd.DataFrame({"value": [1, 2, 3]}, dtype="int64"),
+        spark.createDataFrame([1, 2, 3], schema="long").toPandas(), pd.DataFrame({"value": [1, 2, 3]}, dtype="int64")
     )
     assert_frame_equal(
-        spark.createDataFrame([(1, "a"), (2, "b")], schema="a integer, t string").sort("a").toPandas(),
+        spark.createDataFrame([(1, "a"), (2, "b")], schema="a integer, t string").toPandas(),
         pd.DataFrame({"a": [1, 2], "t": ["a", "b"]}).astype({"a": "int32"}),
     )
 
@@ -233,21 +232,21 @@ def test_sql(spark):
 
 
 def test_sql_temp_view(spark, df, df_view):
-    assert_frame_equal(spark.sql(f"SELECT * FROM {df_view}").sort("a").toPandas(), df.sort("a").toPandas())  # noqa: S608
+    assert_frame_equal(spark.sql(f"SELECT * FROM {df_view}").toPandas(), df.toPandas())  # noqa: S608
 
 
 def test_write_json(spark, df, tmpdir):
     path = str(tmpdir.join("df.json"))
     df.write.json(path)
     out = spark.read.json(path).sort("a")
-    assert_frame_equal(df.sort("a").toPandas(), out.toPandas(), check_dtype=False)
+    assert_frame_equal(df.toPandas(), out.toPandas(), check_dtype=False)
 
 
 def test_write_parquet(spark, df, tmpdir):
     path = str(tmpdir.join("df.parquet"))
     df.write.parquet(path)
     out = spark.read.parquet(path).sort("a")
-    assert_frame_equal(df.sort("a").toPandas(), out.toPandas(), check_dtype=False)
+    assert_frame_equal(df.toPandas(), out.toPandas(), check_dtype=False)
 
 
 def test_write_partitioned_parquet(spark, df, tmpdir):
@@ -262,7 +261,7 @@ def test_write_partitioned_parquet(spark, df, tmpdir):
     assert expected == out.collect()
 
     out = spark.read.parquet(path).filter(F.col("partition") == "456").sort("a")
-    expected = df.sort("a").toPandas()
+    expected = df.toPandas()
     expected["partition"] = "456"
     assert_frame_equal(expected, out.toPandas(), check_dtype=False)
 
@@ -274,9 +273,7 @@ def test_write_csv(spark, simple_df, tmpdir, infer_schema):
     # is parametrized to pin both behaviors.
     # `inferSchema=True` preserves types; `False` (the Spark default) reads
     # every column back as STRING.
-    expected_typed = simple_df.sort("a").toPandas()
-    if not infer_schema:
-        expected_typed = expected_typed.astype(str)
+    expected_typed = simple_df.toPandas() if infer_schema else simple_df.toPandas().astype(str)
 
     path = str(tmpdir.join(f"simple_df_0_{infer_schema}.csv"))
     simple_df.write.csv(path)
@@ -387,8 +384,8 @@ def test_udf(df, udf_add_one, udf_add_x_y, udf_add):
 
 def test_sql_with_clause(spark, df, df_view):
     assert_frame_equal(
-        spark.sql(f"WITH test AS (SELECT * FROM {df_view}) SELECT * FROM test").sort("a").toPandas(),  # noqa: S608
-        df.sort("a").toPandas(),
+        spark.sql(f"WITH test AS (SELECT * FROM {df_view}) SELECT * FROM test").toPandas(),  # noqa: S608
+        df.toPandas(),
     )
 
 
@@ -468,8 +465,8 @@ def test_coalesce_string_literal_and_date_ansi_enabled(spark):
 
 
 def test_select_expression(df):
-    assert_frame_equal(df.selectExpr("b.foo").sort("foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
-    assert_frame_equal(df.selectExpr("b.*").sort("foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
+    assert_frame_equal(df.selectExpr("b.foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
+    assert_frame_equal(df.selectExpr("b.*").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
 
 
 @pytest.mark.skip(reason="not implemented")

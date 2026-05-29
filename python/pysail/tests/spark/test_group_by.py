@@ -240,8 +240,9 @@ def test_cube(spark):
 
 
 def test_aggregation_with_nulls(spark):
-    actual = spark.sql("SELECT FIRST(age) FROM (SELECT CAST(NULL AS INT) AS age)").toPandas()
-    assert pd.isna(actual["first(age)"].iloc[0])
+    actual = spark.sql("SELECT FIRST(age) FROM person").toPandas()
+    expected = pd.DataFrame({"first(age)": [None]}).astype({"first(age)": "float64"})
+    assert_frame_equal(actual, expected)
 
 
 @pytest.mark.skip(reason="not implemented")

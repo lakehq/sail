@@ -40,7 +40,7 @@ def test_struct_wildcard_after_join(spark):
             )
         ]
     )
-    assert out.sort(F.col("some_struct.id")).collect() == [
+    assert out.collect() == [
         Row(some_struct=Row(id=1, some_payload="A")),
         Row(some_struct=Row(id=2, some_payload="B")),
         Row(some_struct=Row(id=3, some_payload="C")),
@@ -69,7 +69,7 @@ def test_struct_wildcard_on_struct_column(spark):
             )
         ]
     )
-    assert out.sort(F.col("some_struct.id")).collect() == [
+    assert out.collect() == [
         Row(some_struct=Row(id=1, some_payload="A")),
         Row(some_struct=Row(id=2, some_payload="B")),
     ]

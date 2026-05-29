@@ -19,9 +19,9 @@
 +-----------------------------------------------+
 |2025-11-03                                     |
 +-----------------------------------------------+
->>> df = spark.createDataFrame([(0, "2025-11-02 23:30:45.123456"), (1, "2025-11-02 23:30:45.123456-08:00"), (2, "2025-11-02 23:30:45.123456+01:00")], ["id", "ts"])
->>> df = df.select("id", "ts", sf.expr("CAST(ts AS TIMESTAMP_NTZ)").alias("ts_ntz"), sf.expr("CAST(ts AS TIMESTAMP_LTZ)").alias("ts_ltz"))
->>> df.select("id", "ts", "ts_ntz", "ts_ltz", sf.to_date("ts_ntz").alias("date_ntz"), sf.to_date("ts_ltz").alias("date_ltz")).orderBy("id").drop("id").show(truncate=False)
+>>> df = spark.createDataFrame([("2025-11-02 23:30:45.123456",), ("2025-11-02 23:30:45.123456-08:00",), ("2025-11-02 23:30:45.123456+01:00",)], ["ts"])
+>>> df = df.select("ts", sf.expr("CAST(ts AS TIMESTAMP_NTZ)").alias("ts_ntz"), sf.expr("CAST(ts AS TIMESTAMP_LTZ)").alias("ts_ltz"))
+>>> df.select("ts", "ts_ntz", "ts_ltz", sf.to_date("ts_ntz").alias("date_ntz"), sf.to_date("ts_ltz").alias("date_ltz")).show(truncate=False)
 +--------------------------------+--------------------------+--------------------------+----------+----------+
 |ts                              |ts_ntz                    |ts_ltz                    |date_ntz  |date_ltz  |
 +--------------------------------+--------------------------+--------------------------+----------+----------+

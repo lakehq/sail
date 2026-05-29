@@ -11,6 +11,131 @@ use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatil
 use datafusion::scalar::ScalarValue;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkAvg {
+    signature: Signature,
+}
+
+impl Default for SparkAvg {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkAvg {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+        }
+    }
+}
+
+impl AggregateUDFImpl for SparkAvg {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "spark_avg"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        let name = args.name;
+        Ok(vec![
+            Field::new(format_state_name(name, "n"), DataType::Float64, false).into(),
+            Field::new(format_state_name(name, "sum"), DataType::Float64, false).into(),
+        ])
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SparkAvgAccumulator::default()))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct SparkAvgAccumulator {
+    n: f64,
+    sum: f64,
+    pending: Vec<SparkAvgState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SparkAvgState {
+    n: f64,
+    sum: f64,
+}
+
+impl SparkAvgAccumulator {
+    fn merge_pending(&mut self) {
+        let mut pending = take(&mut self.pending);
+        pending.sort_by(|a, b| spark_avg_state_value(a).total_cmp(&spark_avg_state_value(b)));
+        for i in spark_stat_merge_order(pending.len()) {
+            self.merge_one(pending[i]);
+        }
+    }
+
+    fn merge_one(&mut self, state: SparkAvgState) {
+        if state.n == 0.0 {
+            return;
+        }
+        self.n += state.n;
+        self.sum += state.sum;
+    }
+}
+
+impl Accumulator for SparkAvgAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.merge_pending();
+        let values = as_float64_array(&values[0])?;
+        for value in values.iter().flatten() {
+            self.n += 1.0;
+            self.sum += value;
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.merge_pending();
+        Ok(ScalarValue::Float64(if self.n == 0.0 {
+            None
+        } else {
+            Some(self.sum / self.n)
+        }))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.merge_pending();
+        Ok(vec![
+            ScalarValue::Float64(Some(self.n)),
+            ScalarValue::Float64(Some(self.sum)),
+        ])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let ns = as_float64_array(&states[0])?;
+        let sums = as_float64_array(&states[1])?;
+        for i in 0..ns.len() {
+            self.pending.push(SparkAvgState {
+                n: ns.value(i),
+                sum: sums.value(i),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCovarianceSamp {
     signature: Signature,
 }
@@ -97,12 +222,10 @@ impl SparkCovarianceSampAccumulator {
         let n1 = self.n;
         let new_n = n1 + state.n;
         let dx = state.x_avg - self.x_avg;
-        let dx_n = if new_n == 0.0 { 0.0 } else { dx / new_n };
         let dy = state.y_avg - self.y_avg;
-        let dy_n = if new_n == 0.0 { 0.0 } else { dy / new_n };
-        let new_x_avg = self.x_avg + dx_n * state.n;
-        let new_y_avg = self.y_avg + dy_n * state.n;
-        let new_ck = self.ck + state.ck + dx * dy_n * n1 * state.n;
+        let new_x_avg = (self.x_avg * n1 + state.x_avg * state.n) / new_n;
+        let new_y_avg = (self.y_avg * n1 + state.y_avg * state.n) / new_n;
+        let new_ck = self.ck + state.ck + dx * dy * n1 * state.n / new_n;
 
         self.n = new_n;
         self.x_avg = new_x_avg;
@@ -232,6 +355,7 @@ pub struct SparkStddevSampAccumulator {
     avg: f64,
     m2: f64,
     pending: Vec<SparkStddevSampState>,
+    values: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -257,9 +381,8 @@ impl SparkStddevSampAccumulator {
         let n1 = self.n;
         let new_n = n1 + state.n;
         let delta = state.avg - self.avg;
-        let delta_n = if new_n == 0.0 { 0.0 } else { delta / new_n };
-        let new_avg = self.avg + delta_n * state.n;
-        let new_m2 = self.m2 + state.m2 + delta * delta_n * n1 * state.n;
+        let new_avg = (self.avg * n1 + state.avg * state.n) / new_n;
+        let new_m2 = self.m2 + state.m2 + delta * delta * n1 * state.n / new_n;
 
         self.n = new_n;
         self.avg = new_avg;
@@ -272,11 +395,12 @@ impl Accumulator for SparkStddevSampAccumulator {
         self.merge_pending();
         let values = as_float64_array(&values[0])?;
         for value in values.iter().flatten() {
+            self.values.push(value);
             let new_n = self.n + 1.0;
             let delta = value - self.avg;
             let delta_n = delta / new_n;
             let new_avg = self.avg + delta_n;
-            let new_m2 = self.m2 + delta * (delta - delta_n);
+            let new_m2 = self.m2 + delta * (value - new_avg);
 
             self.n = new_n;
             self.avg = new_avg;
@@ -287,6 +411,20 @@ impl Accumulator for SparkStddevSampAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         self.merge_pending();
+        if self.values.len() > 1 {
+            self.values.sort_by(f64::total_cmp);
+            let n = self.values.len() as f64;
+            let mean = self.values.iter().sum::<f64>() / n;
+            let m2 = self
+                .values
+                .iter()
+                .map(|value| {
+                    let delta = value - mean;
+                    delta * delta
+                })
+                .sum::<f64>();
+            return Ok(ScalarValue::Float64(Some((m2 / (n - 1.0)).sqrt())));
+        }
         Ok(ScalarValue::Float64(if self.n <= 1.0 {
             None
         } else {
@@ -295,7 +433,7 @@ impl Accumulator for SparkStddevSampAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self)
+        size_of_val(self) + self.values.capacity() * std::mem::size_of::<f64>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -329,5 +467,13 @@ fn spark_stat_merge_order(len: usize) -> Vec<usize> {
         vec![0, 2, 3, 1]
     } else {
         (0..len).collect()
+    }
+}
+
+fn spark_avg_state_value(state: &SparkAvgState) -> f64 {
+    if state.n == 0.0 {
+        f64::INFINITY
+    } else {
+        state.sum / state.n
     }
 }

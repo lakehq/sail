@@ -10,17 +10,17 @@ def test_quote(spark):
     """Tests quote escapes single quotes and backslashes, and wraps in single quotes."""
     df = spark.createDataFrame(
         [
-            (0, "hello"),
-            (1, "Don't"),
-            (2, "a\\b"),
-            (3, "a\\'b"),
-            (4, ""),
-            (5, None),
+            ("hello",),
+            ("Don't",),
+            ("a\\b",),
+            ("a\\'b",),
+            ("",),
+            (None,),
         ],
-        ["id", "value"],
+        ["value"],
     )
 
-    actual = df.selectExpr("id", "quote(value) AS result").sort("id").toPandas()
+    actual = df.selectExpr("quote(value) AS result").toPandas()
 
     assert actual["result"].iloc[0] == "'hello'"
     assert actual["result"].iloc[1] == "'Don\\'t'"
@@ -38,6 +38,6 @@ def test_quote_function_api(spark):
     """Tests sf.quote() function from pyspark.sql.functions matches the SQL form."""
     from pyspark.sql import functions as sf
 
-    df = spark.createDataFrame([(0, "Don't")], "id INT, value STRING")
+    df = spark.createDataFrame(["Don't"], "STRING")
     actual = df.select(sf.quote("value").alias("result")).toPandas()
     assert actual["result"].iloc[0] == "'Don\\'t'"

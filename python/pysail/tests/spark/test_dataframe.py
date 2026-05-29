@@ -186,7 +186,7 @@ def test_dataframe_to_adds_missing_columns(spark):
     )
     struct_result = df.select(struct("id", "name").alias("struct")).to(struct_schema)
     assert struct_result.schema == struct_schema
-    assert sorted(struct_result.collect(), key=lambda row: row.struct.id) == [((1, "a"),), ((2, "b"),)]
+    assert struct_result.collect() == [((1, "a"),), ((2, "b"),)]
 
     with pytest.raises(Exception, match="NULLABLE_COLUMN_OR_FIELD"):
         df.to(StructType([StructField("id", IntegerType(), False)])).collect()

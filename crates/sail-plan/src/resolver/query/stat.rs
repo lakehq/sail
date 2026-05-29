@@ -3,9 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::DataType;
-use datafusion::functions_aggregate::approx_median::approx_median_udaf;
 use datafusion::functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
-use datafusion::functions_aggregate::average::avg_udaf;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::sum::sum_udaf;
@@ -18,7 +16,8 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::aggregate::spark_stat::{SparkCovarianceSamp, SparkStddevSamp};
+use sail_function::aggregate::percentile_disc::PercentileDisc;
+use sail_function::aggregate::spark_stat::{SparkAvg, SparkCovarianceSamp, SparkStddevSamp};
 use sail_function::scalar::math::random::Random;
 
 use crate::error::{PlanError, PlanResult};
@@ -105,8 +104,8 @@ impl PlanResolver<'_> {
         } else {
             self.resolve_columns(input.schema(), &columns, state)?
         };
-        let statistics: HashSet<String> = if statistics.is_empty() {
-            HashSet::from([
+        let statistics: Vec<String> = if statistics.is_empty() {
+            vec![
                 "count".to_string(),
                 "mean".to_string(),
                 "stddev".to_string(),
@@ -115,17 +114,18 @@ impl PlanResolver<'_> {
                 "50%".to_string(),
                 "75%".to_string(),
                 "max".to_string(),
-            ])
+            ]
         } else {
             statistics
                 .into_iter()
                 .map(|x| x.trim().to_lowercase())
                 .collect()
         };
+        let statistics_set: HashSet<String> = statistics.iter().cloned().collect();
 
         let mut all_aggregates = Vec::new();
         for column in &columns {
-            if statistics.contains("count") {
+            if statistics_set.contains("count") {
                 let count = Expr::AggregateFunction(expr::AggregateFunction {
                     func: count_udaf(),
                     params: AggregateFunctionParams {
@@ -152,9 +152,9 @@ impl PlanResolver<'_> {
                     None
                 };
                 if let Some(numeric_column) = numeric_column {
-                    if statistics.contains("mean") {
+                    if statistics_set.contains("mean") {
                         let mean = Expr::AggregateFunction(expr::AggregateFunction {
-                            func: avg_udaf(),
+                            func: Arc::new(AggregateUDF::from(SparkAvg::new())),
                             params: AggregateFunctionParams {
                                 args: vec![numeric_column.clone()],
                                 distinct: false,
@@ -166,7 +166,7 @@ impl PlanResolver<'_> {
                         .alias(state.register_field_name(format!("mean_{}", column.name())));
                         all_aggregates.push(mean);
                     }
-                    if statistics.contains("stddev") {
+                    if statistics_set.contains("stddev") {
                         let stddev = Expr::AggregateFunction(expr::AggregateFunction {
                             func: Arc::new(AggregateUDF::from(SparkStddevSamp::new())),
                             params: AggregateFunctionParams {
@@ -180,9 +180,9 @@ impl PlanResolver<'_> {
                         .alias(state.register_field_name(format!("stddev_{}", column.name())));
                         all_aggregates.push(stddev);
                     }
-                    if statistics.contains("25%") {
+                    if statistics_set.contains("25%") {
                         let percentile_25 = Expr::AggregateFunction(expr::AggregateFunction {
-                            func: approx_percentile_cont_udaf(),
+                            func: Arc::new(AggregateUDF::from(PercentileDisc::new())),
                             params: AggregateFunctionParams {
                                 args: vec![
                                     numeric_column.clone(),
@@ -197,11 +197,14 @@ impl PlanResolver<'_> {
                         .alias(state.register_field_name(format!("25%_{}", column.name())));
                         all_aggregates.push(percentile_25);
                     }
-                    if statistics.contains("50%") {
+                    if statistics_set.contains("50%") {
                         let percentile_50 = Expr::AggregateFunction(expr::AggregateFunction {
-                            func: approx_median_udaf(),
+                            func: Arc::new(AggregateUDF::from(PercentileDisc::new())),
                             params: AggregateFunctionParams {
-                                args: vec![numeric_column.clone()],
+                                args: vec![
+                                    numeric_column.clone(),
+                                    Expr::Literal(ScalarValue::Float64(Some(0.5_f64)), None),
+                                ],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -211,9 +214,9 @@ impl PlanResolver<'_> {
                         .alias(state.register_field_name(format!("50%_{}", column.name())));
                         all_aggregates.push(percentile_50);
                     }
-                    if statistics.contains("75%") {
+                    if statistics_set.contains("75%") {
                         let percentile_75 = Expr::AggregateFunction(expr::AggregateFunction {
-                            func: approx_percentile_cont_udaf(),
+                            func: Arc::new(AggregateUDF::from(PercentileDisc::new())),
                             params: AggregateFunctionParams {
                                 args: vec![
                                     numeric_column.clone(),
@@ -231,7 +234,7 @@ impl PlanResolver<'_> {
                 }
             }
 
-            if statistics.contains("min") {
+            if statistics_set.contains("min") {
                 let min = Expr::AggregateFunction(expr::AggregateFunction {
                     func: min_udaf(),
                     params: AggregateFunctionParams {
@@ -246,7 +249,7 @@ impl PlanResolver<'_> {
                 all_aggregates.push(min);
             }
 
-            if statistics.contains("max") {
+            if statistics_set.contains("max") {
                 let max = Expr::AggregateFunction(expr::AggregateFunction {
                     func: max_udaf(),
                     params: AggregateFunctionParams {
@@ -267,26 +270,30 @@ impl PlanResolver<'_> {
             .build()?;
 
         let summary_alias = state.register_field_name("summary");
-        let create_stat_row =
-            |stat_name: &str, stats_by_column: Vec<(String, Expr)>| -> PlanResult<LogicalPlan> {
-                let stats_plan_clone = stats_plan.clone();
-                let mut projections =
-                    vec![
-                        Expr::Literal(ScalarValue::Utf8(Some(stat_name.to_string())), None)
-                            .alias(&summary_alias),
-                    ];
-                for (col_name, expr) in stats_by_column {
-                    let expr = expr.cast_to(&DataType::Utf8, stats_plan_clone.schema())?;
-                    projections.push(expr.alias(&col_name));
-                }
-                let plan = LogicalPlanBuilder::from(stats_plan_clone)
-                    .project(projections)?
-                    .build()?;
-                Ok(plan)
-            };
+        let summary_order_alias = state.register_field_name("__summary_order");
+        let create_stat_row = |stat_name: &str,
+                               stat_index: usize,
+                               stats_by_column: Vec<(String, Expr)>|
+         -> PlanResult<LogicalPlan> {
+            let stats_plan_clone = stats_plan.clone();
+            let mut projections = vec![
+                Expr::Literal(ScalarValue::UInt64(Some(stat_index as u64)), None)
+                    .alias(&summary_order_alias),
+                Expr::Literal(ScalarValue::Utf8(Some(stat_name.to_string())), None)
+                    .alias(&summary_alias),
+            ];
+            for (col_name, expr) in stats_by_column {
+                let expr = expr.cast_to(&DataType::Utf8, stats_plan_clone.schema())?;
+                projections.push(expr.alias(&col_name));
+            }
+            let plan = LogicalPlanBuilder::from(stats_plan_clone)
+                .project(projections)?
+                .build()?;
+            Ok(plan)
+        };
 
         let mut union_plan = None;
-        for stat_type in statistics {
+        for (stat_index, stat_type) in statistics.iter().enumerate() {
             let stat_type = stat_type.as_str();
             let mut stats_by_column = Vec::new();
             for column in &columns {
@@ -318,21 +325,30 @@ impl PlanResolver<'_> {
                         &format!("min_{column_name}"),
                         state,
                     )?)),
-                    "25%" => Some(Expr::Column(self.resolve_one_column(
-                        stats_plan.schema(),
-                        &format!("25%_{column_name}"),
-                        state,
-                    )?)),
-                    "50%" => Some(Expr::Column(self.resolve_one_column(
-                        stats_plan.schema(),
-                        &format!("50%_{column_name}"),
-                        state,
-                    )?)),
-                    "75%" => Some(Expr::Column(self.resolve_one_column(
-                        stats_plan.schema(),
-                        &format!("75%_{column_name}"),
-                        state,
-                    )?)),
+                    "25%" => self
+                        .resolve_optional_column(
+                            stats_plan.schema(),
+                            &format!("25%_{column_name}"),
+                            None,
+                            state,
+                        )?
+                        .map(Expr::Column),
+                    "50%" => self
+                        .resolve_optional_column(
+                            stats_plan.schema(),
+                            &format!("50%_{column_name}"),
+                            None,
+                            state,
+                        )?
+                        .map(Expr::Column),
+                    "75%" => self
+                        .resolve_optional_column(
+                            stats_plan.schema(),
+                            &format!("75%_{column_name}"),
+                            None,
+                            state,
+                        )?
+                        .map(Expr::Column),
                     "max" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("max_{column_name}"),
@@ -347,13 +363,20 @@ impl PlanResolver<'_> {
                 ));
             }
 
-            let stat_row = create_stat_row(stat_type, stats_by_column)?;
+            let stat_row = create_stat_row(stat_type, stat_index, stats_by_column)?;
             union_plan = Some(match union_plan {
                 Some(plan) => LogicalPlanBuilder::from(plan).union(stat_row)?.build()?,
                 None => stat_row,
             });
         }
-        union_plan.ok_or_else(|| PlanError::internal("No describe statistics generated"))
+        let union_plan =
+            union_plan.ok_or_else(|| PlanError::internal("No describe statistics generated"))?;
+        let mut projections = vec![col(&summary_alias)];
+        projections.extend(columns.iter().map(|column| col(column.name())));
+        Ok(LogicalPlanBuilder::from(union_plan)
+            .sort(vec![col(&summary_order_alias).sort(true, true)])?
+            .project(projections)?
+            .build()?)
     }
 
     pub(super) async fn resolve_query_stat_describe(
