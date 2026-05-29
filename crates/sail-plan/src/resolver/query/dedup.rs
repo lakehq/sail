@@ -24,7 +24,10 @@ impl PlanResolver<'_> {
             .await?;
         let schema = input.schema();
         if within_watermark {
-            return Err(PlanError::todo("deduplicate within watermark"));
+            return Err(PlanError::AnalysisError(
+                "dropDuplicatesWithinWatermark is not supported with batch DataFrames/DataSets"
+                    .to_string(),
+            ));
         }
         if !column_names.is_empty() && !all_columns_as_keys {
             let on_expr: Vec<Expr> = self

@@ -137,3 +137,11 @@ def test_dataframe_extended_explain_sections(spark):
     assert "Analyzed Logical Plan" in explain
     assert "Optimized Logical Plan" in explain
     assert "Physical Plan" in explain
+
+
+def test_dataframe_drop_duplicates_within_watermark_batch_error(spark):
+    with pytest.raises(
+        Exception,
+        match="dropDuplicatesWithinWatermark is not supported with batch DataFrames/DataSets",
+    ):
+        spark.range(1).dropDuplicatesWithinWatermark(["id"]).collect()
