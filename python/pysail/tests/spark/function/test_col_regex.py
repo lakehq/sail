@@ -90,3 +90,18 @@ class TestColRegex:
 
         assert len(result.columns) == 0
         assert result.count() == len(data)
+
+    def test_select_qualified_table_column_with_newline(self, spark):
+        """Select table-backed qualified columns using regex."""
+        view_name = "test_col_regex_qualified"
+        spark.createDataFrame([(1, "a"), (2, "b")], ["id", "test\n_column"]).createOrReplaceTempView(
+            view_name
+        )
+        try:
+            df = spark.table(view_name)
+            result = df.select(df.colRegex("`tes.*\n.*mn`"))
+
+            assert result.columns == ["test\n_column"]
+            assert result.collect() == [("a",), ("b",)]
+        finally:
+            spark.catalog.dropTempView(view_name)

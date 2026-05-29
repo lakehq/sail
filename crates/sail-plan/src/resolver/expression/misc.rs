@@ -201,12 +201,7 @@ impl PlanResolver<'_> {
         let mut matching_columns = Vec::new();
         let mut matching_names = Vec::new();
 
-        for (qualifier, field) in schema.iter() {
-            // Skip qualified columns if no qualifier is expected
-            if qualifier.is_some() {
-                continue;
-            }
-
+        for (_qualifier, field) in schema.iter() {
             // Get field info
             let Ok(info) = state.get_field_info(field.name()) else {
                 continue;
