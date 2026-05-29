@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use prost::Message;
 use sail_common::spec;
 use sail_sql_analyzer::expression::{from_ast_expression, from_ast_object_name};
 use sail_sql_analyzer::parser::{parse_expression, parse_object_name, parse_one_statement};
@@ -12,9 +13,9 @@ use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
 use crate::spark::connect::write_stream_operation_start::SinkDestination;
 use crate::spark::connect::{
-    plan, Catalog, CreateDataFrameViewCommand, MergeIntoTableCommand, Plan, Relation,
-    RelationCommon, StreamingForeachFunction, TransformWithStateInfo, WriteOperation,
-    WriteOperationV2, WriteStreamOperationStart,
+    plan, Catalog, Command, CompressionCodec, CreateDataFrameViewCommand, MergeIntoTableCommand,
+    Plan, Relation, RelationCommon, StreamingForeachFunction, TransformWithStateInfo,
+    WriteOperation, WriteOperationV2, WriteStreamOperationStart,
 };
 
 struct RelationMetadata {
@@ -71,14 +72,40 @@ impl TryFrom<Plan> for spec::QueryPlan {
 
     fn try_from(plan: Plan) -> SparkResult<spec::QueryPlan> {
         let Plan { op_type: op } = plan;
-        let relation = match op.required("plan op")? {
+        let op = match op.required("plan op")? {
+            plan::OpType::CompressedOperation(operation) => decompress_operation(operation)?,
+            op => op,
+        };
+        let relation = match op {
             plan::OpType::Root(relation) => relation,
             plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
             plan::OpType::CompressedOperation(_) => {
-                return Err(SparkError::unsupported("compressed operation"))
+                return Err(SparkError::internal("nested compressed operation"))
             }
         };
         relation.try_into()
+    }
+}
+
+pub(crate) fn decompress_operation(
+    operation: plan::CompressedOperation,
+) -> SparkResult<plan::OpType> {
+    use plan::compressed_operation::OpType;
+
+    let codec = CompressionCodec::try_from(operation.compression_codec)?;
+    let data = match codec {
+        CompressionCodec::Zstd => zstd::decode_all(std::io::Cursor::new(operation.data))?,
+        CompressionCodec::Unspecified => {
+            return Err(SparkError::invalid("compression codec is unspecified"))
+        }
+    };
+
+    match OpType::try_from(operation.op_type)? {
+        OpType::Relation => Ok(plan::OpType::Root(Relation::decode(data.as_slice())?)),
+        OpType::Command => Ok(plan::OpType::Command(Command::decode(data.as_slice())?)),
+        OpType::Unspecified => Err(SparkError::invalid(
+            "compressed operation type is unspecified",
+        )),
     }
 }
 

@@ -14,6 +14,7 @@ use crate::config::get_pyspark_version;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
 use crate::proto::data_type_json::parse_spark_json_data_type;
+use crate::proto::plan::decompress_operation;
 use crate::schema::{to_ddl_string, to_spark_schema, to_tree_string};
 use crate::session::SparkSession;
 use crate::spark::connect as sc;
@@ -228,7 +229,11 @@ pub(crate) async fn handle_analyze_json_to_ddl(
 
 fn analyze_is_local(plan: sc::Plan) -> SparkResult<bool> {
     let sc::Plan { op_type: op } = plan;
-    match op.required("plan op")? {
+    let op = match op.required("plan op")? {
+        plan::OpType::CompressedOperation(operation) => decompress_operation(operation)?,
+        op => op,
+    };
+    match op {
         plan::OpType::Command(_) => Ok(true),
         plan::OpType::Root(relation) => {
             let plan: spec::Plan = relation.try_into()?;
@@ -243,18 +248,22 @@ fn analyze_is_local(plan: sc::Plan) -> SparkResult<bool> {
             ))
         }
         plan::OpType::CompressedOperation(_) => {
-            Err(SparkError::unsupported("compressed operation"))
+            Err(SparkError::internal("nested compressed operation"))
         }
     }
 }
 
 fn semantic_plan_key(plan: sc::Plan) -> SparkResult<String> {
     let sc::Plan { op_type: op } = plan;
-    match op.required("plan op")? {
+    let op = match op.required("plan op")? {
+        plan::OpType::CompressedOperation(operation) => decompress_operation(operation)?,
+        op => op,
+    };
+    match op {
         plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
         plan::OpType::Root(relation) => relation_semantic_key(relation),
         plan::OpType::CompressedOperation(_) => {
-            return Err(SparkError::unsupported("compressed operation"))
+            return Err(SparkError::internal("nested compressed operation"))
         }
     }
 }
@@ -301,7 +310,11 @@ fn normalize_semantic_value(value: &mut serde_json::Value) {
 
 fn analyze_is_streaming(plan: sc::Plan) -> SparkResult<bool> {
     let sc::Plan { op_type: op } = plan;
-    match op.required("plan op")? {
+    let op = match op.required("plan op")? {
+        plan::OpType::CompressedOperation(operation) => decompress_operation(operation)?,
+        op => op,
+    };
+    match op {
         plan::OpType::Command(_) => Ok(false),
         plan::OpType::Root(relation) => {
             let plan: spec::Plan = relation.try_into()?;
@@ -311,7 +324,7 @@ fn analyze_is_streaming(plan: sc::Plan) -> SparkResult<bool> {
             }
         }
         plan::OpType::CompressedOperation(_) => {
-            Err(SparkError::unsupported("compressed operation"))
+            Err(SparkError::internal("nested compressed operation"))
         }
     }
 }

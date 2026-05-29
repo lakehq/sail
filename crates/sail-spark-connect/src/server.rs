@@ -140,7 +140,12 @@ impl SparkConnectService for SparkConnectServer {
             .await
             .map_err(SparkError::from)?;
         let Plan { op_type: op } = request.plan.required("plan")?;
-        let op = op.required("plan op")?;
+        let op = match op.required("plan op")? {
+            plan::OpType::CompressedOperation(operation) => {
+                crate::proto::plan::decompress_operation(operation)?
+            }
+            op => op,
+        };
         let stream = match op {
             plan::OpType::Root(relation) => {
                 service::handle_execute_relation(&ctx, relation, metadata).await?
@@ -152,7 +157,7 @@ impl SparkConnectService for SparkConnectServer {
                 handle_command(&ctx, command, metadata).await?
             }
             plan::OpType::CompressedOperation(_) => {
-                return Err(Status::unimplemented("compressed operation plan"));
+                return Err(SparkError::internal("nested compressed operation").into());
             }
         };
         Ok(Response::new(stream))

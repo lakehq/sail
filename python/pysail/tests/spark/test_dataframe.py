@@ -6,6 +6,8 @@ from pyspark.sql import Row
 from pyspark.sql.functions import col, lit, struct
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
+from pysail.testing.spark.utils.common import pyspark_version
+
 
 def test_dataframe_drop(spark):
     df = spark.createDataFrame([(14, "Tom"), (23, "Alice"), (16, "Bob")], ["age", "name"])
@@ -86,6 +88,32 @@ def test_self_join_reuses_plan_id(spark):
     filtered = df.filter(df.i > 0)
 
     assert df.join(filtered, df.i == 1).count() == 1
+
+
+@pytest.mark.skipif(
+    pyspark_version() < (4, 1),
+    reason="Spark Connect plan compression was added in PySpark 4.1",
+)
+def test_plan_compression(spark):
+    client = spark._client  # noqa: SLF001
+    assert client._zstd_module is not None  # noqa: SLF001
+
+    spark.range(1).count()
+    default_threshold = client._plan_compression_threshold  # noqa: SLF001
+    assert default_threshold > 0
+    assert client._plan_compression_algorithm == "ZSTD"  # noqa: SLF001
+
+    try:
+        client._plan_compression_threshold = 1000  # noqa: SLF001
+        df = spark.range(1).select(lit("Apache Spark" * 1000).alias("value"))
+        plan = df._plan.to_proto(client)  # noqa: SLF001
+        assert plan.HasField("compressed_operation")
+        assert df.count() == 1
+
+        df.createOrReplaceTempView("temp_view_plan_compression")
+        assert spark.sql("SELECT * FROM temp_view_plan_compression").count() == 1
+    finally:
+        client._plan_compression_threshold = default_threshold  # noqa: SLF001
 
 
 def test_dataframe_with_column_alias(spark):

@@ -113,26 +113,32 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // The JVM Spark Connect client reads spark.connect.session.planCompression.threshold
-    // to decide whether to compress plans before sending them to the server.
-    // This key is not part of Spark's SQL config (spark_config.json) but the client
-    // expects it to exist. Without it, the client logs a NoSuchElementException warning.
-    if !config
-        .entries
-        .iter()
-        .any(|entry| entry.key == "spark.connect.session.planCompression.threshold")
-    {
-        config.entries.push(SparkConfigEntry {
-            key: "spark.connect.session.planCompression.threshold".to_string(),
-            doc: "Minimum plan size in bytes before the client attempts to compress it."
-                .to_string(),
-            default_value: Some("1048576".to_string()),
-            alternatives: Vec::new(),
-            fallback: None,
-            is_static: false,
-            deprecated: None,
-            removed: None,
-        });
+    // The JVM/Python Spark Connect clients read these non-SQL configs to decide
+    // whether to compress plans before sending them to the server.
+    for (key, doc, default_value) in [
+        (
+            "spark.connect.session.planCompression.threshold",
+            "Minimum plan size in bytes before the client attempts to compress it.",
+            "10485760",
+        ),
+        (
+            "spark.connect.session.planCompression.defaultAlgorithm",
+            "Default algorithm for Spark Connect plan compression.",
+            "ZSTD",
+        ),
+    ] {
+        if !config.entries.iter().any(|entry| entry.key == key) {
+            config.entries.push(SparkConfigEntry {
+                key: key.to_string(),
+                doc: doc.to_string(),
+                default_value: Some(default_value.to_string()),
+                alternatives: Vec::new(),
+                fallback: None,
+                is_static: false,
+                deprecated: None,
+                removed: None,
+            });
+        }
     }
 
     let keys = config
