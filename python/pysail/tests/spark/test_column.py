@@ -1,5 +1,7 @@
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
+from pyspark.sql.connect.column import Column
+from pyspark.sql.connect.expressions import DistributedSequenceID
 from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
 
 
@@ -101,3 +103,11 @@ def test_try_cast_invalid_date(spark):
     ).collect()
 
     assert result == [Row(id=None, date_col=None, ts_col=None, ts_ntz_col=None)]
+
+
+def test_distributed_sequence_id(spark):
+    df = spark.range(10)
+
+    assert df.select(Column(DistributedSequenceID()).alias("index"), "*").collect() == [
+        Row(index=i, id=i) for i in range(10)
+    ]

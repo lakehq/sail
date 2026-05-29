@@ -137,6 +137,10 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("current_database", F::custom(current_database)),
         ("current_schema", F::custom(current_database)),
         ("current_user", F::custom(current_user)),
+        (
+            "distributed_sequence_id",
+            F::udf(SparkMonotonicallyIncreasingId::new()),
+        ),
         ("from_avro", F::unknown("from_avro")),
         ("from_protobuf", F::unknown("from_protobuf")),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
