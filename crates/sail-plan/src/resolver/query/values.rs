@@ -5,6 +5,7 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection};
 use sail_common::spec;
+use sail_common_datafusion::literal::LiteralEvaluator;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -74,10 +75,16 @@ impl PlanResolver<'_> {
     }
 
     fn is_spark_nullable_values_expr(expr: &Expr, schema: &DFSchemaRef) -> PlanResult<bool> {
-        if expr.nullable(schema.as_ref())? {
+        if !expr.nullable(schema.as_ref())? {
+            return Ok(false);
+        }
+        if Self::is_spark_nullable_cast(expr) {
             return Ok(true);
         }
-        Ok(Self::is_spark_nullable_cast(expr))
+        if let Ok(scalar) = LiteralEvaluator::new().evaluate(expr) {
+            return Ok(scalar.is_null());
+        }
+        Ok(true)
     }
 
     fn is_spark_nullable_cast(expr: &Expr) -> bool {
