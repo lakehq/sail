@@ -5,8 +5,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::cache::cache_manager::FileStatisticsCache;
-use datafusion::execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
 use datafusion_common::{Constraints, Result};
