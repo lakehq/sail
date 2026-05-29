@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 
+use sail_common::spec::TableColumnIdentity;
 use sail_data_source::options::gen::DeltaWriteOptions;
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +29,8 @@ pub struct DeltaWriterExecOptions {
     pub replace_where: Option<String>,
     #[serde(default)]
     pub generation_expressions: HashMap<String, String>,
+    #[serde(default)]
+    pub identity_columns: HashMap<String, TableColumnIdentity>,
 }
 
 impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
@@ -39,6 +42,7 @@ impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
             overwrite_schema: options.overwrite_schema,
             replace_where: options.replace_where,
             generation_expressions: HashMap::new(),
+            identity_columns: HashMap::new(),
         }
     }
 }
@@ -51,6 +55,14 @@ impl DeltaWriterExecOptions {
         generation_expressions: HashMap<String, String>,
     ) -> Self {
         self.generation_expressions = generation_expressions;
+        self
+    }
+
+    pub fn with_identity_columns(
+        mut self,
+        identity_columns: HashMap<String, TableColumnIdentity>,
+    ) -> Self {
+        self.identity_columns = identity_columns;
         self
     }
 }
