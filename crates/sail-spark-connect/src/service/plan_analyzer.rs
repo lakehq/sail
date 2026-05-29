@@ -269,10 +269,10 @@ fn semantic_plan_key(plan: sc::Plan) -> SparkResult<String> {
         op => op,
     };
     match op {
-        plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
+        plan::OpType::Command(_) => Err(SparkError::invalid("relation expected")),
         plan::OpType::Root(relation) => relation_semantic_key(relation),
         plan::OpType::CompressedOperation(_) => {
-            return Err(SparkError::internal("nested compressed operation"))
+            Err(SparkError::internal("nested compressed operation"))
         }
     }
 }
