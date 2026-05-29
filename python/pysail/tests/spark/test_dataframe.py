@@ -81,6 +81,13 @@ def test_repartition_hint_invalid_column(spark):
         spark.range(1).hint("REPARTITION", "id", 3).collect()
 
 
+def test_self_join_reuses_plan_id(spark):
+    df = spark.createDataFrame([(1, "a")], schema=["i", "j"])
+    filtered = df.filter(df.i > 0)
+
+    assert df.join(filtered, df.i == 1).count() == 1
+
+
 def test_dataframe_with_column_alias(spark):
     df = spark.createDataFrame(
         schema="id INTEGER, value STRING",

@@ -32,6 +32,10 @@ impl FieldInfo {
         self.plan_ids.iter().copied().collect()
     }
 
+    pub fn plan_id_count(&self) -> usize {
+        self.plan_ids.len()
+    }
+
     pub fn is_hidden(&self) -> bool {
         self.hidden
     }

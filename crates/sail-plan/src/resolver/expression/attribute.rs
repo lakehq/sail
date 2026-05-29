@@ -83,13 +83,14 @@ impl PlanResolver<'_> {
                         if qualifier_matches(q.as_ref(), qualifier)
                             && info.matches(name.as_ref(), plan_id)
                         {
+                            let plan_id_count = plan_id.map(|_| info.plan_id_count());
                             let expr = Self::resolve_potentially_nested_field(
                                 col((qualifier, field)),
                                 field.data_type(),
                                 inner,
                             )?;
                             let name = inner.last().unwrap_or(name).as_ref().to_string();
-                            Some((name, expr))
+                            Some((name, expr, plan_id_count))
                         } else {
                             None
                         }
@@ -97,12 +98,23 @@ impl PlanResolver<'_> {
                     .collect()
             })
             .collect::<Vec<_>>();
+        if candidates.len() > 1 && plan_id.is_some() {
+            let min_plan_id_count = candidates.iter().filter_map(|(_, _, count)| *count).min();
+            let closest_candidates = candidates
+                .iter()
+                .filter(|(_, _, count)| *count == min_plan_id_count)
+                .cloned()
+                .collect::<Vec<_>>();
+            if closest_candidates.len() == 1 {
+                candidates = closest_candidates;
+            }
+        }
         if candidates.len() > 1 {
             return Err(PlanError::AnalysisError(format!(
                 "ambiguous attribute: {name:?}"
             )));
         }
-        Ok(candidates.pop())
+        Ok(candidates.pop().map(|(name, expr, _)| (name, expr)))
     }
 
     fn resolve_aggregate_field(
