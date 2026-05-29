@@ -10,6 +10,7 @@ use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
+use datafusion::functions_nested::expr_fn;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
@@ -24,6 +25,72 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    pub(super) async fn resolve_query_stat_approx_quantile(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        probabilities: Vec<f64>,
+        _relative_error: f64,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let input = self.resolve_query_plan(input, state).await?;
+        let columns = self.resolve_columns(input.schema(), &columns, state)?;
+
+        let mut aggregate_expressions = Vec::new();
+        let mut aliases_by_column = Vec::new();
+        for (column_index, column) in columns.iter().enumerate() {
+            let mut aliases = Vec::new();
+            for (probability_index, probability) in probabilities.iter().enumerate() {
+                let name = format!("approx_quantile_{column_index}_{probability_index}");
+                let alias = state.register_field_name(&name);
+                let percentile = Expr::AggregateFunction(expr::AggregateFunction {
+                    func: approx_percentile_cont_udaf(),
+                    params: AggregateFunctionParams {
+                        args: vec![
+                            Expr::Column(column.clone()),
+                            Expr::Literal(ScalarValue::Float64(Some(*probability)), None),
+                        ],
+                        distinct: false,
+                        filter: None,
+                        order_by: vec![],
+                        null_treatment: None,
+                    },
+                })
+                .alias(alias.clone());
+                aggregate_expressions.push(percentile);
+                aliases.push(name);
+            }
+            aliases_by_column.push(aliases);
+        }
+
+        let aggregate_plan = LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), aggregate_expressions)?
+            .build()?;
+
+        let quantiles = aliases_by_column
+            .into_iter()
+            .map(|aliases| {
+                let values = aliases
+                    .into_iter()
+                    .map(|alias| {
+                        Ok(Expr::Column(self.resolve_one_column(
+                            aggregate_plan.schema(),
+                            &alias,
+                            state,
+                        )?))
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                Ok(expr_fn::make_array(values))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let output =
+            expr_fn::make_array(quantiles).alias(state.register_field_name("approx_quantile"));
+
+        Ok(LogicalPlanBuilder::from(aggregate_plan)
+            .project(vec![output])?
+            .build()?)
+    }
+
     pub(super) async fn resolve_query_stat_summary(
         &self,
         input: spec::QueryPlan,

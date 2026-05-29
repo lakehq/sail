@@ -289,8 +289,20 @@ impl PlanResolver<'_> {
                 self.resolve_query_stat_corr(*input, left_column, right_column, method, state)
                     .await?
             }
-            QueryNode::StatApproxQuantile { .. } => {
-                return Err(PlanError::todo("approx quantile"));
+            QueryNode::StatApproxQuantile {
+                input,
+                columns,
+                probabilities,
+                relative_error,
+            } => {
+                self.resolve_query_stat_approx_quantile(
+                    *input,
+                    columns,
+                    probabilities,
+                    relative_error,
+                    state,
+                )
+                .await?
             }
             QueryNode::StatFreqItems { .. } => {
                 return Err(PlanError::todo("freq items"));

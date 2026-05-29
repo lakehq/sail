@@ -163,3 +163,13 @@ def test_dataframe_storage_level_state(spark):
         assert df.storageLevel == StorageLevel.DISK_ONLY
     finally:
         df.unpersist()
+
+
+def test_dataframe_stat_approx_quantile_shape(spark):
+    df = spark.createDataFrame([(1, 2), (2, 4), (3, 6)], ["a", "b"])
+
+    result = df.stat.approxQuantile(["a", "b"], [0.1, 0.5, 0.9], 0.1)
+
+    assert len(result) == 2
+    assert len(result[0]) == 3
+    assert len(result[1]) == 3
