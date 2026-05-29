@@ -186,6 +186,12 @@ pub enum OutputDistribution {
     RoundRobin {
         channels: usize,
     },
+    /// Row-level round-robin distribution for explicit user repartition calls.
+    /// Unlike `RoundRobin` (batch-based), this distributes individual rows across
+    /// output partitions to ensure even data distribution.
+    RoundRobinRow {
+        channels: usize,
+    },
 }
 
 impl OutputDistribution {
@@ -193,6 +199,7 @@ impl OutputDistribution {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
             OutputDistribution::RoundRobin { channels } => *channels,
+            OutputDistribution::RoundRobinRow { channels } => *channels,
         }
     }
 }
@@ -206,6 +213,9 @@ impl fmt::Display for OutputDistribution {
             }
             OutputDistribution::RoundRobin { channels } => {
                 write!(f, "RoundRobin(channels={})", channels)
+            }
+            OutputDistribution::RoundRobinRow { channels } => {
+                write!(f, "RoundRobinRow(channels={})", channels)
             }
         }
     }
