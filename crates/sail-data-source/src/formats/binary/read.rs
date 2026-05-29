@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -8,7 +9,7 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 
 use crate::formats::binary::file_format::BinaryFileFormat;
 use crate::formats::binary::source::BinarySource;
-use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+use crate::listing::source::{ListingScanInput, ReadFormat};
 use crate::options::gen::BinaryReadOptions;
 
 #[derive(Debug, Clone)]
@@ -26,8 +27,22 @@ impl ReadFormat for BinaryReadFormat {
         Ok(Arc::new(BinaryFileFormat::new(options)))
     }
 
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(crate::listing::source::DefaultSchemaInfer)
+    async fn infer_schema(
+        &self,
+        ctx: &dyn Session,
+        _store: &Arc<dyn object_store::ObjectStore>,
+        _objects: &[object_store::ObjectMeta],
+        _compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef> {
+        let tz = Arc::from(
+            ctx.config()
+                .options()
+                .execution
+                .time_zone
+                .clone()
+                .unwrap_or_else(|| "UTC".to_string()),
+        );
+        Ok(super::read_schema(tz))
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
