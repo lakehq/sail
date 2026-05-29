@@ -91,6 +91,9 @@ def _get_vortex_files(path: str) -> list[str]:
         vortex_files.append(path)
     elif os.path.isdir(path):
         for p in Path(path).rglob("*"):
+            # skip hidden files and files inside hidden directories
+            if any(part.startswith(("_", ".")) for part in p.parts):
+                continue
             if p.is_file():
                 f = str(p)
                 if not f.endswith(".vortex"):
