@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion_common::Column;
+use datafusion_common::arrow::datatypes::DataType;
+use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::{
     cast, col, lit, Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias,
 };
@@ -59,22 +60,41 @@ impl PlanResolver<'_> {
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
             let target_name = target_field.name();
-            let input_idx = input_names
+            let expr = if let Some(input_idx) = input_names
                 .iter()
                 .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
-                .ok_or_else(|| {
-                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
-                })?;
-            let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
-            let expr = Expr::Column(Column::from((input_qualifier, input_field)));
-            let expr = if input_field.data_type() == target_field.data_type() {
-                expr
+            {
+                let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
+                if input_field.is_nullable() && !target_field.is_nullable() {
+                    return Err(PlanError::AnalysisError(format!(
+                        "[NULLABLE_COLUMN_OR_FIELD] Column or field `{target_name}` is nullable while target schema requires it to be non-nullable."
+                    )));
+                }
+                if !can_reconcile_to_schema_type(input_field.data_type(), target_field.data_type())
+                {
+                    return Err(PlanError::AnalysisError(format!(
+                        "[INVALID_COLUMN_OR_FIELD_DATA_TYPE] Column or field `{target_name}` has type {:?} which cannot be reconciled with target type {:?}.",
+                        input_field.data_type(),
+                        target_field.data_type()
+                    )));
+                }
+                let expr = Expr::Column(Column::from((input_qualifier, input_field)));
+                if input_field.data_type() == target_field.data_type() {
+                    expr
+                } else {
+                    expr.cast_to(target_field.data_type(), &input.schema())?
+                }
             } else {
-                expr.cast_to(target_field.data_type(), &input.schema())?
-                    .alias_qualified(input_qualifier.cloned(), input_field.name())
+                if !target_field.is_nullable() {
+                    return Err(PlanError::AnalysisError(format!(
+                        "[NULLABLE_COLUMN_OR_FIELD] Missing column or field `{target_name}` is nullable while target schema requires it to be non-nullable."
+                    )));
+                }
+                lit(ScalarValue::try_from(target_field.data_type())?)
             };
-            projected_exprs.push(expr);
+            projected_exprs.push(NamedExpr::new(vec![target_name.clone()], expr));
         }
+        let projected_exprs = self.rewrite_named_expressions(projected_exprs, state)?;
         let projected_plan =
             LogicalPlan::Projection(Projection::try_new(projected_exprs, Arc::new(input))?);
         Ok(projected_plan)
@@ -234,6 +254,7 @@ impl PlanResolver<'_> {
                             _ => Ok(NamedExpr::new(vec![name.to_string()], e.clone())),
                         }
                     }
+
                     None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
                 }
             })
@@ -367,5 +388,49 @@ impl PlanResolver<'_> {
             self.rewrite_named_expressions(replace_exprs, state)?,
             Arc::new(input),
         )?))
+    }
+}
+
+fn can_reconcile_to_schema_type(source: &DataType, target: &DataType) -> bool {
+    if source == target
+        || target.is_string()
+        || source.is_numeric() && target.is_numeric()
+        || matches!(source, DataType::Null)
+    {
+        return true;
+    }
+
+    match (source, target) {
+        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+            source_fields.len() == target_fields.len()
+                && source_fields.iter().zip(target_fields.iter()).all(
+                    |(source_field, target_field)| {
+                        source_field
+                            .name()
+                            .eq_ignore_ascii_case(target_field.name())
+                            && can_reconcile_to_schema_type(
+                                source_field.data_type(),
+                                target_field.data_type(),
+                            )
+                    },
+                )
+        }
+        (DataType::List(source_field), DataType::List(target_field))
+        | (DataType::LargeList(source_field), DataType::LargeList(target_field))
+        | (DataType::ListView(source_field), DataType::ListView(target_field))
+        | (DataType::LargeListView(source_field), DataType::LargeListView(target_field)) => {
+            can_reconcile_to_schema_type(source_field.data_type(), target_field.data_type())
+        }
+        (
+            DataType::FixedSizeList(source_field, source_size),
+            DataType::FixedSizeList(target_field, target_size),
+        ) => {
+            source_size == target_size
+                && can_reconcile_to_schema_type(source_field.data_type(), target_field.data_type())
+        }
+        (DataType::Map(source_field, _), DataType::Map(target_field, _)) => {
+            can_reconcile_to_schema_type(source_field.data_type(), target_field.data_type())
+        }
+        _ => false,
     }
 }

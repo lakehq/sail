@@ -3,7 +3,8 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark import StorageLevel
 from pyspark.sql import Row
-from pyspark.sql.functions import col, lit
+from pyspark.sql.functions import col, lit, struct
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
 
 def test_dataframe_drop(spark):
@@ -111,6 +112,45 @@ def test_dataframe_with_column_alias(spark):
             }
         ).astype({"id": "int32", "col1": "int32", "col3": "int32"}),
     )
+
+
+def test_dataframe_to_adds_missing_columns(spark):
+    df = spark.createDataFrame([(1, "a"), (2, "b")], ["id", "name"])
+    schema = StructType(
+        [
+            StructField("col1", IntegerType(), True),
+            StructField("col2", StringType(), True),
+        ]
+    )
+
+    result = df.to(schema)
+
+    assert result.schema == schema
+    assert result.collect() == [(None, None), (None, None)]
+
+    struct_schema = StructType(
+        [
+            StructField(
+                "struct",
+                StructType(
+                    [
+                        StructField("id", IntegerType(), True),
+                        StructField("name", StringType(), True),
+                    ]
+                ),
+                False,
+            )
+        ]
+    )
+    struct_result = df.select(struct("id", "name").alias("struct")).to(struct_schema)
+    assert struct_result.schema == struct_schema
+    assert struct_result.collect() == [((1, "a"),), ((2, "b"),)]
+
+    with pytest.raises(Exception, match="NULLABLE_COLUMN_OR_FIELD"):
+        df.to(StructType([StructField("id", IntegerType(), False)])).collect()
+
+    with pytest.raises(Exception, match="INVALID_COLUMN_OR_FIELD_DATA_TYPE"):
+        df.to(StructType([StructField("name", IntegerType(), True)])).collect()
 
 
 def test_with_metadata(spark):
