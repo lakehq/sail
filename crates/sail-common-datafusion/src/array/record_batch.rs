@@ -212,6 +212,16 @@ fn cast_struct_array_positionally(src: &ArrayRef, target_fields: &Fields) -> Res
     let struct_array = src.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
         DataFusionError::Internal("Failed to downcast array to StructArray".to_string())
     })?;
+    // PySpark encodes VariantVal as {value, metadata}, while the Arrow
+    // parquet variant extension uses {metadata, value}. Preserve the payload by
+    // matching these fields by name even when the surrounding cast is positional.
+    if is_pyspark_variant_fields(target_fields)
+        && target_fields
+            .iter()
+            .all(|field| struct_array.column_by_name(field.name()).is_some())
+    {
+        return cast_struct_array(src, target_fields);
+    }
     if struct_array.num_columns() != target_fields.len() {
         return Err(DataFusionError::Plan(format!(
             "Struct field count mismatch: expected {} fields but found {} fields",
@@ -233,6 +243,18 @@ fn cast_struct_array_positionally(src: &ArrayRef, target_fields: &Fields) -> Res
         struct_array.nulls().cloned(),
     )?;
     Ok(Arc::new(new_struct))
+}
+
+fn is_pyspark_variant_fields(fields: &Fields) -> bool {
+    fields.len() == 2
+        && fields.iter().any(|field| {
+            field.name() == "metadata"
+                && field
+                    .metadata()
+                    .get("variant")
+                    .is_some_and(|value| value == "true")
+        })
+        && fields.iter().any(|field| field.name() == "value")
 }
 
 fn cast_list_array(src: &ArrayRef, target_field: &FieldRef) -> Result<ArrayRef> {
