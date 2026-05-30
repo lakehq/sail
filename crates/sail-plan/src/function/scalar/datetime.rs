@@ -8,12 +8,10 @@ use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_functions::expr_fn::to_time;
-use datafusion_functions_nested::make_array::make_array;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
@@ -28,6 +26,7 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_sql_analyzer::literal::interval::IntervalValue;
@@ -743,12 +742,8 @@ struct WindowSpec {
     start_time: i64,
 }
 
-impl WindowSpec {
-    /// `ceil(windowDuration / slideDuration)` (1 for a tumbling window).
-    fn overlapping_windows(&self) -> i64 {
-        (self.window_duration + self.slide_duration - 1) / self.slide_duration
-    }
-}
+/// Bound on `ceil(windowDuration / slideDuration)`
+const MAX_OVERLAPPING_WINDOWS: i64 = 1_000_000;
 
 /// Parses and validates the `window` durations from the full argument list
 /// (`args[0]` is the time column; `args[1..]` are window/slide/start).
@@ -783,6 +778,17 @@ fn parse_window_spec(args: &[Expr]) -> PlanResult<WindowSpec> {
             "window: the slide duration must be less than or equal to the window duration",
         ));
     }
+    if start_time >= slide_duration || start_time <= -slide_duration {
+        return Err(PlanError::invalid(format!(
+            "The `abs(start_time)`({start_time}L) must be < the `slide_duration`({slide_duration}L)."
+        )));
+    }
+    let overlapping = (window_duration + slide_duration - 1) / slide_duration;
+    if overlapping > MAX_OVERLAPPING_WINDOWS {
+        return Err(PlanError::invalid(format!(
+            "window: ceil(windowDuration / slideDuration) = {overlapping} exceeds the limit of {MAX_OVERLAPPING_WINDOWS}"
+        )));
+    }
     Ok(WindowSpec {
         window_duration,
         slide_duration,
@@ -810,29 +816,9 @@ fn window_field_type(
     })
 }
 
-/// The `[start, end)` boundaries of the `index`-th overlapping window. Follows
-/// Spark: `lastStart = ts - ((ts - startTime + slide) % slide)`.
-fn window_bounds(
-    time_micros: &Expr,
-    field_type: &DataType,
-    spec: &WindowSpec,
-    index: i64,
-) -> (Expr, Expr) {
-    let offset = (time_micros.clone() - lit(spec.start_time) + lit(spec.slide_duration))
-        % lit(spec.slide_duration);
-    let last_start = time_micros.clone() - offset;
-    let window_start = last_start - lit(index * spec.slide_duration);
-    let window_end = window_start.clone() + lit(spec.window_duration);
-    (
-        cast(window_start, field_type.clone()),
-        cast(window_end, field_type.clone()),
-    )
-}
-
 /// The Spark `window` time function: buckets a timestamp into `struct<start, end>`
-/// windows. Candidate windows are exploded into rows, keeping only those that
-/// contain the time value — which drops over-estimated sliding windows and
-/// null-time rows (empty array, no output), matching Spark.
+/// windows. The candidate enumeration is deferred to the `SparkWindowBuckets` UDF
+/// so the plan stays bounded regardless of the `window/slide` ratio.
 fn window(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let schema = input.function_context.schema;
     let args = input.arguments;
@@ -843,24 +829,14 @@ fn window(input: ScalarFunctionInput) -> PlanResult<Expr> {
         .next()
         .ok_or_else(|| PlanError::internal("window missing time column"))?;
     let field_type = window_field_type(&time.get_type(schema)?, &session_tz)?;
-    let time_ts = cast(time, field_type.clone());
-    let time_micros = cast(time_ts.clone(), DataType::Int64);
-
-    let mut windows = Vec::with_capacity(spec.overlapping_windows() as usize);
-    for index in 0..spec.overlapping_windows() {
-        let (start, end) = window_bounds(&time_micros, &field_type, &spec, index);
-        let window = expr_fn::named_struct(vec![
-            lit("start"),
-            start.clone(),
-            lit("end"),
-            end.clone(),
-        ]);
-        // Keep the window only if it contains the time value; `array_compact` drops the rest.
-        let contains = start.lt_eq(time_ts.clone()).and(time_ts.clone().lt(end));
-        windows.push(when(contains, window).end()?);
-    }
-    let windows = ScalarUDF::from(SparkArrayCompact::new()).call(vec![make_array(windows)]);
-    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Explode)).call(vec![windows]))
+    let time_ts = cast(time, field_type);
+    let buckets = ScalarUDF::from(SparkWindowBuckets::new(
+        spec.window_duration,
+        spec.slide_duration,
+        spec.start_time,
+    ))
+    .call(vec![time_ts]);
+    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Explode)).call(vec![buckets]))
 }
 
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFunction)> {
