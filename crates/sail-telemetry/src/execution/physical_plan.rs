@@ -102,6 +102,10 @@ impl ExecutionPlan for TracingExec {
         Self::static_name()
     }
 
+    fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+        Some(self.inner.as_ref())
+    }
+
     fn static_name() -> &'static str
     where
         Self: Sized,
