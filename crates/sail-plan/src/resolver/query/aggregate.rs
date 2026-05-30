@@ -394,12 +394,10 @@ impl PlanResolver<'_> {
             return Ok(expr);
         }
         Ok(expr
-            .transform_down(
-                |e| match replacements.iter().find(|(from, _)| *from == e) {
-                    Some((_, to)) => Ok(Transformed::yes(to.clone())),
-                    None => Ok(Transformed::no(e)),
-                },
-            )
+            .transform_down(|e| match replacements.iter().find(|(from, _)| *from == e) {
+                Some((_, to)) => Ok(Transformed::yes(to.clone())),
+                None => Ok(Transformed::no(e)),
+            })
             .data()?)
     }
 
