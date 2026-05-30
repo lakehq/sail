@@ -14,7 +14,7 @@ use futures::StreamExt;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::physical_plan::scan_by_adds_exec::map_statistics_to_schema;
+use crate::datasource::scan::map_statistics_to_schema;
 
 #[derive(Debug, Clone)]
 pub struct RelaxedTzCastExec {

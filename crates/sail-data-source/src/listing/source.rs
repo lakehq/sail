@@ -4,61 +4,30 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
-use datafusion::datasource::provider_as_source;
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::TableSource;
+use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
+use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result, Statistics};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::TableSchema;
 use sail_common_datafusion::datasource::{
     find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
     TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
+use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::utils::split_parquet_compression_string;
-
-/// Trait for schema inference logic
-#[async_trait::async_trait]
-pub trait SchemaInfer: Debug + Send + Sync + 'static {
-    /// Get schema based on options. Each implementation can handle its own
-    /// special cases like inferSchema=false.
-    async fn get_schema(
-        &self,
-        ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
-        list_options: &ListingOptions,
-    ) -> Result<Schema>;
-}
-
-/// Default schema inferrer that uses DataFusion's built-in inference
-#[derive(Debug)]
-pub struct DefaultSchemaInfer;
-
-#[async_trait::async_trait]
-impl SchemaInfer for DefaultSchemaInfer {
-    async fn get_schema(
-        &self,
-        ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
-        list_options: &ListingOptions,
-    ) -> Result<Schema> {
-        Ok(list_options
-            .format
-            .infer_schema(ctx, store, files)
-            .await?
-            .as_ref()
-            .clone())
-    }
-}
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -76,6 +45,7 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
 }
 
 /// A trait for format-specific logic for reading listing files.
+#[async_trait]
 pub trait ReadFormat: Debug + Send + Sync + 'static {
     fn create_read_format(
         &self,
@@ -88,8 +58,55 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
         Ok(None)
     }
 
-    /// Get the schema inferrer for this format
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer>;
+    /// Infer the file schema from the given files.
+    async fn infer_schema(
+        &self,
+        ctx: &dyn Session,
+        store: &Arc<dyn object_store::ObjectStore>,
+        objects: &[object_store::ObjectMeta],
+        compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef>;
+
+    /// Infer file-level metadata needed for planning.
+    /// The metadata includes statistics and ordering.
+    async fn infer_file_meta(
+        &self,
+        ctx: &dyn Session,
+        store: &Arc<dyn object_store::ObjectStore>,
+        file_schema: SchemaRef,
+        object: &object_store::ObjectMeta,
+        compression: CompressionTypeVariant,
+    ) -> Result<ListingFileMeta> {
+        let _ = (ctx, store, object, compression);
+        Ok(ListingFileMeta {
+            statistics: Statistics::new_unknown(&file_schema),
+            ordering: None,
+        })
+    }
+
+    /// Build a scan configuration for listing reads.
+    async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
+}
+
+#[derive(Debug, Clone)]
+pub struct ListingFileMeta {
+    pub statistics: Statistics,
+    pub ordering: Option<LexOrdering>,
+}
+
+#[derive(Debug)]
+pub struct ListingScanInput {
+    pub object_store_url: ObjectStoreUrl,
+    pub file_groups: Vec<FileGroup>,
+    pub constraints: datafusion_common::Constraints,
+    pub projection: Option<Vec<usize>>,
+    pub limit: Option<usize>,
+    pub preserve_order: bool,
+    pub output_ordering: Vec<LexOrdering>,
+    pub statistics: Statistics,
+    pub partitioned_by_file_group: bool,
+    pub schema: TableSchema,
+    pub compression: Option<CompressionTypeVariant>,
 }
 
 /// A trait for format-specific logic for writing listing files.
@@ -238,9 +255,39 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         // The schema must be set after the listing options, otherwise it will panic.
         let config = config.with_schema(schema);
         let config = crate::listing::utils::rewrite_listing_partitions(config)?;
-        Ok(provider_as_source(Arc::new(
-            ListingTable::try_new(config)?.with_constraints(constraints),
-        )))
+
+        let listing_options = config.options.ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "listing options should be present in the config"
+            )
+        })?;
+
+        let compression = listing_options
+            .format
+            .compression_type()
+            .map(|c| *c.get_variant());
+
+        let file_schema = config.file_schema.ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!("listing file schema should be present")
+        })?;
+        let partition_fields = listing_options
+            .table_partition_cols
+            .iter()
+            .map(|(col, data_type)| Arc::new(Field::new(col, data_type.clone(), false)))
+            .collect::<Vec<_>>();
+
+        let source = ListingTableSource::try_new(ListingTableSourceConfig {
+            table_paths: config.table_paths,
+            file_extension: listing_options.file_extension,
+            schema: TableSchema::new(file_schema, partition_fields),
+            constraints,
+            file_sort_order: listing_options.file_sort_order,
+            collect_stat: listing_options.collect_stat,
+            target_partitions: listing_options.target_partitions,
+            read_format: Arc::new(read_format),
+            compression,
+        })?;
+        Ok(Arc::new(source))
     }
 
     async fn create_writer(

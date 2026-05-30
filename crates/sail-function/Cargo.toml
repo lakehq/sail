@@ -13,6 +13,7 @@ sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 arrow = { workspace = true }
 arrow-schema ={ workspace = true }
+chumsky = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
