@@ -49,13 +49,9 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
         }
-        let [.., last] = table.parts() else {
-            return Err(PlanError::invalid("missing table name"));
-        };
-        let table_name: String = last.clone().into();
-        validate_location_identifier(&table_name, "table")?;
         let mut columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
+        let format = self.resolve_catalog_table_format(file_format)?;
         let location = if let Some(location) = location {
             use crate::config::qualify_table_location;
             let [qualifier @ .., _] = table.parts() else {
@@ -74,7 +70,6 @@ impl PlanResolver<'_> {
         } else {
             self.resolve_default_table_location(&table).await?
         };
-        let format = self.resolve_catalog_table_format(file_format)?;
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
@@ -169,12 +164,6 @@ impl PlanResolver<'_> {
                 "Schema may not be specified in a Create Table As Select (CTAS) statement.",
             ));
         }
-        let [.., last] = table.parts() else {
-            return Err(PlanError::invalid("missing table name"));
-        };
-        let table_name: String = last.clone().into();
-        validate_location_identifier(&table_name, "table")?;
-
         // Column definitions are not allowed in PARTITIONED BY for CTAS.
         let partition_by_exprs = partition_by
             .into_iter()
@@ -247,8 +236,11 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("missing table name"));
         };
         let name: String = last.clone().into();
-        validate_location_identifier(&name, "table")?;
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let provider = catalog_manager.database_provider_by_qualifier(qualifier)?;
+        if provider.requires_identifier_validation_for_default_table_location() {
+            validate_location_identifier(&name, "table")?;
+        }
         let location = catalog_manager
             .get_database_by_qualifier(qualifier)
             .await
@@ -610,7 +602,7 @@ mod tests {
         AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
         CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
     };
-    use sail_common::spec::{self, QueryNode, QueryPlan};
+    use sail_common::spec;
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
     use sail_common_datafusion::session::plan::PlanService;
@@ -641,16 +633,31 @@ mod tests {
 
         async fn get_database(
             &self,
-            _database: &Namespace,
+            database: &Namespace,
         ) -> sail_catalog::error::CatalogResult<DatabaseStatus> {
-            unreachable!()
+            Ok(DatabaseStatus {
+                catalog: "native".to_string(),
+                database: database.clone().into(),
+                comment: None,
+                location: None,
+                properties: vec![],
+            })
         }
 
         async fn list_databases(
             &self,
-            _prefix: Option<&Namespace>,
+            prefix: Option<&Namespace>,
         ) -> sail_catalog::error::CatalogResult<Vec<DatabaseStatus>> {
-            unreachable!()
+            Ok(vec![DatabaseStatus {
+                catalog: "native".to_string(),
+                database: prefix
+                    .cloned()
+                    .unwrap_or_else(|| vec!["default".to_string()].try_into().unwrap())
+                    .into(),
+                comment: None,
+                location: None,
+                properties: vec![],
+            }])
         }
 
         async fn drop_database(
@@ -754,6 +761,10 @@ mod tests {
                     "native".to_string(),
                     Arc::new(NativeNamespaceProvider) as Arc<dyn CatalogProvider>,
                 ),
+                (
+                    "nested/table".to_string(),
+                    Arc::new(NativeNamespaceProvider) as Arc<dyn CatalogProvider>,
+                ),
             ]),
             default_catalog: default_catalog.to_string(),
             default_database: vec!["default".to_string()],
@@ -768,14 +779,19 @@ mod tests {
         Ok(SessionContext::new_with_state(state))
     }
 
-    fn table_definition(location: Option<&str>) -> spec::TableDefinition {
+    fn table_definition(
+        location: Option<&str>,
+        file_format: Option<&str>,
+    ) -> spec::TableDefinition {
         spec::TableDefinition {
             external: false,
             columns: vec![],
             comment: None,
             constraints: vec![],
             location: location.map(ToString::to_string),
-            file_format: None,
+            file_format: file_format.map(|format| spec::TableFileFormat::General {
+                format: format.to_string(),
+            }),
             row_format: None,
             partition_by: vec![],
             sort_by: vec![],
@@ -845,7 +861,7 @@ mod tests {
         let err = match resolver
             .resolve_catalog_create_table(
                 spec::ObjectName::from(["default", "../escaped"]),
-                table_definition(None),
+                table_definition(None, None),
                 &mut state,
             )
             .await
@@ -859,38 +875,26 @@ mod tests {
         };
 
         assert!(
-            err.to_string().contains("invalid"),
+            err.to_string().contains("invalid table name"),
             "unexpected error: {err}"
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_create_table_rejects_invalid_name_for_explicit_location() -> PlanResult<()> {
+    async fn test_create_table_allows_invalid_name_for_explicit_location() -> PlanResult<()> {
         let ctx = create_session("sail")?;
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
         let mut state = PlanResolverState::new();
 
-        let err = match resolver
+        resolver
             .resolve_catalog_create_table(
                 spec::ObjectName::from(["default", "nested/table"]),
-                table_definition(Some("relative/table")),
+                table_definition(Some("relative/table"), None),
                 &mut state,
             )
             .await
-        {
-            Ok(plan) => {
-                return Err(PlanError::internal(format!(
-                    "expected error, got: {plan:?}"
-                )))
-            }
-            Err(err) => err,
-        };
-
-        assert!(
-            err.to_string().contains("invalid"),
-            "unexpected error: {err}"
-        );
+            .map(|_| ())?;
         Ok(())
     }
 
@@ -919,27 +923,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ctas_rejects_invalid_name_for_explicit_location() -> PlanResult<()> {
+    async fn test_native_default_location_allows_invalid_name() -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        resolver
+            .resolve_default_table_location(&spec::ObjectName::from(["default", "nested/table"]))
+            .await
+            .map(|_| ())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_default_table_location_uses_qualifier_provider_not_table_name_provider(
+    ) -> PlanResult<()> {
         let ctx = create_session("sail")?;
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
 
         let err = match resolver
-            .resolve_catalog_create_table_as_select(
-                spec::ObjectName::from(["default", "nested/table"]),
-                table_definition(Some("relative/table")),
-                QueryPlan::new(QueryNode::LocalRelation {
-                    data: None,
-                    schema: None,
-                }),
-                &mut state,
-            )
+            .resolve_default_table_location(&spec::ObjectName::bare("nested/table"))
             .await
         {
-            Ok(plan) => {
+            Ok(location) => {
                 return Err(PlanError::internal(format!(
-                    "expected error, got: {plan:?}"
-                )))
+                    "expected error, got: {location:?}"
+                )));
             }
             Err(err) => err,
         };

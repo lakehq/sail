@@ -26,7 +26,6 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("missing database name"));
         };
         let db_name: String = last.clone().into();
-        validate_location_identifier(&db_name, "database")?;
         let location = match location.as_deref() {
             Some(location) => Some(qualify_database_location(
                 Some(location),
@@ -39,13 +38,17 @@ impl PlanResolver<'_> {
                 // Spark-managed metastore catalogs synthesize a default database
                 // location, while native namespace catalogs should only persist a
                 // location when the user explicitly supplied one.
-                provider.uses_spark_default_database_location().then(|| {
-                    qualify_database_location(
-                        None,
-                        &db_name,
-                        &self.config.default_warehouse_directory,
-                    )
-                })
+                provider
+                    .uses_spark_default_database_location()
+                    .then(|| {
+                        validate_location_identifier(&db_name, "database")?;
+                        Ok::<String, PlanError>(qualify_database_location(
+                            None,
+                            &db_name,
+                            &self.config.default_warehouse_directory,
+                        ))
+                    })
+                    .transpose()?
             }
         };
         let command = CatalogCommand::CreateDatabase {
@@ -365,11 +368,12 @@ mod tests {
     }
 
     #[test]
-    fn test_create_database_rejects_invalid_name_for_explicit_location() -> PlanResult<()> {
+    fn test_create_database_allows_invalid_name_for_explicit_location() -> PlanResult<()> {
         let ctx = create_session("native")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let config = Arc::new(PlanConfig::new()?);
+        let resolver = PlanResolver::new(&ctx, config.clone());
 
-        let err = match resolver.resolve_catalog_create_database(
+        let plan = resolver.resolve_catalog_create_database(
             spec::ObjectName::bare("nested/db"),
             spec::DatabaseDefinition {
                 if_not_exists: false,
@@ -377,19 +381,46 @@ mod tests {
                 location: Some("relative/db".to_string()),
                 properties: vec![],
             },
-        ) {
-            Ok(plan) => {
-                return Err(PlanError::internal(format!(
-                    "expected error, got: {plan:?}"
-                )))
-            }
-            Err(err) => err,
-        };
+        )?;
 
-        assert!(
-            err.to_string().contains("invalid"),
-            "unexpected error: {err}"
+        let sail_catalog::command::CatalogCommand::CreateDatabase { options, .. } =
+            resolved_command(plan)?
+        else {
+            return Err(PlanError::internal("expected create database command"));
+        };
+        assert_eq!(
+            options.location,
+            Some(qualify_database_location(
+                Some("relative/db"),
+                "nested/db",
+                &config.default_warehouse_directory
+            ))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_database_allows_invalid_name_for_native_catalog_without_location(
+    ) -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let plan = resolver.resolve_catalog_create_database(
+            spec::ObjectName::bare("nested/db"),
+            spec::DatabaseDefinition {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )?;
+
+        let sail_catalog::command::CatalogCommand::CreateDatabase { options, .. } =
+            resolved_command(plan)?
+        else {
+            return Err(PlanError::internal("expected create database command"));
+        };
+        assert_eq!(options.location, None);
         Ok(())
     }
 }

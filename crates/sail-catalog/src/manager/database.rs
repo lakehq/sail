@@ -97,6 +97,14 @@ impl CatalogManager {
         Ok(provider)
     }
 
+    pub fn database_provider_by_qualifier<T: AsRef<str>>(
+        &self,
+        qualifier: &[T],
+    ) -> CatalogResult<Arc<dyn CatalogProvider>> {
+        let (provider, _) = self.resolve_database_by_qualifier(qualifier)?;
+        Ok(provider)
+    }
+
     pub async fn drop_database<T: AsRef<str>>(
         &self,
         database: &[T],
