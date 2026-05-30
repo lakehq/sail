@@ -26,12 +26,12 @@ mod tests {
 
     #[test]
     fn validate_location_identifier_allows_filename_safe_special_characters() {
-        validate_location_identifier("my@table", "table").unwrap();
+        assert!(validate_location_identifier("my@table", "table").is_ok());
     }
 
     #[test]
     fn validate_location_identifier_rejects_path_traversal() {
-        let error = validate_location_identifier("../escaped", "table").unwrap_err();
-        assert!(error.to_string().contains("invalid table name"));
+        assert!(validate_location_identifier("../escaped", "table")
+            .is_err_and(|error| error.to_string().contains("invalid table name")));
     }
 }
