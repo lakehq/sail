@@ -1,4 +1,3 @@
-use std::fmt::Write;
 use std::sync::Arc;
 
 use chrono::prelude::*;
@@ -683,12 +682,15 @@ fn scalar_to_display_string(scalar: &ScalarValue) -> String {
 }
 
 fn format_binary(value: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
     let mut output = String::from("[");
     for (i, byte) in value.iter().enumerate() {
         if i > 0 {
             output.push(' ');
         }
-        write!(&mut output, "{byte:02X}").expect("writing to String should not fail");
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
     }
     output.push(']');
     output
