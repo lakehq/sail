@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{FormatFactory, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{FormatFactory, ListingTableFormat};
 use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
 use crate::options::ResolveOptions;
 
@@ -78,37 +76,6 @@ fn rename_default_csv_columns(schema: Schema) -> Schema {
     }
 
     Schema::new_with_metadata(new_fields, schema.metadata().clone())
-}
-
-/// Schema inferrer for CSV format
-#[derive(Debug)]
-pub struct CsvSchemaInfer {
-    infer_schema: bool,
-}
-
-#[async_trait::async_trait]
-impl SchemaInfer for CsvSchemaInfer {
-    async fn get_schema(
-        &self,
-        ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        files: &[object_store::ObjectMeta],
-        list_options: &datafusion::datasource::listing::ListingOptions,
-    ) -> Result<Schema> {
-        let mut schema = list_options
-            .format
-            .infer_schema(ctx, store, files)
-            .await?
-            .as_ref()
-            .clone();
-        if !self.infer_schema {
-            schema = convert_string_columns(schema);
-        }
-        // Rename default CSV columns (column_1 -> _c0, etc.)
-        schema = rename_default_csv_columns(schema);
-
-        Ok(schema)
-    }
 }
 
 #[derive(Debug, Default)]

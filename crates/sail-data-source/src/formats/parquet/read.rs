@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
@@ -13,10 +13,9 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use futures::{StreamExt, TryStreamExt};
 
-use crate::listing::source::{
-    DefaultSchemaInfer, ListingFileMeta, ListingScanInput, ReadFormat, SchemaInfer,
-};
+use crate::listing::source::{ListingFileMeta, ListingScanInput, ReadFormat};
 use crate::options::gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
@@ -24,16 +23,13 @@ pub struct ParquetReadFormat {
     pub(super) options: ParquetReadOptions,
 }
 
-fn set_source_encryption_factory(
-    options: &TableParquetOptions,
-    source: ParquetSource,
-) -> Result<ParquetSource> {
-    if let Some(encryption_factory_id) = &options.crypto.factory_id {
+fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
+    if let Some(x) = &options.crypto.factory_id {
         Err(DataFusionError::Configuration(format!(
-            "Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled"
+            "Parquet encryption factory ID is set to '{x}' but parquet encryption is unsupported"
         )))
     } else {
-        Ok(source)
+        Ok(())
     }
 }
 
@@ -51,8 +47,67 @@ impl ReadFormat for ParquetReadFormat {
         Ok(Some(self.options.extension.clone()))
     }
 
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(DefaultSchemaInfer)
+    async fn infer_schema(
+        &self,
+        ctx: &dyn Session,
+        store: &Arc<dyn object_store::ObjectStore>,
+        objects: &[object_store::ObjectMeta],
+        _compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef> {
+        let options = self.options.clone().into_table_options();
+        fail_for_encryption_factory(&options)?;
+
+        let coerce_int96 = options
+            .global
+            .coerce_int96
+            .as_deref()
+            .map(parse_coerce_int96_string)
+            .transpose()?;
+
+        let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata_size_hint = options.global.metadata_size_hint;
+        let metadata_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
+
+        let mut schemas: Vec<(object_store::path::Path, Schema)> = futures::stream::iter(objects)
+            .map(|object| async {
+                let schema = DFParquetMetadata::new(store.as_ref(), object)
+                    .with_metadata_size_hint(metadata_size_hint)
+                    .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
+                    .with_coerce_int96(coerce_int96)
+                    .fetch_schema()
+                    .await?;
+                Ok::<_, DataFusionError>((object.location.clone(), schema))
+            })
+            .boxed() // Workaround for https://github.com/rust-lang/rust/issues/64552
+            // fetch schemas concurrently
+            .buffer_unordered(metadata_fetch_concurrency)
+            .try_collect()
+            .await?;
+
+        // Ensure deterministic ordering for stable schema inference.
+        schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
+
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
+
+        let merged = if options.global.skip_metadata {
+            Schema::try_merge(schemas.map(clear_metadata))
+        } else {
+            Schema::try_merge(schemas)
+        }?;
+
+        let merged = if options.global.binary_as_string {
+            datafusion::datasource::file_format::parquet::transform_binary_to_string(&merged)
+        } else {
+            merged
+        };
+
+        let merged = if options.global.schema_force_view_types {
+            datafusion::datasource::file_format::parquet::transform_schema_to_view(&merged)
+        } else {
+            merged
+        };
+
+        Ok(Arc::new(merged))
     }
 
     async fn infer_file_meta(
@@ -61,12 +116,13 @@ impl ReadFormat for ParquetReadFormat {
         store: &Arc<dyn object_store::ObjectStore>,
         file_schema: SchemaRef,
         object: &object_store::ObjectMeta,
+        _compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
         let options = self.options.clone().into_table_options();
-        let file_metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata = DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(options.global.metadata_size_hint)
-            .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_file_metadata_cache(Some(metadata_cache))
             .fetch_metadata()
             .await?;
         let statistics =
@@ -80,10 +136,11 @@ impl ReadFormat for ParquetReadFormat {
 
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let options = self.options.clone().into_table_options();
+        fail_for_encryption_factory(&options)?;
+
         let mut source =
             ParquetSource::new(input.schema).with_table_parquet_options(options.clone());
 
-        // Use the CachedParquetFileReaderFactory
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let store = ctx
             .runtime_env()
@@ -95,8 +152,6 @@ impl ReadFormat for ParquetReadFormat {
         if let Some(metadata_size_hint) = options.global.metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
-
-        source = set_source_encryption_factory(&options, source)?;
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
             .with_file_groups(input.file_groups)
@@ -110,5 +165,32 @@ impl ReadFormat for ParquetReadFormat {
             .build();
 
         Ok(config)
+    }
+}
+
+/// Clears all metadata (Schema level and field level) for a schema.
+fn clear_metadata(schema: Schema) -> Schema {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            Arc::new(field.as_ref().clone().with_metadata(Default::default())) // clear meta
+        })
+        .collect::<Fields>();
+    Schema::new(fields)
+}
+
+/// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
+///
+/// This is adapted from DataFusion's Parquet data source implementation.
+fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
+    match setting.to_lowercase().as_str() {
+        "ns" => Ok(TimeUnit::Nanosecond),
+        "us" => Ok(TimeUnit::Microsecond),
+        "ms" => Ok(TimeUnit::Millisecond),
+        "s" => Ok(TimeUnit::Second),
+        _ => Err(DataFusionError::Configuration(format!(
+            "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
+        ))),
     }
 }
