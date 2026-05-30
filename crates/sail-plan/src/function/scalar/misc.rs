@@ -26,7 +26,7 @@ fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         let col = arguments.one()?;
         (
             // Need to do this order to avoid the "value used after being moved" error.
-            lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", col)))),
+            lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", &col)))),
             col,
         )
     } else if arguments.len() == 2 {

@@ -80,7 +80,7 @@ fn expand_merge_node(node: &MergeIntoNode) -> Result<Transformed<LogicalPlan>> {
         .collect();
     trace!(
         "rewrite target_plan schema after ensure_merge_metadata_columns: {:?}",
-        target_fields
+        &target_fields
     );
     if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN)
         || row_index_column.is_some_and(|c| !target_fields.iter().any(|n| n == c))
@@ -263,8 +263,8 @@ fn ensure_merge_metadata_columns(
                 {
                     trace!(
                         "ensure_merge_metadata_columns (scan) before - table_name: {:?}, projection: {:?}",
-                        scan.table_name,
-                        scan.projection
+                        &scan.table_name,
+                        &scan.projection
                     );
 
                     let mut projection: Option<Vec<usize>> = scan.projection.clone();

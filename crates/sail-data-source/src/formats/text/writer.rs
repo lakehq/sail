@@ -154,7 +154,7 @@ impl DisplayAs for TextSink {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: txt")?;
-                write!(f, "file={}", self.config.original_url)
+                write!(f, "file={}", &self.config.original_url)
             }
         }
     }

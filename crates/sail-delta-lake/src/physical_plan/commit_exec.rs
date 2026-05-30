@@ -337,7 +337,7 @@ impl ExecutionPlan for DeltaCommitExec {
             log::trace!(
                 "final_actions_len: {}, final_action_kinds: {:?}",
                 final_actions.len(),
-                kinds
+                &kinds
             );
 
             if final_actions.is_empty() && !table_exists {
