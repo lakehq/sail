@@ -202,11 +202,6 @@ impl ScalarUDFImpl for SparkToCsv {
         Ok(DataType::Utf8)
     }
 
-    #[allow(deprecated)]
-    fn display_name(&self, args: &[Expr]) -> Result<String> {
-        Ok(Self::column_name(args))
-    }
-
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         Ok(Self::column_name(args))
     }
