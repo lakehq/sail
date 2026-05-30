@@ -5,6 +5,7 @@ use sail_catalog::provider::CreateDatabaseOptions;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
+use super::validate_location_identifier;
 use crate::config::qualify_database_location;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -25,6 +26,7 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("missing database name"));
         };
         let db_name: String = last.clone().into();
+        validate_location_identifier(&db_name, "database")?;
         let location = match location.as_deref() {
             Some(location) => Some(qualify_database_location(
                 Some(location),
@@ -329,6 +331,64 @@ mod tests {
                 "native_db",
                 &config.default_warehouse_directory
             ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_database_rejects_invalid_name_for_default_location() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let err = match resolver.resolve_catalog_create_database(
+            spec::ObjectName::bare("../escaped"),
+            spec::DatabaseDefinition {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        ) {
+            Ok(plan) => {
+                return Err(PlanError::internal(format!(
+                    "expected error, got: {plan:?}"
+                )))
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("invalid"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_database_rejects_invalid_name_for_explicit_location() -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let err = match resolver.resolve_catalog_create_database(
+            spec::ObjectName::bare("nested/db"),
+            spec::DatabaseDefinition {
+                if_not_exists: false,
+                comment: None,
+                location: Some("relative/db".to_string()),
+                properties: vec![],
+            },
+        ) {
+            Ok(plan) => {
+                return Err(PlanError::internal(format!(
+                    "expected error, got: {plan:?}"
+                )))
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("invalid"),
+            "unexpected error: {err}"
         );
         Ok(())
     }
