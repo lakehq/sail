@@ -168,6 +168,8 @@ datafusion = { git = "https://github.com/apache/datafusion", rev = "1875365ab7d4
 ] }
 datafusion-common = { git = "https://github.com/apache/datafusion", rev = "1875365ab7d450c309558ce32568b3801f750abb", features = ["object_store"] }
 datafusion-datasource = { git = "https://github.com/apache/datafusion", rev = "1875365ab7d450c309558ce32568b3801f750abb" }
+datafusion-datasource-avro = { git = "https://github.com/apache/datafusion", rev = "1875365ab7d450c309558ce32568b3801f750abb" }
+datafusion-datasource-json = { git = "https://github.com/apache/datafusion", rev = "1875365ab7d450c309558ce32568b3801f750abb" }
 datafusion-expr = { git = "https://github.com/apache/datafusion", rev = "1875365ab7d450c309558ce32568b3801f750abb", default-features = false }
 datafusion-expr-common = { git = "https://github.com/apache/datafusion", rev = "1875365ab7d450c309558ce32568b3801f750abb" }
 datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "1875365ab7d450c309558ce32568b3801f750abb" }

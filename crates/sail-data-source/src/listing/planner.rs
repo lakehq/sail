@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
+use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
@@ -17,6 +18,7 @@ use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{project_schema, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
@@ -350,8 +352,6 @@ async fn do_collect_statistics_and_ordering(
     store: &Arc<dyn ObjectStore>,
     part_file: &datafusion_datasource::PartitionedFile,
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-    use datafusion::execution::cache::cache_manager::CachedFileMetadata;
-
     let path = &part_file.object_meta.location;
     let meta = &part_file.object_meta;
     let collected_statistics = source.collected_statistics();
@@ -377,6 +377,10 @@ async fn do_collect_statistics_and_ordering(
             store,
             source.config().schema.file_schema().clone(),
             meta,
+            source
+                .config()
+                .compression
+                .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
         )
         .await?;
     let statistics = Arc::new(file_meta.statistics);

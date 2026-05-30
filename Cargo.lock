@@ -7629,6 +7629,8 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-datasource",
+ "datafusion-datasource-avro",
+ "datafusion-datasource-json",
  "datafusion-session",
  "futures",
  "glob",
