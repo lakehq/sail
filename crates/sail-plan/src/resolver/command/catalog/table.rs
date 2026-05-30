@@ -181,7 +181,7 @@ impl PlanResolver<'_> {
         let input = rename_logical_plan(input, &column_names)?;
         let format = self.resolve_catalog_table_format(file_format)?;
         let mut write_options = options;
-        let location = if let Some(location) = location {
+        if let Some(location) = location {
             use crate::config::qualify_table_location;
             let [qualifier @ .., _] = table.parts() else {
                 return Err(PlanError::invalid("missing table name"));
@@ -191,15 +191,13 @@ impl PlanResolver<'_> {
                 .get_database_by_qualifier(qualifier)
                 .await
                 .map(|status| database_location(&status))?;
-            qualify_table_location(
+            let location = qualify_table_location(
                 &location,
                 db_location.as_deref(),
                 &self.config.default_warehouse_directory,
-            )
-        } else {
-            self.resolve_default_table_location(&table).await?
-        };
-        write_options.push(("path".to_string(), location));
+            );
+            write_options.push(("path".to_string(), location));
+        }
 
         // Set write mode based on create-or-replace / if-not-exists semantics.
         let write_mode = if replace {
@@ -596,6 +594,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::execution::SessionStateBuilder;
+    use datafusion::logical_expr::LogicalPlan;
     use datafusion::prelude::SessionContext;
     use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
     use sail_catalog::provider::{
@@ -606,9 +605,10 @@ mod tests {
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
     use sail_common_datafusion::session::plan::PlanService;
+    use sail_logical_plan::barrier::BarrierNode;
 
     use super::{database_location, namespace_location_from_properties};
-    use crate::catalog::SparkCatalogObjectDisplay;
+    use crate::catalog::{CatalogCommandNode, SparkCatalogObjectDisplay};
     use crate::error::{PlanError, PlanResult};
     use crate::formatter::SparkPlanFormatter;
     use crate::resolver::state::PlanResolverState;
@@ -652,8 +652,8 @@ mod tests {
                 catalog: "native".to_string(),
                 database: prefix
                     .cloned()
-                    .unwrap_or_else(|| vec!["default".to_string()].try_into().unwrap())
-                    .into(),
+                    .map(Into::into)
+                    .unwrap_or_else(|| vec!["default".to_string()]),
                 comment: None,
                 location: None,
                 properties: vec![],
@@ -802,6 +802,50 @@ mod tests {
             options: vec![],
             properties: vec![],
         }
+    }
+
+    fn ctas_query() -> spec::QueryPlan {
+        spec::QueryPlan::new(spec::QueryNode::LocalRelation {
+            data: None,
+            schema: Some(spec::Schema {
+                fields: vec![spec::Field {
+                    name: "id".to_string(),
+                    data_type: spec::DataType::Int32,
+                    nullable: true,
+                    metadata: vec![],
+                }]
+                .into(),
+            }),
+        })
+    }
+
+    fn resolved_create_table_options(plan: LogicalPlan) -> PlanResult<CreateTableOptions> {
+        let LogicalPlan::Extension(extension) = plan else {
+            return Err(PlanError::internal("expected extension logical plan"));
+        };
+        let barrier = extension
+            .node
+            .as_any()
+            .downcast_ref::<BarrierNode>()
+            .ok_or_else(|| PlanError::internal("expected barrier node"))?;
+        let precondition = barrier
+            .preconditions()
+            .first()
+            .ok_or_else(|| PlanError::internal("expected catalog precondition"))?;
+        let LogicalPlan::Extension(extension) = precondition.as_ref() else {
+            return Err(PlanError::internal("expected extension precondition"));
+        };
+        let command = extension
+            .node
+            .as_any()
+            .downcast_ref::<CatalogCommandNode>()
+            .ok_or_else(|| PlanError::internal("expected catalog command node"))?
+            .command()
+            .clone();
+        let sail_catalog::command::CatalogCommand::CreateTable { options, .. } = command else {
+            return Err(PlanError::internal("expected create table command"));
+        };
+        Ok(options)
     }
 
     #[test]
@@ -956,6 +1000,73 @@ mod tests {
             err.to_string().contains("invalid"),
             "unexpected error: {err}"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ctas_without_location_remains_managed() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table_as_select(
+                spec::ObjectName::from(["default", "ctas_managed"]),
+                table_definition(None, Some("parquet")),
+                ctas_query(),
+                &mut state,
+            )
+            .await?;
+
+        let options = resolved_create_table_options(plan)?;
+        assert!(!options.is_external);
+        assert!(options.location.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ctas_with_location_is_external() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table_as_select(
+                spec::ObjectName::from(["default", "ctas_location"]),
+                table_definition(Some("relative/table"), Some("parquet")),
+                ctas_query(),
+                &mut state,
+            )
+            .await?;
+
+        let options = resolved_create_table_options(plan)?;
+        assert!(options.is_external);
+        assert!(options.location.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ctas_with_path_option_is_external() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let mut definition = table_definition(None, Some("parquet"));
+        definition
+            .options
+            .push(("path".to_string(), "relative/table".to_string()));
+
+        let plan = resolver
+            .resolve_catalog_create_table_as_select(
+                spec::ObjectName::from(["default", "ctas_path_option"]),
+                definition,
+                ctas_query(),
+                &mut state,
+            )
+            .await?;
+
+        let options = resolved_create_table_options(plan)?;
+        assert!(options.is_external);
+        assert!(options.location.is_some());
         Ok(())
     }
 }

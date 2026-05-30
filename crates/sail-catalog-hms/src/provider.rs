@@ -90,6 +90,24 @@ fn build_drop_table_request(purge: bool) -> DropTableRequest {
     }
 }
 
+fn handle_drop_database_exception(
+    db_name: &str,
+    err: ThriftHiveMetastoreDropDatabaseException,
+    if_exists: bool,
+    attempt: usize,
+) -> CatalogResult<()> {
+    match err {
+        ThriftHiveMetastoreDropDatabaseException::O1(_) if if_exists || attempt > 0 => Ok(()),
+        ThriftHiveMetastoreDropDatabaseException::O1(_) => Err(CatalogError::NotFound(
+            CatalogObject::Database,
+            db_name.to_string(),
+        )),
+        err => Err(CatalogError::External(format!(
+            "Failed to drop HMS database '{db_name}': {err:?}"
+        ))),
+    }
+}
+
 fn apply_alter_table_options(
     hms_table: &mut Table,
     db_name: &str,
@@ -907,27 +925,9 @@ impl CatalogProvider for HmsCatalogProvider {
                     .await
                 {
                     Ok(MaybeException::Ok(())) => Ok(()),
-                    Ok(MaybeException::Exception(
-                        ThriftHiveMetastoreDropDatabaseException::O1(_),
-                    )) if options.if_exists || attempt > 0 => Ok(()),
-                    Ok(MaybeException::Exception(
-                        ThriftHiveMetastoreDropDatabaseException::O1(_),
-                    )) => Err(CatalogError::NotFound(CatalogObject::Database, db_name)),
-                    // HMS 3.x throws MetaException (O3) with NullPointerException when
-                    // cascade-dropping a database that contains tables with null locations.
-                    // Treat as success when if_exists is set to avoid spurious failures.
-                    Ok(MaybeException::Exception(
-                        ThriftHiveMetastoreDropDatabaseException::O3(ref e),
-                    )) if options.if_exists => {
-                        log::warn!(
-                            "HMS cascade-drop of '{db_name}' returned MetaException \
-                             (treated as success because IF EXISTS is set): {e:?}"
-                        );
-                        Ok(())
+                    Ok(MaybeException::Exception(err)) => {
+                        handle_drop_database_exception(&db_name, err, options.if_exists, attempt)
                     }
-                    Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
-                        "Failed to drop HMS database '{db_name}': {err:?}"
-                    ))),
                     Err(err) => Err(Self::hms_client_error(
                         &format!("Failed to drop HMS database '{db_name}'"),
                         err,
@@ -1231,7 +1231,7 @@ mod tests {
     use sail_common::runtime::RuntimeHandle;
 
     use super::{HmsCatalogConfig, HmsCatalogProvider};
-    use crate::hms::Table;
+    use crate::hms::{Table, ThriftHiveMetastoreDropDatabaseException};
 
     #[tokio::test]
     async fn test_create_table_rejects_iceberg_format() {
@@ -1306,6 +1306,48 @@ mod tests {
             properties.get(&FastStr::from_static_str("ifPurge")),
             Some(&FastStr::from_static_str("TRUE"))
         );
+    }
+
+    #[test]
+    fn test_handle_drop_database_exception_ignores_missing_database_when_if_exists() {
+        let result = super::handle_drop_database_exception(
+            "missing_db",
+            ThriftHiveMetastoreDropDatabaseException::O1(Default::default()),
+            true,
+            0,
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_drop_database_exception_reports_missing_database_without_if_exists() {
+        let error = super::handle_drop_database_exception(
+            "missing_db",
+            ThriftHiveMetastoreDropDatabaseException::O1(Default::default()),
+            false,
+            0,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            CatalogError::NotFound(CatalogObject::Database, ref name) if name == "missing_db"
+        ));
+    }
+
+    #[test]
+    fn test_handle_drop_database_exception_propagates_meta_exception_with_if_exists() {
+        let error = super::handle_drop_database_exception(
+            "broken_db",
+            ThriftHiveMetastoreDropDatabaseException::O3(Default::default()),
+            true,
+            0,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CatalogError::External(_)));
+        assert!(error.to_string().contains("Failed to drop HMS database"));
     }
 
     #[test]
