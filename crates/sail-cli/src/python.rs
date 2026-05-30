@@ -101,7 +101,7 @@ impl NativeLogging {
         logger().log(
             &Record::builder()
                 .metadata(metadata)
-                .args(format_args!("{}", message))
+                .args(format_args!("{}", &message))
                 .line(Some(line))
                 .file(Some(&pathname))
                 .module_path(Some(&pathname))

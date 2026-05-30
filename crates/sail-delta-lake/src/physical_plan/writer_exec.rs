@@ -586,7 +586,7 @@ impl DeltaWriterExec {
             // Compute physical-to-logical mapping once before the loop
             let phys_to_logical = logical_kernel_for_mapping.as_ref().map(|logical_kernel| {
                 let map = Self::build_physical_to_logical_map(logical_kernel, kernel_mode);
-                log::trace!("phys_to_logical: {:?}", map);
+                log::trace!("phys_to_logical: {:?}", &map);
                 map
             });
 
@@ -621,8 +621,8 @@ impl DeltaWriterExec {
                     .collect();
                 log::trace!(
                     "input_batch_fields: {:?}, target_fields: {:?}",
-                    input_names,
-                    target_names
+                    &input_names,
+                    &target_names
                 );
 
                 let validated_batch = Self::validate_and_adapt_batch(
