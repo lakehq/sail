@@ -32,6 +32,15 @@ pub trait CatalogProvider: Send + Sync {
         false
     }
 
+    /// Whether Sail should validate table identifiers before deriving a default
+    /// table location from them.
+    ///
+    /// Catalogs that own their own namespace/table location semantics should
+    /// return `false`.
+    fn requires_identifier_validation_for_default_table_location(&self) -> bool {
+        false
+    }
+
     /// Creates a new database in the catalog.
     async fn create_database(
         &self,

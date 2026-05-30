@@ -60,6 +60,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         true
     }
 
+    fn requires_identifier_validation_for_default_table_location(&self) -> bool {
+        true
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
